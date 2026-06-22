@@ -46,7 +46,14 @@ def test_is_trading_time_weekend() -> None:
 
 def test_is_trading_day_exception_fallback() -> None:
     """chinese_calendar 异常时降级到周末判断。"""
-    with mock.patch("builtins.__import__", side_effect=ImportError("no module")):
+    real_import = __import__
+
+    def fake_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "chinese_calendar":
+            raise ImportError("no module")
+        return real_import(name, *args, **kwargs)
+
+    with mock.patch("builtins.__import__", side_effect=fake_import):
         assert is_trading_day(date(2024, 1, 8)) is True
         assert is_trading_day(date(2024, 1, 6)) is False
 

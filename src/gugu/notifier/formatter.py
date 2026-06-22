@@ -79,12 +79,56 @@ def _format_signals(signals: Any) -> str:
     return str(signals)
 
 
+def _format_wisdom(wisdom: Any) -> str:
+    """Format wisdom advice dict into readable markdown lines."""
+    if not wisdom or not isinstance(wisdom, dict):
+        return ""
+    label_map = {
+        "entry_check": "入场建议",
+        "stop_loss": "止损建议",
+        "position_sizing": "仓位建议",
+        "profit_taking": "止盈建议",
+        "trailing_stop": "追踪止损",
+        "psychology_check": "心态检查",
+    }
+    lines: list[str] = []
+    for key, val in wisdom.items():
+        if not val:
+            continue
+        label = label_map.get(key, key)
+        text = val if isinstance(val, str) else str(val)
+        # 截取前 200 字符避免卡片过长
+        if len(text) > 200:
+            text = text[:200] + "..."
+        lines.append(f"- **{label}**：{text}")
+    return "\n".join(lines) if lines else ""
+
+
+def _format_wisdom_decision(decision: Any) -> str:
+    """Format wisdom decision dict into readable markdown lines."""
+    if not decision or not isinstance(decision, dict):
+        return ""
+    lines: list[str] = []
+    if decision.get("entry_filtered"):
+        lines.append(f"- ⚠️ **入场过滤**：{decision.get('filter_reason', '低置信度')}")
+    if decision.get("adjusted_position_ratio") is not None:
+        ratio = decision["adjusted_position_ratio"]
+        strategy = decision.get("position_strategy", "")
+        strategy_text = {"trial": "试仓", "add": "加码", "full": "满仓"}.get(strategy, strategy)
+        lines.append(f"- 📊 **仓位调整**：{ratio:.2%}（{strategy_text}）")
+    if decision.get("stop_loss_price") is not None:
+        stop_price = decision["stop_loss_price"]
+        stop_pct = decision.get("stop_loss_pct", 0)
+        lines.append(f"- 🛑 **止损预设**：¥{stop_price:.2f}（-{stop_pct:.0%}）")
+    return "\n".join(lines) if lines else ""
+
+
 def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     """Format a trade signal into a Feishu card.
 
     Args:
         signal: Dict with keys symbol, name, direction("buy"/"sell"),
-                strategy, reason, suggested_position, price.
+                strategy, reason, suggested_position, price, wisdom, wisdom_decision.
 
     Returns:
         Feishu interactive card message dict.
@@ -95,20 +139,115 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     action = "买入" if is_buy else "卖出"
 
     symbol = signal.get("symbol", "")
-    name = signal.get("name", "")
-    strategy = signal.get("strategy", "")
+    name = signal.get("name", "") or symbol
+    strategies = signal.get("strategies", [])
+    strategy = signal.get("strategy", "") or (
+        ",".join(str(s) for s in strategies) if strategies else "未提供"
+    )
     reason = signal.get("reason", "")
     position = signal.get("suggested_position", "")
+    if not position and "suggested_position_ratio" in signal:
+        position = f"{signal['suggested_position_ratio']:.0%}"
     price = signal.get("price", "")
+    wisdom = signal.get("wisdom", {})
+    wisdom_decision = signal.get("wisdom_decision", {})
+
+    # 入场过滤的信号用黄色卡片
+    if wisdom_decision.get("entry_filtered"):
+        template = "yellow"
+        action = f"{action}（已过滤）"
 
     title = f"{action}信号 · {name}({symbol})"
 
     sections = [
         f"**股票**：{name}({symbol})\n**方向**：{action}\n**当前价**：{price}",
-        f"**触发策略**：{strategy}\n**建议仓位**：{position}\n**触发理由**：{reason}",
+        f"**触发策略**：{strategy}\n**建议仓位**：{position or '未提供'}\n**触发理由**：{reason}",
     ]
 
+    decision_text = _format_wisdom_decision(wisdom_decision)
+    if decision_text:
+        sections.append(f"**智慧决策**\n{decision_text}")
+
+    wisdom_text = _format_wisdom(wisdom)
+    if wisdom_text:
+        sections.append(f"**交易智慧参考**\n{wisdom_text}")
+
     return _card(title, template, sections, note="gugu 交易系统 · 信号通知")
+
+
+def _format_market_summary(summary: Any) -> str:
+    """Format market summary dict/list into readable markdown text."""
+    if not summary:
+        return ""
+    if isinstance(summary, str):
+        return summary
+    if isinstance(summary, dict):
+        total_value = summary.get("total_value", 0)
+        cash = summary.get("cash", 0)
+        positions_count = summary.get("positions_count", 0)
+        return (
+            f"总资产: ¥{total_value:,.0f} | "
+            f"现金: ¥{cash:,.0f} | "
+            f"持仓: {positions_count} 只"
+        )
+    return str(summary)
+
+
+def _format_sector_top(sector_top: Any) -> str:
+    """Format sector flow list into readable markdown lines."""
+    if not sector_top:
+        return ""
+    if isinstance(sector_top, str):
+        return sector_top
+    if isinstance(sector_top, list):
+        lines: list[str] = []
+        for item in sector_top:
+            if isinstance(item, dict):
+                sector = item.get("sector", "")
+                main_net = item.get("main_net", 0)
+                main_pct = item.get("main_pct", 0)
+                try:
+                    net_val = float(main_net or 0)
+                    pct_val = float(main_pct or 0)
+                except (TypeError, ValueError):
+                    net_val = 0.0
+                    pct_val = 0.0
+                lines.append(
+                    f"- {sector}: 主力净流入 ¥{net_val/1e8:,.2f}亿 ({pct_val:+.2%})"
+                )
+            else:
+                lines.append(f"- {item}")
+        return "\n".join(lines) if lines else ""
+    return str(sector_top)
+
+
+def _format_portfolio_summary(portfolio: Any) -> str:
+    """Format portfolio dict into readable markdown lines."""
+    if not portfolio:
+        return ""
+    if isinstance(portfolio, str):
+        return portfolio
+    if isinstance(portfolio, dict):
+        lines: list[str] = []
+        for sym, info in portfolio.items():
+            if isinstance(info, dict):
+                quantity = info.get("quantity", 0)
+                profit = info.get("profit", 0)
+                market_value = info.get("market_value", 0)
+                try:
+                    profit_val = float(profit or 0)
+                    mv_val = float(market_value or 0)
+                except (TypeError, ValueError):
+                    profit_val = 0.0
+                    mv_val = 0.0
+                profit_str = f"+¥{profit_val:,.0f}" if profit_val >= 0 else f"-¥{abs(profit_val):,.0f}"
+                lines.append(
+                    f"- {sym}: {quantity}股 | 市值 ¥{mv_val:,.0f} | 盈亏 {profit_str}"
+                )
+            else:
+                lines.append(f"- {sym}: {info}")
+        return "\n".join(lines) if lines else ""
+    return str(portfolio)
 
 
 def format_daily_report(period: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -135,13 +274,13 @@ def format_daily_report(period: str, data: dict[str, Any]) -> dict[str, Any]:
 
     sections: list[str] = []
     if market_summary:
-        sections.append(f"**市场概览**\n{market_summary}")
+        sections.append(f"**市场概览**\n{_format_market_summary(market_summary)}")
     if sector_top:
-        sections.append(f"**热门板块**\n{sector_top}")
+        sections.append(f"**热门板块**\n{_format_sector_top(sector_top)}")
     if signals:
         sections.append(f"**今日信号**\n{_format_signals(signals)}")
     if portfolio_summary:
-        sections.append(f"**持仓概况**\n{portfolio_summary}")
+        sections.append(f"**持仓概况**\n{_format_portfolio_summary(portfolio_summary)}")
 
     if not sections:
         sections.append("暂无数据")

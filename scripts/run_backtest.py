@@ -26,31 +26,36 @@ async def main(symbol: str, strategy_name: str, days: int, notify: bool) -> None
     """执行回测。"""
     logger.info(f"开始回测: {symbol} 策略={strategy_name} 天数={days}")
 
-    # 1. 获取数据
-    dm = data_manager()
-    df = dm.fetch_stock_history(symbol, days=days)
-    if df.empty:
-        logger.error(f"无法获取 {symbol} 数据")
-        return
+    notifier: FeishuNotifier | None = None
+    try:
+        # 1. 获取数据
+        dm = data_manager()
+        df = dm.fetch_stock_history(symbol, days=days)
+        if df.empty:
+            logger.error(f"无法获取 {symbol} 数据")
+            return
 
-    logger.info(f"获取 {len(df)} 条历史数据")
+        logger.info(f"获取 {len(df)} 条历史数据")
 
-    # 2. 运行回测
-    strategy = get_strategy(strategy_name)
-    engine = BacktestEngine()
-    result = engine.run(strategy, df, symbol)
+        # 2. 运行回测
+        strategy = get_strategy(strategy_name)
+        engine = BacktestEngine()
+        result = engine.run(strategy, df, symbol)
 
-    # 3. 打印报告
-    report = format_report(result)
-    print(report)
+        # 3. 打印报告
+        report = format_report(result)
+        print(report)
 
-    # 4. 飞书通知（可选）
-    if notify:
-        from gugu.backtest.report import format_report_dict
+        # 4. 飞书通知（可选）
+        if notify:
+            from gugu.backtest.report import format_report_dict
 
-        notifier = FeishuNotifier()
-        await notifier.notify_backtest(format_report_dict(result))
-        logger.info("回测报告已推送到飞书")
+            notifier = FeishuNotifier()
+            await notifier.notify_backtest(format_report_dict(result))
+            logger.info("回测报告已推送到飞书")
+    finally:
+        if notifier is not None:
+            await notifier.close()
 
 
 if __name__ == "__main__":
@@ -59,6 +64,7 @@ if __name__ == "__main__":
     parser.add_argument("--strategy", default="turtle", help="策略名称")
     parser.add_argument("--days", type=int, default=120, help="回测天数")
     parser.add_argument("--notify", action="store_true", help="推送飞书")
+    parser.add_argument("--version", action="version", version="gugu 0.1.0")
     args = parser.parse_args()
 
     asyncio.run(main(args.symbol, args.strategy, args.days, args.notify))

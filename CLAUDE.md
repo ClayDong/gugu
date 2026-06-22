@@ -49,15 +49,23 @@ gugu/
 ├── src/
 │   └── gugu/
 │       ├── __init__.py
+│       ├── config.py            # 配置加载（YAML + env）
 │       ├── data/                # 数据层
-│       │   ├── collectors/      # 东财/akshare/新浪/腾讯采集器
+│       │   ├── manager.py       # DataManager（统一数据入口）
 │       │   ├── quality.py       # 数据质量校验
-│       │   └── cache.py         # 本地缓存
+│       │   ├── cache.py         # 本地缓存
+│       │   └── collectors/      # 采集器
+│       │       ├── base.py      # BaseCollector 抽象
+│       │       ├── akshare_collector.py  # 主源
+│       │       └── fallback.py   # 降级源（Sina/Tencent）
+│       ├── models/              # 数据模型
+│       │   └── position.py      # Position 统一模型
 │       ├── strategies/          # 策略层
 │       │   ├── base.py          # 策略抽象基类
 │       │   ├── trend.py         # 趋势跟踪（海龟/双均线/MACD/SAR）
 │       │   ├── mean_revert.py   # 均值回归（RSI/KDJ/布林带）
 │       │   ├── breakout.py      # 突破（箱体/Dual Thrust/支撑阻力）
+│       │   ├── generator.py     # LLM 自然语言策略生成器
 │       │   └── registry.py      # 策略注册表
 │       ├── backtest/            # 回测引擎
 │       │   ├── engine.py
@@ -73,8 +81,11 @@ gugu/
 │       ├── notifier/            # 通知层
 │       │   ├── feishu.py        # 飞书推送
 │       │   └── formatter.py     # 信号/日报/告警消息格式化
+│       ├── selector/            # 选股层
+│       │   └── stock_selector.py # 资金流 + 策略筛选
 │       ├── wisdom/              # 决策层（books2skill skill 调用）
-│       │   └── advisor.py
+│       │   ├── advisor.py       # WisdomAdvisor（加载 skill + 增强信号）
+│       │   └── skills/          # 炒股的智慧 8 个 skill（项目内置，随仓库提交）
 │       ├── engine/              # 主引擎
 │       │   ├── main.py          # 主引擎入口
 │       │   ├── scheduler.py     # APScheduler 调度
@@ -90,7 +101,13 @@ gugu/
 ├── scripts/
 │   ├── run_backtest.py          # 回测入口
 │   ├── run_paper.py             # 模拟盘入口
+│   ├── show_portfolio.py        # 持仓查看入口
 │   └── run_live.py              # 实盘入口（阶段四）
+├── docs/                        # 文档
+│   ├── PRODUCT.md               # 产品文档
+│   ├── TECH.md                  # 技术文档
+│   ├── ITERATION_1.md           # 迭代1计划
+│   └── ITERATION_1_REVIEW.md    # 迭代1评审
 └── _refs/                       # 参考项目（gitignore，不提交）
 ```
 

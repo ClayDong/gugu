@@ -70,10 +70,12 @@ def test_route_any_buy(df: pd.DataFrame) -> None:
     with mock.patch("gugu.engine.signal_router.settings") as mock_settings:
         mock_settings.return_value = {"strategy": {"signal_fusion": "any", "min_confidence": 0.5}}
         router = SignalRouter([AlwaysBuy()])
-        sig = router.route(df, "600519")
+        sig = router.route(df, "600519", name="茅台")
         assert sig is not None
         assert sig["direction"] == "buy"
+        assert sig["name"] == "茅台"
         assert "always_buy" in sig["strategies"]
+        assert "always_buy" in sig["strategy"]
 
 
 def test_route_unanimous_buy(df: pd.DataFrame) -> None:

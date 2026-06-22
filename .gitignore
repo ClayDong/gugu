@@ -31,7 +31,7 @@ htmlcov/
 .ruff_cache/
 
 # 数据与日志（本地）
-data/
+/data/
 logs/
 *.db
 *.sqlite

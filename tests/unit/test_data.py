@@ -122,3 +122,20 @@ def test_validate_stock_flow_without_date() -> None:
     df = pd.DataFrame({"main_net": [1e6], "main_pct": [0.01]})
     out = validate_stock_flow(df, "600519")
     assert len(out) == 1
+
+
+def test_validate_stock_history_zero_price() -> None:
+    """零价数据应被剔除。"""
+    df = pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=3),
+            "open": [10.0, 0.0, 10.0],
+            "high": [11.0, 0.0, 11.0],
+            "low": [9.0, 0.0, 9.0],
+            "close": [10.5, 0.0, 10.5],
+            "volume": [1000, 0, 1000],
+        }
+    )
+    out = validate_stock_history(df, "600519")
+    assert len(out) == 2
+    assert (out["close"] > 0).all()

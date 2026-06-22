@@ -31,19 +31,24 @@ class SignalRouter:
         """添加策略。"""
         self._strategies.append(strategy)
 
-    def route(self, df: pd.DataFrame, symbol: str) -> dict[str, Any] | None:
+    def route(
+        self, df: pd.DataFrame, symbol: str, name: str = ""
+    ) -> dict[str, Any] | None:
         """对单只股票融合多策略信号。
 
         Args:
             df: 行情数据
             symbol: 股票代码
+            name: 股票名称（可选，用于飞书卡片展示）
 
         Returns:
             融合后的信号 dict，无信号返回 None
             {
                 "symbol": str,
+                "name": str,
                 "direction": "buy"/"sell"/"hold",
                 "confidence": float,
+                "strategy": str,           # 触发策略字符串（逗号分隔）
                 "strategies": [触发策略名],
                 "reason": str,
             }
@@ -116,8 +121,10 @@ class SignalRouter:
 
         return {
             "symbol": symbol,
+            "name": name,
             "direction": direction,
             "confidence": round(avg_conf, 3),
+            "strategy": ",".join(triggered),
             "strategies": triggered,
             "reason": f"策略 {','.join(triggered)} 触发 {direction} 信号",
         }

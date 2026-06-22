@@ -7,7 +7,9 @@ from gugu.execution import PaperBroker
 
 
 @pytest.fixture
-def broker():
+def broker(tmp_path, monkeypatch) -> PaperBroker:
+    """每个测试用独立状态文件，避免持久化干扰。"""
+    monkeypatch.setattr("gugu.execution.paper.STATE_FILE", tmp_path / "state.json")
     return PaperBroker(initial_capital=1_000_000)
 
 
@@ -75,3 +77,25 @@ def test_trade_record(broker):
     assert len(broker.trades) == 1
     assert broker.trades[0]["symbol"] == "600519"
     assert broker.trades[0]["direction"] == "buy"
+
+
+def test_add_position_t_plus_1_unchanged(broker):
+    """追加买入后，旧持仓 available 不变，新买入部分当日不可卖。"""
+    broker.order("600519", "buy", 100, 1500.0)
+    broker.settle_t_plus_1()
+    pos = broker.get_position("600519")
+    assert pos is not None
+    assert pos.available == 100
+
+    broker.order("600519", "buy", 200, 1500.0)
+    assert pos.quantity == 300
+    assert pos.available == 100  # 追加部分仍受 T+1 限制
+
+
+def test_daily_start_value_recorded(broker):
+    """settle_t_plus_1 应记录日初净值。"""
+    broker.order("600519", "buy", 100, 1500.0)
+    broker.settle_t_plus_1()
+    assert broker.daily_start_value > 0
+    broker.reset_daily_start_value()
+    assert broker.daily_start_value == broker.get_account().total_value

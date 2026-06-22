@@ -79,5 +79,10 @@ class TradingScheduler:
             while True:
                 await asyncio.sleep(3600)
         except (KeyboardInterrupt, SystemExit):
-            self._scheduler.shutdown()
-            logger.info("调度器已停止")
+            await self.shutdown()
+
+    async def shutdown(self) -> None:
+        """停止调度器并释放资源。"""
+        self._scheduler.shutdown()
+        await self._engine.shutdown()
+        logger.info("调度器已停止")

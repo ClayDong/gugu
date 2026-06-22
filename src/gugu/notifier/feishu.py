@@ -5,6 +5,7 @@ Never raises to caller to avoid blocking the main trading flow.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from typing import Any
@@ -193,4 +194,6 @@ class FeishuNotifier:
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""
-        await self._client.aclose()
+        with contextlib.suppress(RuntimeError):
+            # Event loop may already be closed; safe to ignore
+            await self._client.aclose()

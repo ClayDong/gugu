@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -51,7 +52,7 @@ def load_yaml(name: str) -> dict[str, Any]:
     if not path.exists():
         return {}
     with path.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+        return deepcopy(yaml.safe_load(f) or {})
 
 
 @lru_cache(maxsize=1)

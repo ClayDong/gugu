@@ -4,7 +4,7 @@ Transaction cost model:
 - Buy:  commission_rate (default 0.025%) + slippage (default 0.2%)
 - Sell: commission_rate + stamp_tax (default 0.1%) + slippage
 
-Position management is simplified: full-capital buy / full-clear sell.
+Position management respects the L1 single-position ratio from risk config.
 Risk manager integration will be added in a later iteration.
 """
 from __future__ import annotations
@@ -14,6 +14,7 @@ from typing import Any
 
 import pandas as pd
 
+from gugu.config import settings
 from gugu.strategies.base import Strategy
 from gugu.utils.log import get_logger
 
@@ -68,7 +69,8 @@ class BacktestResult:
 class BacktestEngine:
     """Backtest engine with realistic A-share transaction costs.
 
-    Simplified position management: full-capital buy / full-clear sell.
+    Position sizing is capped by ``position_ratio`` (default from risk config)
+    to stay consistent with the L1 single-position limit.
     Risk manager integration will be added in a later iteration.
 
     Example:
@@ -83,11 +85,18 @@ class BacktestEngine:
         commission_rate: float = 0.00025,
         stamp_tax: float = 0.001,
         slippage: float = 0.002,
+        position_ratio: float | None = None,
     ) -> None:
         self.initial_capital = initial_capital
         self.commission_rate = commission_rate
         self.stamp_tax = stamp_tax
         self.slippage = slippage
+        # 默认与风控 L1 保持一致，避免回测与模拟盘行为脱节
+        if position_ratio is None:
+            position_ratio = float(
+                settings().get("risk", {}).get("max_position_ratio", 0.30)
+            )
+        self.position_ratio = max(0.0, min(1.0, position_ratio))
         self._logger = get_logger()
 
     def run(self, strategy: Strategy, df: pd.DataFrame, symbol: str) -> BacktestResult:
@@ -189,12 +198,14 @@ class BacktestEngine:
 
         Buy price = close * (1 + slippage)
         Quantity is rounded down to the nearest board lot (100 shares).
+        买入金额受 position_ratio 限制，与风控 L1 单股上限保持一致。
 
         Returns None if not enough cash for even one lot.
         """
         buy_price = close * (1 + self.slippage)
         cost_per_share = buy_price * (1 + self.commission_rate)
-        max_qty = int(cash / cost_per_share)
+        max_value = min(cash, self.initial_capital * self.position_ratio)
+        max_qty = int(max_value / cost_per_share)
         quantity = (max_qty // _BOARD_LOT) * _BOARD_LOT
         if quantity <= 0:
             self._logger.debug(

@@ -23,7 +23,8 @@ def is_trading_day(d: date | None = None) -> bool:
 
         return bool(cc.is_workday(d))
     except Exception:
-        return d.weekday() < 5  # 周一到周五
+        # 降级：周末 + 内置固定节假日表
+        return d.weekday() < 5 and d not in _holiday_set()
 
 
 def is_trading_time(now: datetime | None = None) -> bool:

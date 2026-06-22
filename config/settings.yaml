@@ -1,11 +1,19 @@
 # gugu 交易系统主配置
 
+# ========== 自选股 ==========
+# 自选股列表（代码用字符串，前缀 0 容易被 YAML 解析为八进制，务必加引号）
+watchlist:
+  - "600519"   # 贵州茅台
+  - "300750"   # 宁德时代
+  - "000858"   # 五粮液
+  - "601318"   # 中国平安
+  - "000333"   # 美的集团
+
 # ========== 数据源 ==========
 data:
   primary_source: akshare        # 主源：akshare + 东方财富
-  fallback_sources:              # 降级源
+  fallback_sources:              # 降级源（使用与主源不同的 API 接口）
     - sina
-    - tencent
   fetch_interval_seconds: 120    # 实时采集间隔（秒）
   fail_threshold: 3              # 连续失败 N 次降级
   fail_cooldown_seconds: 300     # 降级冷却时间
@@ -25,7 +33,7 @@ strategy:
   # 信号融合规则：unanimous（全票通过）/ majority（多数）/ any（任一）
   signal_fusion: majority
   min_confidence: 0.6            # 最低置信度阈值
-  auto_select: true              # 是否启用自动选股
+  auto_select: false             # 是否启用自动选股（阶段三骨架期建议关闭，待数据源稳定后再开启）
   select_top_n: 50               # 全市场按资金流排序取前 N
   select_max_candidates: 10      # 最大选股数量
 
@@ -70,6 +78,19 @@ scheduler:
   timezone: Asia/Shanghai
   # 交易日才执行
   trading_days_only: true
+
+# ========== 交易智慧 ==========
+wisdom:
+  skill_dir: "src/gugu/wisdom/skills"  # 项目内 skill 目录（优先）
+  fallback_dirs:                       # 额外的 skill 目录（如本地 books2skill）
+    - "_refs/books2skill/library/books/炒股的智慧/skills"
+  skill_names:
+    - stock-entry-decision
+    - stock-stop-loss-decision
+    - stock-position-sizing
+    - stock-profit-taking-decision
+    - stock-trailing-stop
+    - stock-psychology-check
 
 # ========== 日志 ==========
 log:

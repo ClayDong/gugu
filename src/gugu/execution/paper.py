@@ -1,18 +1,23 @@
 """模拟盘 broker。
 
 内存中维护现金、持仓、交易记录。模拟真实交易成本。
+状态持久化到 JSON 文件，重启后自动恢复。
 """
 from __future__ import annotations
 
+import json
 from datetime import date
 from typing import Any
 
-from gugu.config import settings
+from gugu.config import PROJECT_ROOT, settings
 from gugu.execution.base import AccountInfo, BaseBroker, Direction, OrderResult
 from gugu.models import Position
 from gugu.utils.log import get_logger
 
 logger = get_logger()
+
+# 持久化文件路径
+STATE_FILE = PROJECT_ROOT / "data" / "paper_broker_state.json"
 
 
 class PaperBroker(BaseBroker):
@@ -32,6 +37,9 @@ class PaperBroker(BaseBroker):
         self._slippage = float(slippage or cfg.get("slippage", 0.002))
         self._positions: dict[str, Position] = {}
         self._trades: list[dict[str, Any]] = []
+        self._daily_start_value: float | None = None
+        # 从磁盘恢复状态
+        self._load_state()
 
     def order(
         self,
@@ -42,6 +50,7 @@ class PaperBroker(BaseBroker):
     ) -> OrderResult:
         """下单。模拟成交，扣手续费/印花税/滑点。"""
         symbol = symbol.strip().zfill(6)
+        direction = direction.lower().strip()  # 规范化，与 RiskManager 保持一致
         if quantity <= 0 or quantity % 100 != 0:
             return OrderResult(
                 False, symbol, direction, 0, 0, 0, message="数量必须为 100 的正整数倍"
@@ -72,8 +81,7 @@ class PaperBroker(BaseBroker):
                     (pos.avg_cost * pos.quantity + fill_price * quantity) / new_qty
                 )
                 pos.quantity = new_qty
-                # T+1：新买的当日不可卖
-                pos.available = pos.available
+                # T+1：追加买入的部分当日仍不可卖，旧持仓的 available 不变
             else:
                 self._positions[symbol] = Position(
                     symbol=symbol,
@@ -138,6 +146,7 @@ class PaperBroker(BaseBroker):
                 "stamp_tax": result.stamp_tax,
             }
         )
+        self._save_state()
         return result
 
     def get_position(self, symbol: str) -> Position | None:
@@ -166,11 +175,76 @@ class PaperBroker(BaseBroker):
             self.update_price(sym, price)
 
     def settle_t_plus_1(self) -> None:
-        """T+1 结算：每日开盘前调用，持仓全部变为可卖。"""
+        """T+1 结算：每日开盘前调用，持仓全部变为可卖，并记录日初净值。"""
         for pos in self._positions.values():
             pos.available = pos.quantity
+        if self._daily_start_value is None or self._daily_start_value <= 0:
+            self._daily_start_value = self.get_account().total_value
+        self._save_state()
 
     @property
     def trades(self) -> list[dict[str, Any]]:
         """历史交易记录。"""
         return list(self._trades)
+
+    @property
+    def daily_start_value(self) -> float:
+        """当日开盘时账户净值（用于日亏计算）。"""
+        if self._daily_start_value is None or self._daily_start_value <= 0:
+            return self.get_account().total_value
+        return self._daily_start_value
+
+    def reset_daily_start_value(self) -> None:
+        """重置日初净值（用于人工恢复或跨日）。"""
+        self._daily_start_value = self.get_account().total_value
+        self._save_state()
+
+    def _save_state(self) -> None:
+        """将当前状态持久化到 JSON 文件。"""
+        try:
+            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "cash": self._cash,
+                "positions": {
+                    sym: {
+                        "symbol": p.symbol,
+                        "quantity": p.quantity,
+                        "available": p.available,
+                        "avg_cost": p.avg_cost,
+                        "current_price": p.current_price,
+                    }
+                    for sym, p in self._positions.items()
+                },
+                "trades": self._trades,
+                "daily_start_value": self._daily_start_value,
+            }
+            STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"保存模拟盘状态失败: {e}")
+
+    def _load_state(self) -> None:
+        """从 JSON 文件恢复状态。"""
+        if not STATE_FILE.exists():
+            return
+        try:
+            data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            self._cash = data.get("cash", self._cash)
+            self._positions = {
+                sym: Position(
+                    symbol=p["symbol"],
+                    quantity=p["quantity"],
+                    available=p["available"],
+                    avg_cost=p["avg_cost"],
+                    current_price=p["current_price"],
+                )
+                for sym, p in data.get("positions", {}).items()
+            }
+            self._trades = data.get("trades", [])
+            self._daily_start_value = data.get("daily_start_value")
+            if self._positions:
+                logger.info(
+                    f"恢复模拟盘状态: 现金 ¥{self._cash:,.2f}, "
+                    f"持仓 {len(self._positions)} 只, 交易 {len(self._trades)} 笔"
+                )
+        except Exception as e:
+            logger.warning(f"加载模拟盘状态失败: {e}")

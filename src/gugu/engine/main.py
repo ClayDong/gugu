@@ -5,14 +5,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
-from gugu.config import settings
+import pandas as pd
+
+from gugu.config import PROJECT_ROOT, settings
 from gugu.data import data_manager
 from gugu.engine.signal_router import SignalRouter
 from gugu.execution import PaperBroker
 from gugu.notifier import FeishuNotifier
 from gugu.risk import RiskManager
+from gugu.risk.rules import RiskAction
 from gugu.selector import StockSelector
 from gugu.strategies.registry import get_enabled_strategies
 from gugu.utils.calendar import is_trading_day
@@ -46,12 +50,21 @@ class TradingEngine:
         return bool(settings().get("strategy", {}).get("auto_select", False))
 
     def _load_watchlist(self) -> list[str]:
-        """加载自选股列表。"""
-        # 从配置加载，后续可扩展为数据库
-        return ["600519", "300750", "000858", "601318", "000333"]
+        """加载自选股列表（从 settings.yaml 的 watchlist 配置读取）。"""
+        watchlist = settings().get("watchlist", [])
+        if not watchlist:
+            logger.warning("settings.yaml 中未配置 watchlist，使用空自选股列表")
+            return []
+        # 规范化：去除空白、补零
+        return [str(code).strip().zfill(6) for code in watchlist]
 
     async def run_daily_cycle(self) -> None:
         """每日交易循环：采集 → 策略 → 风控 → 执行 → 通知。"""
+        # 铁律：L2 熔断状态下，即使同日再次调用也必须保持熔断
+        if self._risk.is_halted:
+            logger.warning("L2 熔断状态激活中，跳过本次交易循环（需人工 reset_halt 后恢复）")
+            return
+
         if not is_trading_day():
             logger.info("非交易日，跳过")
             return
@@ -68,6 +81,8 @@ class TradingEngine:
         # 3. 自动选股 + 自选股扫描
         if self.auto_select_enabled:
             selected = self._selector.select()
+            if not selected:
+                logger.info("自动选股未产生候选")
             for s in selected:
                 if s["symbol"] not in self._watchlist:
                     self._watchlist.append(s["symbol"])
@@ -82,6 +97,7 @@ class TradingEngine:
         # 5. 检查日亏
         await self._check_daily_loss()
 
+        self._write_heartbeat("ok")
         logger.info("=== 每日交易循环完成 ===")
 
     async def _update_prices(self) -> None:
@@ -105,11 +121,23 @@ class TradingEngine:
                 df = self._dm.fetch_stock_history(symbol, days=60)
                 if df.empty:
                     continue
-                signal = self._router.route(df, symbol)
+
+                meta = self._dm.fetch_stock_meta(symbol)
+                signal = self._router.route(df, symbol, name=meta.get("name", ""))
                 if signal:
-                    # 决策层增强
-                    signal = self._wisdom.advise(signal)
+                    # L3 元数据
+                    signal["prev_close"] = (
+                        float(df.iloc[-2]["close"]) if len(df) >= 2 else float(df.iloc[-1]["close"])
+                    )
+                    signal["is_st"] = bool(meta.get("is_st", False))
+                    signal["is_suspended"] = bool(meta.get("is_suspended", False))
+                    signal["name"] = signal.get("name") or meta.get("name", "")
                     signal["price"] = float(df.iloc[-1]["close"])
+                    # 先设置基础仓位比例，再交给 wisdom 调整
+                    max_ratio = settings().get("risk", {}).get("max_position_ratio", 0.30)
+                    signal["suggested_position_ratio"] = max_ratio * 0.8
+                    # 决策层增强（可能调整仓位比例、预设止损、过滤入场）
+                    signal = self._wisdom.advise(signal)
                     signals.append(signal)
                     logger.info(
                         f"信号: {signal['symbol']} {signal['direction']} "
@@ -125,17 +153,27 @@ class TradingEngine:
         direction = signal["direction"]
         price = signal.get("price", 0)
 
-        # 计算下单数量：按风控 max_position_ratio 的 80% 作为目标仓位
+        # 入场过滤：wisdom 判定低置信度，仅通知不下单
+        if signal.get("wisdom_filtered"):
+            logger.info(f"{symbol} 信号被 wisdom 入场过滤，仅通知不下单")
+            await self._notifier.notify_signal(signal)
+            return
+
+        # 使用 wisdom 调整后的仓位比例（已在 _scan_signals 中设置）
+        suggested_ratio = signal.get("suggested_position_ratio", 0.0)
+        if suggested_ratio <= 0:
+            max_ratio = settings().get("risk", {}).get("max_position_ratio", 0.30)
+            suggested_ratio = max_ratio * 0.8
+
         account = self._broker.get_account()
-        max_ratio = settings().get("risk", {}).get("max_position_ratio", 0.30)
-        target_value = account.total_value * max_ratio * 0.8
+        target_value = account.total_value * suggested_ratio
         quantity = int(target_value / price / 100) * 100 if price > 0 else 0
 
         if quantity <= 0:
             logger.warning(f"{symbol} 计算下单数量为 0，跳过")
             return
 
-        # 风控检查
+        # 风控检查（传入 L3 元数据，确保涨跌停/停牌/ST 不被绕过）
         portfolio = self._broker.get_portfolio()
         risk_result = self._risk.check_order(
             symbol=symbol,
@@ -144,6 +182,9 @@ class TradingEngine:
             price=price,
             portfolio=portfolio,
             cash=account.cash,
+            prev_close=signal.get("prev_close"),
+            is_st=bool(signal.get("is_st", False)),
+            is_suspended=bool(signal.get("is_suspended", False)),
         )
 
         if not risk_result.allowed:
@@ -171,15 +212,17 @@ class TradingEngine:
         await self._notifier.notify_signal(signal)
 
     async def _check_daily_loss(self) -> None:
-        """检查当日亏损。"""
+        """检查当日亏损（以日初净值为基准）。"""
         account = self._broker.get_account()
-        initial = settings().get("execution", {}).get("paper", {}).get(
-            "initial_capital", 1_000_000
-        )
-        loss_pct = (initial - account.total_value) / initial
+        start_value = self._broker.daily_start_value
+        if start_value <= 0:
+            start_value = settings().get("execution", {}).get("paper", {}).get(
+                "initial_capital", 1_000_000
+            )
+        loss_pct = (start_value - account.total_value) / start_value
 
         risk_result = self._risk.check_daily_loss(loss_pct)
-        if risk_result.action.value == "warn":
+        if risk_result.action == RiskAction.WARN:
             await self._notifier.notify_risk_alert(
                 {
                     "level": "warn",
@@ -187,7 +230,7 @@ class TradingEngine:
                     "suggestion": "关注持仓，考虑减仓",
                 }
             )
-        elif risk_result.action.value == "halt":
+        elif risk_result.action == RiskAction.HALT:
             await self._notifier.notify_risk_alert(
                 {
                     "level": "halt",
@@ -219,6 +262,36 @@ class TradingEngine:
             },
         }
         await self._notifier.notify_daily_report(period, data)
+
+    async def shutdown(self) -> None:
+        """关闭引擎资源（HTTP client 等）。"""
+        await self._notifier.close()
+        self._write_heartbeat("shutdown")
+
+    def reset_halt(self) -> None:
+        """手动解除 L2 熔断（需人工确认后执行）。"""
+        self._risk.reset()
+        self._broker.reset_daily_start_value()
+        logger.warning("L2 熔断状态已手动重置")
+
+    def _write_heartbeat(self, status: str) -> None:
+        """写入心跳文件，便于外部监控。"""
+        try:
+            hb_dir = PROJECT_ROOT / "data"
+            hb_dir.mkdir(exist_ok=True)
+            path = hb_dir / "heartbeat.json"
+            account = self._broker.get_account()
+            payload = {
+                "last_cycle_at": pd.Timestamp.now().isoformat(),
+                "status": status,
+                "halted": self._risk.is_halted,
+                "total_value": account.total_value,
+                "cash": account.cash,
+                "positions_count": len(account.positions),
+            }
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"写入心跳文件失败: {e}")
 
 
 def run_engine() -> None:
