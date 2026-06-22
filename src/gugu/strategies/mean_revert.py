@@ -62,7 +62,9 @@ class RSIStrategy(Strategy):
         df["rsi"] = 100 - (100 / (1 + rs))
 
         df["signal"] = 0
-        # RSI 从超卖区上穿
+        # RSI 回升确认策略：从超卖区回升时买入，从超买区回落时卖出
+        # 注：这是"回升确认"流派，在 RSI 离开超卖区时触发（价格已反弹），
+        # 而非"首次进入超卖区"流派（价格仍在下跌）
         df.loc[(df["rsi"] < oversold) & (df["rsi"].shift(1) >= oversold), "signal"] = 1
         # RSI 从超买区下穿
         df.loc[

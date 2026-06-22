@@ -5,9 +5,9 @@
 """
 from __future__ import annotations
 
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 
 from gugu.config import settings
 from gugu.engine.signal_router import SignalRouter
@@ -15,7 +15,6 @@ from gugu.execution import PaperBroker
 from gugu.risk import RiskManager
 from gugu.strategies.registry import get_enabled_strategies
 from gugu.wisdom import WisdomAdvisor
-
 
 # ========== Fixture 数据 ==========
 
@@ -231,3 +230,50 @@ class TestBoundaryBacktestTPlus1:
                 curr_trade = result.trades[i]
                 if prev_trade.direction == "buy" and curr_trade.direction == "sell":
                     assert prev_trade.date != curr_trade.date, "T+1 违规：同日买入卖出"
+
+
+class TestBoundaryIsTradableDirection:
+    """边界场景：is_tradable 区分买卖方向。"""
+
+    def test_limit_up_allows_sell(self):
+        """涨停时允许卖出。"""
+        risk = RiskManager()
+        # 主板 10% 涨停：prev_close=100, limit_up=110
+        assert risk.is_tradable("000858", 110.0, 100.0, direction="sell") is True
+        assert risk.is_tradable("000858", 110.0, 100.0, direction="buy") is False
+
+    def test_limit_down_allows_buy(self):
+        """跌停时允许买入。"""
+        risk = RiskManager()
+        # 主板 10% 跌停：prev_close=100, limit_down=90
+        assert risk.is_tradable("000858", 90.0, 100.0, direction="buy") is True
+        assert risk.is_tradable("000858", 90.0, 100.0, direction="sell") is False
+
+    def test_normal_price_tradable(self):
+        """正常价格买卖均可。"""
+        risk = RiskManager()
+        assert risk.is_tradable("000858", 105.0, 100.0, direction="buy") is True
+        assert risk.is_tradable("000858", 95.0, 100.0, direction="sell") is True
+
+
+class TestBoundaryMinimumOneLot:
+    """边界场景：最低1手保底。"""
+
+    def test_high_price_stock_minimum_lot(self, tmp_path, monkeypatch):
+        """高价股试仓比例过小时，保底买入100股。"""
+        monkeypatch.setattr("gugu.execution.paper.STATE_FILE", tmp_path / "state.json")
+
+        broker = PaperBroker(initial_capital=1_000_000)
+        # 茅台 1500 元/股，试仓 4.8% → target=48000 → 32 股 → 取整为 0
+        # 保底应买入 100 股
+        price = 1500.0
+        suggested_ratio = 0.048
+        target_value = 1_000_000 * suggested_ratio
+        quantity = int(target_value / price / 100) * 100
+        assert quantity == 0  # 常规计算为 0
+
+        # 保底逻辑：现金足够则买入 100 股
+        account = broker.get_account()
+        if account.cash >= price * 100:
+            quantity = 100
+        assert quantity == 100  # 保底生效

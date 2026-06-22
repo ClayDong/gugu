@@ -86,13 +86,17 @@ class TradingEngine:
 
         # 3. 自动选股 + 自选股扫描
         if self.auto_select_enabled:
-            selected = self._selector.select()
-            if not selected:
-                logger.info("自动选股未产生候选")
-            for s in selected:
-                if s["symbol"] not in self._watchlist:
-                    self._watchlist.append(s["symbol"])
-                    logger.info(f"自动选股加入 watchlist: {s['symbol']}")
+            # 降级源不支持全市场快照，降级时跳过自动选股
+            if self._dm.is_degraded:
+                logger.info("数据源已降级，跳过自动选股（降级源不支持全市场快照）")
+            else:
+                selected = self._selector.select()
+                if not selected:
+                    logger.info("自动选股未产生候选")
+                for s in selected:
+                    if s["symbol"] not in self._watchlist:
+                        self._watchlist.append(s["symbol"])
+                        logger.info(f"自动选股加入 watchlist: {s['symbol']}")
 
         signals = await self._scan_signals()
 
@@ -174,6 +178,11 @@ class TradingEngine:
         account = self._broker.get_account()
         target_value = account.total_value * suggested_ratio
         quantity = int(target_value / price / 100) * 100 if price > 0 else 0
+
+        # 最低1手保底：试仓比例过小时（如高价股），确保至少买入100股
+        if quantity <= 0 and price > 0 and account.cash >= price * 100:
+            quantity = 100
+            logger.info(f"{symbol} 试仓比例过小，使用最低1手保底: 100股")
 
         if quantity <= 0:
             logger.warning(f"{symbol} 计算下单数量为 0，跳过")

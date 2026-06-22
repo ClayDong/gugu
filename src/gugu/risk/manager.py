@@ -122,9 +122,9 @@ class RiskManager:
                 message=f"{symbol} is suspended, trading not allowed",
             )
 
-        # L3: price limit check (涨跌停)
+        # L3: price limit check (涨跌停) - 区分买卖方向
         if prev_close is not None and prev_close > 0 and not self.is_tradable(
-            symbol, price, prev_close, is_st=is_st
+            symbol, price, prev_close, is_st=is_st, direction=direction
         ):
             return RiskCheckResult(
                 level=RiskLevel.L3_SYSTEM,
@@ -293,6 +293,7 @@ class RiskManager:
         *,
         is_st: bool = False,
         is_suspended: bool = False,
+        direction: str = "",
     ) -> bool:
         """L3: Check if a stock is tradable (not at price limit, not suspended).
 
@@ -301,12 +302,15 @@ class RiskManager:
         - ChiNext (300/301) / STAR (688/689): ±20%
         - ST stocks: ±5% (overrides board-based limit)
 
+        Direction-aware: 涨停时允许卖出（有人排队买），跌停时允许买入（有人排队卖）。
+
         Args:
             symbol: Stock code.
             price: Current / order price.
             prev_close: Previous close price.
             is_st: Whether the stock is ST.
             is_suspended: Whether the stock is suspended.
+            direction: "buy" or "sell". Empty string = old behavior (both blocked).
 
         Returns:
             True if tradable, False if at price limit or suspended.
@@ -324,10 +328,13 @@ class RiskManager:
         limit_up = round(prev_close * (1 + limit_ratio), 2)
         limit_down = round(prev_close * (1 - limit_ratio), 2)
 
-        # Not tradable if at limit up or limit down
-        if price >= limit_up:
+        # 涨停：不可买入，但可以卖出
+        if price >= limit_up and direction != "sell":
             return False
-        return price > limit_down
+        # 跌停：不可卖出，但可以买入
+        if price <= limit_down and direction != "buy":  # noqa: SIM103
+            return False
+        return True
 
     @staticmethod
     def _price_limit_ratio(symbol: str, is_st: bool) -> float:
