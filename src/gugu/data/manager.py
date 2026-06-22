@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -22,6 +23,8 @@ logger = get_logger()
 
 class DataManager:
     """数据管理器：封装多源切换逻辑。"""
+
+    _lock: asyncio.Lock
 
     def __init__(self) -> None:
         cfg = settings().get("data", {})
@@ -73,8 +76,12 @@ class DataManager:
         "fetch_sector_flow": validate_sector_flow,
     }
 
-    def _call_with_fallback(self, method: str, *args: Any, **kwargs: Any) -> pd.DataFrame:
+    async def _call_with_fallback(self, method: str, *args: Any, **kwargs: Any) -> pd.DataFrame:
         """带降级的方法调用，返回前自动做数据质量校验。"""
+        async with self._lock:
+            return await self._call_with_fallback_inner(method, *args, **kwargs)
+
+    async def _call_with_fallback_inner(self, method: str, *args: Any, **kwargs: Any) -> pd.DataFrame:
         # 缓存键只包含方法名+核心参数值（排除 kwargs 传递方式差异）
         key_parts = [method]
         for a in args:
@@ -123,24 +130,24 @@ class DataManager:
         try:
             return validator(df, symbol)
         except Exception as e:
-            logger.warning(f"{method} 数据质量校验异常: {e}，返回原始数据")
-            return df
+            logger.warning(f"{method} 数据质量校验异常: {e}，返回空 DataFrame")
+            return pd.DataFrame()
 
     # ===== 对外接口 =====
 
-    def fetch_stock_history(self, symbol: str, days: int = 60) -> pd.DataFrame:
-        return self._call_with_fallback("fetch_stock_history", symbol, days=days)
+    async def fetch_stock_history(self, symbol: str, days: int = 60) -> pd.DataFrame:
+        return await self._call_with_fallback("fetch_stock_history", symbol, days=days)
 
-    def fetch_stock_realtime(self, symbols: list[str]) -> pd.DataFrame:
-        return self._call_with_fallback("fetch_stock_realtime", symbols)
+    async def fetch_stock_realtime(self, symbols: list[str]) -> pd.DataFrame:
+        return await self._call_with_fallback("fetch_stock_realtime", symbols)
 
-    def fetch_sector_flow(self) -> pd.DataFrame:
-        return self._call_with_fallback("fetch_sector_flow")
+    async def fetch_sector_flow(self) -> pd.DataFrame:
+        return await self._call_with_fallback("fetch_sector_flow")
 
-    def fetch_stock_flow(self, symbol: str) -> pd.DataFrame:
-        return self._call_with_fallback("fetch_stock_flow", symbol)
+    async def fetch_stock_flow(self, symbol: str) -> pd.DataFrame:
+        return await self._call_with_fallback("fetch_stock_flow", symbol)
 
-    def fetch_stock_meta(self, symbol: str) -> dict[str, Any]:
+    async def fetch_stock_meta(self, symbol: str) -> dict[str, Any]:
         """获取股票元数据（用于风控 L3）。
 
         Returns:
@@ -157,12 +164,13 @@ class DataManager:
 
         # 从实时快照取名称、现价、是否停牌
         try:
-            rt = self.fetch_stock_realtime([code])
+            rt = await self.fetch_stock_realtime([code])
             if not rt.empty:
                 row = rt.iloc[0]
                 meta["name"] = str(row.get("name", ""))
                 price = float(row.get("price", 0) or 0)
-                meta["is_suspended"] = price <= 0
+                volume = float(row.get("volume", 0) or 0)
+                meta["is_suspended"] = price <= 0 or volume <= 0
                 if "ST" in meta["name"]:
                     meta["is_st"] = True
         except Exception as e:
@@ -170,7 +178,7 @@ class DataManager:
 
         # 从近两日历史取前收盘价
         try:
-            hist = self.fetch_stock_history(code, days=2)
+            hist = await self.fetch_stock_history(code, days=2)
             if not hist.empty and len(hist) >= 2:
                 meta["prev_close"] = float(hist.iloc[-2]["close"])
             elif not hist.empty:

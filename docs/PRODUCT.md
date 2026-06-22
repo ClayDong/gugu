@@ -10,9 +10,9 @@
 
 | 维度 | 说明 |
 |------|------|
-| 核心功能 | 免费行情采集 → 策略选股 → 自动买卖 → 飞书实时通知 |
+| 核心功能 | 免费行情采集 → 策略选股 → 自动买卖 → 飞书实时通知 → Web 仪表盘 |
 | 目标用户 | 个人投资者（开发者本人），非通用 SaaS |
-| 交付形态 | Python 后端服务 + 飞书卡片消息（无 GUI） |
+| 交付形态 | Python 后端服务 + 飞书卡片消息 + Web 仪表盘 |
 
 ## 二、解决的痛点
 
@@ -85,6 +85,16 @@
 - 持仓盈亏实时更新
 - CLI 持仓查看：`uv run python scripts/show_portfolio.py --all`
 
+### 4.6 Web 仪表盘
+
+- FastAPI 后端 + 单页 HTML 前端
+- 实时展示：总资产、现金、持仓市值、累计盈亏
+- 持仓详情：代码/数量/成本/现价/盈亏
+- 交易记录：最近 20 笔交易
+- 风控状态：日亏比例、熔断状态
+- 30 秒自动刷新
+- 启动：`uv run python scripts/run_web.py`
+
 ## 五、使用方式
 
 ### 5.1 环境准备
@@ -122,6 +132,9 @@ uv run python scripts/run_backtest.py
 # 模拟盘
 uv run python scripts/run_paper.py
 
+# Web 仪表盘
+uv run python scripts/run_web.py
+
 # 实盘（阶段四）
 uv run python scripts/run_live.py
 ```
@@ -143,3 +156,4 @@ uv run python scripts/run_live.py
 | 3 | 2026-06-22 | wisdom skill 内置化 + 信号卡片展示智慧建议 + L2 熔断防绕过 |
 | 4 | 2026-06-22 | wisdom 真正参与决策 + 自选股配置化 + 持仓查看命令 |
 | 5 | 2026-06-22 | 数据采集器真降级 + wisdom 决策流程修复 + 数据质量增强 |
+| 6 | 2026-06-23 | 多专家评审10项P1修复 + Web仪表盘 + 端到端测试加固 |

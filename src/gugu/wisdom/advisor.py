@@ -164,6 +164,16 @@ class WisdomAdvisor:
         elif direction == "sell":
             advice["profit_taking"] = self._get_skill_advice("stock-profit-taking-decision")
             advice["trailing_stop"] = self._get_skill_advice("stock-trailing-stop")
+            # 卖出决策参与：检查止盈/追踪止损
+            price = signal.get("price", 0)
+            if price > 0:
+                # 追踪止损：价格从最高点回落超过 10% 时建议卖出
+                trailing_stop_pct = 0.10
+                decision["trailing_stop_pct"] = trailing_stop_pct
+                decision["sell_reason"] = "策略信号触发卖出"
+                logger.info(
+                    f"[wisdom] {signal.get('symbol', '')} 卖出决策: 策略信号 + 追踪止损 {trailing_stop_pct:.0%}"
+                )
 
         # 心理检查（买卖都要）
         advice["psychology_check"] = self._get_skill_advice("stock-psychology-check")

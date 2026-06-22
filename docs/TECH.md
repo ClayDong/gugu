@@ -14,6 +14,7 @@
 | 数据处理 | pandas / numpy | |
 | 调度 | APScheduler | CronTrigger |
 | 通知 | 飞书开放平台 API | 卡片消息 |
+| Web | FastAPI + uvicorn | 仪表盘 API + 静态页面 |
 | 实盘 | QMT（迅投）Python API | 阶段四启用 |
 | HTTP | httpx | 异步客户端 |
 | 配置 | pydantic-settings + YAML | |
@@ -75,6 +76,9 @@ gugu/
 │   │   ├── main.py              # TradingEngine 主入口
 │   │   ├── scheduler.py          # APScheduler 调度
 │   │   └── signal_router.py      # 多策略信号融合
+│   ├── web/                     # Web 仪表盘
+│   │   ├── app.py               # FastAPI 应用
+│   │   └── static/index.html    # 单页仪表盘
 │   └── utils/
 │       ├── log.py               # loguru 日志
 │       └── calendar.py          # 交易日历
@@ -84,6 +88,7 @@ gugu/
 ├── scripts/
 │   ├── run_backtest.py          # 回测入口
 │   ├── run_paper.py             # 模拟盘入口
+│   ├── run_web.py               # Web 仪表盘入口
 │   ├── show_portfolio.py        # 持仓查看入口
 │   └── run_live.py              # 实盘入口（阶段四）
 └── docs/
@@ -118,10 +123,11 @@ gugu/
 1. 交易日判断 → 非交易日跳过
 2. `broker.settle_t_plus_1()` + `risk.reset()`
 3. `_update_prices()`：采集行情，更新持仓现价
-4. `_scan_signals()`：自选股 + 自动选股 → 多策略信号融合
-5. `_process_signal()`：逐信号 → 风控检查 → 下单 → 通知
-6. `_check_daily_loss()`：L2 预警/熔断
-7. `_write_heartbeat()`：心跳文件
+4. `_scan_signals()`：自选股 + 自动选股 → 多策略信号融合 → wisdom 决策增强
+5. `_check_stop_loss()`：遍历持仓，现价触及止损价则执行卖出
+6. `_process_signal()`：逐信号 → 风控检查 → 下单 → 通知
+7. `_check_daily_loss()`：L2 预警/熔断
+8. `_write_heartbeat()`：心跳文件
 
 ### 3.3 数据源降级机制
 
@@ -221,23 +227,25 @@ class MyStrategy(Strategy):
 ```
 tests/
 ├── conftest.py              # 公共 fixture（ohlcv_df）
-└── unit/
-    ├── test_strategies.py   # 策略测试
-    ├── test_risk.py          # 风控测试
-    ├── test_execution.py     # 执行层测试
-    ├── test_engine.py        # 主引擎测试
-    ├── test_signal_router.py # 信号路由测试
-    ├── test_backtest.py      # 回测测试
-    ├── test_notifier.py      # 通知层测试
-    ├── test_data.py          # 数据层测试
-    ├── test_generator.py     # 策略生成器测试
-    ├── test_position.py      # Position 模型测试
-    └── test_utils.py         # 工具函数测试
+├── unit/                    # 单元测试
+│   ├── test_strategies.py   # 策略测试
+│   ├── test_risk.py          # 风控测试
+│   ├── test_execution.py     # 执行层测试
+│   ├── test_engine.py        # 主引擎测试
+│   ├── test_signal_router.py # 信号路由测试
+│   ├── test_backtest.py      # 回测测试
+│   ├── test_notifier.py      # 通知层测试
+│   ├── test_data.py          # 数据层测试
+│   ├── test_generator.py     # 策略生成器测试
+│   ├── test_position.py      # Position 模型测试
+│   └── test_utils.py         # 工具函数测试
+└── integration/
+    └── test_e2e_pipeline.py  # 端到端链路测试
 ```
 
 ### 5.2 覆盖率
 
-当前覆盖率：**77%**（目标 ≥ 70%）
+当前覆盖率：**74%**（目标 ≥ 70%）
 
 | 模块 | 覆盖率 | 说明 |
 |------|--------|------|

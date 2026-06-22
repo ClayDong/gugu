@@ -90,6 +90,9 @@ gugu/
 │       │   ├── main.py          # 主引擎入口
 │       │   ├── scheduler.py     # APScheduler 调度
 │       │   └── signal_router.py # 多策略信号融合
+│       ├── web/                 # Web 仪表盘
+│       │   ├── app.py           # FastAPI 应用
+│       │   └── static/index.html # 单页仪表盘
 │       └── utils/
 │           ├── log.py           # 日志
 │           └── calendar.py      # 交易日历（节假日识别）
@@ -101,6 +104,7 @@ gugu/
 ├── scripts/
 │   ├── run_backtest.py          # 回测入口
 │   ├── run_paper.py             # 模拟盘入口
+│   ├── run_web.py               # Web 仪表盘入口
 │   ├── show_portfolio.py        # 持仓查看入口
 │   └── run_live.py              # 实盘入口（阶段四）
 ├── docs/                        # 文档

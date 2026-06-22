@@ -90,7 +90,7 @@ class TradingEngine:
             if self._dm.is_degraded:
                 logger.info("数据源已降级，跳过自动选股（降级源不支持全市场快照）")
             else:
-                selected = self._selector.select()
+                selected = await self._selector.select()
                 if not selected:
                     logger.info("自动选股未产生候选")
                 for s in selected:
@@ -100,11 +100,14 @@ class TradingEngine:
 
         signals = await self._scan_signals()
 
-        # 4. 执行信号（风控 + 下单）
+        # 4. 持仓止损检查：遍历持仓，若现价触及止损价则生成卖出信号
+        await self._check_stop_loss()
+
+        # 5. 执行信号（风控 + 下单）
         for signal in signals:
             await self._process_signal(signal)
 
-        # 5. 检查日亏
+        # 6. 检查日亏
         await self._check_daily_loss()
 
         self._write_heartbeat("ok")
@@ -117,7 +120,7 @@ class TradingEngine:
             return
         symbols = list(portfolio.keys())
         try:
-            df = self._dm.fetch_stock_realtime(symbols)
+            df = await self._dm.fetch_stock_realtime(symbols)
             for _, row in df.iterrows():
                 self._broker.update_price(row["symbol"], float(row["price"]))
         except Exception as e:
@@ -128,11 +131,11 @@ class TradingEngine:
         signals = []
         for symbol in self._watchlist:
             try:
-                df = self._dm.fetch_stock_history(symbol, days=60)
+                df = await self._dm.fetch_stock_history(symbol, days=60)
                 if df.empty:
                     continue
 
-                meta = self._dm.fetch_stock_meta(symbol)
+                meta = await self._dm.fetch_stock_meta(symbol)
                 signal = self._router.route(df, symbol, name=meta.get("name", ""))
                 if signal:
                     # L3 元数据
@@ -142,7 +145,16 @@ class TradingEngine:
                     signal["is_st"] = bool(meta.get("is_st", False))
                     signal["is_suspended"] = bool(meta.get("is_suspended", False))
                     signal["name"] = signal.get("name") or meta.get("name", "")
+                    # 优先使用实时价，历史收盘价作为 fallback
                     signal["price"] = float(df.iloc[-1]["close"])
+                    try:
+                        rt = await self._dm.fetch_stock_realtime([symbol])
+                        if not rt.empty:
+                            rt_price = float(rt.iloc[0]["price"])
+                            if rt_price > 0:
+                                signal["price"] = rt_price
+                    except Exception:
+                        pass  # 实时价获取失败，使用历史收盘价
                     # 先设置基础仓位比例，再交给 wisdom 调整
                     max_ratio = settings().get("risk", {}).get("max_position_ratio", 0.30)
                     signal["suggested_position_ratio"] = max_ratio * 0.8
@@ -229,6 +241,39 @@ class TradingEngine:
         }
         await self._notifier.notify_signal(signal)
 
+    async def _check_stop_loss(self) -> None:
+        """遍历持仓，若现价触及止损价则执行卖出。"""
+        portfolio = self._broker.get_portfolio()
+        account = self._broker.get_account()
+        for symbol, pos in portfolio.items():
+            stop_price = getattr(pos, "stop_loss_price", None)
+            if stop_price is None or stop_price <= 0:
+                continue
+            if pos.current_price <= stop_price and pos.available > 0:
+                logger.warning(
+                    f"止损触发: {symbol} 现价 {pos.current_price} <= 止损价 {stop_price}，执行卖出"
+                )
+                risk_result = self._risk.check_order(
+                    symbol=symbol,
+                    direction="sell",
+                    quantity=pos.available,
+                    price=pos.current_price,
+                    portfolio=portfolio,
+                    cash=account.cash,
+                )
+                if risk_result.allowed:
+                    result = self._broker.order(symbol, "sell", pos.available, pos.current_price)
+                    if result.success:
+                        await self._notifier.notify_risk_alert(
+                            {
+                                "level": "warn",
+                                "message": f"止损卖出: {symbol} {pos.available}股 @ {result.price}",
+                                "suggestion": "止损价由 wisdom 预设，已自动执行",
+                            }
+                        )
+                else:
+                    logger.warning(f"止损卖出 {symbol} 被风控拦截: {risk_result.message}")
+
     async def _check_daily_loss(self) -> None:
         """检查当日亏损（以日初净值为基准）。"""
         account = self._broker.get_account()
@@ -260,7 +305,7 @@ class TradingEngine:
     async def send_daily_report(self, period: str) -> None:
         """发送每日日报。"""
         account = self._broker.get_account()
-        sector_df = self._dm.fetch_sector_flow()
+        sector_df = await self._dm.fetch_sector_flow()
 
         data = {
             "market_summary": {
