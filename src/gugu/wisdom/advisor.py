@@ -127,19 +127,27 @@ class WisdomAdvisor:
                     f"[wisdom] {signal.get('symbol', '')} 入场过滤: 置信度 {confidence:.2f} < {ENTRY_MIN_CONFIDENCE}"
                 )
 
-            # 决策2：仓位调整——分层下注（首次仅用目标仓位的 20%）
+            # 决策2：仓位调整——分层下注
             original_ratio = signal.get("suggested_position_ratio", 0.0)
             if original_ratio > 0:
-                # 首次买入仅用目标仓位的 20%（试仓）
-                adjusted_ratio = original_ratio * POSITION_TRIAL_RATIO
+                # 判断是否已有持仓：有持仓则加码，无持仓则试仓
+                has_position = signal.get("has_position", False)
+                if has_position:
+                    # 加码：用目标仓位的 40%
+                    adjusted_ratio = original_ratio * POSITION_ADD_RATIO
+                    strategy_label = "add"
+                else:
+                    # 试仓：首次买入仅用目标仓位的 20%
+                    adjusted_ratio = original_ratio * POSITION_TRIAL_RATIO
+                    strategy_label = "trial"
                 # 不超过单股最大 20%
                 adjusted_ratio = min(adjusted_ratio, MAX_SINGLE_POSITION)
                 decision["adjusted_position_ratio"] = adjusted_ratio
-                decision["position_strategy"] = "trial"  # 试仓
+                decision["position_strategy"] = strategy_label
                 signal["suggested_position_ratio"] = adjusted_ratio
                 logger.info(
                     f"[wisdom] {signal.get('symbol', '')} 仓位调整: "
-                    f"{original_ratio:.2%} → {adjusted_ratio:.2%} (试仓)"
+                    f"{original_ratio:.2%} → {adjusted_ratio:.2%} ({strategy_label})"
                 )
 
             # 决策3：止损价预设

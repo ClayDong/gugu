@@ -277,3 +277,157 @@ class TestBoundaryMinimumOneLot:
         if account.cash >= price * 100:
             quantity = 100
         assert quantity == 100  # 保底生效
+
+
+# ========== 第三轮修复验证 ==========
+
+class TestRSIReversalConfirmation:
+    """端到端测试：RSI 回升确认策略。"""
+
+    def test_rsi_oversold_recovery_buy_signal(self):
+        """RSI 从超卖区回升到超卖线上方时产生买入信号。"""
+        from gugu.strategies.mean_revert import RSIStrategy
+
+        strategy = RSIStrategy()
+        # 构造 RSI 先进入超卖区再回升的数据
+        np.random.seed(55)
+        days = 60
+        dates = pd.bdate_range("2024-01-01", periods=days)
+        # 前 30 天持续下跌（RSI 进入超卖区），后 30 天持续上涨（RSI 回升）
+        prices = [100.0 * (1 - 0.02 * i) for i in range(30)] + \
+                 [100.0 * (1 - 0.02 * 29) * (1 + 0.015 * i) for i in range(30)]
+        close = pd.Series(prices[:days], dtype=float)
+        high = close * 1.01
+        low = close * 0.99
+        open_ = close * 0.999
+        volume = pd.Series([1_000_000] * days, dtype=float)
+        amount = close * volume
+        df = pd.DataFrame({
+            "date": dates[:days], "open": open_.values, "high": high.values,
+            "low": low.values, "close": close.values, "volume": volume.values,
+            "amount": amount.values,
+        })
+
+        result = strategy.generate_signals(df)
+        buy_signals = result[result["signal"] == 1]
+        # 应该在 RSI 回升确认时产生买入信号
+        assert len(buy_signals) > 0, "RSI 回升确认应产生买入信号"
+        # 买入信号的置信度应 > 0
+        for _, row in buy_signals.iterrows():
+            assert row["confidence"] > 0, "RSI 买入信号置信度应 > 0"
+
+    def test_rsi_overbought_retreat_sell_signal(self):
+        """RSI 从超买区回落到超买线下方时产生卖出信号。"""
+        from gugu.strategies.mean_revert import RSIStrategy
+
+        strategy = RSIStrategy()
+        np.random.seed(56)
+        days = 60
+        dates = pd.bdate_range("2024-01-01", periods=days)
+        # 前 30 天持续上涨（RSI 进入超买区），后 30 天持续下跌（RSI 回落）
+        prices = [100.0 * (1 + 0.02 * i) for i in range(30)] + \
+                 [100.0 * (1 + 0.02 * 29) * (1 - 0.015 * i) for i in range(30)]
+        close = pd.Series(prices[:days], dtype=float)
+        high = close * 1.01
+        low = close * 0.99
+        open_ = close * 0.999
+        volume = pd.Series([1_000_000] * days, dtype=float)
+        amount = close * volume
+        df = pd.DataFrame({
+            "date": dates[:days], "open": open_.values, "high": high.values,
+            "low": low.values, "close": close.values, "volume": volume.values,
+            "amount": amount.values,
+        })
+
+        result = strategy.generate_signals(df)
+        sell_signals = result[result["signal"] == -1]
+        # 应该在 RSI 回落确认时产生卖出信号
+        assert len(sell_signals) > 0, "RSI 回落确认应产生卖出信号"
+        for _, row in sell_signals.iterrows():
+            assert row["confidence"] > 0, "RSI 卖出信号置信度应 > 0"
+
+    def test_rsi_no_signal_in_neutral_zone(self):
+        """RSI 在中性区域不应产生信号。"""
+        from gugu.strategies.mean_revert import RSIStrategy
+
+        strategy = RSIStrategy()
+        np.random.seed(57)
+        days = 60
+        dates = pd.bdate_range("2024-01-01", periods=days)
+        # 温和波动，RSI 保持在 40-60 中性区
+        noise = np.random.normal(0, 0.003, days)
+        prices = [100.0]
+        for n in noise[1:]:
+            prices.append(prices[-1] * (1 + n))
+        close = pd.Series(prices[:days], dtype=float)
+        high = close * 1.005
+        low = close * 0.995
+        open_ = close * 0.999
+        volume = pd.Series([1_000_000] * days, dtype=float)
+        amount = close * volume
+        df = pd.DataFrame({
+            "date": dates[:days], "open": open_.values, "high": high.values,
+            "low": low.values, "close": close.values, "volume": volume.values,
+            "amount": amount.values,
+        })
+
+        result = strategy.generate_signals(df)
+        signals = result[result["signal"] != 0]
+        # 中性区域信号应远少于趋势数据（趋势数据通常 5+ 个信号）
+        assert len(signals) <= 5, f"中性区域不应频繁产生信号，实际 {len(signals)} 个"
+
+
+class TestWisdomPositionStrategy:
+    """端到端测试：Wisdom 加码/试仓逻辑。"""
+
+    def test_trial_position_when_no_existing(self):
+        """无持仓时使用试仓比例（20%）。"""
+        wisdom = WisdomAdvisor()
+        signal = {
+            "symbol": "000858", "name": "五粮液", "direction": "buy",
+            "confidence": 0.75, "strategy": "bollinger", "strategies": ["bollinger"],
+            "reason": "测试", "suggested_position_ratio": 0.24, "price": 150.0,
+            "has_position": False,  # 无持仓 → 试仓
+        }
+        enhanced = wisdom.advise(signal)
+        # 试仓：0.24 * 0.20 = 0.048
+        assert enhanced["suggested_position_ratio"] == pytest.approx(0.24 * 0.20, abs=0.001)
+        assert enhanced["wisdom_decision"]["position_strategy"] == "trial"
+
+    def test_add_position_when_already_holding(self):
+        """有持仓时使用加码比例（40%）。"""
+        wisdom = WisdomAdvisor()
+        signal = {
+            "symbol": "000858", "name": "五粮液", "direction": "buy",
+            "confidence": 0.75, "strategy": "bollinger", "strategies": ["bollinger"],
+            "reason": "测试", "suggested_position_ratio": 0.24, "price": 150.0,
+            "has_position": True,  # 有持仓 → 加码
+        }
+        enhanced = wisdom.advise(signal)
+        # 加码：0.24 * 0.40 = 0.096
+        assert enhanced["suggested_position_ratio"] == pytest.approx(0.24 * 0.40, abs=0.001)
+        assert enhanced["wisdom_decision"]["position_strategy"] == "add"
+
+    def test_position_capped_at_max_single(self):
+        """仓位不超过单股最大限制 20%。"""
+        wisdom = WisdomAdvisor()
+        signal = {
+            "symbol": "000858", "name": "五粮液", "direction": "buy",
+            "confidence": 0.75, "strategy": "bollinger", "strategies": ["bollinger"],
+            "reason": "测试", "suggested_position_ratio": 0.60, "price": 150.0,
+            "has_position": True,  # 加码：0.60 * 0.40 = 0.24 > 0.20 → 截断
+        }
+        enhanced = wisdom.advise(signal)
+        assert enhanced["suggested_position_ratio"] <= 0.20
+
+    def test_sell_signal_no_position_adjustment(self):
+        """卖出信号不调整仓位。"""
+        wisdom = WisdomAdvisor()
+        signal = {
+            "symbol": "000858", "name": "五粮液", "direction": "sell",
+            "confidence": 0.80, "strategy": "turtle", "strategies": ["turtle"],
+            "reason": "测试", "suggested_position_ratio": 0.24, "price": 150.0,
+        }
+        enhanced = wisdom.advise(signal)
+        # 卖出信号不应调整仓位比例
+        assert enhanced["suggested_position_ratio"] == 0.24

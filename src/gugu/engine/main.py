@@ -146,6 +146,9 @@ class TradingEngine:
                     # 先设置基础仓位比例，再交给 wisdom 调整
                     max_ratio = settings().get("risk", {}).get("max_position_ratio", 0.30)
                     signal["suggested_position_ratio"] = max_ratio * 0.8
+                    # 标记是否已有持仓（wisdom 据此决定试仓/加码）
+                    portfolio = self._broker.get_portfolio()
+                    signal["has_position"] = symbol in portfolio
                     # 决策层增强（可能调整仓位比例、预设止损、过滤入场）
                     signal = self._wisdom.advise(signal)
                     signals.append(signal)

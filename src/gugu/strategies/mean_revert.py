@@ -62,18 +62,18 @@ class RSIStrategy(Strategy):
         df["rsi"] = 100 - (100 / (1 + rs))
 
         df["signal"] = 0
-        # RSI 回升确认策略：从超卖区回升时买入，从超买区回落时卖出
-        # 注：这是"回升确认"流派，在 RSI 离开超卖区时触发（价格已反弹），
-        # 而非"首次进入超卖区"流派（价格仍在下跌）
-        df.loc[(df["rsi"] < oversold) & (df["rsi"].shift(1) >= oversold), "signal"] = 1
-        # RSI 从超买区下穿
+        # RSI 回升确认策略：从超卖区回升到超卖线上方时买入，从超买区回落到超买线下方时卖出
+        # 回升确认流派：RSI 离开超卖区时触发（价格已反弹），更安全
+        df.loc[(df["rsi"] >= oversold) & (df["rsi"].shift(1) < oversold), "signal"] = 1
+        # RSI 从超买区回落
         df.loc[
-            (df["rsi"] > overbought) & (df["rsi"].shift(1) <= overbought), "signal"
+            (df["rsi"] <= overbought) & (df["rsi"].shift(1) > overbought), "signal"
         ] = -1
 
-        # 置信度：超卖区越深买入置信度越高，超买区越深卖出置信度越高
-        buy_conf = ((oversold - df["rsi"]).clip(lower=0) / oversold)
-        sell_conf = ((df["rsi"] - overbought).clip(lower=0) / (100 - overbought))
+        # 置信度：回升确认时用进入超卖区的深度衡量（shift(1) 时的 RSI 偏离程度）
+        prev_rsi = df["rsi"].shift(1)
+        buy_conf = ((oversold - prev_rsi).clip(lower=0) / oversold)
+        sell_conf = ((prev_rsi - overbought).clip(lower=0) / (100 - overbought))
         df["confidence"] = (buy_conf + sell_conf).clip(0, 1)
         # 无信号时置信度为 0
         df.loc[df["signal"] == 0, "confidence"] = 0.0
