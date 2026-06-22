@@ -1,0 +1,79 @@
+# gugu 交易系统主配置
+
+# ========== 数据源 ==========
+data:
+  primary_source: akshare        # 主源：akshare + 东方财富
+  fallback_sources:              # 降级源
+    - sina
+    - tencent
+  fetch_interval_seconds: 120    # 实时采集间隔（秒）
+  fail_threshold: 3              # 连续失败 N 次降级
+  fail_cooldown_seconds: 300     # 降级冷却时间
+  cache_ttl_seconds: 120         # 实时数据缓存
+  history_db: sqlite:///data/gugu.db
+  parquet_dir: data/parquet
+
+# ========== 策略 ==========
+strategy:
+  # 启用的策略列表（在 registry 中注册）
+  enabled:
+    - turtle
+    - bollinger
+    - dual_ma
+    - box_breakout
+    - rsi_reversal
+  # 信号融合规则：unanimous（全票通过）/ majority（多数）/ any（任一）
+  signal_fusion: majority
+  min_confidence: 0.6            # 最低置信度阈值
+  auto_select: true              # 是否启用自动选股
+  select_top_n: 50               # 全市场按资金流排序取前 N
+  select_max_candidates: 10      # 最大选股数量
+
+# ========== 风控 ==========
+risk:
+  max_position_ratio: 0.30       # 单股仓位上限 30%
+  daily_loss_warn: 0.03          # 日亏 3% 预警
+  daily_loss_halt: 0.05          # 日亏 5% 熔断
+  max_total_positions: 5         # 最大持仓数
+  # 涨跌停/停牌自动过滤（系统默认开启，不可关闭）
+  t_plus_1: true                 # T+1 限制
+
+# ========== 执行 ==========
+execution:
+  mode: paper                    # backtest / paper / live
+  paper:
+    initial_capital: 1000000     # 模拟本金 100 万
+    commission_rate: 0.00025     # 佣金费率万2.5
+    stamp_tax: 0.001             # 印花税千1（卖出）
+    slippage: 0.002              # 滑点 0.2%
+  live:
+    broker: qmt
+    confirm_required: true       # 下单前人工确认
+
+# ========== 飞书通知 ==========
+feishu:
+  enabled: true
+  # 消息类型开关
+  notify_signal: true            # 买卖信号
+  notify_daily_report: true      # 每日日报
+  notify_risk_alert: true        # 风控告警
+  notify_backtest: true          # 回测报告
+  notify_system_error: true      # 系统异常
+  # 推送时段（交易日）
+  daily_report_times:
+    - "09:10"
+    - "11:35"
+    - "15:10"
+
+# ========== 调度 ==========
+scheduler:
+  timezone: Asia/Shanghai
+  # 交易日才执行
+  trading_days_only: true
+
+# ========== 日志 ==========
+log:
+  level: INFO
+  dir: logs
+  rotation: "10 MB"
+  retention: "30 days"

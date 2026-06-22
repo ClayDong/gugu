@@ -1,0 +1,48 @@
+# 策略默认参数
+
+turtle:
+  # 海龟交易系统：趋势跟踪 + 突破 + ATR 动态止损
+  breakout_window: 20            # 唐奇安通道突破窗口
+  exit_window: 10                # 退出窗口
+  atr_window: 20                 # ATR 计算窗口
+  risk_per_trade: 0.01           # 单笔风险占比 1%
+  max_units: 4                   # 最大加仓单元数
+
+bollinger:
+  # 布林带：触及下轨买入，触及上轨卖出
+  window: 20
+  num_std: 2.0                   # 标准差倍数
+  stop_loss_atr: 2.0             # ATR 止损倍数
+
+dual_ma:
+  # 双均线交叉：短均线上穿长均线买入，下穿卖出
+  short_window: 5
+  long_window: 20
+
+box_breakout:
+  # 达尔文箱体理论：箱体震荡突破为信号
+  box_window: 20                 # 箱体识别窗口
+  volume_confirm: true           # 成交量确认
+  volume_ratio: 1.5              # 量比阈值
+
+rsi_reversal:
+  # RSI 均值回归：超卖买入，超买卖出
+  window: 14
+  oversold: 30                   # 超卖阈值
+  overbought: 70                 # 超买阈值
+
+macd:
+  short_window: 12
+  long_window: 26
+  signal_window: 9
+
+kdj:
+  window: 9
+  oversold: 20
+  overbought: 80
+
+dual_thrust:
+  # Dual Thrust 突破
+  lookback: 5
+  k_up: 0.5
+  k_down: 0.5
