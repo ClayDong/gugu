@@ -127,11 +127,11 @@ class WisdomAdvisor:
                     f"[wisdom] {signal.get('symbol', '')} 入场过滤: 置信度 {confidence:.2f} < {ENTRY_MIN_CONFIDENCE}"
                 )
 
-            # 决策2：仓位调整——分层下注（首次仅 20-30%）
+            # 决策2：仓位调整——分层下注（首次仅用目标仓位的 20%）
             original_ratio = signal.get("suggested_position_ratio", 0.0)
             if original_ratio > 0:
-                # 首次买入仅用目标仓位的 20-30%（取 25%）
-                adjusted_ratio = original_ratio * POSITION_TRIAL_RATIO / MAX_SINGLE_POSITION
+                # 首次买入仅用目标仓位的 20%（试仓）
+                adjusted_ratio = original_ratio * POSITION_TRIAL_RATIO
                 # 不超过单股最大 20%
                 adjusted_ratio = min(adjusted_ratio, MAX_SINGLE_POSITION)
                 decision["adjusted_position_ratio"] = adjusted_ratio

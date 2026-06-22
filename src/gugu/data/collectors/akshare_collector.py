@@ -13,9 +13,9 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from gugu.data.collectors.base import BaseCollector
 from gugu.data.quality import (
+    validate_sector_flow,
     validate_stock_flow,
     validate_stock_history,
-    validate_sector_flow,
 )
 from gugu.utils.log import get_logger
 

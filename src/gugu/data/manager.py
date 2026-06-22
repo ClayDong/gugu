@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import json
 import time
 from typing import Any
 
@@ -15,6 +14,7 @@ from gugu.data.cache import cache
 from gugu.data.collectors.akshare_collector import AkshareCollector
 from gugu.data.collectors.base import BaseCollector
 from gugu.data.collectors.fallback import SinaCollector
+from gugu.data.quality import validate_sector_flow, validate_stock_flow, validate_stock_history
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -40,9 +40,12 @@ class DataManager:
         return time.time() < self._degraded_until
 
     def _get_collector(self) -> BaseCollector:
-        """获取当前可用采集器。"""
+        """获取当前可用采集器。冷却期过后切回主源并重置失败计数。"""
         if self.is_degraded:
             return self._fallbacks[0]
+        # 冷却期结束切回主源时重置 fail_count，避免主源恢复后容错空间被压缩
+        if self._fail_count >= self._fail_threshold:
+            self._fail_count = 0
         return self._primary
 
     def _on_success(self) -> None:
@@ -63,9 +66,23 @@ class DataManager:
                 f"冷却 {self._fail_cooldown} 秒"
             )
 
+    # 方法名 → 质量校验函数的映射
+    _VALIDATORS: dict[str, Any] = {
+        "fetch_stock_history": validate_stock_history,
+        "fetch_stock_flow": validate_stock_flow,
+        "fetch_sector_flow": validate_sector_flow,
+    }
+
     def _call_with_fallback(self, method: str, *args: Any, **kwargs: Any) -> pd.DataFrame:
-        """带降级的方法调用。"""
-        cache_key = json.dumps((method, args, kwargs), sort_keys=True, default=str)
+        """带降级的方法调用，返回前自动做数据质量校验。"""
+        # 缓存键只包含方法名+核心参数值（排除 kwargs 传递方式差异）
+        key_parts = [method]
+        for a in args:
+            key_parts.append(str(a))
+        for k in sorted(kwargs):
+            key_parts.append(f"{k}={kwargs[k]}")
+        cache_key = "|".join(key_parts)
+
         cached = cache().get(cache_key)
         if cached is not None:
             return cached
@@ -75,6 +92,7 @@ class DataManager:
             try:
                 df = getattr(self._primary, method)(*args, **kwargs)
                 self._on_success()
+                df = self._validate(method, df, args)
                 cache().set(cache_key, df)
                 return df
             except Exception as e:
@@ -87,6 +105,7 @@ class DataManager:
                 df = getattr(fb, method)(*args, **kwargs)
                 if df is not None and not df.empty:
                     logger.info(f"降级源 {fb.source} 成功获取 {method}")
+                    df = self._validate(method, df, args)
                     cache().set(cache_key, df)
                     return df
             except Exception as e:
@@ -94,6 +113,18 @@ class DataManager:
 
         logger.error(f"所有数据源 {method} 均失败，返回空 DataFrame")
         return pd.DataFrame()
+
+    def _validate(self, method: str, df: pd.DataFrame, args: tuple) -> pd.DataFrame:
+        """对采集结果做数据质量校验。"""
+        validator = self._VALIDATORS.get(method)
+        if validator is None:
+            return df
+        symbol = str(args[0]) if args else ""
+        try:
+            return validator(df, symbol)
+        except Exception as e:
+            logger.warning(f"{method} 数据质量校验异常: {e}，返回原始数据")
+            return df
 
     # ===== 对外接口 =====
 

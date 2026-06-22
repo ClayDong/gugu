@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import date
 from typing import Any
 
 import pandas as pd
@@ -36,6 +37,7 @@ class TradingEngine:
         self._risk = RiskManager()
         self._broker = PaperBroker()
         self._notifier = FeishuNotifier()
+        self._last_cycle_date: date | None = None  # 上次循环日期，防止同日多次 reset
         self._wisdom = WisdomAdvisor()
         self._selector = StockSelector(self._dm)
         self._watchlist: list[str] = self._load_watchlist()
@@ -73,7 +75,11 @@ class TradingEngine:
 
         # 1. T+1 结算
         self._broker.settle_t_plus_1()
-        self._risk.reset()
+        # 仅在新交易日开始时 reset 风控（防止同日多次调用绕过 L2 熔断）
+        today = date.today()
+        if self._last_cycle_date != today:
+            self._risk.reset()
+            self._last_cycle_date = today
 
         # 2. 采集行情
         await self._update_prices()

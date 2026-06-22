@@ -21,7 +21,6 @@ class TurtleStrategy(Strategy):
 
         df["upper"] = df["high"].rolling(bw).max().shift(1)
         df["lower"] = df["low"].rolling(bw).min().shift(1)
-        # 海龟出场线：多头跌破近 N 日最低点
         df["exit_low"] = df["low"].rolling(ew).min().shift(1)
         df["atr"] = self._atr(df, aw)
 
@@ -31,10 +30,11 @@ class TurtleStrategy(Strategy):
         # 跌破出场线卖出
         df.loc[df["close"] < df["exit_low"], "signal"] = -1
 
-        # 置信度：突破幅度 / ATR
-        df["confidence"] = (
-            (df["close"] - df["upper"]).clip(lower=0) / df["atr"].replace(0, 1)
-        ).clip(0, 1)
+        # 置信度：买入用突破上轨幅度，卖出用跌破出场线幅度
+        atr_safe = df["atr"].replace(0, 1)
+        buy_conf = (df["close"] - df["upper"]).clip(lower=0) / atr_safe
+        sell_conf = (df["exit_low"] - df["close"]).clip(lower=0) / atr_safe
+        df["confidence"] = (buy_conf + sell_conf).clip(0, 1)
         return df
 
 
@@ -65,10 +65,15 @@ class DualMAStrategy(Strategy):
         )
         df.loc[death, "signal"] = -1
 
-        # 置信度：均线距离占比
-        df["confidence"] = (
-            (df["ma_short"] - df["ma_long"]).abs() / df["close"].replace(0, 1)
-        ).clip(0, 1)
+        # 置信度：交叉信号本身是强信号，用交叉斜率衡量确定性
+        # 金叉/死叉瞬间差值极小，用差值的变化率（斜率）更合理
+        ma_diff = df["ma_short"] - df["ma_long"]
+        ma_slope = ma_diff.diff().abs()
+        price_safe = df["close"].replace(0, 1)
+        # 基线 0.65 + 斜率贡献（最大 0.35），确保交叉信号置信度 ≥ 0.65
+        df["confidence"] = (0.65 + (ma_slope / price_safe * 50).clip(0, 0.35)).clip(0, 1)
+        # 无信号时置信度为 0
+        df.loc[df["signal"] == 0, "confidence"] = 0.0
         return df
 
 
@@ -101,5 +106,9 @@ class MACDStrategy(Strategy):
         )
         df.loc[death, "signal"] = -1
 
-        df["confidence"] = (df["macd_hist"].abs() / df["close"].replace(0, 1)).clip(0, 1)
+        # 置信度：交叉信号用基线 + 柱状图斜率，与 DualMA 同理
+        hist_slope = df["macd_hist"].diff().abs()
+        price_safe = df["close"].replace(0, 1)
+        df["confidence"] = (0.65 + (hist_slope / price_safe * 50).clip(0, 0.35)).clip(0, 1)
+        df.loc[df["signal"] == 0, "confidence"] = 0.0
         return df

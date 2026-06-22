@@ -78,7 +78,7 @@ class StockSelector:
                     continue
 
                 signal = self._router.route(df, symbol)
-                if signal and signal["direction"] == "buy":
+                if signal and signal["direction"] in ("buy", "sell"):
                     signal["name"] = row.get("name", "")
                     signal["price"] = float(row.get("price", df.iloc[-1]["close"]))
                     # 过滤涨跌停

@@ -128,6 +128,7 @@ class BacktestEngine:
         cash = self.initial_capital
         position_qty = 0
         position_cost = 0.0  # total cost basis for current position
+        buy_date: pd.Timestamp | None = None  # T+1: 记录买入日期
         trades: list[Trade] = []
         equity_values: list[float] = []
         dates: list[pd.Timestamp] = []
@@ -153,15 +154,21 @@ class BacktestEngine:
                     cash -= trade.price * trade.quantity + trade.commission
                     position_qty = trade.quantity
                     position_cost = trade.price * trade.quantity + trade.commission
+                    buy_date = pd.Timestamp(current_date)
 
             elif signal == -1 and position_qty > 0:
-                # Sell all shares (clear position)
-                trade = self._execute_sell(symbol, current_date, close, position_qty, position_cost)
-                trades.append(trade)
-                proceeds = trade.price * trade.quantity - trade.commission - trade.stamp_tax
-                cash += proceeds
-                position_qty = 0
-                position_cost = 0.0
+                # T+1: 买入当天不能卖出
+                if buy_date is not None and pd.Timestamp(current_date) <= buy_date:
+                    pass  # 跳过当天卖出
+                else:
+                    # Sell all shares (clear position)
+                    trade = self._execute_sell(symbol, current_date, close, position_qty, position_cost)
+                    trades.append(trade)
+                    proceeds = trade.price * trade.quantity - trade.commission - trade.stamp_tax
+                    cash += proceeds
+                    position_qty = 0
+                    position_cost = 0.0
+                    buy_date = None
 
             # Record daily equity (mark-to-market at close)
             equity = cash + position_qty * close

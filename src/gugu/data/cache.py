@@ -4,8 +4,6 @@ from __future__ import annotations
 import time
 from typing import Any
 
-import pandas as pd
-
 from gugu.utils.log import get_logger
 
 logger = get_logger()

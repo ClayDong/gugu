@@ -48,6 +48,8 @@ class BoxBreakoutStrategy(Strategy):
             (df["close"] - df["box_high"]).clip(lower=0) / box_height
             + (df["box_low"] - df["close"]).clip(lower=0) / box_height
         ).clip(0, 1)
+        # 无信号时置信度为 0
+        df.loc[df["signal"] == 0, "confidence"] = 0.0
         return df
 
 
@@ -81,7 +83,9 @@ class DualThrustStrategy(Strategy):
         df.loc[df["close"] < df["lower"], "signal"] = -1
 
         df["confidence"] = (
-            ((df["close"] - df["upper"]).clip(lower=0) / range_val.replace(0, 1))
-            + ((df["lower"] - df["close"]).clip(lower=0) / range_val.replace(0, 1))
+            ((df["close"] - df["upper"]).clip(lower=0) / range_val.shift(1).replace(0, 1))
+            + ((df["lower"] - df["close"]).clip(lower=0) / range_val.shift(1).replace(0, 1))
         ).clip(0, 1)
+        # 无信号时置信度为 0
+        df.loc[df["signal"] == 0, "confidence"] = 0.0
         return df

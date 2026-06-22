@@ -167,8 +167,8 @@ class RiskManager:
             p.quantity * p.current_price for s, p in portfolio.items() if s != symbol
         )
         # Post-trade total = cash - buy_cost + new_symbol_value + other_value
-        #                  = cash + existing_qty * price + other_value
-        post_trade_total = cash + existing_qty * price + other_value
+        # 买入后现金减少 quantity * price（未含手续费，保守估算）
+        post_trade_total = cash - quantity * price + new_symbol_value + other_value
 
         if post_trade_total <= 0:
             return RiskCheckResult(

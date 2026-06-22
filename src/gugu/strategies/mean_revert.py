@@ -29,9 +29,13 @@ class BollingerStrategy(Strategy):
         # 收盘价突破上轨卖出
         df.loc[df["close"] > df["upper"], "signal"] = -1
 
-        # 置信度：偏离中轨程度
-        band_width = (df["upper"] - df["lower"]).replace(0, 1)
-        df["confidence"] = ((df["close"] - df["ma"]).abs() / band_width).clip(0, 1)
+        # 置信度：基线 0.5（触轨即信号）+ 偏离布林带外的程度
+        band_width = (df["upper"] - df["lower"]).clip(lower=df["close"].abs() * 0.01).replace(0, 1)
+        outside_buy = (df["lower"] - df["close"]).clip(lower=0) / band_width
+        outside_sell = (df["close"] - df["upper"]).clip(lower=0) / band_width
+        df["confidence"] = (0.5 + outside_buy + outside_sell).clip(0, 1)
+        # 无信号时置信度为 0
+        df.loc[df["signal"] == 0, "confidence"] = 0.0
         return df
 
 
@@ -51,7 +55,10 @@ class RSIStrategy(Strategy):
         delta = df["close"].diff()
         gain = delta.clip(lower=0).rolling(w).mean()
         loss = (-delta.clip(upper=0)).rolling(w).mean()
+        # 零波动时 RSI 应为 50（中性）
+        both_zero = (gain.abs() < 1e-10) & (loss.abs() < 1e-10)
         rs = gain / loss.replace(0, 1e-10)
+        rs[both_zero] = 1.0
         df["rsi"] = 100 - (100 / (1 + rs))
 
         df["signal"] = 0
@@ -62,8 +69,12 @@ class RSIStrategy(Strategy):
             (df["rsi"] > overbought) & (df["rsi"].shift(1) <= overbought), "signal"
         ] = -1
 
-        # 置信度：偏离 50 的程度
-        df["confidence"] = ((df["rsi"] - 50).abs() / 50).clip(0, 1)
+        # 置信度：超卖区越深买入置信度越高，超买区越深卖出置信度越高
+        buy_conf = ((oversold - df["rsi"]).clip(lower=0) / oversold)
+        sell_conf = ((df["rsi"] - overbought).clip(lower=0) / (100 - overbought))
+        df["confidence"] = (buy_conf + sell_conf).clip(0, 1)
+        # 无信号时置信度为 0
+        df.loc[df["signal"] == 0, "confidence"] = 0.0
         return df
 
 
@@ -82,7 +93,11 @@ class KDJStrategy(Strategy):
 
         low_min = df["low"].rolling(w).min()
         high_max = df["high"].rolling(w).max()
-        rsv = (df["close"] - low_min) / (high_max - low_min).replace(0, 1) * 100
+        price_range = high_max - low_min
+        # 零波动时 RSV 设为 50（中性）
+        rsv = pd.Series(50.0, index=df.index)
+        tradable = price_range > 0
+        rsv[tradable] = (df["close"][tradable] - low_min[tradable]) / price_range[tradable] * 100
 
         df["k"] = rsv.ewm(com=2, adjust=False).mean()
         df["d"] = df["k"].ewm(com=2, adjust=False).mean()
@@ -96,5 +111,10 @@ class KDJStrategy(Strategy):
         death = (df["k"] < df["d"]) & (df["k"].shift(1) >= df["d"].shift(1)) & (df["k"] > overbought)
         df.loc[death, "signal"] = -1
 
-        df["confidence"] = ((df["j"] - 50).abs() / 50).clip(0, 1)
+        # 置信度：用 K 值在超卖/超买区的深度衡量
+        buy_conf = ((oversold - df["k"]).clip(lower=0) / oversold)
+        sell_conf = ((df["k"] - overbought).clip(lower=0) / (100 - overbought))
+        df["confidence"] = (buy_conf + sell_conf).clip(0, 1)
+        # 无信号时置信度为 0
+        df.loc[df["signal"] == 0, "confidence"] = 0.0
         return df
