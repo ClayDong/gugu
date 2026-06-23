@@ -58,30 +58,23 @@ def _card(
     }
 
 
-def _format_signals(signals: Any) -> str:
-    """Format signals list (strings or dicts) into markdown lines."""
+def _format_signals(signals: list[dict[str, Any]]) -> str:
+    """Format signals list into markdown lines."""
     if not signals:
         return "无"
-    if isinstance(signals, str):
-        return signals
-    if isinstance(signals, list):
-        lines: list[str] = []
-        for s in signals:
-            if isinstance(s, dict):
-                direction = str(s.get("direction", "")).lower()
-                symbol = s.get("symbol", "")
-                name = s.get("name", "")
-                action = {"buy": "买入", "sell": "卖出"}.get(direction, direction)
-                lines.append(f"- {action} {name}({symbol})")
-            else:
-                lines.append(f"- {s}")
-        return "\n".join(lines) if lines else "无"
-    return str(signals)
+    lines: list[str] = []
+    for s in signals:
+        direction = str(s.get("direction", "")).lower()
+        symbol = s.get("symbol", "")
+        name = s.get("name", "")
+        action = {"buy": "买入", "sell": "卖出"}.get(direction, direction)
+        lines.append(f"- {action} {name}({symbol})")
+    return "\n".join(lines) if lines else "无"
 
 
-def _format_wisdom(wisdom: Any) -> str:
+def _format_wisdom(wisdom: dict[str, Any]) -> str:
     """Format wisdom advice dict into readable markdown lines."""
-    if not wisdom or not isinstance(wisdom, dict):
+    if not wisdom:
         return ""
     label_map = {
         "entry_check": "入场建议",
@@ -97,7 +90,7 @@ def _format_wisdom(wisdom: Any) -> str:
             continue
         label = label_map.get(key, key)
         text = val if isinstance(val, str) else str(val)
-        # 截取前 200 字符避免卡片过长
+        # truncate at 200 chars to keep card short
         if len(text) > 200:
             text = text[:200] + "..."
         lines.append(f"- **{label}**：{text}")
@@ -119,7 +112,7 @@ def _format_wisdom_decision(decision: Any) -> str:
     if decision.get("stop_loss_price") is not None:
         stop_price = decision["stop_loss_price"]
         stop_pct = decision.get("stop_loss_pct", 0)
-        lines.append(f"- 🛑 **止损预设**：¥{stop_price:.2f}（-{stop_pct:.0%}）")
+        lines.append(f"- 🛑 **止损预设**：￥{stop_price:.2f}（-{stop_pct:.0%}）")
     return "\n".join(lines) if lines else ""
 
 
@@ -152,7 +145,7 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     wisdom = signal.get("wisdom", {})
     wisdom_decision = signal.get("wisdom_decision", {})
 
-    # 入场过滤的信号用黄色卡片
+    # entry-filtered signals use yellow card
     if wisdom_decision.get("entry_filtered"):
         template = "yellow"
         action = f"{action}（已过滤）"
@@ -163,6 +156,24 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
         f"**股票**：{name}({symbol})\n**方向**：{action}\n**当前价**：{price}",
         f"**触发策略**：{strategy}\n**建议仓位**：{position or '未提供'}\n**触发理由**：{reason}",
     ]
+
+    # if the signal has an order result, display actual fill details (U-01 fix)
+    order_result = signal.get("order_result")
+    if order_result:
+        success = order_result.get("success", False)
+        qty = order_result.get("quantity", 0)
+        fill_price = order_result.get("price", 0)
+        commission = order_result.get("commission", 0)
+        amount = qty * fill_price
+        status_label = "✅ 成交" if success else "❌ 失败"
+        sections.append(
+            f"**实际下单**：{status_label}\n"
+            f"**数量**：{qty}股\n"
+            f"**成交价**：￥{fill_price:.2f}\n"
+            f"**金额**：￥{amount:.2f}\n"
+            f"**佣金**：￥{commission:.2f}\n"
+            f"**备注**：{order_result.get('message', '')}"
+        )
 
     decision_text = _format_wisdom_decision(wisdom_decision)
     if decision_text:
@@ -175,79 +186,61 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     return _card(title, template, sections, note="gugu 交易系统 · 信号通知")
 
 
-def _format_market_summary(summary: Any) -> str:
-    """Format market summary dict/list into readable markdown text."""
+def _format_market_summary(summary: dict[str, Any]) -> str:
+    """Format market summary dict into readable markdown text."""
     if not summary:
         return ""
-    if isinstance(summary, str):
-        return summary
-    if isinstance(summary, dict):
-        total_value = summary.get("total_value", 0)
-        cash = summary.get("cash", 0)
-        positions_count = summary.get("positions_count", 0)
-        return (
-            f"总资产: ¥{total_value:,.0f} | "
-            f"现金: ¥{cash:,.0f} | "
-            f"持仓: {positions_count} 只"
-        )
-    return str(summary)
+    total_value = summary.get("total_value", 0)
+    cash = summary.get("cash", 0)
+    positions_count = summary.get("positions_count", 0)
+    return (
+        f"总资产: ￥{total_value:,.0f} | "
+        f"现金: ￥{cash:,.0f} | "
+        f"持仓: {positions_count} 只"
+    )
 
 
-def _format_sector_top(sector_top: Any) -> str:
+def _format_sector_top(sector_top: list[dict[str, Any]]) -> str:
     """Format sector flow list into readable markdown lines."""
     if not sector_top:
         return ""
-    if isinstance(sector_top, str):
-        return sector_top
-    if isinstance(sector_top, list):
-        lines: list[str] = []
-        for item in sector_top:
-            if isinstance(item, dict):
-                sector = item.get("sector", "")
-                main_net = item.get("main_net", 0)
-                main_pct = item.get("main_pct", 0)
-                try:
-                    net_val = float(main_net or 0)
-                    pct_val = float(main_pct or 0)
-                except (TypeError, ValueError):
-                    net_val = 0.0
-                    pct_val = 0.0
-                lines.append(
-                    f"- {sector}: 主力净流入 ¥{net_val/1e8:,.2f}亿 ({pct_val:+.2%})"
-                )
-            else:
-                lines.append(f"- {item}")
-        return "\n".join(lines) if lines else ""
-    return str(sector_top)
+    lines: list[str] = []
+    for item in sector_top:
+        sector = item.get("sector", "")
+        main_net = item.get("main_net", 0)
+        main_pct = item.get("main_pct", 0)
+        try:
+            net_val = float(main_net or 0)
+            pct_val = float(main_pct or 0)
+        except (TypeError, ValueError):
+            net_val = 0.0
+            pct_val = 0.0
+        lines.append(
+            f"- {sector}: 主力净流入 ￥{net_val/1e8:,.2f}亿 ({pct_val:+.2%})"
+        )
+    return "\n".join(lines) if lines else ""
 
 
-def _format_portfolio_summary(portfolio: Any) -> str:
+def _format_portfolio_summary(portfolio: dict[str, Any]) -> str:
     """Format portfolio dict into readable markdown lines."""
     if not portfolio:
         return ""
-    if isinstance(portfolio, str):
-        return portfolio
-    if isinstance(portfolio, dict):
-        lines: list[str] = []
-        for sym, info in portfolio.items():
-            if isinstance(info, dict):
-                quantity = info.get("quantity", 0)
-                profit = info.get("profit", 0)
-                market_value = info.get("market_value", 0)
-                try:
-                    profit_val = float(profit or 0)
-                    mv_val = float(market_value or 0)
-                except (TypeError, ValueError):
-                    profit_val = 0.0
-                    mv_val = 0.0
-                profit_str = f"+¥{profit_val:,.0f}" if profit_val >= 0 else f"-¥{abs(profit_val):,.0f}"
-                lines.append(
-                    f"- {sym}: {quantity}股 | 市值 ¥{mv_val:,.0f} | 盈亏 {profit_str}"
-                )
-            else:
-                lines.append(f"- {sym}: {info}")
-        return "\n".join(lines) if lines else ""
-    return str(portfolio)
+    lines: list[str] = []
+    for sym, info in portfolio.items():
+        quantity = info.get("quantity", 0)
+        profit = info.get("profit", 0)
+        market_value = info.get("market_value", 0)
+        try:
+            profit_val = float(profit or 0)
+            mv_val = float(market_value or 0)
+        except (TypeError, ValueError):
+            profit_val = 0.0
+            mv_val = 0.0
+        profit_str = f"+{profit_val:,.0f}" if profit_val >= 0 else f"-{abs(profit_val):,.0f}"
+        lines.append(
+            f"- {sym}: {quantity}股 | 市值 ￥{mv_val:,.0f} | 盈亏 {profit_str}"
+        )
+    return "\n".join(lines) if lines else ""
 
 
 def format_daily_report(period: str, data: dict[str, Any]) -> dict[str, Any]:

@@ -121,19 +121,11 @@ def test_format_system_error():
     assert card["card"]["header"]["template"] == "red"
 
 
-def test_format_signals_string():
-    """_format_signals 字符串输入。"""
-    from gugu.notifier.formatter import _format_signals
-
-    assert _format_signals("hold") == "hold"
-
-
 def test_format_signals_empty():
     """_format_signals 空输入。"""
     from gugu.notifier.formatter import _format_signals
 
     assert _format_signals([]) == "无"
-    assert _format_signals(None) == "无"
 
 
 def test_format_signals_list_of_dicts():

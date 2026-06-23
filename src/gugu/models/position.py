@@ -14,6 +14,10 @@ class Position:
         available: T+1 可卖数量。
         avg_cost: 平均成本。
         current_price: 最新价。
+        stop_loss_price: 止损价（由 wisdom 预设，0 表示未设置）。
+        prev_close: 前收盘价（L3 涨跌停检查用，0 表示未知）。
+        is_st: 是否 ST（影响涨跌停幅度）。
+        is_suspended: 是否停牌。
     """
 
     symbol: str
@@ -21,6 +25,10 @@ class Position:
     available: int
     avg_cost: float
     current_price: float = 0.0
+    stop_loss_price: float = 0.0
+    prev_close: float = 0.0
+    is_st: bool = False
+    is_suspended: bool = False
 
     @property
     def market_value(self) -> float:

@@ -21,10 +21,25 @@ logger = get_logger()
 class SignalRouter:
     """多策略信号融合器。"""
 
-    def __init__(self, strategies: list[Strategy] | None = None) -> None:
+    def __init__(
+        self,
+        strategies: list[Strategy] | None = None,
+        fusion_rule: str | None = None,
+        min_confidence: float | None = None,
+    ) -> None:
+        """初始化信号路由器。
+
+        Args:
+            strategies: 策略列表，默认从配置加载。
+            fusion_rule: 融合规则（any/majority/unanimous），默认从配置读取。
+            min_confidence: 最低置信度阈值，默认从配置读取。
+                显式传入参数时优先于配置，便于测试注入（T-02 修复）。
+        """
         cfg = settings().get("strategy", {})
-        self._fusion_rule = cfg.get("signal_fusion", "majority")
-        self._min_confidence = float(cfg.get("min_confidence", 0.6))
+        self._fusion_rule = fusion_rule or cfg.get("signal_fusion", "majority")
+        self._min_confidence = (
+            float(min_confidence) if min_confidence is not None else float(cfg.get("min_confidence", 0.6))
+        )
         self._strategies = strategies or []
 
     def add_strategy(self, strategy: Strategy) -> None:
@@ -110,6 +125,10 @@ class SignalRouter:
             return None
 
         # 置信度：获胜方向策略的平均置信度
+        # 注意：不同策略的置信度计算方式不同（基于ATR/斜率/偏离程度等），
+        # 直接取平均在策略置信度含义不统一时可能不够精确。
+        # 后续可考虑 min-max 归一化后平均。当前 version 0.1.0 阶段，
+        # 所有策略置信度均在 [0, 1] 区间，取平均是合理近似。
         chosen_votes = buy_votes if direction == "buy" else sell_votes
         avg_conf = sum(c for _, c in chosen_votes) / len(chosen_votes) if chosen_votes else 0
 

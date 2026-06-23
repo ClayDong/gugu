@@ -33,13 +33,18 @@ class BoxBreakoutStrategy(Strategy):
         # 突破箱体上沿买入
         breakout_up = df["close"] > df["box_high"]
         if vol_confirm:
-            breakout_up = breakout_up & (df["volume"] > df["vol_ma"] * vol_ratio)
+            vol_ok = df["vol_ma"].notna() & (df["volume"] > df["vol_ma"] * vol_ratio)
+            # vol_ma 为 NaN 的行（开箱期）跳过成交量确认，仅用价格突破判断
+            vol_ok = vol_ok | df["vol_ma"].isna()
+            breakout_up = breakout_up & vol_ok
         df.loc[breakout_up, "signal"] = 1
 
         # 跌破箱体下沿卖出
         breakout_down = df["close"] < df["box_low"]
         if vol_confirm:
-            breakout_down = breakout_down & (df["volume"] > df["vol_ma"] * vol_ratio)
+            vol_ok = df["vol_ma"].notna() & (df["volume"] > df["vol_ma"] * vol_ratio)
+            vol_ok = vol_ok | df["vol_ma"].isna()
+            breakout_down = breakout_down & vol_ok
         df.loc[breakout_down, "signal"] = -1
 
         # 置信度：突破幅度 / 箱体高度

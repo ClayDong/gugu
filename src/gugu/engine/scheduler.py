@@ -1,4 +1,13 @@
-"""APScheduler 调度器：定时执行交易任务。"""
+"""APScheduler 调度器：定时执行交易任务。
+
+调度时间表（A 股交易日）：
+- 09:10  盘前日报（昨日持仓、今日关注）
+- 09:30  开盘扫描（信号 + 下单 + 飞书通知）
+- 10:30  盘中扫描（捕捉盘中信号变化）
+- 13:05  午盘扫描（下午开盘后信号更新）
+- 14:30  尾盘扫描（尾盘信号 + 止损检查）
+- 15:10  收盘日报（全天交易汇总）
+"""
 from __future__ import annotations
 
 import asyncio
@@ -13,6 +22,14 @@ from gugu.utils.log import get_logger
 
 logger = get_logger()
 
+# 盘中扫描时刻（hour, minute）
+SCAN_TIMES = [
+    (9, 30),   # 开盘
+    (10, 30),  # 上午中段
+    (13, 5),   # 午盘开盘
+    (14, 30),  # 尾盘
+]
+
 
 class TradingScheduler:
     """交易调度器。"""
@@ -26,15 +43,16 @@ class TradingScheduler:
     def setup(self) -> None:
         """配置定时任务。"""
         feishu_cfg = settings().get("feishu", {})
-        report_times = feishu_cfg.get("daily_report_times", ["09:10", "11:35", "15:10"])
+        report_times = feishu_cfg.get("daily_report_times", ["09:10", "15:10"])
 
-        # 每日交易循环：9:25 集合竞价后开始
-        self._scheduler.add_job(
-            self._safe_run,
-            CronTrigger(hour=9, minute=25, day_of_week="mon-fri"),
-            id="daily_cycle",
-            name="每日交易循环",
-        )
+        # 盘中多轮扫描：每个扫描时刻执行一次完整交易循环
+        for i, (h, m) in enumerate(SCAN_TIMES):
+            self._scheduler.add_job(
+                self._safe_run,
+                CronTrigger(hour=h, minute=m, day_of_week="mon-fri"),
+                id=f"scan_{i+1}",
+                name=f"盘中扫描-{h:02d}:{m:02d}",
+            )
 
         # 日报推送
         period_map = {"09:10": "morning", "11:35": "noon", "15:10": "close"}
@@ -50,6 +68,8 @@ class TradingScheduler:
             )
 
         logger.info(f"调度器配置完成: {len(self._scheduler.get_jobs())} 个任务")
+        for job in self._scheduler.get_jobs():
+            logger.info(f"  {job.id}: {job.name} -> {job.trigger}")
 
     async def _safe_run(self) -> None:
         """安全执行交易循环（非交易日跳过）。"""

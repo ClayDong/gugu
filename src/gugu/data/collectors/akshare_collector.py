@@ -72,6 +72,8 @@ class AkshareCollector(BaseCollector):
         if symbols:
             codes = {self.normalize_symbol(s) for s in symbols}
             df = df[df["代码"].isin(codes)].copy()
+        if df.empty:
+            return pd.DataFrame(columns=["symbol", "name", "price", "change_pct", "volume", "amount"])
         df = df.rename(
             columns={
                 "代码": "symbol",

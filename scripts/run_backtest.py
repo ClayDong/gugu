@@ -30,7 +30,7 @@ async def main(symbol: str, strategy_name: str, days: int, notify: bool) -> None
     try:
         # 1. 获取数据
         dm = data_manager()
-        df = dm.fetch_stock_history(symbol, days=days)
+        df = await dm.fetch_stock_history(symbol, days=days)
         if df.empty:
             logger.error(f"无法获取 {symbol} 数据")
             return

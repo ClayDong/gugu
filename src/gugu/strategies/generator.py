@@ -20,6 +20,7 @@ STRATEGIES_DIR = Path(__file__).resolve().parent
 REGISTRY_FILE = STRATEGIES_DIR / "registry.py"
 
 # 生成代码中不允许出现的危险模块/属性
+# S-02+D-07 修复：增加 builtins/io/pathlib/importlib，防止绕过 open 等危险函数
 _FORBIDDEN_IMPORTS = {
     "os",
     "sys",
@@ -32,6 +33,22 @@ _FORBIDDEN_IMPORTS = {
     "compile",
     "__import__",
     "open",
+    "builtins",
+    "io",
+    "pathlib",
+    "importlib",
+}
+
+# 危险属性访问黑名单
+_FORBIDDEN_ATTRS = {
+    "__builtins__",
+    "__import__",
+    "__class__",
+    "__subclasses__",
+    "__globals__",
+    "__code__",
+    "__bases__",
+    "__mro__",
 }
 
 
@@ -217,6 +234,15 @@ def validate_strategy_code(code: str) -> None:
     dangerous = (imported_names | called_names) & _FORBIDDEN_IMPORTS
     if dangerous:
         raise ValueError(f"生成的代码包含不允许的模块/函数: {sorted(dangerous)}")
+
+    # 检查危险属性访问（如 getattr(__builtins__, ...)）
+    accessed_attrs: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            accessed_attrs.add(node.attr)
+    attr_dangerous = accessed_attrs & _FORBIDDEN_ATTRS
+    if attr_dangerous:
+        raise ValueError(f"生成的代码包含不允许的属性访问: {sorted(attr_dangerous)}")
 
     if not strategy_classes:
         raise ValueError("生成的代码中未找到继承自 Strategy 的类")

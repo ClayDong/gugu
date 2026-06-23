@@ -81,6 +81,8 @@ class PaperBroker(BaseBroker):
                     (pos.avg_cost * pos.quantity + fill_price * quantity) / new_qty
                 )
                 pos.quantity = new_qty
+                # 加仓后同步更新现价，避免止损检查用旧价
+                pos.current_price = cur_price
                 # T+1：追加买入的部分当日仍不可卖，旧持仓的 available 不变
             else:
                 self._positions[symbol] = Position(
@@ -164,9 +166,19 @@ class PaperBroker(BaseBroker):
         )
 
     def update_price(self, symbol: str, price: float) -> None:
+        """更新现价，同步将旧现价赋给 prev_close（P-06+D-08 修复）。
+
+        P1-h 修复：prev_close 仅在每日首次 update_price 时更新，
+        避免同日多次调用（进程重启、调度器重入）导致 prev_close 被盘中价覆盖，
+        进而使 L3 涨跌停检查基准错误。
+        """
         symbol = symbol.strip().zfill(6)
         pos = self._positions.get(symbol)
         if pos:
+            # P1-h 修复：仅当 prev_close 未设置（==0）或与当前价相同（首次更新）时设置
+            # 避免同日多次调用把 prev_close 覆盖为盘中价
+            if pos.prev_close <= 0 and pos.current_price > 0:
+                pos.prev_close = pos.current_price
             pos.current_price = price
 
     def update_prices(self, prices: dict[str, float]) -> None:
@@ -200,7 +212,11 @@ class PaperBroker(BaseBroker):
         self._save_state()
 
     def _save_state(self) -> None:
-        """将当前状态持久化到 JSON 文件。"""
+        """将当前状态持久化到 JSON 文件（原子写入，避免崩溃致半截文件）。
+
+        写入流程：先写临时文件 → 原子 rename 覆盖目标文件。
+        若目标文件已存在，先备份为 .bak 保留上一版本，便于回滚。
+        """
         try:
             STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
             data = {
@@ -212,33 +228,60 @@ class PaperBroker(BaseBroker):
                         "available": p.available,
                         "avg_cost": p.avg_cost,
                         "current_price": p.current_price,
+                        "stop_loss_price": p.stop_loss_price,
+                        "prev_close": p.prev_close,
+                        "is_st": p.is_st,
+                        "is_suspended": p.is_suspended,
                     }
                     for sym, p in self._positions.items()
                 },
                 "trades": self._trades,
                 "daily_start_value": self._daily_start_value,
             }
-            STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            content = json.dumps(data, ensure_ascii=False, indent=2)
+            # 备份现有文件（保留上一版本，便于回滚）
+            if STATE_FILE.exists():
+                backup = STATE_FILE.with_suffix(STATE_FILE.suffix + ".bak")
+                try:
+                    backup.write_bytes(STATE_FILE.read_bytes())
+                except Exception as e:
+                    logger.warning(f"备份状态文件失败: {e}")
+            # 原子写入：临时文件 → rename
+            tmp = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
+            tmp.write_text(content, encoding="utf-8")
+            tmp.replace(STATE_FILE)
         except Exception as e:
             logger.warning(f"保存模拟盘状态失败: {e}")
 
     def _load_state(self) -> None:
-        """从 JSON 文件恢复状态。"""
+        """从 JSON 文件恢复状态。
+
+        P1-f 修复：per-symbol try/except，单条持仓解析失败不丢失其余持仓。
+        """
         if not STATE_FILE.exists():
             return
         try:
             data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
             self._cash = data.get("cash", self._cash)
-            self._positions = {
-                sym: Position(
-                    symbol=p["symbol"],
-                    quantity=p["quantity"],
-                    available=p["available"],
-                    avg_cost=p["avg_cost"],
-                    current_price=p["current_price"],
-                )
-                for sym, p in data.get("positions", {}).items()
-            }
+            # P1-f 修复：显式循环 + per-symbol try/except，避免单条失败丢全部持仓
+            positions_data = data.get("positions", {})
+            for sym, p in positions_data.items():
+                try:
+                    self._positions[sym] = Position(
+                        symbol=p["symbol"],
+                        quantity=p["quantity"],
+                        available=p["available"],
+                        avg_cost=p["avg_cost"],
+                        current_price=p["current_price"],
+                        stop_loss_price=p.get("stop_loss_price", 0.0),
+                        prev_close=p.get("prev_close", 0.0),
+                        is_st=p.get("is_st", False),
+                        is_suspended=p.get("is_suspended", False),
+                    )
+                except (KeyError, TypeError, ValueError) as pos_err:
+                    logger.warning(
+                        f"恢复持仓 {sym} 失败，跳过该持仓: {pos_err}；原始数据: {p}"
+                    )
             self._trades = data.get("trades", [])
             self._daily_start_value = data.get("daily_start_value")
             if self._positions:

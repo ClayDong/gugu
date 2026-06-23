@@ -21,7 +21,7 @@ from gugu.risk.rules import RiskAction, RiskCheckResult, RiskLevel
 def mock_data_manager() -> mock.MagicMock:
     """Mock DataManager：返回可控的行情数据。"""
     dm = mock.MagicMock()
-    dm.fetch_stock_history.return_value = pd.DataFrame(
+    dm.fetch_stock_history = mock.AsyncMock(return_value=pd.DataFrame(
         {
             "date": pd.date_range("2024-01-01", periods=60, freq="D"),
             "open": [10.0] * 60,
@@ -31,20 +31,20 @@ def mock_data_manager() -> mock.MagicMock:
             "volume": [1_000_000] * 60,
             "amount": [10_000_000] * 60,
         }
-    )
-    dm.fetch_stock_realtime.return_value = pd.DataFrame(
+    ))
+    dm.fetch_stock_realtime = mock.AsyncMock(return_value=pd.DataFrame(
         {"symbol": ["600519"], "name": ["茅台"], "price": [10.0]}
-    )
-    dm.fetch_stock_meta.return_value = {
+    ))
+    dm.fetch_stock_meta = mock.AsyncMock(return_value={
         "symbol": "600519",
         "name": "茅台",
         "prev_close": 10.0,
         "is_st": False,
         "is_suspended": False,
-    }
-    dm.fetch_sector_flow.return_value = pd.DataFrame(
+    })
+    dm.fetch_sector_flow = mock.AsyncMock(return_value=pd.DataFrame(
         {"sector": ["白酒"], "main_net": [1e9], "main_pct": [0.1]}
-    )
+    ))
     return dm
 
 
@@ -211,7 +211,7 @@ async def test_update_prices(
     """更新现价应调用 broker.update_price。"""
     mock_broker.get_portfolio.return_value = {"600519": mock.MagicMock()}
     await engine._update_prices()
-    mock_data_manager.fetch_stock_realtime.assert_called()
+    mock_data_manager.fetch_stock_realtime.assert_awaited()
     mock_broker.update_price.assert_called()
 
 
@@ -220,7 +220,7 @@ async def test_update_prices_exception(
     engine: TradingEngine, mock_data_manager: mock.MagicMock
 ) -> None:
     """更新现价失败不应抛异常。"""
-    mock_data_manager.fetch_stock_realtime.side_effect = RuntimeError("network error")
+    mock_data_manager.fetch_stock_realtime = mock.AsyncMock(side_effect=RuntimeError("network error"))
     # 不应抛异常
     await engine._update_prices()
 
@@ -233,9 +233,11 @@ async def test_shutdown(engine: TradingEngine, mock_notifier: mock.AsyncMock) ->
 
 
 def test_reset_halt(engine: TradingEngine, mock_risk: mock.MagicMock) -> None:
-    """reset_halt 应重置风控和日初净值。"""
+    """reset_halt 应清除熔断状态但不重置日初净值（P-01 修复）。"""
     engine.reset_halt()
-    mock_risk.reset.assert_called_once()
+    mock_risk.clear_halt_only.assert_called_once()
+    # 不应再调用 reset（避免掩盖当日亏损）
+    mock_risk.reset.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -271,7 +273,7 @@ async def test_scan_signals_data_fetch_error(
     engine: TradingEngine, mock_data_manager: mock.MagicMock
 ) -> None:
     """数据采集失败不应中断扫描。"""
-    mock_data_manager.fetch_stock_history.side_effect = RuntimeError("api error")
+    mock_data_manager.fetch_stock_history = mock.AsyncMock(side_effect=RuntimeError("api error"))
     engine._watchlist = ["600519"]
     signals = await engine._scan_signals()
     assert signals == []

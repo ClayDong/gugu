@@ -1,7 +1,7 @@
 """策略注册表。按名称获取策略实例。"""
 from __future__ import annotations
 
-from typing import Any
+from functools import lru_cache
 
 from gugu.strategies.base import Strategy
 from gugu.strategies.breakout import BoxBreakoutStrategy, DualThrustStrategy
@@ -45,9 +45,22 @@ def list_strategies() -> list[str]:
     return list(_REGISTRY.keys())
 
 
+@lru_cache(maxsize=1)
 def get_enabled_strategies() -> list[Strategy]:
-    """获取配置中启用的策略实例列表。"""
+    """获取配置中启用的策略实例列表（带缓存，全局共享同一批实例）。"""
     from gugu.config import settings
 
     enabled = settings().get("strategy", {}).get("enabled", [])
     return [get_strategy(name) for name in enabled if name in _REGISTRY]
+
+
+def reload_strategies() -> None:
+    """清除策略缓存，使下次 get_enabled_strategies 调用重新读取配置（O-01 修复）。
+
+    用于配置热更新场景：修改 settings.yaml 后调用此方法，
+    无需重启进程即可生效。也可通过飞书指令触发。
+    """
+    get_enabled_strategies.cache_clear()
+    from gugu.utils.log import get_logger
+
+    get_logger().info("策略缓存已清除，下次调用将重新读取配置")

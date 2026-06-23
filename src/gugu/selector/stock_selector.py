@@ -39,7 +39,7 @@ class StockSelector:
         self._router = SignalRouter(get_enabled_strategies())
         self._risk = RiskManager()
 
-    def select(self) -> list[dict[str, Any]]:
+    async def select(self) -> list[dict[str, Any]]:
         """执行选股。
 
         Returns:
@@ -49,7 +49,7 @@ class StockSelector:
 
         # 1. 全市场快照
         try:
-            market_df = self._dm.fetch_stock_realtime([])
+            market_df = await self._dm.fetch_stock_realtime([])
         except Exception as e:
             logger.error(f"选股：获取全市场快照失败: {e}")
             return []
@@ -73,7 +73,7 @@ class StockSelector:
         for _, row in candidates.iterrows():
             symbol = str(row["symbol"]).zfill(6)
             try:
-                df = self._dm.fetch_stock_history(symbol, days=60)
+                df = await self._dm.fetch_stock_history(symbol, days=60)
                 if df.empty or len(df) < 30:
                     continue
 

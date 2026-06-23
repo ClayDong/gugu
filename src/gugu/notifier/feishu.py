@@ -63,6 +63,12 @@ class FeishuNotifier:
                 "All notifications will be skipped."
             )
 
+    def __repr__(self) -> str:
+        """屏蔽敏感凭证，防止日志/调试意外泄露 token（S-01 修复）。"""
+        configured = self._is_configured()
+        token_state = "set" if self._token else "empty"
+        return f"FeishuNotifier(configured={configured}, token={token_state})"
+
     def _is_configured(self) -> bool:
         """Check if required Feishu credentials are present."""
         return bool(self._app_id and self._app_secret and self._chat_id)

@@ -10,9 +10,13 @@ Levels:
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
-from gugu.config import settings
+from gugu.config import PROJECT_ROOT, settings
+from gugu.config.models import AppConfig
+from gugu.filters.industry_constraint import IndustryConstraint
 from gugu.utils.log import get_logger
 
 from .rules import Position, RiskAction, RiskCheckResult, RiskLevel
@@ -20,11 +24,16 @@ from .rules import Position, RiskAction, RiskCheckResult, RiskLevel
 # Price limit ratios by board
 _MAIN_BOARD_LIMIT = 0.10  # 主板 ±10%
 _GEM_KCB_LIMIT = 0.20  # 创业板 / 科创板 ±20%
+_BSE_LIMIT = 0.30  # 北交所 ±30%（P1-c 修复）
 _ST_LIMIT = 0.05  # ST ±5%
 
 # Symbol prefixes
 _GEM_PREFIXES = ("300", "301")  # 创业板
 _KCB_PREFIXES = ("688", "689")  # 科创板
+_BSE_PREFIXES = ("43", "83", "87", "88", "920")  # 北交所（P1-c 修复）
+
+# L2 熔断状态持久化文件（P0-2 修复）
+RISK_STATE_FILE: Path = PROJECT_ROOT / "data" / "risk_state.json"
 
 
 class RiskManager:
@@ -32,17 +41,40 @@ class RiskManager:
 
     Once L2 halt is triggered, all orders are blocked until ``reset()`` is called.
     This is an iron law and cannot be bypassed.
+
+    P0-2 修复：L2 熔断状态持久化到 data/risk_state.json，
+    进程重启后自动恢复，防止绕过熔断铁律。
     """
 
-    def __init__(self, config: dict[str, Any] | None = None) -> None:
-        cfg = config if config is not None else settings().get("risk", {})
-        self.max_position_ratio: float = float(cfg.get("max_position_ratio", 0.30))
-        self.daily_loss_warn: float = float(cfg.get("daily_loss_warn", 0.03))
-        self.daily_loss_halt: float = float(cfg.get("daily_loss_halt", 0.05))
-        self.max_total_positions: int = int(cfg.get("max_total_positions", 5))
-        self.t_plus_1: bool = bool(cfg.get("t_plus_1", True))
+    def __init__(self, config: dict[str, Any] | AppConfig | None = None) -> None:
+        if isinstance(config, AppConfig):
+            rc = config.risk
+            self.max_position_ratio = rc.max_position_ratio
+            self.daily_loss_warn = rc.daily_loss_warn
+            self.daily_loss_halt = rc.daily_loss_halt
+            self.max_total_positions = rc.max_total_positions
+            self.t_plus_1 = rc.t_plus_1
+            cfg = config.flatten().get("risk", {})
+        elif config is not None:
+            cfg = config
+            self.max_position_ratio = float(cfg.get("max_position_ratio", 0.30))
+            self.daily_loss_warn = float(cfg.get("daily_loss_warn", 0.03))
+            self.daily_loss_halt = float(cfg.get("daily_loss_halt", 0.05))
+            self.max_total_positions = int(cfg.get("max_total_positions", 5))
+            self.t_plus_1 = bool(cfg.get("t_plus_1", True))
+        else:
+            cfg = settings().get("risk", {})
+            self.max_position_ratio = float(cfg.get("max_position_ratio", 0.30))
+            self.daily_loss_warn = float(cfg.get("daily_loss_warn", 0.03))
+            self.daily_loss_halt = float(cfg.get("daily_loss_halt", 0.05))
+            self.max_total_positions = int(cfg.get("max_total_positions", 5))
+            self.t_plus_1 = bool(cfg.get("t_plus_1", True))
         self._logger = get_logger()
         self._halted: bool = False
+        # 行业分散约束
+        self._industry_constraint = IndustryConstraint(config=cfg)
+        # P0-2 修复：启动时从磁盘加载熔断状态
+        self._load_halt_state()
 
     @property
     def is_halted(self) -> bool:
@@ -54,6 +86,57 @@ class RiskManager:
         if self._halted:
             self._logger.info("Risk manager halt state reset")
         self._halted = False
+        self._save_halt_state()
+
+    def clear_halt_only(self) -> None:
+        """仅清除 L2 熔断状态，不重置日初净值。
+
+        用于盘中人工解除熔断后恢复交易，但保留当日亏损累计，
+        避免掩盖当日已发生的亏损（铁律：L2 熔断不可被绕过）。
+        """
+        if self._halted:
+            self._logger.warning(
+                "L2 熔断状态人工解除（clear_halt_only），日初净值保留不变，当日亏损继续累计"
+            )
+        self._halted = False
+        self._save_halt_state()
+
+    def _load_halt_state(self) -> None:
+        """P0-2 修复：从磁盘加载熔断状态，防止进程重启绕过熔断。"""
+        try:
+            if RISK_STATE_FILE.exists():
+                data = json.loads(RISK_STATE_FILE.read_text(encoding="utf-8"))
+                halted = data.get("halted", False)
+                halt_date = data.get("halt_date", "")
+                from datetime import date as _date
+
+                today_str = _date.today().isoformat()
+                # 仅恢复当日熔断状态，跨日熔断自动失效（需新交易日 reset）
+                if halted and halt_date == today_str:
+                    self._halted = True
+                    self._logger.warning(
+                        f"P0-2: 恢复当日 L2 熔断状态（halt_date={halt_date}），"
+                        f"交易已被阻断，需人工 reset_halt 后恢复"
+                    )
+        except Exception as e:
+            self._logger.warning(f"加载熔断状态失败: {e}")
+
+    def _save_halt_state(self) -> None:
+        """P0-2 修复：将熔断状态持久化到磁盘。"""
+        try:
+            RISK_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            from datetime import date as _date
+
+            data = {
+                "halted": self._halted,
+                "halt_date": _date.today().isoformat(),
+                "updated_at": __import__("pandas").Timestamp.now().isoformat(),
+            }
+            RISK_STATE_FILE.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception as e:
+            self._logger.warning(f"保存熔断状态失败: {e}")
 
     def check_order(
         self,
@@ -144,7 +227,7 @@ class RiskManager:
         portfolio: dict[str, Position],
         cash: float,
     ) -> RiskCheckResult:
-        """L1 checks for buy orders: max positions and single position ratio."""
+        """L1 checks for buy orders: max positions, industry constraint, and single position ratio."""
         # L1: max total positions (only when opening a new position)
         if symbol not in portfolio and len(portfolio) >= self.max_total_positions:
             return RiskCheckResult(
@@ -155,6 +238,16 @@ class RiskManager:
                     f"cannot open new position in {symbol}"
                 ),
             )
+
+        # 行业分散约束：同行业持仓不超过上限
+        if symbol not in portfolio:
+            result = self._industry_constraint.check_buy(symbol, portfolio)
+            if not result["allowed"]:
+                return RiskCheckResult(
+                    level=RiskLevel.L1_POSITION,
+                    action=RiskAction.HALT,
+                    message=result["reason"],
+                )
 
         # L1: single position ratio limit
         current_pos = portfolio.get(symbol)
@@ -253,6 +346,7 @@ class RiskManager:
 
         if loss_pct >= self.daily_loss_halt:
             self._halted = True
+            self._save_halt_state()  # P0-2: 持久化熔断状态
             self._logger.warning(
                 f"L2 HALT: daily loss {loss_pct:.2%} >= {self.daily_loss_halt:.2%}, "
                 f"trading halted until reset()"
@@ -338,9 +432,14 @@ class RiskManager:
 
     @staticmethod
     def _price_limit_ratio(symbol: str, is_st: bool) -> float:
-        """Determine price limit ratio based on board and ST status."""
+        """Determine price limit ratio based on board and ST status.
+
+        P1-c 修复：增加北交所（BSE）±30% 涨跌停限制。
+        """
         if is_st:
             return _ST_LIMIT
+        if symbol.startswith(_BSE_PREFIXES):  # P1-c: 北交所优先判断
+            return _BSE_LIMIT
         if symbol.startswith(_GEM_PREFIXES) or symbol.startswith(_KCB_PREFIXES):
             return _GEM_KCB_LIMIT
         return _MAIN_BOARD_LIMIT

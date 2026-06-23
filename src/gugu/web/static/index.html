@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>gugu 交易仪表盘</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f1117;color:#e1e4e8;padding:20px}
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid #21262d}
+.header h1{font-size:24px;font-weight:600;color:#58a6ff}
+.header .status{font-size:13px;color:#8b949e}
+.refresh-btn{background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px}
+.refresh-btn:hover{background:#2ea043}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:24px}
+.card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:20px}
+.card h2{font-size:14px;color:#8b949e;margin-bottom:12px;text-transform:uppercase;letter-spacing:.5px}
+.card .value{font-size:28px;font-weight:600}
+.card .value.positive{color:#3fb950}
+.card .value.negative{color:#f85149}
+.card .value.neutral{color:#e1e4e8}
+.card .sub{font-size:12px;color:#8b949e;margin-top:4px}
+.risk-badge{display:inline-block;padding:4px 10px;border-radius:12px;font-size:12px;font-weight:600}
+.risk-ok{background:#0d2818;color:#3fb950}
+.risk-warn{background:#3d2e00;color:#d29922}
+.risk-halt{background:#4c0519;color:#f85149}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:#8b949e;font-weight:500;padding:8px 12px;border-bottom:1px solid #21262d}
+td{padding:8px 12px;border-bottom:1px solid #161b22}
+tr:hover td{background:#161b22}
+.section{margin-bottom:24px}
+.section h2{font-size:16px;color:#e1e4e8;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid #21262d}
+.empty{color:#8b949e;text-align:center;padding:40px;font-size:14px}
+@media(max-width:600px){.grid{grid-template-columns:1fr}.card .value{font-size:22px}}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>gugu</h1>
+  <div>
+    <span class="status" id="last-update">--</span>
+    <button class="refresh-btn" onclick="refresh()">刷新</button>
+  </div>
+</div>
+
+<div class="grid" id="account-cards"></div>
+
+<div class="section">
+  <h2>风控状态</h2>
+  <div id="risk-status"></div>
+</div>
+
+<div class="section">
+  <h2>持仓详情</h2>
+  <div id="portfolio"></div>
+</div>
+
+<div class="section">
+  <h2>交易记录</h2>
+  <div id="trades"></div>
+</div>
+
+<script>
+function fmt(n,d=2){return n==null?'--':Number(n).toLocaleString('zh-CN',{minimumFractionDigits:d,maximumFractionDigits:d})}
+function fmtPct(n){return n==null?'--':(n>=0?'+':'')+Number(n).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})+'%'}
+function cls(n){return n>0?'positive':n<0?'negative':'neutral'}
+
+async function fetchJSON(url){
+  try{return await(await fetch(url)).json()}catch(e){console.error(e);return null}
+}
+
+async function refresh(){
+  const [account,portfolio,trades,risk]=await Promise.all([
+    fetchJSON('/api/account'),fetchJSON('/api/portfolio'),
+    fetchJSON('/api/trades'),fetchJSON('/api/risk')
+  ]);
+  document.getElementById('last-update').textContent='更新: '+new Date().toLocaleTimeString('zh-CN');
+
+  // Account cards
+  if(account){
+    const mv=account.market_value||0;
+    const profit=account.total_value-1000000;
+    document.getElementById('account-cards').innerHTML=`
+      <div class="card"><h2>总资产</h2><div class="value neutral">¥${fmt(account.total_value)}</div><div class="sub">初始 ¥1,000,000</div></div>
+      <div class="card"><h2>现金</h2><div class="value neutral">¥${fmt(account.cash)}</div><div class="sub">占比 ${fmtPct(account.cash/account.total_value*100)}</div></div>
+      <div class="card"><h2>持仓市值</h2><div class="value neutral">¥${fmt(mv)}</div><div class="sub">${account.positions_count} 只</div></div>
+      <div class="card"><h2>累计盈亏</h2><div class="value ${cls(profit)}">¥${fmt(profit)}</div><div class="sub">${fmtPct(profit/1000000*100)}</div></div>
+    `;
+  }
+
+  // Risk
+  if(risk){
+    const badge=risk.halted?'risk-halt':risk.daily_loss_pct>0.03?'risk-warn':'risk-ok';
+    const label=risk.halted?'已熔断':risk.daily_loss_pct>0.03?'预警中':'正常';
+    document.getElementById('risk-status').innerHTML=`
+      <span class="risk-badge ${badge}">${label}</span>
+      <span style="margin-left:12px;color:#8b949e">日亏 ${fmtPct(risk.daily_loss_pct*100)} | 日初净值 ¥${fmt(risk.daily_start_value)}</span>
+    `;
+  }
+
+  // Portfolio
+  if(portfolio&&portfolio.positions.length){
+    document.getElementById('portfolio').innerHTML=`<table><thead><tr>
+      <th>代码</th><th>数量</th><th>可用</th><th>成本</th><th>现价</th><th>市值</th><th>盈亏</th><th>盈亏%</th>
+    </tr></thead><tbody>${portfolio.positions.map(p=>`<tr>
+      <td>${p.symbol}</td><td>${p.quantity}</td><td>${p.available}</td>
+      <td>${fmt(p.avg_cost)}</td><td>${fmt(p.current_price)}</td><td>¥${fmt(p.market_value)}</td>
+      <td class="${cls(p.profit)}">¥${fmt(p.profit)}</td><td class="${cls(p.profit_pct)}">${fmtPct(p.profit_pct*100)}</td>
+    </tr>`).join('')}</tbody></table>`;
+  }else{
+    document.getElementById('portfolio').innerHTML='<div class="empty">暂无持仓</div>';
+  }
+
+  // Trades
+  if(trades&&trades.trades.length){
+    const recent=trades.trades.slice(-20).reverse();
+    document.getElementById('trades').innerHTML=`<table><thead><tr>
+      <th>日期</th><th>代码</th><th>方向</th><th>价格</th><th>数量</th><th>佣金</th><th>印花税</th>
+    </tr></thead><tbody>${recent.map(t=>`<tr>
+      <td>${t.date}</td><td>${t.symbol}</td>
+      <td style="color:${t.direction==='buy'?'#3fb950':'#f85149'}">${t.direction==='buy'?'买入':'卖出'}</td>
+      <td>${fmt(t.price)}</td><td>${t.quantity}</td><td>${fmt(t.commission)}</td><td>${fmt(t.stamp_tax)}</td>
+    </tr>`).join('')}</tbody></table>
+    <div class="sub" style="margin-top:8px">共 ${trades.count} 笔，显示最近 20 笔</div>`;
+  }else{
+    document.getElementById('trades').innerHTML='<div class="empty">暂无交易记录</div>';
+  }
+}
+
+refresh();
+setInterval(refresh,30000);
+</script>
+</body>
+</html>
