@@ -304,12 +304,10 @@ def create_app() -> FastAPI:
                 return {"success": True, "data": [], "message": "当前无持仓"}
 
             from gugu.models import Position as PosModel
-            from gugu.risk import RiskManager
 
             dm = data_manager()
             portfolio = {k: PosModel(**v) for k, v in positions.items()}
-            rm = RiskManager()
-            alerts = rm.check_correlation(portfolio, dm)
+            alerts = await RiskManager.check_correlation(portfolio, dm)
             return {"success": True, "data": alerts}
         except Exception as e:
             logger.exception(f"相关性检查失败: {e}")
@@ -317,11 +315,9 @@ def create_app() -> FastAPI:
 
     @app.post("/api/halt/reset")
     async def reset_halt() -> dict[str, Any]:
-        """手动解除 L2 熔断。"""
-        from gugu.engine.main import TradingEngine
-
-        engine = TradingEngine()
-        engine.reset_halt()
+        """手动解除 L2 熔断（使用 Web 单例 RiskManager）。"""
+        risk = _get_web_risk()
+        risk.reset()
         return {"success": True, "message": "L2 熔断已手动解除"}
 
     @app.post("/api/engine/run")

@@ -187,7 +187,6 @@ class SignalTracker:
         """追踪单条信号的收益。"""
         symbol = sig.get("symbol", "")
         ts = sig.get("timestamp", "")
-        sig.get("price", 0) or 0
 
         try:
             signal_date = pd.to_datetime(ts)

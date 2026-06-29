@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Any
 
 from gugu.strategies.base import Strategy
 from gugu.strategies.breakout import BoxBreakoutStrategy, DualThrustStrategy
@@ -39,6 +40,18 @@ def get_strategy(name: str, params: dict[str, Any] | None = None) -> Strategy:
     if cls is None:
         raise KeyError(f"策略 '{name}' 未注册，可用: {list(_REGISTRY.keys())}")
     return cls(params)
+
+
+def get_strategy_cls(name: str) -> type[Strategy] | None:
+    """获取策略类（非实例），用于 Walk-Forward 优化等需要 Class 而非 instance 的场景。
+
+    Args:
+        name: 策略名称
+
+    Returns:
+        策略类，未注册返回 None
+    """
+    return _REGISTRY.get(name)
 
 
 def list_strategies() -> list[str]:

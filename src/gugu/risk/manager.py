@@ -74,6 +74,9 @@ class RiskManager:
         self._logger = get_logger()
         self._halted: bool = False
         self._last_reset_date: str = ""
+        # 组合级风控（实例级别，避免跨实例共享）
+        self._portfolio_peak: float = 0.0
+        self._max_drawdown_halt: float = 0.15
         # 行业分散约束
         self._industry_constraint = IndustryConstraint(config=cfg)
         # P0-2 修复：启动时从磁盘加载熔断状态
@@ -461,9 +464,6 @@ class RiskManager:
 
     # ── P1 新增：组合级风控 ─────────────────────────────────────────
 
-    _portfolio_peak: float = 0.0  # 组合历史最高净值
-    _max_drawdown_halt: float = 0.15  # 最大回撤熔断阈值 15%
-
     def update_portfolio_peak(self, total_value: float) -> None:
         """更新组合历史最高净值（每日循环结束时调用）。"""
         if total_value > self._portfolio_peak:
@@ -496,10 +496,10 @@ class RiskManager:
         )
 
     @staticmethod
-    def check_correlation(
+    async def check_correlation(
         portfolio: dict[str, Position], data_mgr: Any, threshold: float = 0.85
     ) -> list[dict]:
-        """检查持仓间高相关性风险（P1 新增）。
+        """检查持仓间高相关性风险（P1 新增，async 修复 FastAPI 兼容）。
 
         基于 historical daily returns 计算两两相关系数，
         返回相关系数 > threshold 的高相关股票对列表。
@@ -512,8 +512,6 @@ class RiskManager:
         Returns:
             高相关股票对列表 [{"pair": (s1,s2), "correlation": float}, ...]
         """
-        import asyncio
-
         import numpy as np
         import pandas as pd
 
@@ -521,29 +519,16 @@ class RiskManager:
         if len(symbols) < 2:
             return []
 
-        # 拉取所有持仓的 60 日收益率序列
         returns: dict[str, pd.Series] = {}
-
-        async def _fetch():
-            for sym in symbols:
-                try:
-                    df = await data_mgr.fetch_stock_history(sym, days=60)
-                    if not df.empty and len(df) >= 30:
-                        ret = df["close"].pct_change().dropna()
-                        if len(ret) >= 30:
-                            returns[sym] = ret
-                except Exception:
-                    pass
-
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import nest_asyncio
-
-                nest_asyncio.apply()
-            asyncio.run(_fetch())
-        except RuntimeError:
-            pass
+        for sym in symbols:
+            try:
+                df = await data_mgr.fetch_stock_history(sym, days=60)
+                if not df.empty and len(df) >= 30:
+                    ret = df["close"].pct_change().dropna()
+                    if len(ret) >= 30:
+                        returns[sym] = ret
+            except Exception:
+                pass
 
         alerts: list[dict] = []
         syms = list(returns.keys())

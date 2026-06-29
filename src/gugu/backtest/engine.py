@@ -233,8 +233,19 @@ class BacktestEngine:
                     from gugu.analysis.trailing_stop import TrailingStopSignal
 
                     window_df = df.iloc[max(0, i - 60) : i + 1]
+                    # P0 修复：回测中同步检测危险信号并传入移动止损引擎
+                    # 确保回测与实盘移动止损行为一致（实盘在 _check_stop_loss 中传入 pos.danger_signals）
+                    ts_danger_signals: list[str] = []
+                    try:
+                        ts_danger_result = self._danger_detector.detect(
+                            window_df, prev_close=prev_close
+                        )
+                        if ts_danger_result.has_signal:
+                            ts_danger_signals = ts_danger_result.signals
+                    except Exception:
+                        pass
                     new_state, ts_signal = self._trailing_stop_engine.update(
-                        trailing_state, window_df
+                        trailing_state, window_df, ts_danger_signals
                     )
                     trailing_state = new_state
 
@@ -613,6 +624,13 @@ def walk_forward_optimize(
                     continue
         else:
             best_params = {}
+            try:
+                strategy = strategy_cls({})
+                engine = BacktestEngine()
+                result = engine.run(strategy, train_df, symbol)
+                best_sharpe = result.metrics.get("sharpe", 0)
+            except Exception:
+                best_sharpe = 0.0
 
         # Test on out-of-sample
         test_strategy = strategy_cls(best_params)

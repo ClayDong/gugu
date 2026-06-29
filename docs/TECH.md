@@ -543,14 +543,26 @@ tests/
 
 ### 八之三、仍待实施（不依赖付费数据）
 
-| # | 功能 | 优先级 |
-|---|------|--------|
-| 1 | 实盘模拟验证（signal_only→paper 模式，积累 3 个月交易记录） | P0 |
-| 2 | 信号绩效自动推送（飞书卡片附历史胜率） | P1 |
-| 3 | 策略参数敏感性分析（回测优化止损/窗口参数） | P1 |
-| 4 | 交易日志 + 归因分析（每笔完成交易后自动分析盈亏原因） | P1 |
-| 5 | 盘前预案推送（跳空高开/低开应对策略） | P2 |
-| 6 | 流动性仓位约束（基于日均成交额限制单笔仓位） | P2 |
+| # | 功能 | 优先级 | 状态 |
+|---|------|--------|------|
+| 1 | 实盘模拟验证（signal_only→paper 模式，积累 3 个月交易记录） | P0 | ⏳ |
+| 2 | 信号绩效自动推送（飞书卡片附历史胜率） | P1 | ✅ v0.3.1 |
+| 3 | 策略参数敏感性分析（回测优化止损/窗口参数） | P1 | ⏳ |
+| 4 | 交易日志 + 归因分析（每笔完成交易后自动分析盈亏原因） | P1 | ⏳ |
+| 5 | 盘前预案推送（跳空高开/低开应对策略） | P2 | ⏳ |
+| 6 | 流动性仓位约束（基于日均成交额限制单笔仓位） | P2 | ⏳ |
+
+### 八之四、v0.3.1 修复（迭代 23）
+
+| # | 修复 | 涉及文件 |
+|---|------|----------|
+| 42 | RiskManager.check_correlation async 化（修复 FastAPI 死循环） | `risk/manager.py` |
+| 43 | 卡片 subtitle→element 渲染（修复 Feishu 静默丢弃） | `notifier/formatter.py:_card` |
+| 44 | Web /api/halt/reset 使用 _web_risk 单例 | `web/app.py` |
+| 45 | _portfolio_peak 类变量→实例变量 | `risk/manager.py` |
+| 46 | 信号死代码移除（signal_tracker.py:190） | `analysis/signal_tracker.py` |
+| 47 | walk_forward_optimize 空网格 best_sharpe 兜底 | `backtest/engine.py` |
+| 48 | 信号历史胜率注入飞书卡片（_inject_performance_summary） | `engine/main.py` |
 
 ## 九、可观测性数据文件
 

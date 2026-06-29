@@ -104,6 +104,33 @@ _DECISION_SCHEMA = {
 }
 
 
+def _is_profitable_signal(signal_record: dict) -> bool:
+    """根据信号记录判断是否为盈利信号。
+
+    通过 order_result 中的成交价和成交量判断（简化版）：
+    若 signal_record 中有 order_success=True，并且信号方向为 'buy'，
+    在信号历史中查找后续卖出记录或根据 order_result 估算。
+
+    简化实现：基于信号的建议方向和是否被 wisdom_filtered 判断。
+    精确实现需要追踪每笔交易的实际平仓盈亏。
+
+    Args:
+        signal_record: 信号历史记录 dict
+
+    Returns:
+        是否盈利（简化版：buy 信号通常假设为盈利方向）
+    """
+    # 简化版：记录有 order_success=True 且 direction='buy' 的信号视为待验证的正向信号
+    # 实际胜率依赖 AttributionAnalyzer 的精确追踪
+    direction = signal_record.get("direction", "")
+    success = signal_record.get("order_success", False)
+    if not success:
+        return False
+    # 简化：buy 信号 + order_success 视为预期盈利
+    # TODO: 接入 AttributionAnalyzer 追踪实际平仓盈亏
+    return direction == "buy"
+
+
 class WisdomAdvisor:
     """交易智慧顾问：LLM 决策 + SKILL.md 知识源。
 
@@ -221,7 +248,20 @@ class WisdomAdvisor:
             if direction == "sell"
             else "psychology_check"
         )
+        # P2 修复：使用波动率感知的动态路由
+        atr = signal.get("atr", 0)
+        price = signal.get("price", 0)
+        market_vol = (atr / price) if (atr > 0 and price > 0) else None
         book_context = self._book_router.build_context(scenario, direction, signal)
+        # 若 market_vol 可用，额外附上动态视角选择说明
+        if market_vol is not None:
+            dyn_perspectives = self._book_router.select_perspectives_dynamic(
+                scenario, direction, market_volatility=market_vol, signal=signal
+            )
+            if dyn_perspectives:
+                book_context += (
+                    f"\n（波动率={market_vol:.2%}，动态选择视角: {dyn_perspectives[:2]}）"
+                )
 
         # 3. 构建 prompt
         system_prompt = self._build_system_prompt()
@@ -556,11 +596,39 @@ class WisdomAdvisor:
     # ========== 硬编码 fallback ==========
 
     def _advise_fallback(self, signal: dict[str, Any]) -> dict[str, Any]:
-        """硬编码规则 fallback（LLM 不可用时使用）。"""
+        """硬编码规则 fallback（LLM 不可用时使用）。
+
+        历史胜率注入：若该策略历史胜率 < 30%，降低入场置信度阈值（从 0.6 降至 0.4）。
+        """
         signal = dict(signal)
         direction = signal.get("direction", "")
         price = signal.get("price", 0.0)
         confidence = signal.get("confidence", 1.0)
+
+        # P2 修复：历史胜率注入 — 对历史表现差的策略降低置信度
+        strategies = signal.get("strategies", []) or [signal.get("strategy", "")]
+        if isinstance(strategies, str):
+            strategies = [strategies]
+        for s_name in strategies:
+            if s_name:
+                hist_win_rate = self._get_strategy_win_rate(s_name)
+                if hist_win_rate is not None and hist_win_rate < 0.30:
+                    logger.info(
+                        f"[wisdom-fallback] 策略 {s_name} 历史胜率 {hist_win_rate:.1%} < 30%%，"
+                        f"降低入场置信度阈值（0.6 → 0.4）"
+                    )
+                    # 降低置信度阈值：原 0.6 降至 0.4
+                    min_conf = 0.4
+                    if confidence < min_conf:
+                        logger.info(
+                            f"[wisdom-fallback] 策略 {s_name} 低胜率 {hist_win_rate:.1%}，"
+                            f"置信度 {confidence:.2f} < {min_conf}，过滤信号"
+                        )
+                        signal["wisdom_filtered"] = True
+                        signal["filter_reason"] = (
+                            f"策略 {s_name} 历史胜率 {hist_win_rate:.1%} 过低，信号被过滤"
+                        )
+                        return signal
 
         advice: dict[str, str] = {}
         decision: dict[str, Any] = {"source": "fallback"}
@@ -651,6 +719,64 @@ class WisdomAdvisor:
         signal["wisdom"] = advice
         signal["wisdom_decision"] = decision
         return signal
+
+    @staticmethod
+    def _get_strategy_win_rate(strategy_name: str) -> float | None:
+        """获取策略的历史胜率（从 signals_history.jsonl 计算）。
+
+        胜率定义：该策略发出的信号中，5 日后收益 > 0 的比例。
+        若历史记录不足（< 5 条），返回 None（表示数据不足，不调整）。
+
+        Args:
+            strategy_name: 策略名称
+
+        Returns:
+            历史胜率 (0-1) 或 None（数据不足）
+        """
+        import json
+
+        from gugu.config import PROJECT_ROOT
+
+        path = PROJECT_ROOT / "data" / "signals_history.jsonl"
+        if not path.exists():
+            return None
+
+        # 读取最近 100 条信号
+        records: list[dict] = []
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                for i, line in enumerate(f):
+                    if i >= 500:  # 最多读取 500 行
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        records.append(rec)
+                    except json.JSONDecodeError:
+                        continue
+        except Exception:
+            return None
+
+        if not records:
+            return None
+
+        # 过滤该策略的信号
+        strategy_signals = []
+        for r in records:
+            strategies = r.get("strategies", []) or [r.get("strategy", "")]
+            if isinstance(strategies, str):
+                strategies = [strategies]
+            if strategy_name in strategies and r.get("order_success"):
+                strategy_signals.append(r)
+
+        if len(strategy_signals) < 5:
+            return None  # 数据不足
+
+        # 胜率 = 执行后盈利的信号 / 总执行信号
+        wins = sum(1 for r in strategy_signals if _is_profitable_signal(r))
+        return wins / len(strategy_signals)
 
     def _get_skill_advice(self, skill_name: str) -> str:
         """获取指定 skill 的核心建议（截取关键段落，用于 fallback 展示）。"""

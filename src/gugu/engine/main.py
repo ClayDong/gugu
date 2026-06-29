@@ -369,6 +369,7 @@ class TradingEngine:
                 record_signal_history(signal, None, None)
             except Exception as e:
                 logger.warning(f"记录信号历史失败: {e}")
+            self._inject_performance_summary(signal)
             notify_ok = await self._notifier.notify_signal(signal)
             if not notify_ok:
                 logger.error(f"{symbol} 信号通知失败，请检查飞书配置")
@@ -546,7 +547,6 @@ class TradingEngine:
             },
         )
 
-        # 通知
         signal["order_result"] = {
             "success": result.success,
             "price": result.price,
@@ -554,6 +554,7 @@ class TradingEngine:
             "commission": result.commission,
             "message": result.message,
         }
+        self._inject_performance_summary(signal)
         notify_ok = await self._notifier.notify_signal(signal)
         # 通知失败时记录告警，确保用户可通过本地日志感知交易
         if not notify_ok:
@@ -1015,6 +1016,61 @@ class TradingEngine:
         if sell_alerts:
             logger.info(f"持仓卖出信号: {len(sell_alerts)} 只股票需关注")
         return sell_alerts
+
+    @staticmethod
+    def _inject_performance_summary(signal: dict[str, Any]) -> None:
+        """注入同类信号历史表现摘要到信号 dict 中。
+
+        通过 SignalTracker 查询最近 30 天的同策略买入信号表现，
+        将胜率/平均收益等数据写入 signal["performance_summary"]，
+        供 formatter 在卡片中展示。
+        """
+        try:
+            from gugu.analysis.signal_tracker import SignalTracker
+
+            tracker = SignalTracker()
+            records = tracker.load_history(days=30)
+            if len(records) < 3:
+                return
+
+            strategies = set()
+            sig_strategies = signal.get("strategies", [])
+            if isinstance(sig_strategies, str):
+                strategies.add(sig_strategies)
+            elif isinstance(sig_strategies, list):
+                strategies.update(sig_strategies)
+            if not strategies:
+                return
+
+            buy_records = [r for r in records if r.get("direction") == "buy"]
+            relevant = [
+                r
+                for r in buy_records
+                if set(
+                    r.get("strategies", [])
+                    if isinstance(r.get("strategies"), list)
+                    else [r.get("strategy", "")]
+                )
+                & strategies
+            ]
+            if len(relevant) < 3:
+                return
+
+            valid = [r for r in relevant if r.get("return_5d") is not None]
+            if len(valid) < 3:
+                return
+            wins = [r for r in valid if r["return_5d"] > 0]
+            returns = [r["return_5d"] for r in valid]
+            signal["performance_summary"] = {
+                "sample_count": len(valid),
+                "win_rate": round(len(wins) / len(valid), 3),
+                "avg_return_5d": round(sum(returns) / len(valid), 4),
+                "best_return": round(max(returns), 4),
+                "worst_return": round(min(returns), 4),
+                "strategies": list(strategies),
+            }
+        except Exception as e:
+            logger.debug(f"注入信号绩效摘要失败: {e}")
 
 
 def run_engine() -> None:

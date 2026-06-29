@@ -1,19 +1,25 @@
 """实盘入口：QMT 实盘交易（阶段四启用）。
 
 用法：
-    python scripts/run_live.py --dry-run   # 仅检查 QMT 环境与连接（不下单）
-    python scripts/run_live.py
+    python scripts/run_live.py              # 默认模式（需 QMT 配置）
+    python scripts/run_live.py --signal-only  # 信号监控模式（只通知不下单）
+    python scripts/run_live.py --dry-run     # 仅检查 QMT 环境与连接
+    python scripts/run_live.py --signal-only --loop 10  # 信号监控模式，每10分钟循环一次
 """
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from gugu.config import env  # noqa: E402
+from gugu.config import get_config  # noqa: E402
+from gugu.data import data_manager as dm  # noqa: E402
+from gugu.engine.main import TradingEngine  # noqa: E402
 from gugu.execution.qmt import QmtBroker  # noqa: E402
+from gugu.notifier import FeishuNotifier  # noqa: E402
 from gugu.utils.log import get_logger  # noqa: E402
 
 logger = get_logger()
@@ -21,39 +27,172 @@ logger = get_logger()
 
 def _checklist() -> list[str]:
     """QMT 环境检查清单。"""
-    cfg = env()
+    cfg = get_config()
+    qmt_path = getattr(cfg.execution.live, "broker", "qmt")
     items = []
-    items.append(f"QMT_PATH: {'已配置' if cfg.qmt_path else '未配置'}")
-    items.append(f"QMT_ACCOUNT_ID: {'已配置' if cfg.qmt_account_id else '未配置'}")
-    items.append(f"QMT_PASSWORD: {'已配置' if cfg.qmt_password else '未配置'}")
+    items.append(f"运行模式: {cfg.execution.mode}")
+    items.append(f"券商接口: {qmt_path}")
+    items.append(f"启用的策略: {cfg.strategy.enabled}")
+    items.append(f"自选股数量: {len(cfg.watchlist)}")
     return items
 
 
-def main(dry_run: bool = False) -> int:
-    """实盘入口（阶段四实现）。"""
-    logger.error("实盘功能未启用（阶段四）。当前可用：模拟盘 python scripts/run_paper.py")
-    logger.info("启用实盘前需完成：")
-    logger.info("1. 模拟盘稳定运行 30 天以上")
-    logger.info("2. 配置 QMT 环境变量（QMT_PATH/QMT_ACCOUNT_ID/QMT_PASSWORD）")
-    logger.info("3. 实现 QmtBroker.connect() 和 order()")
-    logger.info("4. 小额资金验证")
+async def run_signal_only_cycle(loop_interval_minutes: int = 0) -> None:
+    """信号监控模式：运行 TradingEngine 的完整信号扫描流程，但不执行实际下单。
 
-    if dry_run:
-        logger.info("=== QMT 环境检查（dry-run）===")
+    此模式用于：
+    1. 验证数据源连通性
+    2. 验证策略信号生成
+    3. 验证 Wisdom 决策层
+    4. 飞书通知所有信号（不下单）
+
+    与 signal_only 模式的区别：
+    - TradingEngine.run_daily_cycle() 在 settings.yaml 中 mode=signal_only 时
+      不会下单（见 engine/main.py _process_signal 中的 signal_only 检查）
+    - 此函数是独立入口，可周期性循环运行
+
+    Args:
+        loop_interval_minutes: 循环间隔分钟数，0=只运行一次
+    """
+    engine = TradingEngine()
+    notifier = FeishuNotifier()
+
+    try:
+        await notifier.notify_risk_alert(
+            {
+                "level": "info",
+                "message": "gugu 信号监控模式启动",
+                "suggestion": (
+                    f"模式: signal_only\n"
+                    f"策略: {get_config().strategy.enabled}\n"
+                    f"自选股: {len(get_config().watchlist)} 只\n"
+                    f"循环间隔: {'单次运行' if loop_interval_minutes == 0 else f'{loop_interval_minutes}分钟'}"
+                ),
+            }
+        )
+    except Exception as e:
+        logger.warning(f"启动通知失败: {e}")
+
+    while True:
+        try:
+            logger.info("=" * 50)
+            logger.info("信号监控模式：开始交易循环")
+            logger.info("=" * 50)
+            await engine.run_daily_cycle()
+            logger.info("交易循环完成")
+        except Exception as e:
+            logger.error(f"交易循环异常: {e}")
+            try:
+                await notifier.notify_error(
+                    {
+                        "module": "run_live.signal_only",
+                        "message": str(e)[:500],
+                        "suggestion": "检查日志 logs/gugu_*.log",
+                    }
+                )
+            except Exception:
+                pass
+
+        if loop_interval_minutes <= 0:
+            break
+
+        logger.info(f"等待 {loop_interval_minutes} 分钟后下一次循环...")
+        await asyncio.sleep(loop_interval_minutes * 60)
+
+
+async def run_qmt_live() -> None:
+    """QMT 实盘模式（阶段四实现）。
+
+    需要：
+    1. xtquant SDK 安装
+    2. QMT 客户端运行并登录
+    3. .env 配置 QMT_PATH/QMT_ACCOUNT_ID/QMT_PASSWORD
+    4. settings.yaml execution.mode=live
+    """
+    logger.info("QMT 实盘模式启动")
+
+    # 检查环境
+    broker = QmtBroker()
+    connected = broker.connect()
+    if not connected:
+        logger.error("QMT 连接失败，请检查:")
+        logger.error("1. QMT 客户端是否已启动并登录")
+        logger.error("2. .env 文件中 QMT_PATH/QMT_ACCOUNT_ID/QMT_PASSWORD 是否正确配置")
+        logger.error("3. xtquant SDK 是否已安装")
+        logger.error("回退到 signal_only 模式...")
+        await run_signal_only_cycle()
+        return
+
+    logger.info("QMT 连接成功")
+    engine = TradingEngine()
+    await engine.run_daily_cycle()
+
+
+def main(mode: str, loop_interval: int) -> int:
+    """主入口。"""
+    cfg = get_config()
+
+    logger.info("=== gugu 实盘环境检查 ===")
+    for item in _checklist():
+        logger.info(f"  {item}")
+
+    if mode == "signal_only":
+        logger.info("启动信号监控模式（signal_only）")
+        asyncio.run(run_signal_only_cycle(loop_interval_minutes=loop_interval))
+        return 0
+    elif mode == "dry_run":
+        logger.info("=== 环境检查清单 ===")
         for item in _checklist():
             logger.info(item)
-        broker = QmtBroker()
-        connected = broker.connect()
-        logger.info(f"QMT 连接测试: {'成功' if connected else '失败（预期，阶段四未实现）'}")
-        return 0
 
-    return 1
+        # 测试连接
+        if cfg.execution.mode == "live":
+            broker = QmtBroker()
+            connected = broker.connect()
+            logger.info(f"QMT 连接测试: {'成功' if connected else '失败'}")
+        else:
+            logger.info("当前非实盘模式，跳过 QMT 连接测试")
+
+        # 测试数据源
+        try:
+            from gugu.data import data_manager as dm_test
+
+            test_dm = dm_test.data_manager()
+            logger.info(f"数据源状态: {'降级' if test_dm.is_degraded else '正常'}")
+        except Exception as e:
+            logger.warning(f"数据源测试失败: {e}")
+
+        return 0
+    else:
+        # live mode
+        logger.info("启动实盘模式")
+        asyncio.run(run_qmt_live())
+        return 0
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="gugu 实盘")
-    parser.add_argument("--dry-run", action="store_true", help="仅检查 QMT 环境，不下单")
+    parser = argparse.ArgumentParser(
+        description="gugu 实盘入口",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  python scripts/run_live.py --signal-only          # 信号监控模式（只通知不下单）
+  python scripts/run_live.py --signal-only --loop 5  # 信号监控模式每5分钟循环
+  python scripts/run_live.py --dry-run               # 环境检查
+  python scripts/run_live.py                          # 实盘模式（需配置 QMT）
+        """,
+    )
+    parser.add_argument("--signal-only", action="store_true", help="信号监控模式（不下单）")
+    parser.add_argument("--dry-run", action="store_true", help="仅检查环境，不下单")
+    parser.add_argument("--loop", type=int, default=0, metavar="N", help="循环间隔分钟数（signal_only 模式，0=单次）")
     parser.add_argument("--version", action="version", version="gugu 0.1.0")
     args = parser.parse_args()
 
-    sys.exit(main(dry_run=args.dry_run))
+    if args.dry_run:
+        mode = "dry_run"
+    elif args.signal_only:
+        mode = "signal_only"
+    else:
+        mode = "live"
+
+    sys.exit(main(mode, loop_interval=args.loop))

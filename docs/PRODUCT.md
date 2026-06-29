@@ -232,6 +232,7 @@ uv run python scripts/run_live.py
 | 20 | 2026-06-30 | **架构治理 v2**：配置双轨制消除（13 模块迁移到 AppConfig 单例，`settings()` 委托至 `get_config()`）、`_STOCK_NAMES` 三份重复去重到 `data/stock_names.py`、`TrailingStopEngine` ATR 自适应止损优先、熔断状态跨日同步（新增 `last_reset_date` 持久化）、`_check_stop_loss` 批量拉取优化、`PlausiblePriceRule` 低波动股防误判、Ruff 规则清理（255→0） |
 | 21 | 2026-06-30 | **对抗性审查修复**：背测引擎认知模块异常不再静默吞（`logger.debug`）、周线 resample 消除前视偏差（`closed="left"`）、仓位基准改用当前净值（`current_equity` 替代 `initial_capital`）、资金流默认保守拒绝（`pass: False`）、选股器/筛股器 per-stock 超时保护、`is_tradable` 传入方向参数、错误消息密钥脱敏纵深防御、`formatter.py` `_STOCK_NAMES` 去重 |
 | 22 | 2026-06-30 | **产品化 v1**：信号卡片 30 秒决策摘要行（置信度/仓位/止损/止盈一目了然）、ATR 波动率动态调整仓位（高波减 30%/低波加 30%）、止盈双目标方案（+10%/+20% + ATR 自适应校准）、信号融合切换为 weighted 模式、Bollinger+RSI 策略启用形成趋势/均值回归互补、`RiskManager` 新增组合相关性监控（>85%告警）和最大回撤熔断（15%）、`walk_forward_optimize()` 滚动前向验证+参数网格扫描、仓位分层递进（试仓 20%→盈利确认加码 60%→上限 30%）、Web 看板 `/api/signals/performance` 和 `/api/portfolio/correlation` 端点、文档同步更新 |
+| 23 | 2026-06-30 | **Bug 修复 + 信号可信度闭环（v0.3.1）**：修复 `RiskManager.check_correlation` 在 FastAPI 中 `asyncio.run()` 死循环（改为 async）、修复 Feishu 卡片 subtitle 被静默丢弃（移至 card element 渲染）、修复 Web `/api/halt/reset` 操作错误的 RiskManager 实例（改用 `_web_risk` 单例）、修复 `_portfolio_peak` 跨实例类变量共享（移至实例属性）、移除 `signal_tracker.py` 死代码、修复 `walk_forward_optimize` 空参数网格时 `best_sharpe=-999`、新增 `_inject_performance_summary()` 将同类信号历史胜率注入飞书卡片（反馈闭环）、测试 541→550、覆盖率 70%→67%（新增 800 行） |
 
 ## 九、项目关系与合并计划
 

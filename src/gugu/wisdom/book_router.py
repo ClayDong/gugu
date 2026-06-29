@@ -164,6 +164,100 @@ class BookPerspectiveRouter:
 
         return selected[: MAX_PERSPECTIVES_PER_SCENARIO + 1]
 
+    def select_perspectives_dynamic(
+        self,
+        scenario: str,
+        direction: str = "",
+        market_volatility: float | None = None,
+        signal: dict[str, Any] | None = None,
+        custom_perspectives: list[str] | None = None,
+    ) -> list[str]:
+        """根据市场波动率动态调整书籍视角选择。
+
+        高波动市场（ATR/price > 3%%）：
+        - 加强交易系统（止损）和投资哲学（心理）视角
+        - 减少价值投资和宏观视角
+
+        低波动市场（ATR/price < 1%%）：
+        - 加强价值投资和宏观视角
+        - 减少技术分析视角
+
+        正常波动市场：
+        - 使用默认静态路由
+
+        Args:
+            scenario: 交易场景
+            direction: 信号方向
+            market_volatility: 市场波动率（ATR/price 比例，如 0.025）
+            signal: 信号数据（可选，用于提取波动率）
+            custom_perspectives: 自定义视角列表
+
+        Returns:
+            视角名称列表
+        """
+        if custom_perspectives:
+            return [p for p in custom_perspectives if p in self._perspectives]
+
+        # 从 signal 中提取波动率（如果未显式传入）
+        if market_volatility is None and signal is not None:
+            sig_atr = signal.get("atr", 0)
+            sig_price = signal.get("price", 0)
+            if sig_atr > 0 and sig_price > 0:
+                market_volatility = sig_atr / sig_price
+
+        # 使用动态或静态路由
+        if market_volatility is not None:
+            return self._dynamic_select(scenario, direction, market_volatility)
+        else:
+            return self.select_perspectives(scenario, direction)
+
+    def _dynamic_select(self, scenario: str, direction: str, volatility: float) -> list[str]:
+        """波动率感知的动态视角选择。"""
+        # 基础类别从静态映射获取
+        base_categories = list(SCENARIO_MAPPING.get(scenario, ["trading_system"]))
+
+        if volatility > 0.03:
+            # 高波动：加强交易系统（止损）和投资哲学（心理）
+            if scenario == "entry":
+                categories = ["trading_system", "technical_analysis"]
+            elif scenario == "position_sizing":
+                categories = ["trading_system", "investment_philosophy"]
+            elif scenario == "stop_loss":
+                categories = ["trading_system"]
+            else:
+                categories = base_categories
+        elif volatility < 0.01:
+            # 低波动：加强价值投资和宏观视角
+            if scenario == "entry":
+                categories = ["value_investing", "technical_analysis"]
+            elif scenario == "stock_selection":
+                categories = ["value_investing", "growth_selecting"]
+            else:
+                categories = base_categories
+        else:
+            categories = base_categories
+
+        # 从类别中选取视角
+        selected: list[str] = []
+        max_perspectives = MAX_PERSPECTIVES_PER_SCENARIO
+        for category in categories:
+            perspectives_in_category = BOOK_CATEGORIES.get(category, [])
+            for p in perspectives_in_category:
+                if p in self._perspectives and p not in selected:
+                    selected.append(p)
+                if len(selected) >= max_perspectives:
+                    break
+            if len(selected) >= max_perspectives:
+                break
+
+        # 买卖方向补充
+        if direction == "buy" and "chen-jiang-ting-perspective" not in selected:
+            selected.append("chen-jiang-ting-perspective")
+        elif direction == "sell" and "jesse-livermore-perspective" not in selected:
+            selected.append("jesse-livermore-perspective")
+
+        return selected[: max_perspectives + 1]
+
     def build_context(
         self,
         scenario: str,

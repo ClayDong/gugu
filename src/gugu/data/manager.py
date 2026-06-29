@@ -1,6 +1,11 @@
-"""数据管理器：主源/降级源切换 + 缓存 + 统一接口。
+"""数据管理器：主源/降级源切换 + 缓存（内存+Parquet持久化） + 统一接口。
 
 主源连续失败 fail_threshold 次后降级，冷却 fail_cooldown_seconds 秒后切回。
+
+缓存策略（三层）：
+1. Parquet 持久化缓存（跨进程、重启后复用历史数据）
+2. 内存缓存（2分钟 TTL，进程内共享）
+3. API 请求（主源 → 降级源）
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ from typing import Any
 
 import pandas as pd
 
-from gugu.data.cache import cache
+from gugu.data.cache import cache, persistent_cache
 from gugu.data.collectors.akshare_collector import AkshareCollector
 from gugu.data.collectors.base import BaseCollector
 from gugu.data.collectors.fallback import SinaCollector
@@ -27,6 +32,30 @@ _COLLECTOR_REGISTRY: dict[str, type[BaseCollector]] = {
     "akshare": AkshareCollector,
     "sina": SinaCollector,
 }
+
+
+def _stable_cache_key(method: str, *args: Any) -> str:
+    """生成稳定的缓存键。
+
+    对于列表参数，排序后转为稳定字符串表示，确保相同数据无论顺序生成相同键。
+
+    Args:
+        method: 方法名
+        args: 位置参数
+
+    Returns:
+        稳定缓存键字符串
+    """
+    key_parts = [method]
+    for a in args:
+        if isinstance(a, list):
+            # 列表参数排序后转为稳定表示
+            key_parts.append("[" + ",".join(sorted(str(x) for x in a)) + "]")
+        elif isinstance(a, dict):
+            key_parts.append("{" + ",".join(f"{k}:{v}" for k, v in sorted(a.items())) + "}")
+        else:
+            key_parts.append(str(a))
+    return "|".join(key_parts)
 
 
 class DataManager:
@@ -65,6 +94,8 @@ class DataManager:
         self._degraded_until = 0.0  # 降级截止时间戳
         # P2 修复：降级源并发信号量，限制同时运行的 fallback 任务数
         self._fallback_semaphore = asyncio.Semaphore(len(self._fallbacks))
+        # Parquet 持久化缓存
+        self._parquet_cache = persistent_cache()
 
     @property
     def is_degraded(self) -> bool:
@@ -112,39 +143,54 @@ class DataManager:
     async def _call_with_fallback(self, method: str, *args: Any, **kwargs: Any) -> pd.DataFrame:
         """带降级的方法调用，返回前自动做数据质量校验。
 
-        锁粒度：仅对失败计数/降级状态切换加锁，数据请求本身并发执行（A-02 修复）。
-        缓存键：基于 method + args 位置参数构建，kwargs 仅作透传（DA-03 修复）。
-        """
-        # 缓存键只包含方法名+位置参数值（排除 kwargs 传递方式差异）
-        key_parts = [method]
-        for a in args:
-            key_parts.append(str(a))
-        cache_key = "|".join(key_parts)
+        缓存策略（三层）：
+        1. Parquet 持久化缓存（仅 fetch_stock_history，跨进程使用）
+        2. 内存缓存（2min TTL，进程内）
+        3. API 实时请求
 
+        锁粒度：仅对失败计数/降级状态切换加锁，数据请求本身并发执行（A-02 修复）。
+        缓存键：基于稳定的 method + args 序列化构建（DA-03 修复 + 列表顺序稳定）。
+        """
+        # 稳定缓存键（列表参数排序处理）
+        cache_key = _stable_cache_key(method, *args)
+
+        # 1. 持久化缓存：仅对历史数据请求
+        if method == "fetch_stock_history" and len(args) >= 1:
+            symbol = str(args[0])
+            days = int(args[1]) if len(args) > 1 else 60
+            parquet_df = self._parquet_cache.get(symbol, days)
+            if parquet_df is not None and not parquet_df.empty:
+                # 持久化缓存命中后，也放入内存缓存加速
+                cache().set(cache_key, parquet_df)
+                return parquet_df
+
+        # 2. 内存缓存
         cached = cache().get(cache_key)
         if cached is not None:
             return cached
 
-        # 主源（使用 to_thread 避免同步 IO 阻塞事件循环，不加全局锁允许并发）
-        # DA-05 修复：is_degraded 读取与 fail_count 修改在同一锁内
+        # 3. 实时请求
         async with self._lock:
             is_degraded = await self._is_degraded_locked()
+
         if not is_degraded:
             try:
                 _fn = partial(getattr(self._primary, method), *args, **kwargs)
                 df = await asyncio.to_thread(_fn)
-                async with self._lock:  # 仅对状态切换加锁
+                async with self._lock:
                     await self._on_success_locked()
                 df = self._validate(method, df, args)
                 cache().set(cache_key, df)
+                # 持久化缓存：仅对历史数据
+                if method == "fetch_stock_history" and len(args) >= 1 and not df.empty:
+                    self._parquet_cache.set(str(args[0]), int(args[1]) if len(args) > 1 else 60, df)
                 return df
             except Exception as e:
                 logger.error(f"主源 {method} 异常: {e}")
-                async with self._lock:  # 仅对失败计数加锁
+                async with self._lock:
                     await self._on_failure_locked(method)
 
         # 降级源：并发尝试所有 fallback，FIRST_COMPLETED 模式
-        # P2 修复：使用信号量限制并发任务数（避免高负载 OOM）
         async with self._fallback_semaphore:
             tasks: dict[BaseCollector, asyncio.Task] = {
                 fb: asyncio.create_task(
@@ -160,18 +206,20 @@ class DataManager:
             try:
                 df = t.result()
                 if df is not None and not df.empty:
-                    # 找到对应的 collector 以记录 source 名称
                     success_fb = next(fb for fb, task in tasks.items() if task is t)
                     logger.info(f"降级源 {success_fb.source} 成功获取 {method}")
                     df = self._validate(method, df, args)
                     cache().set(cache_key, df)
-                    # 取消仍在 pending 的任务
+                    # 持久化缓存
+                    if method == "fetch_stock_history" and len(args) >= 1 and not df.empty:
+                        self._parquet_cache.set(
+                            str(args[0]), int(args[1]) if len(args) > 1 else 60, df
+                        )
                     for pt in pending:
                         pt.cancel()
                     return df
             except Exception as e:
                 logger.warning(f"降级源完成结果异常: {e}")
-        # 所有 done 的任务都失败了：等待剩余 pending 并重试
         if pending:
             all_done, _ = await asyncio.wait(pending, timeout=30.0)
             for t in all_done:
@@ -182,6 +230,10 @@ class DataManager:
                         logger.info(f"降级源 {success_fb.source} 成功获取 {method}")
                         df = self._validate(method, df, args)
                         cache().set(cache_key, df)
+                        if method == "fetch_stock_history" and len(args) >= 1 and not df.empty:
+                            self._parquet_cache.set(
+                                str(args[0]), int(args[1]) if len(args) > 1 else 60, df
+                            )
                         return df
                 except Exception:
                     continue
@@ -209,7 +261,7 @@ class DataManager:
 
     async def fetch_stock_history(self, symbol: str, days: int = 60) -> pd.DataFrame:
         # days 作为位置参数传递，确保 fetch_stock_history("600519") 与
-        # fetch_stock_history("600519", days=60) 生成相同缓存键（DA-03 修复）
+        # fetch_stock_history("600519", days=60) 生成相同缓存键
         return await self._call_with_fallback("fetch_stock_history", symbol, days)
 
     async def fetch_stock_realtime(self, symbols: list[str]) -> pd.DataFrame:

@@ -151,8 +151,9 @@ def test_format_signal_uses_strategies_fallback():
         "price": 1500.0,
     }
     card = format_signal(signal)
-    # elements: [div, hr, div, hr, note] → 第 2 个 div 是 index 2
-    content = card["card"]["elements"][2]["text"]["content"]
+    # P0 修复：卡片首元素改为摘要行（subtitle_div + hr），section 后移 2 位
+    # elements: [subtitle_div, hr, hr, div_0, hr, div_1, hr, note] → div_1 是 index 5
+    content = card["card"]["elements"][5]["text"]["content"]
     assert "dual_ma,bollinger" in content
     assert "24%" in content
 

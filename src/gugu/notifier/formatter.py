@@ -48,14 +48,18 @@ def _card(
         template: Header color template (green/red/yellow/grey).
         sections: List of markdown content blocks, separated by hr.
         note: Optional footer note text.
-        subtitle: Optional subtitle under header.
+        subtitle: Optional subtitle — rendered as the first element (Feishu header has no subtitle field).
 
     Returns:
         Feishu interactive card message dict.
     """
     elements: list[dict[str, Any]] = []
-    for i, section in enumerate(sections):
-        if i > 0:
+    # P0 修复：Feishu card header 无 subtitle 字段，将摘要作为第一个元素渲染
+    if subtitle:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": subtitle}})
+        elements.append({"tag": "hr"})
+    for _i, section in enumerate(sections):
+        if elements:
             elements.append({"tag": "hr"})
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": section}})
 
@@ -73,8 +77,6 @@ def _card(
         "title": {"tag": "plain_text", "content": title},
         "template": template,
     }
-    if subtitle:
-        header_payload["subtitle"] = {"tag": "plain_text", "content": subtitle}
 
     return {
         "msg_type": "interactive",
