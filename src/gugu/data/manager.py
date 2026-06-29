@@ -21,6 +21,26 @@ from gugu.utils.log import get_logger
 
 logger = get_logger()
 
+# 采集器注册表：配置名 → 采集器类
+_COLLECTOR_REGISTRY: dict[str, type[BaseCollector]] = {
+    "akshare": AkshareCollector,
+    "sina": SinaCollector,
+}
+
+# 本地股票名称映射（fallback，网络获取失败时使用）
+_STOCK_NAMES: dict[str, str] = {
+    "600519": "贵州茅台", "300750": "宁德时代", "000858": "五粮液",
+    "601318": "中国平安", "000333": "美的集团", "300059": "东方财富",
+    "600030": "中信证券", "000776": "广发证券", "603259": "药明康德",
+    "600600": "青岛啤酒", "002625": "光启技术", "600674": "川投能源",
+    "688396": "华润微", "601238": "广汽集团", "600460": "士兰微",
+    "000977": "浪潮信息", "002049": "紫光国微", "300033": "同花顺",
+    "600026": "中远海能", "600150": "中国船舶", "600489": "中金黄金",
+    "600584": "长电科技", "601899": "紫金矿业", "603019": "中科曙光",
+    "603799": "华友钴业", "600036": "招商银行", "601398": "工商银行",
+    "601939": "建设银行", "000538": "云南白药",
+}
+
 
 class DataManager:
     """数据管理器：封装多源切换逻辑。"""
@@ -31,8 +51,25 @@ class DataManager:
         self._fail_threshold = cfg.get("fail_threshold", 3)
         self._fail_cooldown = cfg.get("fail_cooldown_seconds", 300)
 
-        self._primary = AkshareCollector()
-        self._fallbacks: list[BaseCollector] = [SinaCollector()]
+        # 从配置读取数据源选择（支持通过 settings.yaml 一键切换）
+        primary_name = cfg.get("primary_source", "akshare")
+        fallback_names = cfg.get("fallback_sources", ["sina"])
+
+        primary_cls = _COLLECTOR_REGISTRY.get(primary_name)
+        if primary_cls is None:
+            logger.warning(f"未知主数据源 '{primary_name}'，回退到 akshare")
+            primary_cls = AkshareCollector
+
+        self._primary = primary_cls()
+        self._fallbacks: list[BaseCollector] = []
+        for name in fallback_names:
+            cls = _COLLECTOR_REGISTRY.get(name)
+            if cls is not None:
+                self._fallbacks.append(cls())
+
+        if not self._fallbacks:
+            logger.warning("无有效的降级数据源配置")
+            self._fallbacks = [SinaCollector()]
 
         self._fail_count = 0
         self._degraded_until = 0.0  # 降级截止时间戳
@@ -201,7 +238,7 @@ class DataManager:
         code = BaseCollector.normalize_symbol(symbol)
         meta: dict[str, Any] = {
             "symbol": code,
-            "name": "",
+            "name": _STOCK_NAMES.get(code, ""),
             "prev_close": 0.0,
             "is_st": False,
             "is_suspended": False,
@@ -212,7 +249,11 @@ class DataManager:
             rt = await self.fetch_stock_realtime([code])
             if not rt.empty:
                 row = rt.iloc[0]
-                meta["name"] = str(row.get("name", ""))
+                api_name = str(row.get("name", "")).strip()
+                # A-04 修复：实时快照在非交易时间可能返回空/异常名称
+                # 此时保留 _STOCK_NAMES 的 fallback 而非覆盖为空
+                if api_name and api_name != code and api_name != f"{code}":
+                    meta["name"] = api_name
                 price = float(row.get("price", 0) or 0)
                 volume = float(row.get("volume", 0) or 0)
                 # P1-g 修复：停牌判定仅凭 price<=0，不再用 volume<=0

@@ -73,10 +73,15 @@ def pipeline() -> SignalPipeline:
     pl._fundamental_filter = MagicMock()
     pl._money_flow_filter = MagicMock()
     pl._industry_constraint = MagicMock()
+    pl._industry_constraint.get_industry.return_value = "白酒"
     pl._wisdom = MagicMock()
     pl._router = MagicMock()
     pl._dm = MagicMock()
     pl._dm.is_degraded = False
+    # Mock sector rotation: detect is async
+    pl._sector_rotation = MagicMock()
+    pl._sector_rotation.SW_INDUSTRY_MAP = {"白酒": "消费", "半导体": "科技", "银行": "金融", "房地产": "周期"}
+    pl._hot_sectors_cache = None
     return pl
 
 
@@ -336,6 +341,125 @@ class TestSignalPipeline:
 
         assert signal is not None
         assert signal["price"] == 1500.0  # 被实时价覆盖
+
+
+class TestMultiPeriodTrend:
+    """多周期趋势判断测试。"""
+
+    def test_weekly_trend_up(self):
+        """上升趋势应返回 aligned=True。"""
+        # 构造 60 天稳定上升行情
+        dates = pd.bdate_range("2024-01-01", periods=60)
+        close = [100.0 + i * 0.5 for i in range(60)]
+        df = pd.DataFrame({
+            "date": dates,
+            "open": close,
+            "high": [c * 1.01 for c in close],
+            "low": [c * 0.99 for c in close],
+            "close": close,
+            "volume": [1_000_000] * 60,
+        })
+        result = SignalPipeline._check_weekly_trend(df)
+        assert result["weekly_trend"] == "up"
+        assert result["weekly_aligned"] is True
+
+    def test_weekly_trend_down(self):
+        """下降趋势应返回 aligned=False。"""
+        dates = pd.bdate_range("2024-01-01", periods=60)
+        close = [100.0 - i * 0.5 for i in range(60)]
+        df = pd.DataFrame({
+            "date": dates,
+            "open": close,
+            "high": [c * 1.01 for c in close],
+            "low": [c * 0.99 for c in close],
+            "close": close,
+            "volume": [1_000_000] * 60,
+        })
+        result = SignalPipeline._check_weekly_trend(df)
+        assert result["weekly_trend"] == "down"
+        assert result["weekly_aligned"] is False
+
+    def test_weekly_trend_short_df(self):
+        """数据不足时返回 unknown 且 aligned=True。"""
+        df = pd.DataFrame({
+            "date": pd.bdate_range("2024-01-01", periods=5),
+            "close": [100.0] * 5,
+        })
+        result = SignalPipeline._check_weekly_trend(df)
+        assert result["weekly_trend"] == "unknown"
+        assert result["weekly_aligned"] is True
+
+    def test_weekly_trend_empty(self):
+        """空 DataFrame 返回 unknown。"""
+        result = SignalPipeline._check_weekly_trend(pd.DataFrame())
+        assert result["weekly_trend"] == "unknown"
+
+
+class TestSectorRotationCheck:
+    """板块轮动感知测试。"""
+
+    async def _run_with_sector(self, pipeline, sample_df, budget, mock_account,
+                                symbol, industry, hot_sectors, categories):
+        """辅助方法：运行完整的 signal process 测试。"""
+        from unittest.mock import AsyncMock, MagicMock
+
+        pipeline._router.route = MagicMock(return_value={
+            "symbol": symbol, "direction": "buy",
+            "strategy": "turtle", "strategies": ["turtle"],
+            "reason": "突破", "confidence": 0.8,
+        })
+        pipeline._fundamental_filter.check = MagicMock(return_value={
+            "pass": True, "reasons": [], "industry": industry,
+        })
+        pipeline._money_flow_filter.check = AsyncMock(return_value={
+            "pass": True, "reasons": [], "score": 0.5,
+        })
+        pipeline._industry_constraint.check_buy = MagicMock(return_value={
+            "allowed": True, "reason": "",
+        })
+        pipeline._wisdom.advise = MagicMock(side_effect=lambda s: dict(s))
+
+        # Mock sector rotation detect as async
+        pipeline._sector_rotation.detect = AsyncMock(return_value={
+            "hot_sectors": hot_sectors,
+            "categories": categories,
+            "reason": f"热点: {', '.join(hot_sectors[:3])}",
+        })
+        pipeline._industry_constraint.get_industry.return_value = industry
+        pipeline._hot_sectors_cache = None
+
+        meta = {"name": "Test", "is_st": False, "is_suspended": False}
+        return await pipeline.process(
+            symbol=symbol, df=sample_df, meta=meta, budget=budget,
+            rt_all=None, watchlist=[],
+            portfolio={}, account=mock_account,
+        )
+
+    @pytest.mark.asyncio
+    async def test_sector_hot(self, pipeline, sample_df, budget, mock_account):
+        """热点板块的股票 should be marked is_hot=True。"""
+        signal = await self._run_with_sector(
+            pipeline, sample_df, budget, mock_account,
+            symbol="600519", industry="白酒",
+            hot_sectors=["白酒", "半导体"], categories=["消费", "科技"],
+        )
+        assert signal is not None
+        sector = signal.get("sector_check", {})
+        assert sector.get("is_hot") is True
+        assert sector.get("is_cold") is False
+
+    @pytest.mark.asyncio
+    async def test_sector_cold(self, pipeline, sample_df, budget, mock_account):
+        """冷门板块的股票 should be marked is_cold=True。"""
+        signal = await self._run_with_sector(
+            pipeline, sample_df, budget, mock_account,
+            symbol="601398", industry="银行",
+            hot_sectors=["白酒", "半导体"], categories=["消费", "科技"],
+        )
+        assert signal is not None
+        sector = signal.get("sector_check", {})
+        assert sector.get("is_hot") is False
+        assert sector.get("is_cold") is True
 
 
 class TestRecordSignalHistory:

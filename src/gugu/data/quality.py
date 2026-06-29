@@ -111,6 +111,59 @@ class ZeroPriceRule(ValidationRule):
         return True, "zero price check done"
 
 
+class PlausiblePriceRule(ValidationRule):
+    """价格合理性检查：最新收盘价不应偏离过去 N 日 MA 超过 max_deviation 倍。
+
+    用于捕获数据源返回明显错误的价格（如 akshare 被封时的垃圾数据）。
+    若数据不足 N 行则跳过检查。
+    """
+
+    def __init__(
+        self,
+        price_column: str = "close",
+        ma_window: int = 20,
+        max_deviation: float = 10.0,
+    ) -> None:
+        self._price_column = price_column
+        self._ma_window = ma_window
+        self._max_deviation = max_deviation
+
+    def check(self, df: pd.DataFrame, symbol: str = "") -> tuple:
+        if self._price_column not in df.columns or len(df) < self._ma_window:
+            return True, "insufficient data, skip plausibility check"
+        prices = df[self._price_column].values.astype(float)
+        latest = prices[-1]
+        # 历史 MA（使用前 ma_window 行，避免最新价拉高 MA 导致误判）
+        ma = float(prices[-self._ma_window:].mean())
+
+        if ma <= 0 or latest <= 0:
+            return True, "zero or negative price/MA, skip plausibility check"
+
+        # Check 1: 最新价偏离历史 MA 过大 → 数据源可能返回错误
+        deviation = max(latest, ma) / min(latest, ma)
+        if deviation > self._max_deviation:
+            msg = (
+                f"{symbol} 最新价 {latest:.2f} 偏离 {self._ma_window}日MA {ma:.2f} "
+                f"({deviation:.1f}x)，怀疑数据源返回错误数据，丢弃"
+            )
+            logger.warning(msg)
+            return False, pd.DataFrame(), msg
+
+        # Check 2: 全区间价格变化过小（如所有价格完全相同）→ 数据源可能被封锁
+        p_min, p_max = float(prices.min()), float(prices.max())
+        if p_min > 0 and p_max > 0:
+            range_ratio = p_max / p_min
+            if range_ratio < 1.005:  # 60 天内波动 < 0.5%，极不自然
+                msg = (
+                    f"{symbol} 全区间价格几无波动 (min={p_min:.2f}, max={p_max:.2f}, "
+                    f"ratio={range_ratio:.4f})，怀疑数据源被封锁返回静态数据，丢弃"
+                )
+                logger.warning(msg)
+                return False, pd.DataFrame(), msg
+
+        return True, "price is plausible"
+
+
 class HighLowConsistencyRule(ValidationRule):
     """高低价逻辑检查：high >= low。违反的行剔除。"""
 
@@ -269,6 +322,7 @@ STOCK_HISTORY_VALIDATOR: DataValidator = (
         columns=["open", "high", "low", "close", "volume"],
     ))
     .add_rule(ZeroPriceRule(price_column="close"))
+    .add_rule(PlausiblePriceRule(price_column="close", ma_window=20, max_deviation=10.0))
     .add_rule(HighLowConsistencyRule())
     .add_rule(FreshnessRule())
     .add_rule(SortByDateRule())

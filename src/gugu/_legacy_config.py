@@ -12,7 +12,19 @@ from typing import Any
 import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+def _find_project_root() -> Path:
+    """从 __file__ 所在目录向上搜索，找到包含 config/settings.yaml 的项目根目录。"""
+    current = Path(__file__).resolve().parent
+    for _ in range(20):
+        if (current / "config" / "settings.yaml").exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    raise RuntimeError(f"无法定位项目根目录（未找到 config/settings.yaml），起始路径: {Path(__file__).resolve()}")
+
+PROJECT_ROOT = _find_project_root()
 CONFIG_DIR = PROJECT_ROOT / "config"
 
 

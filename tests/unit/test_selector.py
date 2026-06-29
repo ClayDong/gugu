@@ -23,6 +23,17 @@ from gugu.selector.stock_selector import StockSelector
 from gugu.strategies.trend import DualMAStrategy
 
 
+def _mock_ranker() -> mock.AsyncMock:
+    """创建一个模拟 StockRanker，返回空排名结果。
+
+    避免单元测试中触发真实网络 IO（DataManager 获取行情 / 资金流 / 基本面），
+    保持 selector 测试聚焦在选股流程本身（过滤、排序、限流）。
+    """
+    ranker = mock.AsyncMock()
+    ranker.rank.return_value = []  # 空排名 → 跳过评分合并，直接返回原始信号
+    return ranker
+
+
 def _golden_cross_df() -> pd.DataFrame:
     """构造 60 日行情，最后一日触发 dual_ma 金叉买入信号。
 
@@ -67,6 +78,8 @@ def _make_selector(
         fusion_rule="any",
         min_confidence=0.0,
     )
+    # 注入 mock ranker，避免真实网络 IO（行情/资金流/基本面请求）
+    selector._ranker = _mock_ranker()
     return selector
 
 

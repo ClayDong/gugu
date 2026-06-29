@@ -1,12 +1,13 @@
 """自动选股模块。
 
-基于资金流 + 策略信号，从全市场筛选候选股票。
+基于资金流 + 策略信号 + 综合评分，从全市场筛选候选股票。
 流程：
 1. 获取全市场快照
 2. 过滤：ST、停牌、涨跌停、新股
 3. 按主力净占比排序取前 N
 4. 对候选股跑策略信号
-5. 返回买入信号股票
+5. StockRanker 综合评分排名（因子30%+基本面25%+资金流25%+板块20%）
+6. 返回买入信号股票
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from typing import Any
 
 import pandas as pd
 
+from gugu.analysis.stock_ranker import StockRanker
 from gugu.data import DataManager
 from gugu.data import data_manager as get_data_manager
 from gugu.engine.signal_router import SignalRouter
@@ -25,7 +27,10 @@ logger = get_logger()
 
 
 class StockSelector:
-    """自动选股器。"""
+    """自动选股器。
+
+    v2: 接入 StockRanker 综合评分，替换单一 main_pct 排序。
+    """
 
     def __init__(
         self,
@@ -38,6 +43,7 @@ class StockSelector:
         self._max_candidates = max_candidates
         self._router = SignalRouter(get_enabled_strategies())
         self._risk = RiskManager()
+        self._ranker = StockRanker()
 
     async def select(self) -> list[dict[str, Any]]:
         """执行选股。
@@ -68,8 +74,8 @@ class StockSelector:
             candidates = candidates.sort_values("main_pct", ascending=False)
         candidates = candidates.head(self._top_n)
 
-        # 4. 跑策略信号
-        signals = []
+        # 4. 跑策略信号，收集有信号的股票
+        signal_stocks: list[dict[str, Any]] = []
         for _, row in candidates.iterrows():
             symbol = str(row["symbol"]).zfill(6)
             try:
@@ -88,16 +94,47 @@ class StockSelector:
                     ):
                         logger.info(f"选股：{symbol} 涨跌停，跳过")
                         continue
-                    signals.append(signal)
+                    signal_stocks.append(signal)
 
-                if len(signals) >= self._max_candidates:
+                if len(signal_stocks) >= self._max_candidates * 2:
                     break
             except Exception as e:
                 logger.warning(f"选股：{symbol} 处理失败: {e}")
                 continue
 
-        logger.info(f"选股完成：{len(signals)} 只候选股")
-        return signals
+        if not signal_stocks:
+            logger.info("选股完成：无候选股")
+            return []
+
+        # 5. StockRanker 综合评分排名
+        symbols = [s["symbol"] for s in signal_stocks]
+        try:
+            ranked = await self._ranker.rank(symbols, top_n=self._max_candidates)
+        except Exception as e:
+            logger.warning(f"综合评分失败，使用原始排序: {e}")
+            ranked = []
+
+        # 6. 合并评分到信号
+        if ranked:
+            rank_map = {r["symbol"]: r for r in ranked}
+            for sig in signal_stocks:
+                r = rank_map.get(sig["symbol"])
+                if r:
+                    sig["total_score"] = r["total_score"]
+                    sig["factor_score"] = r["factor_score"]
+                    sig["fundamental_score"] = r["fundamental_score"]
+                    sig["money_flow_score"] = r["money_flow_score"]
+                    sig["sector_score"] = r["sector_score"]
+            # 按综合评分排序
+            signal_stocks.sort(
+                key=lambda x: x.get("total_score", 0), reverse=True
+            )
+
+        # 无论评分是否成功，都截断到 max_candidates
+        signal_stocks = signal_stocks[: self._max_candidates]
+
+        logger.info(f"选股完成：{len(signal_stocks)} 只候选股")
+        return signal_stocks
 
     @staticmethod
     def _filter_basic(df: pd.DataFrame) -> pd.DataFrame:

@@ -88,6 +88,8 @@ def engine(
     mock_risk: mock.MagicMock,
 ) -> TradingEngine:
     """构造一个所有依赖均被 mock 的 TradingEngine。"""
+    # 测试中默认使用 paper 模式（而非 signal_only），以便测试下单逻辑
+    mock_settings = {"execution": {"mode": "paper", "paper": {"initial_capital": 1_000_000}}}
     with (
         mock.patch("gugu.engine.main.data_manager", return_value=mock_data_manager),
         mock.patch("gugu.engine.main.get_enabled_strategies", return_value=[]),
@@ -96,6 +98,7 @@ def engine(
         mock.patch("gugu.engine.main.RiskManager", return_value=mock_risk),
         mock.patch("gugu.engine.main.WisdomAdvisor"),
         mock.patch("gugu.engine.main.StockSelector"),
+        mock.patch("gugu.engine.main.settings", return_value=mock_settings),
     ):
         eng = TradingEngine()
     return eng

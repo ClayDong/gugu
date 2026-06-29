@@ -20,6 +20,7 @@ from typing import Any, cast
 from gugu.config import PROJECT_ROOT, env, settings
 from gugu.models.signal import Signal
 from gugu.utils.log import get_logger
+from gugu.wisdom.book_router import BookPerspectiveRouter
 
 logger = get_logger()
 
@@ -91,6 +92,9 @@ class WisdomAdvisor:
             ],
         )
         self._load_skills()
+
+        # 加载仓颉蒸馏的多视角书籍认知
+        self._book_router = BookPerspectiveRouter()
 
         # 检测 LLM 可用性
         cfg = env()
@@ -181,9 +185,13 @@ class WisdomAdvisor:
         # 2. 构建信号上下文
         signal_context = self._build_signal_context(signal)
 
+        # 2.5 构建多视角书籍认知上下文
+        scenario = "entry" if direction == "buy" else "profit_taking" if direction == "sell" else "psychology_check"
+        book_context = self._book_router.build_context(scenario, direction, signal)
+
         # 3. 构建 prompt
         system_prompt = self._build_system_prompt()
-        user_prompt = f"{signal_context}\n\n{skill_context}"
+        user_prompt = f"{signal_context}\n\n{skill_context}\n\n{book_context}"
 
         # 4. 调用 LLM
         resp = httpx.post(
@@ -216,8 +224,10 @@ class WisdomAdvisor:
     def _build_system_prompt(self) -> str:
         """构建 LLM 系统提示词。"""
         return (
-            "你是一位基于《炒股的智慧》交易原则的A股交易决策顾问。\n"
-            "你的职责是根据策略信号和交易智慧知识，给出结构化的交易决策。\n\n"
+            "你是一位融合28本股书智慧的交易决策顾问。\n"
+            "你的认知来自陈江挺《炒股的智慧》、利弗莫尔《股票大作手回忆录》、\n"
+            "海龟交易法则、范·撒普《通向财务自由之路》、邱国鹭《投资中最简单的事》等经典。\n"
+            "你的职责是根据策略信号和多视角交易智慧，给出结构化的交易决策。\n\n"
             "你必须输出 JSON 格式，包含以下字段：\n"
             "- action: \"buy\" | \"sell\" | \"hold\" | \"filter\"\n"
             "  - buy: 建议买入\n"

@@ -2,12 +2,16 @@
 
 Gracefully degrades when env config is missing: logs warning and skips send.
 Never raises to caller to avoid blocking the main trading flow.
+
+失败重试队列：信号通知失败时持久化到 data/notify_queue.jsonl，定期重试。
+确保买卖信号不因飞书临时故障而丢失。
 """
 from __future__ import annotations
 
 import contextlib
 import json
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -18,7 +22,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from gugu.config import env
+from gugu.config import PROJECT_ROOT, env
 from gugu.notifier.formatter import (
     format_backtest_report,
     format_daily_report,
@@ -26,6 +30,8 @@ from gugu.notifier.formatter import (
     format_signal,
     format_system_error,
 )
+from gugu.notifier.fund_monitor import build_fund_monitor_card
+from gugu.screener.report import format_screener_report
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -35,6 +41,8 @@ TOKEN_URL = f"{FEISHU_BASE}/auth/v3/tenant_access_token/internal"
 MESSAGE_URL = f"{FEISHU_BASE}/im/v1/messages"
 # Feishu tenant_access_token is valid for 2 hours; refresh slightly earlier.
 TOKEN_TTL_SECONDS = 2 * 60 * 60
+# 重试队列最大重试次数
+MAX_RETRY_COUNT = 5
 
 
 class FeishuNotifier:
@@ -55,6 +63,7 @@ class FeishuNotifier:
         self._token: str = ""
         self._token_expires_at: float = 0.0
         self._client: httpx.AsyncClient = httpx.AsyncClient(timeout=10.0)
+        self._queue_path: Path = PROJECT_ROOT / "data" / "notify_queue.jsonl"
 
         if not self._is_configured():
             logger.warning(
@@ -132,7 +141,7 @@ class FeishuNotifier:
         """Send an interactive card to the configured chat.
 
         Returns True on success, False on failure or when not configured.
-        Never raises to caller.
+        失败时自动入队，等待后续重试。Never raises to caller.
         """
         if not self._is_configured():
             logger.warning("Feishu not configured, skip card send")
@@ -144,7 +153,88 @@ class FeishuNotifier:
             return True
         except Exception as e:
             logger.error(f"Feishu send_card failed: {e}")
+            # 入队等待重试
+            self._enqueue(card)
             return False
+
+    def _enqueue(self, card: dict[str, Any]) -> None:
+        """失败通知入队，持久化到 data/notify_queue.jsonl。"""
+        try:
+            self._queue_path.parent.mkdir(parents=True, exist_ok=True)
+            record = {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "card": card,
+                "retry_count": 0,
+            }
+            with self._queue_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+            logger.info(f"通知入队等待重试: {self._queue_path}")
+        except Exception as e:
+            logger.error(f"通知入队失败: {e}")
+
+    async def retry_queued(self) -> int:
+        """重试队列中的失败通知。
+
+        Returns:
+            成功重试的通知数
+        """
+        if not self._queue_path.exists():
+            return 0
+
+        # 读取所有待重试记录
+        pending: list[dict[str, Any]] = []
+        try:
+            with self._queue_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        pending.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            logger.error(f"读取重试队列失败: {e}")
+            return 0
+
+        if not pending:
+            return 0
+
+        # 清空队列文件（重试成功的移除，失败的重新写入）
+        self._queue_path.write_text("", encoding="utf-8")
+
+        success_count = 0
+        still_failed: list[dict[str, Any]] = []
+
+        for item in pending:
+            retry_count = item.get("retry_count", 0)
+            if retry_count >= MAX_RETRY_COUNT:
+                logger.warning(
+                    f"通知重试次数超限({retry_count}), 丢弃: "
+                    f"{json.dumps(item.get('card', {}), ensure_ascii=False)[:200]}"
+                )
+                continue
+
+            card = item.get("card", {})
+            try:
+                token = await self._get_tenant_token()
+                await self._post_card(token, card)
+                success_count += 1
+                logger.info(f"重试通知成功: {success_count}")
+            except Exception as e:
+                logger.debug(f"重试通知失败: {e}")
+                item["retry_count"] = retry_count + 1
+                still_failed.append(item)
+
+        # 重新写入仍失败的通知
+        if still_failed:
+            with self._queue_path.open("a", encoding="utf-8") as f:
+                for item in still_failed:
+                    f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
+
+        if success_count > 0:
+            logger.info(f"重试队列: {success_count} 成功, {len(still_failed)} 仍失败")
+        return success_count
 
     @retry(
         stop=stop_after_attempt(3),
@@ -194,9 +284,28 @@ class FeishuNotifier:
         """Format and send a backtest report notification."""
         return await self.send_card(format_backtest_report(report))
 
+    async def notify_screener(self, results: list, total_scanned: int) -> bool:
+        """发送尾盘选股结果。"""
+        card = format_screener_report(results, total_scanned)
+        return await self.send_card(card)
+
     async def notify_error(self, error: dict[str, Any]) -> bool:
         """Format and send a system error notification."""
         return await self.send_card(format_system_error(error))
+
+    async def notify_fund_monitor(self, result: dict[str, Any]) -> bool:
+        """Format and send a fund monitor report."""
+        return await self.send_card(build_fund_monitor_card(result))
+
+    async def notify_flow_report(self, period: str, data: dict[str, Any]) -> bool:
+        """Format and send a capital flow report.
+
+        Args:
+            period: "morning" (盘前复盘) or "close" (收盘日报).
+            data: Result from run_morning_report() or run_close_report().
+        """
+        card = data["card"]
+        return await self.send_card(card)
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""

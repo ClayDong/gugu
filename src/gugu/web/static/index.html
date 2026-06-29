@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>gugu 交易仪表盘</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f1117;color:#e1e4e8;padding:20px}
@@ -12,6 +13,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .header .status{font-size:13px;color:#8b949e}
 .refresh-btn{background:#238636;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px}
 .refresh-btn:hover{background:#2ea043}
+.tabs{display:flex;gap:4px;margin-bottom:20px;border-bottom:1px solid #21262d}
+.tab{padding:10px 20px;cursor:pointer;font-size:14px;color:#8b949e;border-bottom:2px solid transparent;transition:all .2s}
+.tab:hover{color:#e1e4e8}
+.tab.active{color:#58a6ff;border-bottom-color:#58a6ff}
+.tab-content{display:none}
+.tab-content.active{display:block}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:24px}
 .card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:20px}
 .card h2{font-size:14px;color:#8b949e;margin-bottom:12px;text-transform:uppercase;letter-spacing:.5px}
@@ -24,6 +31,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .risk-ok{background:#0d2818;color:#3fb950}
 .risk-warn{background:#3d2e00;color:#d29922}
 .risk-halt{background:#4c0519;color:#f85149}
+.stage-badge{display:inline-block;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600;margin-left:6px}
+.stage-sideways{background:#1a1a2e;color:#8b949e}
+.stage-normal_up{background:#0d2818;color:#3fb950}
+.stage-frenzy{background:#3d2e00;color:#d29922}
+.stage-final{background:#4c0519;color:#f85149}
+.stage-downtrend{background:#2d1b1b;color:#f85149}
+.danger-badge{display:inline-block;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600;background:#4c0519;color:#f85149}
+.danger-none{display:none}
+.signal-dir-buy{color:#3fb950;font-weight:600}
+.signal-dir-sell{color:#f85149;font-weight:600}
+.signal-filtered{color:#d29922;font-size:11px}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{text-align:left;color:#8b949e;font-weight:500;padding:8px 12px;border-bottom:1px solid #21262d}
 td{padding:8px 12px;border-bottom:1px solid #161b22}
@@ -31,6 +49,9 @@ tr:hover td{background:#161b22}
 .section{margin-bottom:24px}
 .section h2{font-size:16px;color:#e1e4e8;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid #21262d}
 .empty{color:#8b949e;text-align:center;padding:40px;font-size:14px}
+.book-card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:16px;margin-bottom:12px}
+.book-card h3{font-size:14px;color:#58a6ff;margin-bottom:6px}
+.book-card p{font-size:12px;color:#8b949e;line-height:1.5}
 @media(max-width:600px){.grid{grid-template-columns:1fr}.card .value{font-size:22px}}
 </style>
 </head>
@@ -43,36 +64,88 @@ tr:hover td{background:#161b22}
   </div>
 </div>
 
-<div class="grid" id="account-cards"></div>
-
-<div class="section">
-  <h2>风控状态</h2>
-  <div id="risk-status"></div>
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('overview')">总览</div>
+  <div class="tab" onclick="switchTab('signals')">信号历史</div>
+  <div class="tab" onclick="switchTab('positions')">持仓详情</div>
+  <div class="tab" onclick="switchTab('nav')">净值曲线</div>
+  <div class="tab" onclick="switchTab('books')">书籍视角</div>
 </div>
 
-<div class="section">
-  <h2>持仓详情</h2>
-  <div id="portfolio"></div>
+<div class="tab-content active" id="tab-overview">
+  <div class="grid" id="account-cards"></div>
+  <div class="section">
+    <h2>风控状态</h2>
+    <div id="risk-status"></div>
+  </div>
+  <div class="section">
+    <h2>最近信号</h2>
+    <div id="recent-signals"></div>
+  </div>
 </div>
 
-<div class="section">
-  <h2>交易记录</h2>
-  <div id="trades"></div>
+<div class="tab-content" id="tab-signals">
+  <div class="section">
+    <h2>信号历史（最近50条）</h2>
+    <div id="all-signals"></div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-positions">
+  <div class="section">
+    <h2>持仓详情（含移动止损）</h2>
+    <div id="portfolio-detail"></div>
+  </div>
+  <div class="section">
+    <h2>交易记录</h2>
+    <div id="trades"></div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-nav">
+  <div class="section">
+    <h2>净值曲线（近30天）</h2>
+    <div style="position:relative;height:360px">
+      <canvas id="nav-chart" style="width:100%;height:100%"></canvas>
+    </div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-books">
+  <div class="section">
+    <h2>仓颉蒸馏的28本股书认知视角</h2>
+    <div id="books-list"></div>
+  </div>
 </div>
 
 <script>
 function fmt(n,d=2){return n==null?'--':Number(n).toLocaleString('zh-CN',{minimumFractionDigits:d,maximumFractionDigits:d})}
 function fmtPct(n){return n==null?'--':(n>=0?'+':'')+Number(n).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})+'%'}
 function cls(n){return n>0?'positive':n<0?'negative':'neutral'}
+let navChart=null;
+const STAGE_CN={sideways:'牛皮市',normal_up:'正常升势',frenzy:'疯狂',final:'最后',downtrend:'下降'};
+const DANGER_CN={volume_price_stall:'量增价不涨',two_day_reversal:'两天转头',bad_news:'坏消息',divergence:'量价背离',long_upper_shadow:'长上影'};
+
+function switchTab(name){
+  const tabs=['overview','signals','positions','nav','books'];
+  document.querySelectorAll('.tab').forEach((t,i)=>{
+    t.classList.toggle('active',tabs[i]===name);
+  });
+  document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  if(name==='nav') loadNavChart();
+}
 
 async function fetchJSON(url){
   try{return await(await fetch(url)).json()}catch(e){console.error(e);return null}
 }
 
 async function refresh(){
-  const [account,portfolio,trades,risk]=await Promise.all([
+  const [account,portfolio,portfolioDetail,trades,risk,signals,books]=await Promise.all([
     fetchJSON('/api/account'),fetchJSON('/api/portfolio'),
-    fetchJSON('/api/trades'),fetchJSON('/api/risk')
+    fetchJSON('/api/portfolio/detail'),fetchJSON('/api/trades'),
+    fetchJSON('/api/risk'),fetchJSON('/api/signals?limit=50'),
+    fetchJSON('/api/books')
   ]);
   document.getElementById('last-update').textContent='更新: '+new Date().toLocaleTimeString('zh-CN');
 
@@ -98,17 +171,75 @@ async function refresh(){
     `;
   }
 
-  // Portfolio
-  if(portfolio&&portfolio.positions.length){
-    document.getElementById('portfolio').innerHTML=`<table><thead><tr>
-      <th>代码</th><th>数量</th><th>可用</th><th>成本</th><th>现价</th><th>市值</th><th>盈亏</th><th>盈亏%</th>
-    </tr></thead><tbody>${portfolio.positions.map(p=>`<tr>
-      <td>${p.symbol}</td><td>${p.quantity}</td><td>${p.available}</td>
-      <td>${fmt(p.avg_cost)}</td><td>${fmt(p.current_price)}</td><td>¥${fmt(p.market_value)}</td>
-      <td class="${cls(p.profit)}">¥${fmt(p.profit)}</td><td class="${cls(p.profit_pct)}">${fmtPct(p.profit_pct*100)}</td>
-    </tr>`).join('')}</tbody></table>`;
+  // Recent signals (overview tab)
+  if(signals&&signals.signals.length){
+    const recent=signals.signals.slice(0,10);
+    document.getElementById('recent-signals').innerHTML=`<table><thead><tr>
+      <th>时间</th><th>代码</th><th>名称</th><th>方向</th><th>价格</th><th>置信度</th><th>状态</th>
+    </tr></thead><tbody>${recent.map(s=>{
+      const t=s.timestamp?new Date(s.timestamp).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'--';
+      const dirCls=s.direction==='buy'?'signal-dir-buy':'signal-dir-sell';
+      const dirText=s.direction==='buy'?'买入':'卖出';
+      const status=s.wisdom_filtered?'<span class="signal-filtered">已过滤</span>':s.order_success?'<span style="color:#3fb950">已成交</span>':'<span style="color:#8b949e">待执行</span>';
+      return `<tr><td>${t}</td><td>${s.symbol}</td><td>${s.name||'--'}</td><td class="${dirCls}">${dirText}</td><td>${fmt(s.price)}</td><td>${s.confidence?(s.confidence*100).toFixed(0)+'%':'--'}</td><td>${status}</td></tr>`;
+    }).join('')}</tbody></table>`;
   }else{
-    document.getElementById('portfolio').innerHTML='<div class="empty">暂无持仓</div>';
+    document.getElementById('recent-signals').innerHTML='<div class="empty">暂无信号</div>';
+  }
+
+  // All signals (signals tab) - with expandable decision chain
+  if(signals&&signals.signals.length){
+    document.getElementById('all-signals').innerHTML=`<table><thead><tr>
+      <th>时间</th><th>代码</th><th>方向</th><th>价格</th><th>置信度</th><th>阶段</th><th>危险信号</th><th>状态</th><th>详情</th>
+    </tr></thead><tbody>${signals.signals.map((s,idx)=>{
+      const t=s.timestamp?new Date(s.timestamp).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'--';
+      const dirCls=s.direction==='buy'?'signal-dir-buy':'signal-dir-sell';
+      const dirText=s.direction==='buy'?'买入':'卖出';
+      const stageInfo=s.stage&&s.stage.stage?STAGE_CN[s.stage.stage]||s.stage.stage:'--';
+      const stageColor=s.stage&&s.stage.stage==='frenzy'?'#f85149':s.stage&&s.stage.stage==='final'?'#f85149':s.stage&&s.stage.stage==='normal_up'?'#3fb950':'#8b949e';
+      const dangerInfo=s.danger_signals&&s.danger_signals.signals&&s.danger_signals.signals.length?s.danger_signals.signals.map(d=>DANGER_CN[d]||d).join(', '):'';
+      const dangerBadge=dangerInfo?`<span class="danger-badge">${dangerInfo}</span>`:'<span style="color:#8b949e">无</span>';
+      const status=s.wisdom_filtered?`<span class="signal-filtered">已过滤</span>`:s.order_success?'<span style="color:#3fb950">已成交</span>':'<span style="color:#8b949e">待执行</span>';
+      const hasChain=s.decision_chain&&s.decision_chain.length>0;
+      const expandBtn=hasChain?`<span style="cursor:pointer;color:#58a6ff" onclick="toggleChain(${idx})">展开</span>`:'--';
+      let chainHtml='';
+      if(hasChain){
+        chainHtml=`<tr id="chain-${idx}" style="display:none"><td colspan="9" style="padding:12px;background:#0d1117">
+          <div style="font-size:12px;line-height:1.8">
+            ${s.decision_chain.map(step=>{
+              const passIcon=step.passed?'<span style="color:#3fb950">✓</span>':'<span style="color:#f85149">✗</span>';
+              let detail='';
+              if(step.reasons) detail=step.reasons.join(', ');
+              else if(step.reason) detail=step.reason;
+              else if(step.description) detail=step.description;
+              else if(step.signals&&step.signals.length) detail=step.signals.join(', ');
+              return `<div>${passIcon} <b>${step.name}</b>: ${step.result}${detail?' — '+detail:''}</div>`;
+            }).join('')}
+            ${s.filter_reason?`<div style="color:#f85149;margin-top:4px"><b>过滤原因:</b> ${s.filter_reason}</div>`:''}
+            ${s.stop_loss_price?`<div style="color:#d29922"><b>止损价:</b> ¥${fmt(s.stop_loss_price)}</div>`:''}
+          </div>
+        </td></tr>`;
+      }
+      return `<tr onclick="toggleChain(${idx})" style="cursor:pointer"><td>${t}</td><td>${s.symbol}</td><td class="${dirCls}">${dirText}</td><td>${fmt(s.price)}</td><td>${s.confidence?(s.confidence*100).toFixed(0)+'%':'--'}</td><td style="color:${stageColor}">${stageInfo}</td><td>${dangerBadge}</td><td>${status}</td><td>${expandBtn}</td></tr>${chainHtml}`;
+    }).join('')}</tbody></table>
+    <div class="sub" style="margin-top:8px">共 ${signals.count} 条信号 · 点击行展开决策链路</div>`;
+  }else{
+    document.getElementById('all-signals').innerHTML='<div class="empty">暂无信号记录</div>';
+  }
+
+  // Portfolio detail with trailing stop
+  if(portfolioDetail&&portfolioDetail.positions.length){
+    document.getElementById('portfolio-detail').innerHTML=`<table><thead><tr>
+      <th>代码</th><th>数量</th><th>成本</th><th>现价</th><th>盈亏%</th><th>止损价</th><th>移动止损</th><th>危险信号</th>
+    </tr></thead><tbody>${portfolioDetail.positions.map(p=>{
+      const ts=p.trailing_stop;
+      const tsInfo=ts?`止损 ¥${fmt(ts.current_stop_price)} | 最高 ¥${fmt(ts.highest_price)} | 破谷 ${ts.valley_break_count}次`:'--';
+      const ds=p.danger_signals&&p.danger_signals.length?p.danger_signals.map(d=>DANGER_CN[d]||d).join(', '):'';
+      const dsBadge=ds?`<span class="danger-badge">${ds}</span>`:'<span style="color:#8b949e">无</span>';
+      return `<tr><td>${p.symbol}</td><td>${p.quantity}</td><td>${fmt(p.avg_cost)}</td><td>${fmt(p.current_price)}</td><td class="${cls(p.profit_ratio)}">${fmtPct(p.profit_ratio*100)}</td><td>${p.stop_loss_price?'¥'+fmt(p.stop_loss_price):'--'}</td><td style="font-size:11px;color:#8b949e">${tsInfo}</td><td>${dsBadge}</td></tr>`;
+    }).join('')}</tbody></table>`;
+  }else{
+    document.getElementById('portfolio-detail').innerHTML='<div class="empty">暂无持仓</div>';
   }
 
   // Trades
@@ -125,10 +256,60 @@ async function refresh(){
   }else{
     document.getElementById('trades').innerHTML='<div class="empty">暂无交易记录</div>';
   }
+
+  // Books
+  if(books&&books.books&&books.books.length){
+    document.getElementById('books-list').innerHTML=books.books.map(b=>`
+      <div class="book-card">
+        <h3>${b.name}</h3>
+        <p>${b.summary||'暂无摘要'}</p>
+      </div>
+    `).join('')+`<div class="sub" style="margin-top:12px">共 ${books.count} 个书籍视角，来自仓颉认知植入术蒸馏</div>`;
+  }else{
+    document.getElementById('books-list').innerHTML='<div class="empty">暂无书籍视角数据</div>';
+  }
 }
 
 refresh();
 setInterval(refresh,30000);
+async function loadNavChart(){
+  const data=await fetchJSON('/api/equity/history?days=30');
+  if(!data||!data.points||data.points.length<2) return;
+  const labels=data.points.map(p=>{const d=new Date(p.timestamp);return (d.getMonth()+1)+'/'+d.getDate()+' '+d.getHours()+':'+String(d.getMinutes()).padStart(2,'0');});
+  const values=data.points.map(p=>p.total_value);
+  if(window.navChart) window.navChart.destroy();
+  const ctx=document.getElementById('nav-chart');
+  if(!ctx) return;
+  window.navChart=new Chart(ctx,{
+    type:'line',
+    data:{
+      labels:labels,
+      datasets:[{
+        label:'总资产',
+        data:values,
+        borderColor:'#58a6ff',
+        backgroundColor:'rgba(88,166,255,0.1)',
+        fill:true,
+        tension:0.3,
+        pointRadius:2,
+        pointHitRadius:8,
+      }]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:'#8b949e'}}},
+      scales:{
+        x:{ticks:{color:'#8b949e',maxTicksLimit:10}},
+        y:{ticks:{color:'#8b949e',callback:v=>'¥'+v.toLocaleString()}}
+      }
+    }
+  });
+}
+
+function toggleChain(idx){
+  const el=document.getElementById('chain-'+idx);
+  if(el){el.style.display=el.style.display==='none'?'':'none';}
+}
 </script>
 </body>
 </html>

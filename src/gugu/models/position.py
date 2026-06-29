@@ -29,6 +29,10 @@ class Position:
     prev_close: float = 0.0
     is_st: bool = False
     is_suspended: bool = False
+    # 移动止损状态（JSON dict，由 TrailingStopEngine 管理）
+    trailing_stop: dict | None = None
+    # 危险信号记录
+    danger_signals: list[str] | None = None
 
     @property
     def market_value(self) -> float:

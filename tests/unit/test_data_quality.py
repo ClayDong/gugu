@@ -56,7 +56,7 @@ def _make_ohlcv(
     else:
         n = len(dates)
     if close is None:
-        close = [10.0] * n
+        close = [10.0 + (i * 0.01) for i in range(n)]  # 10.0 → 10.59 (通过 PlausiblePriceRule)
     elif isinstance(close, (int, float)):
         close = [float(close)] * n
     if volume is None:

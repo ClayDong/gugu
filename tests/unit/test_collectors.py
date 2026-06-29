@@ -16,16 +16,16 @@ from gugu.data.collectors.fallback import SinaCollector
 # ========== Fixture 数据 ==========
 
 def make_history_df(rows: int = 60) -> pd.DataFrame:
-    """构造合法的 OHLCV 历史 DataFrame（akshare 中文列名）。"""
-    dates = pd.bdate_range("2024-01-01", periods=rows)
+    """构造模拟历史行情 DataFrame（带微小波动以通过 PlausiblePriceRule）。"""
+    prices = [100.0 + (i * 0.02) for i in range(rows)]
     return pd.DataFrame({
-        "日期": dates.strftime("%Y-%m-%d"),
-        "开盘": [100.0] * rows,
-        "收盘": [101.0] * rows,
-        "最高": [102.0] * rows,
-        "最低": [99.0] * rows,
+        "日期": pd.date_range("2024-01-01", periods=rows, freq="D").strftime("%Y-%m-%d"),
+        "开盘": [p - 0.1 for p in prices],
+        "收盘": prices,
+        "最高": [p + 0.2 for p in prices],
+        "最低": [p - 0.2 for p in prices],
         "成交量": [1_000_000] * rows,
-        "成交额": [101_000_000.0] * rows,
+        "成交额": [100_000_000] * rows,
         "涨跌幅": [1.0] * rows,
     })
 

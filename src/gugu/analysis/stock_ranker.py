@@ -54,9 +54,14 @@ class StockRanker:
 
         for symbol in symbols:
             try:
-                score_detail = await self._score_one(symbol, hot_sectors or [])
+                # 单只股票评分超时10秒，避免整体卡住
+                score_detail = await asyncio.wait_for(
+                    self._score_one(symbol, hot_sectors or []), timeout=10.0
+                )
                 if score_detail:
                     results.append(score_detail)
+            except asyncio.TimeoutError:
+                logger.debug(f"评分超时 {symbol}")
             except Exception as e:
                 logger.debug(f"评分失败 {symbol}: {e}")
 

@@ -89,14 +89,16 @@ class MultiPeriodRegimeDetector:
                 [("ma20", 20), ("ma60", 60), ("ma120", 120)])
             weekly_evidence = self._analyze_period(weekly.reset_index(), "weekly",
                 [("ma5", 5), ("ma10", 10)])
-            hourly_evidence = self._analyze_period(daily.tail(30), "hourly",
-                [("ma20", 20), ("ma60", 60)])
+            # Bug 修复：原代码用 daily.tail(30) 冒充小时线，语义错误。
+            # 改为用日线短期均线(MA5/MA10)作为短期动能指标，正确标注为 short_term。
+            short_term_evidence = self._analyze_period(daily.tail(30), "short_term",
+                [("ma5", 5), ("ma10", 10)])
 
             # 综合评分
             score = (
                 weekly_evidence.strength * 0.40 * (1 if weekly_evidence.signal == "bullish" else -1 if weekly_evidence.signal == "bearish" else 0) +
                 daily_evidence.strength * 0.40 * (1 if daily_evidence.signal == "bullish" else -1 if daily_evidence.signal == "bearish" else 0) +
-                hourly_evidence.strength * 0.20 * (1 if hourly_evidence.signal == "bullish" else -1 if hourly_evidence.signal == "bearish" else 0)
+                short_term_evidence.strength * 0.20 * (1 if short_term_evidence.signal == "bullish" else -1 if short_term_evidence.signal == "bearish" else 0)
             )
 
             # 波动率判断（用于识别crash/rally）
@@ -132,9 +134,9 @@ class MultiPeriodRegimeDetector:
                 "evidence": {
                     "daily": {"signal": daily_evidence.signal, "strength": daily_evidence.strength, "details": daily_evidence.details},
                     "weekly": {"signal": weekly_evidence.signal, "strength": weekly_evidence.strength, "details": weekly_evidence.details},
-                    "hourly": {"signal": hourly_evidence.signal, "strength": hourly_evidence.strength, "details": hourly_evidence.details},
+                    "short_term": {"signal": short_term_evidence.signal, "strength": short_term_evidence.strength, "details": short_term_evidence.details},
                 },
-                "reason": self._build_reason(regime, score, daily_evidence, weekly_evidence, hourly_evidence),
+                "reason": self._build_reason(regime, score, daily_evidence, weekly_evidence, short_term_evidence),
             }
 
             self._cache = result
@@ -200,15 +202,15 @@ class MultiPeriodRegimeDetector:
 
     def _build_reason(self, regime: str, score: float,
                       daily: RegimeEvidence, weekly: RegimeEvidence,
-                      hourly: RegimeEvidence) -> str:
+                      short_term: RegimeEvidence) -> str:
         """构建可读的判断理由。"""
         regime_cn = {"bull": "牛市", "bear": "熊市", "sideways": "震荡",
                      "crash": "暴跌", "rally": "反弹"}
-        period_cn = {"daily": "日线", "weekly": "周线", "hourly": "小时线"}
+        period_cn = {"daily": "日线", "weekly": "周线", "short_term": "短期"}
         signal_cn = {"bullish": "多头", "bearish": "空头", "neutral": "中性"}
 
         parts = [f"综合评分{score:.2f}，判定为{regime_cn.get(regime, regime)}"]
-        for ev in [weekly, daily, hourly]:
+        for ev in [weekly, daily, short_term]:
             parts.append(f"{period_cn.get(ev.period, ev.period)}{signal_cn.get(ev.signal, ev.signal)}(强度{ev.strength:.2f})")
         return "；".join(parts)
 

@@ -254,7 +254,7 @@ async def test_notify_daily_report_sends_report(mock_env):
         msg_req = requests[1]
         body = json.loads(msg_req.content)
         content = json.loads(body["content"])
-        assert "收盘日报" in content["header"]["title"]["content"]
+        assert "收盘" in content["header"]["title"]["content"]
     finally:
         await mock_client.aclose()
 

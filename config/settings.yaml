@@ -38,9 +38,9 @@ watchlist:
 
 # ========== 数据源 ==========
 data:
-  primary_source: akshare        # 主源：akshare + 东方财富
-  fallback_sources:              # 降级源（使用与主源不同的 API 接口）
-    - sina
+  primary_source: sina           # 主源：新浪（东方财富在部分网络被封）
+  fallback_sources:              # 降级源
+    - akshare
   fetch_interval_seconds: 120    # 实时采集间隔（秒）
   fail_threshold: 3              # 连续失败 N 次降级
   fail_cooldown_seconds: 300     # 降级冷却时间
@@ -80,7 +80,11 @@ risk:
 
 # ========== 执行 ==========
 execution:
-  mode: paper                    # backtest / paper / live
+  # 模式说明：
+  #   signal_only - 只发信号通知，不下单（监控验证用）
+  #   paper      - 模拟下单（纸面交易）
+  #   live       - 实盘交易（需配置券商接口）
+  mode: signal_only
   paper:
     initial_capital: 1000000     # 模拟本金 100 万
     commission_rate: 0.00025     # 佣金费率万2.5
@@ -129,6 +133,33 @@ wisdom:
     - stock-profit-taking-decision
     - stock-trailing-stop
     - stock-psychology-check
+  # 仓颉蒸馏的28本书籍视角（多视角认知参考）
+  books_dir: "src/gugu/wisdom/skills/books"
+  enable_multi_perspective: true      # 启用多视角书籍认知
+  max_perspectives: 3                 # 每次决策最多参考的视角数
+
+# ========== 基金监控 ==========
+fund:
+  enabled: true
+  funds:
+    - code: "001480"
+      name: "财通成长优选混合A"
+      cost_price: null    # 可选，配置后显示累计盈亏和止盈信号
+      base_investment: 1000
+    - code: "026211"
+      name: "平安科技精选混合C"
+      cost_price: null
+      base_investment: 1000
+
+# ========== 资金流日报 ==========
+flow_report:
+  enabled: true
+  # 推送时段
+  morning_time: "08:00"    # 盘前 — 昨日(T-1)资金流复盘
+  close_time: "15:10"      # 收盘 — 今日资金流日报
+  # 分析参数
+  sector_top_n: 5
+  stock_strong_top_n: 5
 
 # ========== 基本面过滤 ==========
 fundamental:

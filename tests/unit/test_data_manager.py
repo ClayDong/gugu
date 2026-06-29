@@ -16,13 +16,14 @@ from gugu.data.manager import DataManager
 
 
 def _make_basic_df(n: int = 60) -> pd.DataFrame:
-    """构造基础 OHLCV DataFrame。"""
+    """构造基础 OHLCV DataFrame（带微小波动以通过 PlausiblePriceRule）。"""
+    prices = [10.0 + (i * 0.01) for i in range(n)]  # 60 天内从 10.0 缓慢涨到 10.59
     return pd.DataFrame({
         "date": pd.date_range("2024-01-01", periods=n, freq="D"),
-        "open": [10.0] * n,
-        "high": [11.0] * n,
-        "low": [9.0] * n,
-        "close": [10.0] * n,
+        "open": [p - 0.02 for p in prices],
+        "high": [p + 0.05 for p in prices],
+        "low": [p - 0.05 for p in prices],
+        "close": prices,
         "volume": [1_000_000] * n,
         "amount": [10_000_000] * n,
     })
@@ -36,28 +37,28 @@ def _fresh_dm() -> DataManager:
     return dm
 
 
-@mock.patch.object(AkshareCollector, "fetch_stock_history", return_value=_make_basic_df())
 @mock.patch.object(SinaCollector, "fetch_stock_history", return_value=_make_basic_df())
+@mock.patch.object(AkshareCollector, "fetch_stock_history", return_value=_make_basic_df())
 @pytest.mark.asyncio
 async def test_primary_success_not_degraded(
-    mock_sina: mock.MagicMock,
     mock_ak: mock.MagicMock,
+    mock_sina: mock.MagicMock,
 ) -> None:
-    """主源成功时不应调用降级源。"""
+    """主源（sina）成功时不应调用降级源（akshare）。"""
     cache().clear()
     dm = _fresh_dm()
     df = await dm.fetch_stock_history("600519", days=60)
     assert not df.empty
-    mock_ak.assert_called()
-    assert mock_sina.call_count == 0
+    mock_sina.assert_called()
+    assert mock_ak.call_count == 0
 
 
-@mock.patch.object(AkshareCollector, "fetch_stock_history", side_effect=RuntimeError("api error"))
-@mock.patch.object(SinaCollector, "fetch_stock_history", return_value=_make_basic_df())
+@mock.patch.object(AkshareCollector, "fetch_stock_history", return_value=_make_basic_df())
+@mock.patch.object(SinaCollector, "fetch_stock_history", side_effect=RuntimeError("api error"))
 @pytest.mark.asyncio
 async def test_fallback_after_failures(
-    mock_sina: mock.MagicMock,
     mock_ak: mock.MagicMock,
+    mock_sina: mock.MagicMock,
 ) -> None:
     """主源连续失败 fail_threshold 次后切换到降级源。
 

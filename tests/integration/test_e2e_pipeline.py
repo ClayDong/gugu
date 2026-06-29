@@ -618,6 +618,12 @@ class TestEndToEndIntegrationNoBusinessMock:
         engine._risk = risk
         engine._notifier = notifier
         engine._wisdom = WisdomAdvisor()
+        engine._exec_mode = "paper"  # 非 signal_only 模式，触发完整风控+下单+通知
+        # P0 新增属性
+        from gugu.analysis.trailing_stop import TrailingStopEngine
+        from gugu.analysis.danger_signal import DangerSignalDetector
+        engine._trailing_stop_engine = TrailingStopEngine()
+        engine._danger_detector = DangerSignalDetector()
 
         # 构造异常信号：price=0
         signal = {
@@ -750,8 +756,14 @@ class TestEndToEndIntegrationNoBusinessMock:
         engine._risk = risk
         engine._notifier = notifier
         engine._wisdom = WisdomAdvisor()
+        engine._exec_mode = "paper"  # 非 signal_only 模式，触发完整风控+下单+通知
         from gugu.engine.event_engine import EventEngine
         engine._event_engine = EventEngine()
+        # P0 新增属性
+        from gugu.analysis.trailing_stop import TrailingStopEngine
+        from gugu.analysis.danger_signal import DangerSignalDetector
+        engine._trailing_stop_engine = TrailingStopEngine()
+        engine._danger_detector = DangerSignalDetector()
 
         # 构造正常信号
         signal = {
@@ -863,6 +875,11 @@ class TestEndToEndFullCycle:
         engine._app_config = None
         from gugu.engine.event_engine import EventEngine
         engine._event_engine = EventEngine()
+        # P0 新增属性
+        from gugu.analysis.trailing_stop import TrailingStopEngine
+        from gugu.analysis.danger_signal import DangerSignalDetector
+        engine._trailing_stop_engine = TrailingStopEngine()
+        engine._danger_detector = DangerSignalDetector()
 
         import asyncio
 

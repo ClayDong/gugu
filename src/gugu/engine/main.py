@@ -13,6 +13,8 @@ import pandas as pd
 
 from gugu.analysis.position_controller import PositionController
 from gugu.analysis.regime_detector import MultiPeriodRegimeDetector
+from gugu.analysis.trailing_stop import TrailingStopEngine, TrailingStopState, TrailingStopSignal
+from gugu.analysis.danger_signal import DangerSignalDetector
 from gugu.config import PROJECT_ROOT, settings
 from gugu.config.models import AppConfig
 from gugu.data import data_manager
@@ -68,6 +70,8 @@ class TradingEngine:
         self._selector = StockSelector(self._dm)
         self._watchlist: list[str] = self._load_watchlist()
         self._running: bool = False  # 运行中标志，防止重入
+        # 执行模式缓存（signal_only/paper/live）
+        self._exec_mode: str = settings().get("execution", {}).get("mode", "paper")
 
         # 过滤器
         self._fundamental_filter = FundamentalFilter()
@@ -80,6 +84,10 @@ class TradingEngine:
         # 多周期择时（替换旧的 market_regime）
         self._regime_detector = MultiPeriodRegimeDetector()
         self._position_controller = PositionController()
+
+        # 移动止损引擎 + 危险信号检测器
+        self._trailing_stop_engine = TrailingStopEngine()
+        self._danger_detector = DangerSignalDetector()
 
         # 信号过滤流水线
         self._pipeline = SignalPipeline(
@@ -100,7 +108,7 @@ class TradingEngine:
 
         logger.info(
             f"交易引擎初始化: {len(self._strategies)} 策略, "
-            f"自选股 {len(self._watchlist)} 只, 模式=paper"
+            f"自选股 {len(self._watchlist)} 只, 模式={self._exec_mode}"
         )
 
     @property
@@ -332,10 +340,23 @@ class TradingEngine:
         return signals
 
     async def _process_signal(self, signal: dict[str, Any]) -> None:
-        """处理单个信号：风控检查 → 下单 → 通知。"""
+        """处理单个信号：signal_only 模式只通知不下单，paper/live 模式走风控+下单+通知。"""
         symbol = signal["symbol"]
         direction = signal["direction"]
         price = signal.get("price", 0)
+
+        # signal_only 模式：只发信号通知，不下单（监控验证用）
+        if self._exec_mode == "signal_only":
+            logger.info(f"{symbol} {direction} 信号（signal_only 模式，仅通知不下单）")
+            # 记录信号历史（不下单，order_result=None）
+            try:
+                record_signal_history(signal, None, None)
+            except Exception as e:
+                logger.warning(f"记录信号历史失败: {e}")
+            notify_ok = await self._notifier.notify_signal(signal)
+            if not notify_ok:
+                logger.error(f"{symbol} 信号通知失败，请检查飞书配置")
+            return
 
         # 入场过滤：wisdom 判定低置信度，仅通知不下单
         if signal.get("wisdom_filtered"):
@@ -436,6 +457,22 @@ class TradingEngine:
                 pos.is_st = bool(signal.get("is_st", False))
                 pos.is_suspended = bool(signal.get("is_suspended", False))
 
+                # 初始化移动止损状态
+                trailing_state = self._trailing_stop_engine.init_stop(
+                    entry_price=result.price,
+                    initial_stop_pct=None if not stop_loss else None,
+                )
+                if stop_loss and stop_loss > 0:
+                    # 使用 wisdom 设定的止损价作为初始止损
+                    trailing_state.initial_stop_price = float(stop_loss)
+                    trailing_state.current_stop_price = float(stop_loss)
+                pos.trailing_stop = self._trailing_stop_engine.state_to_dict(trailing_state)
+
+                # 注入危险信号信息
+                danger_info = signal.get("danger_signals", {})
+                if danger_info.get("signals"):
+                    pos.danger_signals = danger_info["signals"]
+
         # 事件推送：信号 + 订单
         self._event_engine.put(EVENT_SIGNAL, {
             "symbol": symbol,
@@ -481,6 +518,11 @@ class TradingEngine:
     async def _check_stop_loss(self) -> None:
         """遍历持仓，若现价触及止损价则执行卖出。
 
+        集成移动止损引擎：
+        - 对有 trailing_stop 状态的持仓，先用 TrailingStopEngine 更新止损价
+        - 对无 trailing_stop 状态的持仓，使用固定 stop_loss_price
+        - 检测危险信号并联动收紧止损
+
         L3 元数据（prev_close/is_st/is_suspended）从 Position 取出传入风控，
         确保涨跌停时止损卖出也受 L3 规则约束（跌停时不可卖出）。
 
@@ -493,6 +535,41 @@ class TradingEngine:
         # 先收集需止损的持仓信息，避免遍历中修改（P-10+D-09）
         stop_list: list[tuple[str, float, float, "Position"]] = []
         for symbol, pos in portfolio.items():
+            # 移动止损更新：如果有 trailing_stop 状态，先更新
+            if pos.trailing_stop:
+                try:
+                    df = await self._dm.fetch_stock_history(symbol, days=60)
+                    if not df.empty:
+                        state = TrailingStopEngine.dict_to_state(pos.trailing_stop)
+                        danger_signals = pos.danger_signals or []
+                        state, signal = self._trailing_stop_engine.update(
+                            state, df, danger_signals
+                        )
+                        pos.trailing_stop = self._trailing_stop_engine.state_to_dict(state)
+                        # 更新止损价为移动止损价
+                        if state.current_stop_price > 0:
+                            pos.stop_loss_price = state.current_stop_price
+
+                        # 移动止损信号触发
+                        if signal == TrailingStopSignal.EXIT:
+                            logger.warning(
+                                f"移动止损触发: {symbol} 信号={signal.value}, "
+                                f"止损价={state.current_stop_price:.2f}"
+                            )
+                            if pos.available > 0:
+                                stop_list.append(
+                                    (symbol, pos.current_price, float(pos.available), pos)
+                                )
+                            continue
+                        elif signal in (TrailingStopSignal.WARNING, TrailingStopSignal.ALERT):
+                            logger.info(
+                                f"移动止损预警: {symbol} 信号={signal.value}, "
+                                f"跌破浪谷 {state.valley_break_count} 次"
+                            )
+                except Exception as e:
+                    logger.warning(f"{symbol} 移动止损更新失败: {e}")
+
+            # 固定止损检查
             stop_price = getattr(pos, "stop_loss_price", None)
             if stop_price is None or stop_price <= 0:
                 continue
@@ -523,11 +600,15 @@ class TradingEngine:
             if risk_result.allowed:
                 result = self._broker.order(symbol, "sell", int(available), price)
                 if result.success:
+                    # 清除移动止损状态
+                    pos.trailing_stop = None
+                    pos.danger_signals = None
+
                     notify_ok = await self._notifier.notify_risk_alert(
                         {
                             "level": "warn",
                             "message": f"止损卖出: {symbol} {result.quantity}股 @ {result.price}",
-                            "suggestion": "止损价由 wisdom 预设，已自动执行",
+                            "suggestion": "止损价由移动止损引擎管理，已自动执行",
                         }
                     )
                     # P-07 修复：止损通知失败时记录 error 日志
@@ -570,9 +651,73 @@ class TradingEngine:
             )
 
     async def send_daily_report(self, period: str) -> None:
-        """发送每日日报。"""
+        """发送信号汇总报告。
+
+        弱化传统日报，聚焦项目核心：信号汇总 + 绩效验证。
+        - morning: 盘前推送昨日信号绩效 + 今日关注
+        - noon: 午盘推送今日已触发信号汇总
+        - close: 收盘推送今日信号汇总 + 持仓状态 + 绩效报告
+        """
         account = self._broker.get_account()
-        sector_df = await self._dm.fetch_sector_flow()
+
+        # 读取今日信号（从 signals_history.jsonl）
+        today_signals = self._load_today_signals()
+
+        # 收盘日报附带信号绩效报告 + 额外状态
+        performance_report = None
+        regime_info = None
+        risk_info = None
+        trailing_stop_info = None
+        if period == "close":
+            try:
+                from gugu.analysis.signal_tracker import SignalTracker
+
+                tracker = SignalTracker()
+                performance_report = await tracker.generate_report(days=30)
+            except Exception as e:
+                logger.warning(f"生成信号绩效报告失败: {e}")
+
+            # 市场状态信息
+            try:
+                regime = await self._regime_detector.detect()
+                regime_info = {
+                    "regime": regime.get("regime", "unknown"),
+                    "reason": regime.get("reason", ""),
+                    "total_limit": regime.get("total_position_limit", 0),
+                }
+            except Exception as e:
+                logger.debug(f"获取市场状态失败: {e}")
+
+            # 风控状态
+            try:
+                daily_loss_pct = 0.0
+                start_value = self._broker.daily_start_value
+                if start_value > 0:
+                    daily_loss_pct = (start_value - account.total_value) / start_value
+                risk_info = {
+                    "halted": self._risk.is_halted,
+                    "daily_loss_pct": round(daily_loss_pct, 4),
+                    "daily_start_value": start_value,
+                }
+            except Exception as e:
+                logger.debug(f"获取风控状态失败: {e}")
+
+            # 移动止损状态
+            try:
+                portfolio = self._broker.get_portfolio()
+                stops = []
+                for sym, pos in portfolio.items():
+                    trailing_state = getattr(pos, "trailing_stop", None)
+                    if trailing_state:
+                        stops.append({
+                            "symbol": sym,
+                            "current_stop": trailing_state.get("current_stop_price", 0),
+                            "highest": trailing_state.get("highest_price", 0),
+                            "signal": trailing_state.get("last_signal", "hold"),
+                        })
+                trailing_stop_info = stops
+            except Exception as e:
+                logger.debug(f"获取移动止损状态失败: {e}")
 
         data = {
             "market_summary": {
@@ -580,18 +725,112 @@ class TradingEngine:
                 "cash": account.cash,
                 "positions_count": len(account.positions),
             },
-            "sector_top": sector_df.head(5).to_dict("records") if not sector_df.empty else [],
-            "signals": [],
+            "signals": today_signals,
             "portfolio_summary": {
                 sym: {
+                    "name": "",
                     "quantity": pos.quantity,
                     "profit": pos.profit,
                     "market_value": pos.market_value,
                 }
                 for sym, pos in account.positions.items()
             },
+            "performance": performance_report,
+            "regime": regime_info,
+            "risk": risk_info,
+            "trailing_stops": trailing_stop_info,
         }
+
+        # 异步填充持仓股票名称（含 _STOCK_NAMES fallback）
+        _local_names = {
+            "600519": "贵州茅台", "300750": "宁德时代", "000858": "五粮液",
+            "601318": "中国平安", "000333": "美的集团", "300059": "东方财富",
+            "600030": "中信证券", "000776": "广发证券", "603259": "药明康德",
+            "600600": "青岛啤酒", "002625": "光启技术", "600674": "川投能源",
+            "688396": "华润微", "601238": "广汽集团", "600460": "士兰微",
+            "000977": "浪潮信息", "002049": "紫光国微", "300033": "同花顺",
+            "600026": "中远海能", "600150": "中国船舶", "600489": "中金黄金",
+            "600584": "长电科技", "601899": "紫金矿业", "603019": "中科曙光",
+            "603799": "华友钴业", "600036": "招商银行", "601398": "工商银行",
+            "601939": "建设银行", "000538": "云南白药",
+        }
+        for sym, info in data["portfolio_summary"].items():
+            name = _local_names.get(sym, "")
+            if not name:
+                try:
+                    meta = await self._dm.fetch_stock_meta(sym)
+                    name = meta.get("name", "")
+                except Exception:
+                    pass
+            info["name"] = name or sym
+
+        # 先重试之前失败的通知
+        try:
+            await self._notifier.retry_queued()
+        except Exception as e:
+            logger.debug(f"重试队列处理失败: {e}")
+
         await self._notifier.notify_daily_report(period, data)
+
+    def _load_today_signals(self) -> list[dict[str, Any]]:
+        """从 signals_history.jsonl 读取今日信号。"""
+        import json
+        from datetime import date as _date
+
+        path = PROJECT_ROOT / "data" / "signals_history.jsonl"
+        if not path.exists():
+            return []
+
+        today_str = _date.today().isoformat()
+
+        # 本地名称映射（用于 signals 中 name 为空时的 fallback）
+        _local_names = {
+            "600519": "贵州茅台", "300750": "宁德时代", "000858": "五粮液",
+            "601318": "中国平安", "000333": "美的集团", "300059": "东方财富",
+            "600030": "中信证券", "000776": "广发证券", "603259": "药明康德",
+            "600600": "青岛啤酒", "002625": "光启技术", "600674": "川投能源",
+            "688396": "华润微", "601238": "广汽集团", "600460": "士兰微",
+            "000977": "浪潮信息", "002049": "紫光国微", "300033": "同花顺",
+            "600026": "中远海能", "600150": "中国船舶", "600489": "中金黄金",
+            "600584": "长电科技", "601899": "紫金矿业", "603019": "中科曙光",
+            "603799": "华友钴业", "600036": "招商银行", "601398": "工商银行",
+            "601939": "建设银行", "000538": "云南白药",
+        }
+
+        seen: dict[str, dict[str, Any]] = {}  # key = symbol_direction
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        ts = rec.get("timestamp", "")
+                        if not ts.startswith(today_str):
+                            continue
+                        symbol = rec.get("symbol", "")
+                        direction = rec.get("direction", "")
+                        key = f"{symbol}_{direction}"
+                        raw_name = rec.get("name", "") or ""
+                        if not raw_name or raw_name == symbol:
+                            raw_name = _local_names.get(symbol, "") or symbol
+                        seen[key] = {
+                            "symbol": symbol,
+                            "name": raw_name,
+                            "direction": direction,
+                            "price": rec.get("price"),
+                            "strategies": rec.get("strategies", []),
+                            "order_success": rec.get("order_success"),
+                            "wisdom_filtered": rec.get("wisdom_filtered", False),
+                        }
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            logger.warning(f"读取今日信号失败: {e}")
+
+        # 去重后只保留每个 (symbol, direction) 的最后一条记录
+        return list(seen.values())
 
     async def shutdown(self) -> None:
         """关闭引擎资源（HTTP client 等）。"""

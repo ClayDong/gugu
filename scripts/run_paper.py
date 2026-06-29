@@ -1,8 +1,9 @@
-"""模拟盘入口：启动交易引擎，模拟盘运行。
+"""信号监控入口：启动信号监控系统。
 
 用法：
-    python scripts/run_paper.py            # 运行一次交易循环
-    python scripts/run_paper.py --daemon   # 守护进程模式（定时调度）
+    python scripts/run_paper.py            # 运行一次信号扫描
+    python scripts/run_paper.py --daemon   # 守护进程模式（定时调度，保活）
+    python scripts/run_paper.py --report  # 单次模式结束后发送信号汇总
 """
 from __future__ import annotations
 
@@ -21,8 +22,9 @@ logger = get_logger()
 
 
 async def run_once(send_report: bool = False, reset_halt: bool = False) -> None:
-    """运行一次交易循环。"""
+    """运行一次信号扫描。"""
     engine = TradingEngine()
+    logger.info(f"运行模式: {engine._exec_mode}")
     if reset_halt:
         engine.reset_halt()
     try:
@@ -34,8 +36,9 @@ async def run_once(send_report: bool = False, reset_halt: bool = False) -> None:
 
 
 async def run_daemon() -> None:
-    """守护进程模式：定时调度。"""
+    """守护进程模式：定时调度，保活运行。"""
     scheduler = TradingScheduler()
+    logger.info("启动信号监控守护进程...")
     try:
         await scheduler.start()
     finally:
@@ -43,9 +46,9 @@ async def run_daemon() -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="gugu 模拟盘")
-    parser.add_argument("--daemon", action="store_true", help="守护进程模式")
-    parser.add_argument("--report", action="store_true", help="单次模式结束后发送收盘日报")
+    parser = argparse.ArgumentParser(description="gugu 信号监控系统")
+    parser.add_argument("--daemon", action="store_true", help="守护进程模式（保活）")
+    parser.add_argument("--report", action="store_true", help="单次模式结束后发送信号汇总")
     parser.add_argument("--reset-halt", action="store_true", help="重置 L2 熔断状态后执行")
     parser.add_argument("--version", action="version", version="gugu 0.1.0")
     args = parser.parse_args()

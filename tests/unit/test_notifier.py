@@ -316,3 +316,203 @@ def test_format_signal_entry_filtered():
     card = format_signal(signal)
     assert card["card"]["header"]["template"] == "yellow"
     assert "已过滤" in card["card"]["header"]["title"]["content"]
+
+
+# ========== A-06 飞书决策摘要 ==========
+
+
+def test_format_decision_chain_empty():
+    """空的 decision_chain 返回空字符串。"""
+    from gugu.notifier.formatter import _format_decision_chain
+    assert _format_decision_chain([]) == ""
+
+
+def test_format_decision_chain_all_passed():
+    """完整决策链路，全部通过。"""
+    from gugu.notifier.formatter import _format_decision_chain
+
+    chain = [
+        {"step": 0, "name": "四阶段判断", "result": "normal_up", "passed": True},
+        {"step": 0.5, "name": "危险信号检测", "result": "none", "passed": True},
+        {"step": 1, "name": "基本面过滤", "result": "pass", "passed": True, "reasons": []},
+        {"step": 2.5, "name": "向下摊平检查", "result": "allowed", "passed": True},
+    ]
+    text = _format_decision_chain(chain)
+    for name in ("四阶段判断", "危险信号检测", "基本面过滤", "向下摊平检查"):
+        assert name in text
+    assert "✅" in text
+    assert "❌" not in text
+
+
+def test_format_decision_chain_with_filter():
+    """某层过滤时显示 ❌ 和原因。"""
+    from gugu.notifier.formatter import _format_decision_chain
+
+    chain = [
+        {"step": 0, "name": "四阶段判断", "result": "normal_up", "passed": True},
+        {"step": 1, "name": "基本面过滤", "result": "fail", "passed": False,
+         "reasons": ["PE异常高"]},
+    ]
+    text = _format_decision_chain(chain)
+    assert "❌" in text
+    assert "基本面过滤" in text
+    assert "fail" in text
+
+
+def test_format_signal_with_decision_chain():
+    """信号卡片含 decision_chain 时展示决策链路 section。"""
+    signal = {
+        "symbol": "600519",
+        "name": "贵州茅台",
+        "direction": "buy",
+        "strategy": "turtle",
+        "reason": "突破上轨",
+        "price": 1500.0,
+        "decision_chain": [
+            {"step": 0, "name": "四阶段判断", "result": "normal_up", "passed": True},
+            {"step": 5, "name": "Wisdom决策", "result": "buy", "passed": True,
+             "reason": "趋势良好"},
+        ],
+    }
+    card = format_signal(signal)
+    content = str(card)
+    assert "决策链路" in content
+    assert "四阶段判断" in content
+    assert "Wisdom决策" in content
+
+
+# ========== A-04 修复验证: _resolve_name 多层 fallback ==========
+
+
+def test_resolve_name_normal():
+    """正常 name 应直接返回。"""
+    from gugu.notifier.formatter import _resolve_name
+
+    signal = {"symbol": "600519", "name": "贵州茅台"}
+    assert _resolve_name(signal) == "贵州茅台"
+
+
+def test_resolve_name_missing():
+    """name 缺失时从内置映射查找。"""
+    from gugu.notifier.formatter import _resolve_name
+
+    signal = {"symbol": "600519"}
+    assert _resolve_name(signal) == "贵州茅台"
+
+
+def test_resolve_name_empty():
+    """name 为空字符串时从内置映射查找。"""
+    from gugu.notifier.formatter import _resolve_name
+
+    signal = {"symbol": "600519", "name": ""}
+    assert _resolve_name(signal) == "贵州茅台"
+
+
+def test_resolve_name_equal_to_symbol():
+    """name 等于代码本身时（API 脏数据），从内置映射查找。"""
+    from gugu.notifier.formatter import _resolve_name
+
+    signal = {"symbol": "600519", "name": "600519"}
+    assert _resolve_name(signal) == "贵州茅台"
+
+
+def test_resolve_name_unknown_symbol():
+    """不在内置映射表的股票回退为代码。"""
+    from gugu.notifier.formatter import _resolve_name
+
+    signal = {"symbol": "000001"}
+    assert _resolve_name(signal) == "000001"
+
+
+def test_format_signal_missing_name():
+    """A-04: name 缺失时应从内置映射补全，不显示"未知"或"600519(600519)"。"""
+    signal = {
+        "symbol": "600519",
+        "direction": "buy",
+        "price": 1.0,
+    }
+    card = format_signal(signal)
+    title = card["card"]["header"]["title"]["content"]
+    assert "贵州茅台" in title
+    assert "未知" not in title
+    assert "600519(600519)" not in title
+
+
+def test_format_signal_name_equal_code():
+    """A-04: name 等于代码时（API 脏数据），从内置映射补全。"""
+    signal = {
+        "symbol": "600519",
+        "name": "600519",
+        "direction": "buy",
+        "price": 1.0,
+    }
+    card = format_signal(signal)
+    title = card["card"]["header"]["title"]["content"]
+    assert "贵州茅台" in title
+    assert "600519(600519)" not in title
+
+
+def test_format_signal_empty_name():
+    """A-04: name 为空字符串时从内置映射补全。"""
+    signal = {
+        "symbol": "600519",
+        "name": "",
+        "direction": "buy",
+        "price": 1.0,
+    }
+    card = format_signal(signal)
+    title = card["card"]["header"]["title"]["content"]
+    assert "贵州茅台" in title
+    assert "未知" not in title
+
+
+def test_format_signals_missing_name():
+    """A-04: _format_signals 中 name 缺失时从内置映射补全。"""
+    from gugu.notifier.formatter import _format_signals
+
+    signals = [
+        {"direction": "buy", "symbol": "600519"},
+        {"direction": "sell", "symbol": "000858"},
+    ]
+    text = _format_signals(signals)
+    assert "贵州茅台" in text
+    assert "五粮液" in text
+    assert "600519(600519)" not in text
+
+
+def test_format_daily_report_portfolio_missing_name():
+    """A-04: 日报持仓中 name 缺失时从内置映射补全。"""
+    portfolio = {
+        "600519": {"quantity": 100, "profit": 5000, "market_value": 150000},
+        "000858": {"quantity": 200, "name": "", "profit": -2000, "market_value": 300000},
+    }
+    data = {
+        "market_summary": {"total_value": 1_000_000, "cash": 500_000, "positions_count": 2},
+        "signals": [],
+        "portfolio_summary": portfolio,
+    }
+    card = format_daily_report("close", data)
+    content = str(card)
+    assert "贵州茅台" in content
+    assert "五粮液" in content
+
+
+def test_format_daily_report_close_enhanced():
+    """A-06: 收盘日报含市场状态、风控、移动止损信息。"""
+    data = {
+        "market_summary": {"total_value": 1_000_000, "cash": 500_000, "positions_count": 2},
+        "signals": [],
+        "portfolio_summary": {},
+        "regime": {"regime": "sideways", "total_limit": 0.4, "reason": "横盘震荡"},
+        "risk": {"halted": False, "daily_loss_pct": 0.01},
+        "trailing_stops": [
+            {"symbol": "600519", "current_stop": 1420.0, "highest": 1500.0, "signal": "hold"},
+        ],
+    }
+    card = format_daily_report("close", data)
+    content = str(card)
+    assert "市场状态" in content
+    assert "风控状态" in content
+    assert "移动止损" in content
+    assert "600519" in content
+    assert "宕" not in content  # 不应看到熔断

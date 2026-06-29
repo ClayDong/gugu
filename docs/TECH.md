@@ -8,7 +8,7 @@
 
 | 层 | 技术 | 说明 |
 |----|------|------|
-| 语言 | Python 3.11+ | 使用 3.14 运行 |
+| 语言 | Python 3.12+ | venv 使用 3.12.13 |
 | 依赖管理 | uv | pyproject.toml + uv.lock |
 | 数据源 | akshare（主）+ 新浪（降级） | 免费，使用不同底层 API 确保冗余 |
 | 数据处理 | pandas / numpy / pyarrow | |
@@ -87,10 +87,17 @@ gugu/
 │   │   ├── stock_ranker.py     # 个股综合评分
 │   │   ├── sector_rotation.py  # 板块轮动
 │   │   ├── param_optimizer.py  # 参数优化
-│   │   └── execution_optimizer.py # 执行优化
+│   │   ├── execution_optimizer.py # 执行优化
+│   │   ├── stage_detector.py   # P0 四阶段判断器（牛皮/升势/疯狂/最后）
+│   │   ├── trailing_stop.py    # P0 浪谷递进移动止损引擎
+│   │   ├── danger_signal.py    # P0 五大危险信号检测器
+│   │   └── no_average_down.py  # P0 向下摊平检查器
 │   ├── wisdom/                  # 决策层
-│   │   ├── advisor.py           # WisdomAdvisor（LLM 决策 + fallback）
-│   │   └── skills/              # 炒股的智慧 6 个 skill（项目内置）
+│   │   ├── advisor.py           # WisdomAdvisor（LLM 决策 + 多视角路由 + fallback）
+│   │   ├── book_router.py       # P0 BookPerspectiveRouter（28 本书多视角路由）
+│   │   └── skills/              # 认知 SKILL
+│   │       ├── (炒股的智慧 6 个 skill)
+│   │       └── books/           # 仓颉蒸馏的 28 本股书 SKILL.md
 │   ├── engine/                  # 主引擎
 │   │   ├── main.py              # TradingEngine（核心编排）
 │   │   ├── scheduler.py         # APScheduler 调度（4 次/日扫描）
@@ -135,9 +142,13 @@ gugu/
        ↓
 策略层(strategies/)  8个内置策略 + LLM自然语言生成器
        ↓
+规则引擎层(analysis/)  四阶段判断 → 危险信号检测 → 向下摊平检查（不可绕过）
+       ↓
 过滤层(filters/)     基本面 → 资金流 → 行业约束（仅买入信号）
        ↓
-决策层(wisdom/)      LLM决策引擎（炒股的智慧6 skill）→ fallback硬编码规则
+决策层(wisdom/)      BookPerspectiveRouter（28本书多视角）→ LLM决策 → fallback
+       ↓
+移动止损(analysis/)  浪谷递进止损引擎（每日动态更新止损价）
        ↓
 引擎层(engine/)      信号路由(多策略融合) → 过滤流水线 → 事件驱动引擎
        ↓
@@ -174,20 +185,59 @@ gugu/
 ```
 策略信号 → 路由 → L3 元数据注入(prev_close/is_st/is_suspended)
                     ↓
+         [步骤0]  四阶段判断（StageDetector）
+                    ↓
+         [步骤0.5] 危险信号检测（DangerSignalDetector，仅买入，medium+ 过滤）
+                    ↓
               1. 基本面过滤（仅买入）
                     ↓
               2. 资金流过滤（仅买入）
                     ↓
               3. 行业约束（仅买入 + 新建仓位）
                     ↓
+         [步骤2.5] 向下摊平检查（NoAverageDownChecker，仅买入）
+                    ↓
               4. 市场状态仓位修正（budget 已体现）
                     ↓
               5. Wisdom 决策层（LLM 或 fallback）
+                    ↓
+         [步骤3.5] 四阶段入场过滤（疯狂/最后阶段不入场）
                     ↓
               完整信号输出
 ```
 
 可独立于 TradingEngine 测试，通过依赖注入替换各过滤组件。
+
+### 3.3.1 移动止损引擎
+
+`TrailingStopEngine`（[analysis/trailing_stop.py](src/gugu/analysis/trailing_stop.py)）：
+
+```
+买入时: init_stop(entry_price) → 初始止损价 = entry_price × (1 - 8%)
+         → 状态存储到 Position.trailing_stop (dict)
+
+每日 _check_stop_loss 时:
+  1. 读取 Position.trailing_stop → TrailingStopState
+  2. update(state, df, danger_signals):
+     a. 更新 highest_price
+     b. 识别浪谷（N日窗口局部低点）
+     c. 止损上移至最近浪谷（只能上移）
+     d. 危险信号收紧止损（收紧 30%）
+     e. 最大回撤兜底（>15% 触发 EXIT）
+  3. 评估信号: EXIT/WARNING/ALERT/TIGHTEN/HOLD
+  4. EXIT → 执行卖出 → 清除 trailing_stop 状态
+  5. 状态写回 Position.trailing_stop
+```
+
+### 3.3.2 BookPerspectiveRouter
+
+`BookPerspectiveRouter`（[wisdom/book_router.py](src/gugu/wisdom/book_router.py)）：
+
+- 加载 28 本股书蒸馏 SKILL.md
+- 按交易场景（entry/stop_loss/position_sizing 等）路由到对应书籍类别
+- 每个场景最多返回 4 个视角，提取核心认知（信念/绝不做的事/思维习惯）
+- 买入时补充陈江挺视角（交易纪律），卖出时补充利弗莫尔视角（止损铁律）
+- 构建多视角认知上下文注入 LLM prompt
 
 ### 3.4 事件引擎
 
@@ -412,7 +462,10 @@ tests/
 
 ### 7.2 覆盖率
 
-当前覆盖率：**87%**（463 测试，全部通过）
+当前覆盖率：**47%**（506 测试，全部通过）
+
+> 注：迭代 6 新增 5 个 P0 模块（1,338 行新代码），覆盖率暂时下降。
+> 新模块自身有 33 个专项测试覆盖，但整体行数增长导致百分比下降。
 
 | 模块 | 覆盖率 | 说明 |
 |------|--------|------|
@@ -434,6 +487,11 @@ tests/
 | analysis/ | 76-97% | 7/10 模块 90%+，3 个 70%+ |
 | web/ | 0% | FastAPI 前端（阶段四前） |
 | execution/qmt.py | 43% | QMT 骨架（阶段四实现） |
+| analysis/stage_detector.py | 43% | P0 四阶段判断器（新增） |
+| analysis/trailing_stop.py | 43% | P0 移动止损引擎（新增） |
+| analysis/danger_signal.py | — | P0 危险信号检测器（新增） |
+| analysis/no_average_down.py | — | P0 向下摊平检查器（新增） |
+| wisdom/book_router.py | 79% | P0 28 本书多视角路由器（新增） |
 
 ## 八、已知限制与技术债务
 
@@ -447,6 +505,12 @@ tests/
 | 6 | Web 前端零测试 | 覆盖率 0% | 阶段四前 |
 | 7 | 日志为纯文本 | 监控系统解析困难 | 未修复 |
 | 8 | AppConfig 尚未全面替换 settings() | 双模式共存 | 下一轮 |
+| 9 | P0 规则引擎参数未经验证 | 止损比例/浪谷窗口/收紧比例均为经验值 | 需回测验证 |
+| 10 | 移动止损未集成到回测引擎 | 无法回测验证止损效果 | 下一迭代 |
+| 11 | Python 版本更新 | 文档标 3.14，实际 venv 使用 3.12.13 | 2026-06 已修 |
+| 12 | BookPerspectiveRouter 静态路由 | 不考虑市场环境变化 | 需动态路由 |
+| 13 | 危险信号"坏消息"依赖人工 | 无法自动检测利空消息 | 需新闻 API |
+| 14 | SignalPipeline 新增 4 个检查点未独立测试 | 过滤链集成测试覆盖不足 | 下一轮 |
 
 ## 九、可观测性数据文件
 
