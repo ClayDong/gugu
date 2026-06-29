@@ -504,3 +504,47 @@ def format_system_error(error: dict[str, Any]) -> dict[str, Any]:
     ]
 
     return _card(title, "red", sections, note="明策 · gugu · 异常告警")
+
+
+def format_holdings_sell_alert(stocks: list[dict]) -> dict[str, Any]:
+    """格式化为持仓卖出告警卡片。
+
+    Args:
+        stocks: 卖出信号明确的持仓股列表，每项含 name, symbol, price,
+                profit_pct, sell_count, buy_count, sell_signals.
+    """
+    if not stocks:
+        return {
+            "msg_type": "interactive",
+            "card": {"header": {"title": {"tag": "plain_text", "content": "持仓卖出检查"}, "template": "green"},
+                     "elements": []},
+        }
+
+    lines = ["**以下持仓股出现卖出信号：**", ""]
+    for s in stocks:
+        name = s.get("name", s.get("symbol", ""))
+        symbol = s.get("symbol", "")
+        price = s.get("price", 0)
+        profit = s.get("profit_pct", 0)
+        sell_n = s.get("sell_count", 0)
+        buy_n = s.get("buy_count", 0)
+        profit_icon = "🟢" if profit >= 0 else "🔴"
+        lines.append(
+            f"**{name}** ({symbol})\n"
+            f"{profit_icon} 现价 {price:.2f} | 盈亏 {profit:+.1f}%\n"
+            f"🔴 卖出 {sell_n} vs 🟢 买入 {buy_n}\n"
+        )
+        for sig in s.get("sell_signals", [])[:3]:
+            strategy = sig.get("strategy_name", sig.get("strategy", ""))
+            strength = sig.get("signal_strength", sig.get("confidence", 0))
+            lines.append(f"  - {strategy} 强度 {strength:.0%}")
+
+    lines.append("")
+    lines.append("---\n⚠️ 策略信号提示，不构成投资建议。请结合基本面和仓位管理决策。")
+
+    return _card(
+        title="⚠️ 持仓卖出信号告警",
+        template="red",
+        sections=["\n".join(lines)],
+        note="明策 · gugu · 持仓告警",
+    )

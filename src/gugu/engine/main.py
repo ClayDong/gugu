@@ -772,6 +772,17 @@ class TradingEngine:
 
         await self._notifier.notify_daily_report(period, data)
 
+        # 收盘后检查持仓股卖出信号（迁移自 MingCe _check_holdings_sell_signals）
+        if period == "close":
+            try:
+                portfolio = self._broker.get_portfolio()
+                if portfolio:
+                    sell_alerts = await self._check_holdings_sell_signals(portfolio)
+                    if sell_alerts:
+                        await self._notifier.notify_holdings_sell_alert(sell_alerts)
+            except Exception as e:
+                logger.warning(f"持仓卖出检查失败（不影响日报）: {e}")
+
     def _load_today_signals(self) -> list[dict[str, Any]]:
         """从 signals_history.jsonl 读取今日信号。"""
         import json
@@ -898,6 +909,64 @@ class TradingEngine:
                 f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         except Exception as e:
             logger.warning(f"写入心跳文件失败: {e}")
+
+    async def _check_holdings_sell_signals(self, portfolio: dict) -> list[dict]:
+        """收盘后检查持仓股卖出信号。
+
+        遍历所有持仓股，运行策略信号扫描，若 sell > buy 达到阈值则生成告警。
+        迁移自 MingCe _check_holdings_sell_signals。
+
+        Args:
+            portfolio: {symbol: Position} 持仓字典。
+
+        Returns:
+            卖出信号明确的股票列表，每项含 name, symbol, price, profit_pct, sell_count 等。
+        """
+        if not portfolio:
+            return []
+
+        symbols = list(portfolio.keys())
+        logger.info(f"持仓卖出信号检查: {len(symbols)} 只持仓股")
+
+        # 用现有信号管道扫描所有持仓股
+        signals = await self._scan_signals(extra_symbols=symbols)
+        if not signals:
+            return []
+
+        # 获取最新行情用于计算盈亏
+        from gugu.models.position import Position  # noqa: PLC0415
+
+        sell_alerts = []
+        for sig in signals:
+            sym = sig.get("symbol", "")
+            if sym not in portfolio:
+                continue
+            direction = str(sig.get("direction", "")).lower()
+            if direction != "sell":
+                continue
+            pos = portfolio[sym]
+            if not isinstance(pos, dict) and not hasattr(pos, "avg_cost"):
+                continue
+            cost = float(pos.get("avg_cost", 0) if isinstance(pos, dict) else getattr(pos, "avg_cost", 0))
+            price = sig.get("price", 0) or 0
+            profit_pct = ((price - cost) / cost * 100) if cost and price else 0
+
+            sell_alerts.append({
+                "name": sig.get("name", sym),
+                "symbol": sym,
+                "price": price,
+                "profit_pct": round(profit_pct, 2),
+                "sell_count": len(sig.get("sell_signals", sig.get("strategies", []))),
+                "buy_count": 1 if sig.get("buy_signals") else 0,
+                "sell_signals": [
+                    {"strategy_name": s, "signal_strength": sig.get("confidence", 0.5)}
+                    for s in (sig.get("strategies", []) if isinstance(sig.get("strategies"), list) else [sig.get("strategy", "?")])
+                ],
+            })
+
+        if sell_alerts:
+            logger.info(f"持仓卖出信号: {len(sell_alerts)} 只股票需关注")
+        return sell_alerts
 
 
 def run_engine() -> None:

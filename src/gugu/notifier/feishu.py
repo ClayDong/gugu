@@ -26,6 +26,7 @@ from gugu.config import PROJECT_ROOT, env
 from gugu.notifier.formatter import (
     format_backtest_report,
     format_daily_report,
+    format_holdings_sell_alert,
     format_risk_alert,
     format_signal,
     format_system_error,
@@ -306,6 +307,10 @@ class FeishuNotifier:
         """
         card = data["card"]
         return await self.send_card(card)
+
+    async def notify_holdings_sell_alert(self, stocks: list[dict]) -> bool:
+        """Format and send a holdings sell signal alert."""
+        return await self.send_card(format_holdings_sell_alert(stocks))
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""
