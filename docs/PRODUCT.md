@@ -229,6 +229,9 @@ uv run python scripts/run_live.py
 || 17 | 2026-06-24 | **仓颉深度融合 + P0 认知引擎**：28 本书多视角路由、四阶段判断器、移动止损引擎、危险信号检测器、向下摊平检查器、RegimeDetector bug 修复、Web 4 标签页 |
 || 18 | 2026-06-29 | **数据源修复 + 测试完善**：PROJECT_ROOT 路径修复（48 个测试一次性修复）、akshare 连接被封锁 → 切换 sina 为主源、异步测试 mock ranker 消除网络 IO、调度器 __main__ 入口、Cron 盘中自动扫描任务 |
 || 19 | 2026-06-29 | **宏观五维模块 + 多时段日报 + 项目全景分析**：新增 `src/gugu/macro/`（5 维度数据采集 + 飞书卡片 + 4 时段调度）、`docs/PROJECT_LANDSCAPE_ANALYSIS.md`（第一性原理+对抗性审查报告）、策略迁移评估表（18→8→+5）、Cron 更新（12 个定时任务含宏观）、PRODUCT.md 第九章合并计划、CLAUDE.md 项目状态表 |
+| 20 | 2026-06-30 | **架构治理 v2**：配置双轨制消除（13 模块迁移到 AppConfig 单例，`settings()` 委托至 `get_config()`）、`_STOCK_NAMES` 三份重复去重到 `data/stock_names.py`、`TrailingStopEngine` ATR 自适应止损优先、熔断状态跨日同步（新增 `last_reset_date` 持久化）、`_check_stop_loss` 批量拉取优化、`PlausiblePriceRule` 低波动股防误判、Ruff 规则清理（255→0） |
+| 21 | 2026-06-30 | **对抗性审查修复**：背测引擎认知模块异常不再静默吞（`logger.debug`）、周线 resample 消除前视偏差（`closed="left"`）、仓位基准改用当前净值（`current_equity` 替代 `initial_capital`）、资金流默认保守拒绝（`pass: False`）、选股器/筛股器 per-stock 超时保护、`is_tradable` 传入方向参数、错误消息密钥脱敏纵深防御、`formatter.py` `_STOCK_NAMES` 去重 |
+| 22 | 2026-06-30 | **产品化 v1**：信号卡片 30 秒决策摘要行（置信度/仓位/止损/止盈一目了然）、ATR 波动率动态调整仓位（高波减 30%/低波加 30%）、止盈双目标方案（+10%/+20% + ATR 自适应校准）、信号融合切换为 weighted 模式、Bollinger+RSI 策略启用形成趋势/均值回归互补、`RiskManager` 新增组合相关性监控（>85%告警）和最大回撤熔断（15%）、`walk_forward_optimize()` 滚动前向验证+参数网格扫描、仓位分层递进（试仓 20%→盈利确认加码 60%→上限 30%）、Web 看板 `/api/signals/performance` 和 `/api/portfolio/correlation` 端点、文档同步更新 |
 
 ## 九、项目关系与合并计划
 

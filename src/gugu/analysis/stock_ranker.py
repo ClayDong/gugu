@@ -2,15 +2,16 @@
 
 参考 qlib 的 TopkDropoutStrategy：在候选池中选TopK，然后逐个验证策略信号。
 """
+
 from __future__ import annotations
 
 import asyncio
 from typing import Any
 
 from gugu.analysis.alpha_factory import AlphaFactory
+from gugu.data import data_manager
 from gugu.filters.fundamental import FundamentalFilter
 from gugu.filters.money_flow import MoneyFlowFilter
-from gugu.data import data_manager
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -60,7 +61,7 @@ class StockRanker:
                 )
                 if score_detail:
                     results.append(score_detail)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.debug(f"评分超时 {symbol}")
             except Exception as e:
                 logger.debug(f"评分失败 {symbol}: {e}")
@@ -82,6 +83,7 @@ class StockRanker:
 
         # 获取行业（用于板块评分）
         from gugu.filters.industry_constraint import IndustryConstraint
+
         industry_checker = IndustryConstraint()
         industry = industry_checker.get_industry(symbol)
 
@@ -118,18 +120,14 @@ class StockRanker:
             sector_score = 1.0
         elif industry:
             from gugu.analysis.sector_rotation import SW_INDUSTRY_MAP
+
             cat = SW_INDUSTRY_MAP.get(industry, "")
             hot_cats = {SW_INDUSTRY_MAP.get(s, "") for s in hot_sectors}
             if cat in hot_cats:
                 sector_score = 0.5
 
         # 加权总分
-        total = (
-            factor_score * 0.30 +
-            fund_score * 0.25 +
-            flow_score * 0.25 +
-            sector_score * 0.20
-        )
+        total = factor_score * 0.30 + fund_score * 0.25 + flow_score * 0.25 + sector_score * 0.20
 
         return {
             "symbol": symbol,

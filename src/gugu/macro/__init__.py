@@ -5,13 +5,13 @@
 """
 
 from gugu.macro.collectors import MacroCollector
-from gugu.macro.models import GoldData, OilData, FxData, BondData, DerivativeData
+from gugu.macro.models import BondData, DerivativeData, FxData, GoldData, OilData
 
 __all__ = [
-    "MacroCollector",
-    "GoldData",
-    "OilData",
-    "FxData",
     "BondData",
     "DerivativeData",
+    "FxData",
+    "GoldData",
+    "MacroCollector",
+    "OilData",
 ]

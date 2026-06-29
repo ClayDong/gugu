@@ -12,10 +12,11 @@
 - 疯狂：谨慎持有，收紧止损，不追高
 - 最后：准备离场，出现危险信号立即卖出
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import numpy as np
@@ -26,23 +27,25 @@ from gugu.utils.log import get_logger
 logger = get_logger()
 
 
-class MarketStage(str, Enum):
+class MarketStage(StrEnum):
     """股票走势四阶段。"""
-    SIDEWAYS = "sideways"          # 牛皮市 - 盘整
-    NORMAL_UPTREND = "normal_up"   # 正常升势
-    FRENZY = "frenzy"              # 疯狂
-    FINAL = "final"                # 最后阶段
-    DOWNTREND = "downtrend"        # 下降趋势（补充）
+
+    SIDEWAYS = "sideways"  # 牛皮市 - 盘整
+    NORMAL_UPTREND = "normal_up"  # 正常升势
+    FRENZY = "frenzy"  # 疯狂
+    FINAL = "final"  # 最后阶段
+    DOWNTREND = "downtrend"  # 下降趋势（补充）
 
 
 @dataclass
 class StageResult:
     """阶段判断结果。"""
+
     stage: MarketStage
-    confidence: float          # 判断置信度 0-1
-    description: str           # 阶段描述
-    suggestion: str            # 操作建议
-    metrics: dict[str, Any]    # 判断指标详情
+    confidence: float  # 判断置信度 0-1
+    description: str  # 阶段描述
+    suggestion: str  # 操作建议
+    metrics: dict[str, Any]  # 判断指标详情
 
 
 class StageDetector:
@@ -59,16 +62,16 @@ class StageDetector:
     """
 
     # 阶段判断参数
-    LOOKBACK_PERIOD = 60           # 回看周期（约3个月）
-    WAVE_WINDOW = 5                # 波浪高低点识别窗口
-    MA_SHORT = 10                  # 短期均线
-    MA_MEDIUM = 20                 # 中期均线
-    MA_LONG = 60                   # 长期均线
-    VOLUME_MA = 20                 # 成交量均线
-    FRENZY_VOLUME_RATIO = 2.0      # 疯狂阶段成交量倍数
+    LOOKBACK_PERIOD = 60  # 回看周期（约3个月）
+    WAVE_WINDOW = 5  # 波浪高低点识别窗口
+    MA_SHORT = 10  # 短期均线
+    MA_MEDIUM = 20  # 中期均线
+    MA_LONG = 60  # 长期均线
+    VOLUME_MA = 20  # 成交量均线
+    FRENZY_VOLUME_RATIO = 2.0  # 疯狂阶段成交量倍数
     FRENZY_SLOPE_THRESHOLD = 0.03  # 疯狂阶段MA斜率阈值
-    FINAL_SLOPE_THRESHOLD = 0.05   # 最后阶段MA斜率阈值
-    SIDEWAYS_VOLATILITY_MAX = 0.02 # 牛皮市最大波动率
+    FINAL_SLOPE_THRESHOLD = 0.05  # 最后阶段MA斜率阈值
+    SIDEWAYS_VOLATILITY_MAX = 0.02  # 牛皮市最大波动率
 
     def detect(self, df: pd.DataFrame) -> StageResult:
         """判断股票当前所处的阶段。
@@ -126,7 +129,7 @@ class StageDetector:
 
         # 取最近LOOKBACK_PERIOD根K线
         lookback = min(self.LOOKBACK_PERIOD, len(df))
-        close_recent = close.iloc[-lookback:]
+        close.iloc[-lookback:]
         high_recent = high.iloc[-lookback:]
         low_recent = low.iloc[-lookback:]
         vol_recent = volume.iloc[-lookback:]
@@ -157,7 +160,9 @@ class StageDetector:
         atr_ratio = atr / close.iloc[-1] if close.iloc[-1] > 0 else 0
 
         # 6. 近期涨幅
-        price_change_20 = (close.iloc[-1] - close.iloc[-min(21, len(close))]) / close.iloc[-min(21, len(close))]
+        price_change_20 = (close.iloc[-1] - close.iloc[-min(21, len(close))]) / close.iloc[
+            -min(21, len(close))
+        ]
 
         # 7. 均线排列
         ma_bullish = ma_short > ma_medium > ma_long
@@ -231,7 +236,7 @@ class StageDetector:
         higher_lows = metrics.get("higher_lows", False)
         ma_bullish = metrics.get("ma_bullish", False)
         ma_bearish = metrics.get("ma_bearish", False)
-        price_change_20 = metrics.get("price_change_20", 0)
+        metrics.get("price_change_20", 0)
 
         # 最后阶段：抛物线走势
         if ma_slope > self.FINAL_SLOPE_THRESHOLD and volume_ratio > self.FRENZY_VOLUME_RATIO:

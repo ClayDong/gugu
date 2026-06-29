@@ -8,13 +8,14 @@ Levels:
 - L2 daily loss: warn at daily_loss_warn (default 3%), halt at daily_loss_halt (default 5%)
 - L3 system: T+1 settlement, price limit (涨跌停), suspension (停牌)
 """
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 from typing import Any
 
-from gugu.config import PROJECT_ROOT, settings
+from gugu.config import PROJECT_ROOT, get_config
 from gugu.config.models import AppConfig
 from gugu.filters.industry_constraint import IndustryConstraint
 from gugu.utils.log import get_logger
@@ -63,14 +64,16 @@ class RiskManager:
             self.max_total_positions = int(cfg.get("max_total_positions", 5))
             self.t_plus_1 = bool(cfg.get("t_plus_1", True))
         else:
-            cfg = settings().get("risk", {})
-            self.max_position_ratio = float(cfg.get("max_position_ratio", 0.30))
-            self.daily_loss_warn = float(cfg.get("daily_loss_warn", 0.03))
-            self.daily_loss_halt = float(cfg.get("daily_loss_halt", 0.05))
-            self.max_total_positions = int(cfg.get("max_total_positions", 5))
-            self.t_plus_1 = bool(cfg.get("t_plus_1", True))
+            rc = get_config().risk
+            self.max_position_ratio = rc.max_position_ratio
+            self.daily_loss_warn = rc.daily_loss_warn
+            self.daily_loss_halt = rc.daily_loss_halt
+            self.max_total_positions = rc.max_total_positions
+            self.t_plus_1 = rc.t_plus_1
+            cfg = get_config().flatten().get("risk", {})
         self._logger = get_logger()
         self._halted: bool = False
+        self._last_reset_date: str = ""
         # 行业分散约束
         self._industry_constraint = IndustryConstraint(config=cfg)
         # P0-2 修复：启动时从磁盘加载熔断状态
@@ -86,6 +89,9 @@ class RiskManager:
         if self._halted:
             self._logger.info("Risk manager halt state reset")
         self._halted = False
+        from datetime import date as _date
+
+        self._last_reset_date = _date.today().isoformat()
         self._save_halt_state()
 
     def clear_halt_only(self) -> None:
@@ -102,7 +108,10 @@ class RiskManager:
         self._save_halt_state()
 
     def _load_halt_state(self) -> None:
-        """P0-2 修复：从磁盘加载熔断状态，防止进程重启绕过熔断。"""
+        """P0-2 修复：从磁盘加载熔断状态，防止进程重启绕过熔断。
+
+        同时加载 last_reset_date，用于确定是否为新交易日（与 _last_cycle_date 同步）。
+        """
         try:
             if RISK_STATE_FILE.exists():
                 data = json.loads(RISK_STATE_FILE.read_text(encoding="utf-8"))
@@ -118,11 +127,17 @@ class RiskManager:
                         f"P0-2: 恢复当日 L2 熔断状态（halt_date={halt_date}），"
                         f"交易已被阻断，需人工 reset_halt 后恢复"
                     )
+                self._last_reset_date = data.get("last_reset_date", "")
         except Exception as e:
             self._logger.warning(f"加载熔断状态失败: {e}")
 
+    @property
+    def last_reset_date(self) -> str:
+        """上次 reset() 日期（用于 TradingEngine 的 _last_cycle_date 同步）。"""
+        return self._last_reset_date
+
     def _save_halt_state(self) -> None:
-        """P0-2 修复：将熔断状态持久化到磁盘。"""
+        """P0-2 修复：将熔断状态持久化到磁盘，含 last_reset_date 用于跨日同步。"""
         try:
             RISK_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
             from datetime import date as _date
@@ -130,6 +145,7 @@ class RiskManager:
             data = {
                 "halted": self._halted,
                 "halt_date": _date.today().isoformat(),
+                "last_reset_date": self._last_reset_date,
                 "updated_at": __import__("pandas").Timestamp.now().isoformat(),
             }
             RISK_STATE_FILE.write_text(
@@ -206,8 +222,10 @@ class RiskManager:
             )
 
         # L3: price limit check (涨跌停) - 区分买卖方向
-        if prev_close is not None and prev_close > 0 and not self.is_tradable(
-            symbol, price, prev_close, is_st=is_st, direction=direction
+        if (
+            prev_close is not None
+            and prev_close > 0
+            and not self.is_tradable(symbol, price, prev_close, is_st=is_st, direction=direction)
         ):
             return RiskCheckResult(
                 level=RiskLevel.L3_SYSTEM,
@@ -256,9 +274,7 @@ class RiskManager:
         # Post-trade position value for this symbol (valued at order price)
         new_symbol_value = (existing_qty + quantity) * price
         # Other positions valued at their current price
-        other_value = sum(
-            p.quantity * p.current_price for s, p in portfolio.items() if s != symbol
-        )
+        other_value = sum(p.quantity * p.current_price for s, p in portfolio.items() if s != symbol)
         # Post-trade total = cash - buy_cost + new_symbol_value + other_value
         # 买入后现金减少 quantity * price（未含手续费，保守估算）
         post_trade_total = cash - quantity * price + new_symbol_value + other_value
@@ -368,8 +384,7 @@ class RiskManager:
                 level=RiskLevel.L2_DAILY_LOSS,
                 action=RiskAction.WARN,
                 message=(
-                    f"Daily loss {loss_pct:.2%} reached warn threshold "
-                    f"{self.daily_loss_warn:.2%}"
+                    f"Daily loss {loss_pct:.2%} reached warn threshold {self.daily_loss_warn:.2%}"
                 ),
             )
 
@@ -443,3 +458,105 @@ class RiskManager:
         if symbol.startswith(_GEM_PREFIXES) or symbol.startswith(_KCB_PREFIXES):
             return _GEM_KCB_LIMIT
         return _MAIN_BOARD_LIMIT
+
+    # ── P1 新增：组合级风控 ─────────────────────────────────────────
+
+    _portfolio_peak: float = 0.0  # 组合历史最高净值
+    _max_drawdown_halt: float = 0.15  # 最大回撤熔断阈值 15%
+
+    def update_portfolio_peak(self, total_value: float) -> None:
+        """更新组合历史最高净值（每日循环结束时调用）。"""
+        if total_value > self._portfolio_peak:
+            self._portfolio_peak = total_value
+
+    def check_portfolio_drawdown(self, total_value: float) -> RiskCheckResult:
+        """检查组合从高点回撤是否触发熔断。
+
+        回撤 ≥ 15% 时禁止加仓（仅允许减仓/平仓）。
+        """
+        if self._portfolio_peak <= 0:
+            return RiskCheckResult(
+                level=RiskLevel.L2_DAILY_LOSS,
+                action=RiskAction.ALLOW,
+                message="组合峰值未初始化",
+            )
+        dd = (self._portfolio_peak - total_value) / self._portfolio_peak
+        if dd >= self._max_drawdown_halt:
+            return RiskCheckResult(
+                level=RiskLevel.L2_DAILY_LOSS,
+                action=RiskAction.HALT,
+                message=(
+                    f"组合回撤 {dd:.2%} 触发熔断（阈值 {self._max_drawdown_halt:.0%}），仅允许减仓"
+                ),
+            )
+        return RiskCheckResult(
+            level=RiskLevel.L2_DAILY_LOSS,
+            action=RiskAction.ALLOW,
+            message=f"组合回撤 {dd:.2%} 在安全范围内",
+        )
+
+    @staticmethod
+    def check_correlation(
+        portfolio: dict[str, Position], data_mgr: Any, threshold: float = 0.85
+    ) -> list[dict]:
+        """检查持仓间高相关性风险（P1 新增）。
+
+        基于 historical daily returns 计算两两相关系数，
+        返回相关系数 > threshold 的高相关股票对列表。
+
+        Args:
+            portfolio: 当前持仓 {symbol: Position}
+            data_mgr: DataManager 实例（用于拉取历史数据）
+            threshold: 相关系数告警阈值
+
+        Returns:
+            高相关股票对列表 [{"pair": (s1,s2), "correlation": float}, ...]
+        """
+        import asyncio
+
+        import numpy as np
+        import pandas as pd
+
+        symbols = list(portfolio.keys())
+        if len(symbols) < 2:
+            return []
+
+        # 拉取所有持仓的 60 日收益率序列
+        returns: dict[str, pd.Series] = {}
+
+        async def _fetch():
+            for sym in symbols:
+                try:
+                    df = await data_mgr.fetch_stock_history(sym, days=60)
+                    if not df.empty and len(df) >= 30:
+                        ret = df["close"].pct_change().dropna()
+                        if len(ret) >= 30:
+                            returns[sym] = ret
+                except Exception:
+                    pass
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import nest_asyncio
+
+                nest_asyncio.apply()
+            asyncio.run(_fetch())
+        except RuntimeError:
+            pass
+
+        alerts: list[dict] = []
+        syms = list(returns.keys())
+        for i in range(len(syms)):
+            for j in range(i + 1, len(syms)):
+                s1, s2 = syms[i], syms[j]
+                try:
+                    aligned = pd.concat([returns[s1], returns[s2]], axis=1).dropna()
+                    if len(aligned) < 20:
+                        continue
+                    corr = float(np.corrcoef(aligned.iloc[:, 0], aligned.iloc[:, 1])[0, 1])
+                    if abs(corr) > threshold:
+                        alerts.append({"pair": (s1, s2), "correlation": round(corr, 4)})
+                except Exception:
+                    continue
+        return alerts

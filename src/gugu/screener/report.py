@@ -1,4 +1,5 @@
 """尾盘选股结果 Feishu 卡片格式化。"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -54,8 +55,7 @@ def format_screener_report(
     # ── 汇总 ──
     total_checked = len(passed) + len(partial)
     sections.append(
-        f"扫描 {total_scanned} 只 → 涨幅3-5% → 深度检查 {total_checked} 只 → "
-        f"通过 {len(passed)} 只"
+        f"扫描 {total_scanned} 只 → 涨幅3-5% → 深度检查 {total_checked} 只 → 通过 {len(passed)} 只"
     )
 
     template = "green" if passed else "yellow"
@@ -74,9 +74,7 @@ def _build_card(
     for i, section in enumerate(sections):
         if i > 0:
             elements.append({"tag": "hr"})
-        elements.append(
-            {"tag": "div", "text": {"tag": "lark_md", "content": section}}
-        )
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": section}})
     if note:
         if elements:
             elements.append({"tag": "hr"})

@@ -37,14 +37,14 @@ logger = get_logger()
 
 # 合理性校验范围（基于 2026 年价格基线）
 _PRICE_RANGES: dict[str, tuple[float, float]] = {
-    "gold": (1500.0, 6000.0),      # COMEX 黄金
-    "silver": (10.0, 100.0),       # COMEX 白银
-    "brent": (20.0, 150.0),        # ICE 布伦特
-    "wti": (15.0, 140.0),          # NYMEX WTI
-    "usd_index": (90.0, 120.0),    # 美元指数
-    "usd_cny": (6.0, 8.0),         # 美元/人民币
-    "vix": (5.0, 100.0),           # VIX 恐慌指数
-    "us10y": (0.5, 7.0),           # 美债 10Y 收益率
+    "gold": (1500.0, 6000.0),  # COMEX 黄金
+    "silver": (10.0, 100.0),  # COMEX 白银
+    "brent": (20.0, 150.0),  # ICE 布伦特
+    "wti": (15.0, 140.0),  # NYMEX WTI
+    "usd_index": (90.0, 120.0),  # 美元指数
+    "usd_cny": (6.0, 8.0),  # 美元/人民币
+    "vix": (5.0, 100.0),  # VIX 恐慌指数
+    "us10y": (0.5, 7.0),  # 美债 10Y 收益率
 }
 
 
@@ -196,10 +196,13 @@ async def _collect_fx() -> FxData:
     if not fd.valid:
         try:
             import httpx
+
             # USD/CNY from sina
-            r = httpx.get("https://hq.sinajs.cn/list=fx_susdcny",
-                          headers={"Referer": "https://finance.sina.com.cn"},
-                          timeout=10.0)
+            r = httpx.get(
+                "https://hq.sinajs.cn/list=fx_susdcny",
+                headers={"Referer": "https://finance.sina.com.cn"},
+                timeout=10.0,
+            )
             if r.status_code == 200:
                 parts = r.text.split(",")
                 if len(parts) >= 2:
@@ -327,23 +330,23 @@ class MacroCollector:
         snapshot = MacroSnapshot()
         snapshot.timestamp = datetime.now().isoformat()
 
-        for name, result in zip(tasks.keys(), results):
+        for name, result in zip(tasks.keys(), results, strict=False):
             if isinstance(result, Exception):
                 logger.warning(f"[macro] {name} 采集异常: {result}")
             elif result is not None:
                 setattr(snapshot, name, result)
 
-        valid_count = sum([
-            snapshot.gold.valid,
-            snapshot.oil.valid,
-            snapshot.fx.valid,
-            snapshot.bond.valid,
-            snapshot.derivative.valid,
-        ])
-        snapshot.all_valid = valid_count >= 3  # 至少 3/5 维度有效
-        logger.info(
-            f"[macro] 五维数据采集完成: {valid_count}/5 维度有效"
+        valid_count = sum(
+            [
+                snapshot.gold.valid,
+                snapshot.oil.valid,
+                snapshot.fx.valid,
+                snapshot.bond.valid,
+                snapshot.derivative.valid,
+            ]
         )
+        snapshot.all_valid = valid_count >= 3  # 至少 3/5 维度有效
+        logger.info(f"[macro] 五维数据采集完成: {valid_count}/5 维度有效")
         return snapshot
 
 

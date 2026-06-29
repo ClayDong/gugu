@@ -3,13 +3,14 @@
 内存中维护现金、持仓、交易记录。模拟真实交易成本。
 状态持久化到 JSON 文件，重启后自动恢复。
 """
+
 from __future__ import annotations
 
 import json
 from datetime import date
 from typing import Any
 
-from gugu.config import PROJECT_ROOT, settings
+from gugu.config import PROJECT_ROOT, get_config
 from gugu.execution.base import AccountInfo, BaseBroker, Direction, OrderResult
 from gugu.models import Position
 from gugu.utils.log import get_logger
@@ -30,11 +31,11 @@ class PaperBroker(BaseBroker):
         stamp_tax: float | None = None,
         slippage: float | None = None,
     ) -> None:
-        cfg = settings().get("execution", {}).get("paper", {})
-        self._cash = float(initial_capital or cfg.get("initial_capital", 1_000_000))
-        self._commission_rate = float(commission_rate or cfg.get("commission_rate", 0.00025))
-        self._stamp_tax = float(stamp_tax or cfg.get("stamp_tax", 0.001))
-        self._slippage = float(slippage or cfg.get("slippage", 0.002))
+        cfg = get_config().execution.paper
+        self._cash = float(initial_capital or cfg.initial_capital)
+        self._commission_rate = float(commission_rate or cfg.commission_rate)
+        self._stamp_tax = float(stamp_tax or cfg.stamp_tax)
+        self._slippage = float(slippage or cfg.slippage)
         self._positions: dict[str, Position] = {}
         self._trades: list[dict[str, Any]] = []
         self._daily_start_value: float | None = None
@@ -69,17 +70,13 @@ class PaperBroker(BaseBroker):
             commission = fill_price * quantity * self._commission_rate
             total_cost = fill_price * quantity + commission
             if total_cost > self._cash:
-                return OrderResult(
-                    False, symbol, direction, 0, 0, 0, message="资金不足"
-                )
+                return OrderResult(False, symbol, direction, 0, 0, 0, message="资金不足")
 
             self._cash -= total_cost
             pos = self._positions.get(symbol)
             if pos:
                 new_qty = pos.quantity + quantity
-                pos.avg_cost = (
-                    (pos.avg_cost * pos.quantity + fill_price * quantity) / new_qty
-                )
+                pos.avg_cost = (pos.avg_cost * pos.quantity + fill_price * quantity) / new_qty
                 pos.quantity = new_qty
                 # 加仓后同步更新现价，避免止损检查用旧价
                 pos.current_price = cur_price
@@ -103,9 +100,7 @@ class PaperBroker(BaseBroker):
         elif direction == "sell":
             pos = self._positions.get(symbol)
             if not pos or pos.available < quantity:
-                return OrderResult(
-                    False, symbol, direction, 0, 0, 0, message="可卖数量不足（T+1）"
-                )
+                return OrderResult(False, symbol, direction, 0, 0, 0, message="可卖数量不足（T+1）")
 
             fill_price = cur_price * (1 - self._slippage)
             commission = fill_price * quantity * self._commission_rate
@@ -133,9 +128,7 @@ class PaperBroker(BaseBroker):
                 f"佣金 {commission:.2f} 印花税 {stamp_tax:.2f}"
             )
         else:
-            return OrderResult(
-                False, symbol, direction, 0, 0, 0, message=f"未知方向: {direction}"
-            )
+            return OrderResult(False, symbol, direction, 0, 0, 0, message=f"未知方向: {direction}")
 
         self._trades.append(
             {
@@ -179,6 +172,9 @@ class PaperBroker(BaseBroker):
             # 避免同日多次调用把 prev_close 覆盖为盘中价
             if pos.prev_close <= 0 and pos.current_price > 0:
                 pos.prev_close = pos.current_price
+            # P1 修复：追踪持仓以来最低价（用于 NoAverageDownChecker 累计浮亏检查）
+            if pos.lowest_price <= 0 or price < pos.lowest_price:
+                pos.lowest_price = price
             pos.current_price = price
 
     def update_prices(self, prices: dict[str, float]) -> None:
@@ -232,6 +228,7 @@ class PaperBroker(BaseBroker):
                         "prev_close": p.prev_close,
                         "is_st": p.is_st,
                         "is_suspended": p.is_suspended,
+                        "lowest_price": p.lowest_price,
                     }
                     for sym, p in self._positions.items()
                 },
@@ -277,11 +274,10 @@ class PaperBroker(BaseBroker):
                         prev_close=p.get("prev_close", 0.0),
                         is_st=p.get("is_st", False),
                         is_suspended=p.get("is_suspended", False),
+                        lowest_price=p.get("lowest_price", 0.0),
                     )
                 except (KeyError, TypeError, ValueError) as pos_err:
-                    logger.warning(
-                        f"恢复持仓 {sym} 失败，跳过该持仓: {pos_err}；原始数据: {p}"
-                    )
+                    logger.warning(f"恢复持仓 {sym} 失败，跳过该持仓: {pos_err}；原始数据: {p}")
             self._trades = data.get("trades", [])
             self._daily_start_value = data.get("daily_start_value")
             if self._positions:

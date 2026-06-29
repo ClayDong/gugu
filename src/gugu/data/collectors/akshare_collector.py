@@ -3,6 +3,7 @@
 akshare 已封装东方财富/新浪等数据，统一通过 akshare 接口采集。
 失败时由 fallback.py 的新浪/腾讯采集器降级。
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -73,7 +74,9 @@ class AkshareCollector(BaseCollector):
             codes = {self.normalize_symbol(s) for s in symbols}
             df = df[df["代码"].isin(codes)].copy()
         if df.empty:
-            return pd.DataFrame(columns=["symbol", "name", "price", "change_pct", "volume", "amount"])
+            return pd.DataFrame(
+                columns=["symbol", "name", "price", "change_pct", "volume", "amount"]
+            )
         df = df.rename(
             columns={
                 "代码": "symbol",

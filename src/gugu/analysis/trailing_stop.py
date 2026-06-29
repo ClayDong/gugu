@@ -15,13 +15,13 @@
 3. 止损价只能上移，不能下移
 4. 当危险信号出现时，收紧止损至最近浪谷
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from gugu.utils.log import get_logger
@@ -29,13 +29,14 @@ from gugu.utils.log import get_logger
 logger = get_logger()
 
 
-class TrailingStopSignal(str, Enum):
+class TrailingStopSignal(StrEnum):
     """移动止损信号。"""
-    HOLD = "hold"               # 持有，止损未触发
-    ALERT = "alert"             # 警惕，跌破浪谷1次
-    WARNING = "warning"         # 警告，跌破浪谷2次
-    EXIT = "exit"               # 清仓，跌破浪谷3次或触发止损价
-    TIGHTEN = "tighten"         # 收紧止损（出现危险信号时）
+
+    HOLD = "hold"  # 持有，止损未触发
+    ALERT = "alert"  # 警惕，跌破浪谷1次
+    WARNING = "warning"  # 警告，跌破浪谷2次
+    EXIT = "exit"  # 清仓，跌破浪谷3次或触发止损价
+    TIGHTEN = "tighten"  # 收紧止损（出现危险信号时）
 
 
 @dataclass
@@ -44,6 +45,7 @@ class TrailingStopState:
 
     存储在Position.trailing_stop字段中，每日更新。
     """
+
     # 初始止损价（入场时设定）
     initial_stop_price: float = 0.0
     # 当前止损价（随浪谷上移）
@@ -83,11 +85,12 @@ class TrailingStopEngine:
     """
 
     # 默认参数
-    DEFAULT_INITIAL_STOP_PCT = 0.08    # 初始止损8%（固定比例模式）
-    DEFAULT_ATR_MULTIPLIER = 3.0       # ATR 止损倍数（ATR 模式）
-    WAVE_WINDOW = 5                     # 浪谷识别窗口
-    MAX_DRAWDOWN_STOP_PCT = 0.15       # 最大回撤止损15%
-    TIGHTEN_FACTOR = 0.5               # 危险信号收紧因子
+    DEFAULT_INITIAL_STOP_PCT = 0.08  # 初始止损8%（固定比例模式）
+    DEFAULT_ATR_MULTIPLIER = 3.0  # ATR 止损倍数（ATR 模式）
+    WAVE_WINDOW = 5  # 浪谷识别窗口（基准值，实际由 ATR 自适应）
+    MAX_DRAWDOWN_STOP_PCT = 0.15  # 最大回撤止损15%
+    TIGHTEN_FACTOR = 0.5  # 危险信号收紧因子
+    MIN_VALLEY_PCT = 0.005  # P2 修复：浪谷之间最小价格差异比例（避免接近的重复浪谷）
 
     def init_stop(
         self,
@@ -142,7 +145,7 @@ class TrailingStopEngine:
             pct = initial_stop_pct or self.DEFAULT_INITIAL_STOP_PCT
             stop_price = round(entry_price * (1 - pct), 2)
 
-        if 'pct' not in dir() or pct is None:
+        if "pct" not in dir() or pct is None:
             pct = (entry_price - stop_price) / entry_price
 
         state = TrailingStopState(
@@ -184,7 +187,7 @@ class TrailingStopEngine:
             return state, TrailingStopSignal.HOLD
 
         current_price = float(df.iloc[-1]["close"])
-        high_series = df["high"].astype(float) if "high" in df.columns else df["close"].astype(float)
+        df["high"].astype(float) if "high" in df.columns else df["close"].astype(float)
         low_series = df["low"].astype(float) if "low" in df.columns else df["close"].astype(float)
 
         # 1. 更新最高价
@@ -213,7 +216,8 @@ class TrailingStopEngine:
         # 4. 危险信号收紧止损
         if danger_signals and not state.tightened:
             tighten_price = round(
-                state.current_stop_price + (current_price - state.current_stop_price) * self.TIGHTEN_FACTOR,
+                state.current_stop_price
+                + (current_price - state.current_stop_price) * self.TIGHTEN_FACTOR,
                 2,
             )
             if tighten_price > state.current_stop_price:
@@ -226,9 +230,7 @@ class TrailingStopEngine:
                 )
 
         # 5. 最大回撤止损兜底
-        max_dd_stop = round(
-            state.highest_price * (1 - self.MAX_DRAWDOWN_STOP_PCT), 2
-        )
+        max_dd_stop = round(state.highest_price * (1 - self.MAX_DRAWDOWN_STOP_PCT), 2)
         if max_dd_stop > state.current_stop_price and current_price > max_dd_stop:
             state.current_stop_price = max_dd_stop
 
@@ -241,24 +243,55 @@ class TrailingStopEngine:
 
         return state, signal
 
-    @staticmethod
-    def _find_wave_valleys(low_series: pd.Series, window: int) -> list[float]:
+    def _adaptive_wave_window(self, df: pd.DataFrame) -> int:
+        """根据 ATR 波动率自适应计算浪谷窗口。
+
+        高波动股票（ATR/price > 3%%）：用 8 日窗口（过滤更多噪音）
+        中波动股票（ATR/price 1-3%%）：用 5 日窗口（默认）
+        低波动股票（ATR/price < 1%%）：用 3 日窗口（捕捉更多细节）
+        """
+        try:
+            from gugu.analysis.technical import atr as calc_atr
+
+            atr_value = float(calc_atr(df, period=14).iloc[-1])
+            price = float(df["close"].iloc[-1])
+            if price > 0:
+                atr_ratio = atr_value / price
+                if atr_ratio > 0.03:
+                    return 8
+                elif atr_ratio < 0.01:
+                    return 3
+        except Exception:
+            pass
+        return self.WAVE_WINDOW
+
+    @classmethod
+    def _find_wave_valleys(cls, low_series: pd.Series, window: int) -> list[float]:
         """识别浪谷（局部低点）。
 
         在最近30根K线中寻找局部低点。
         """
         lookback = min(30, len(low_series))
         recent = low_series.iloc[-lookback:]
-        valleys: list[float] = []
+        raw_valleys: list[float] = []
 
         for i in range(window, len(recent) - window):
             segment = recent.iloc[i - window : i + window + 1]
             if recent.iloc[i] == segment.min():
-                valleys.append(float(recent.iloc[i]))
+                raw_valleys.append(float(recent.iloc[i]))
 
         # 末尾低点
         if len(recent) > 0:
-            valleys.append(float(recent.iloc[-1]))
+            raw_valleys.append(float(recent.iloc[-1]))
+
+        # P2 修复：过滤过于接近的浪谷（差异 < MIN_VALLEY_PCT 的合并）
+        # 防止连续上涨行情中接近的伪浪谷导致止损价被频繁上移至市价
+        if not raw_valleys:
+            return []
+        valleys = [raw_valleys[0]]
+        for v in raw_valleys[1:]:
+            if abs(v - valleys[-1]) / max(valleys[-1], 1) > cls.MIN_VALLEY_PCT:
+                valleys.append(v)
 
         return valleys
 
@@ -291,8 +324,7 @@ class TrailingStopEngine:
             # 跌破最近浪谷
             state.valley_break_count += 1
             logger.warning(
-                f"[trailing-stop] 跌破浪谷 {latest_valley:.2f}，"
-                f"第 {state.valley_break_count} 次"
+                f"[trailing-stop] 跌破浪谷 {latest_valley:.2f}，第 {state.valley_break_count} 次"
             )
 
             if state.valley_break_count >= 3:

@@ -6,6 +6,7 @@
 - 预构建校验器：STOCK_HISTORY_VALIDATOR / SECTOR_FLOW_VALIDATOR / STOCK_FLOW_VALIDATOR
 - 兼容原 validate_stock_history / validate_sector_flow / validate_stock_flow 函数
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -134,7 +135,7 @@ class PlausiblePriceRule(ValidationRule):
         prices = df[self._price_column].values.astype(float)
         latest = prices[-1]
         # 历史 MA（使用前 ma_window 行，避免最新价拉高 MA 导致误判）
-        ma = float(prices[-self._ma_window:].mean())
+        ma = float(prices[-self._ma_window :].mean())
 
         if ma <= 0 or latest <= 0:
             return True, "zero or negative price/MA, skip plausibility check"
@@ -150,16 +151,30 @@ class PlausiblePriceRule(ValidationRule):
             return False, pd.DataFrame(), msg
 
         # Check 2: 全区间价格变化过小（如所有价格完全相同）→ 数据源可能被封锁
+        # P3 修复：增加成交量变化检查，避免低波动蓝筹股被误判为封锁
+        # 只有当成交量也几乎无变化（<1% 波动）时才判定为数据源封锁
         p_min, p_max = float(prices.min()), float(prices.max())
         if p_min > 0 and p_max > 0:
             range_ratio = p_max / p_min
             if range_ratio < 1.005:  # 60 天内波动 < 0.5%，极不自然
-                msg = (
-                    f"{symbol} 全区间价格几无波动 (min={p_min:.2f}, max={p_max:.2f}, "
-                    f"ratio={range_ratio:.4f})，怀疑数据源被封锁返回静态数据，丢弃"
-                )
-                logger.warning(msg)
-                return False, pd.DataFrame(), msg
+                # 检查成交量是否也几无变化
+                vol_col = "volume"
+                if vol_col in df.columns and len(df) > self._ma_window:
+                    vol_values = df[vol_col].values[-self._ma_window :].astype(float)
+                    v_min, v_max = vol_values.min(), vol_values.max()
+                    if v_min > 0 and v_max / v_min < 1.01:
+                        msg = (
+                            f"{symbol} 全区间价格成交量均无波动 (price_ratio={range_ratio:.4f}, "
+                            f"vol_ratio={v_max / v_min:.4f})，怀疑数据源被封锁返回静态数据，丢弃"
+                        )
+                        logger.warning(msg)
+                        return False, pd.DataFrame(), msg
+                    else:
+                        # 价格稳定但成交量有变化 = 低波动蓝筹，合理，放行
+                        logger.debug(
+                            f"{symbol} 价格稳定 ({range_ratio:.4f}) 但成交量有变化 "
+                            f"({v_max / v_min:.2f})，判断为低波动股，放行"
+                        )
 
         return True, "price is plausible"
 
@@ -314,13 +329,17 @@ class DataValidator:
 
 STOCK_HISTORY_VALIDATOR: DataValidator = (
     DataValidator()
-    .add_rule(RequiredColumnsRule(
-        required=["date", "open", "high", "low", "close", "volume"],
-        context="stock_history",
-    ))
-    .add_rule(NonNegativeValuesRule(
-        columns=["open", "high", "low", "close", "volume"],
-    ))
+    .add_rule(
+        RequiredColumnsRule(
+            required=["date", "open", "high", "low", "close", "volume"],
+            context="stock_history",
+        )
+    )
+    .add_rule(
+        NonNegativeValuesRule(
+            columns=["open", "high", "low", "close", "volume"],
+        )
+    )
     .add_rule(ZeroPriceRule(price_column="close"))
     .add_rule(PlausiblePriceRule(price_column="close", ma_window=20, max_deviation=10.0))
     .add_rule(HighLowConsistencyRule())
@@ -330,19 +349,23 @@ STOCK_HISTORY_VALIDATOR: DataValidator = (
 
 SECTOR_FLOW_VALIDATOR: DataValidator = (
     DataValidator()
-    .add_rule(RequiredColumnsRule(
-        required=["sector", "main_net", "main_pct"],
-        context="sector_flow",
-    ))
+    .add_rule(
+        RequiredColumnsRule(
+            required=["sector", "main_net", "main_pct"],
+            context="sector_flow",
+        )
+    )
     .add_rule(DeduplicateByColumnRule(column="sector"))
 )
 
 STOCK_FLOW_VALIDATOR: DataValidator = (
     DataValidator()
-    .add_rule(RequiredColumnsRule(
-        required=["main_net", "main_pct"],
-        context="stock_flow",
-    ))
+    .add_rule(
+        RequiredColumnsRule(
+            required=["main_net", "main_pct"],
+            context="stock_flow",
+        )
+    )
     .add_rule(SortByDateRule())
 )
 

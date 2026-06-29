@@ -13,6 +13,7 @@
 - confidence: 判断置信度
 - evidence: 各周期判断详情
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -28,20 +29,21 @@ logger = get_logger()
 
 # 仓位映射表：根据市场状态决定总仓位上限
 POSITION_LIMIT_MAP = {
-    "bull": 0.80,      # 牛市：总仓位80%
-    "rally": 0.60,     # 反弹：总仓位60%
+    "bull": 0.80,  # 牛市：总仓位80%
+    "rally": 0.60,  # 反弹：总仓位60%
     "sideways": 0.40,  # 震荡：总仓位40%
-    "bear": 0.20,      # 熊市：总仓位20%
-    "crash": 0.00,     # 暴跌：空仓
+    "bear": 0.20,  # 熊市：总仓位20%
+    "crash": 0.00,  # 暴跌：空仓
 }
 
 
 @dataclass
 class RegimeEvidence:
     """单周期判断证据"""
-    period: str                # daily / weekly / hourly
-    signal: str                # bullish / bearish / neutral
-    strength: float            # 信号强度 0-1
+
+    period: str  # daily / weekly / hourly
+    signal: str  # bullish / bearish / neutral
+    strength: float  # 信号强度 0-1
     details: dict[str, Any] = field(default_factory=dict)
 
 
@@ -67,6 +69,7 @@ class MultiPeriodRegimeDetector:
     async def detect(self) -> dict[str, Any]:
         """检测当前市场状态并返回总仓位建议。"""
         from datetime import date
+
         today = str(date.today())
         if self._cache_date == today:
             return self._cache
@@ -78,27 +81,65 @@ class MultiPeriodRegimeDetector:
                 return self._fallback()
 
             # 获取沪深300周线（通过日线resample）
+            # P0 修复：closed="left", label="left" 确保不包含当前不完整周的数据
             daily_indexed = daily.set_index("date")
-            weekly = daily_indexed.resample("W").agg({
-                "open": "first", "high": "max", "low": "min",
-                "close": "last", "volume": "sum", "amount": "sum"
-            }).dropna()
+            weekly = (
+                daily_indexed.resample("W", closed="left", label="left")
+                .agg(
+                    {
+                        "open": "first",
+                        "high": "max",
+                        "low": "min",
+                        "close": "last",
+                        "volume": "sum",
+                        "amount": "sum",
+                    }
+                )
+                .dropna()
+            )
 
             # 各周期分析
-            daily_evidence = self._analyze_period(daily, "daily",
-                [("ma20", 20), ("ma60", 60), ("ma120", 120)])
-            weekly_evidence = self._analyze_period(weekly.reset_index(), "weekly",
-                [("ma5", 5), ("ma10", 10)])
+            daily_evidence = self._analyze_period(
+                daily, "daily", [("ma20", 20), ("ma60", 60), ("ma120", 120)]
+            )
+            weekly_evidence = self._analyze_period(
+                weekly.reset_index(), "weekly", [("ma5", 5), ("ma10", 10)]
+            )
             # Bug 修复：原代码用 daily.tail(30) 冒充小时线，语义错误。
             # 改为用日线短期均线(MA5/MA10)作为短期动能指标，正确标注为 short_term。
-            short_term_evidence = self._analyze_period(daily.tail(30), "short_term",
-                [("ma5", 5), ("ma10", 10)])
+            short_term_evidence = self._analyze_period(
+                daily.tail(30), "short_term", [("ma5", 5), ("ma10", 10)]
+            )
 
             # 综合评分
             score = (
-                weekly_evidence.strength * 0.40 * (1 if weekly_evidence.signal == "bullish" else -1 if weekly_evidence.signal == "bearish" else 0) +
-                daily_evidence.strength * 0.40 * (1 if daily_evidence.signal == "bullish" else -1 if daily_evidence.signal == "bearish" else 0) +
-                short_term_evidence.strength * 0.20 * (1 if short_term_evidence.signal == "bullish" else -1 if short_term_evidence.signal == "bearish" else 0)
+                weekly_evidence.strength
+                * 0.40
+                * (
+                    1
+                    if weekly_evidence.signal == "bullish"
+                    else -1
+                    if weekly_evidence.signal == "bearish"
+                    else 0
+                )
+                + daily_evidence.strength
+                * 0.40
+                * (
+                    1
+                    if daily_evidence.signal == "bullish"
+                    else -1
+                    if daily_evidence.signal == "bearish"
+                    else 0
+                )
+                + short_term_evidence.strength
+                * 0.20
+                * (
+                    1
+                    if short_term_evidence.signal == "bullish"
+                    else -1
+                    if short_term_evidence.signal == "bearish"
+                    else 0
+                )
             )
 
             # 波动率判断（用于识别crash/rally）
@@ -132,11 +173,25 @@ class MultiPeriodRegimeDetector:
                 "volatility": round(volatility, 3),
                 "recent_return": round(recent_return, 3),
                 "evidence": {
-                    "daily": {"signal": daily_evidence.signal, "strength": daily_evidence.strength, "details": daily_evidence.details},
-                    "weekly": {"signal": weekly_evidence.signal, "strength": weekly_evidence.strength, "details": weekly_evidence.details},
-                    "short_term": {"signal": short_term_evidence.signal, "strength": short_term_evidence.strength, "details": short_term_evidence.details},
+                    "daily": {
+                        "signal": daily_evidence.signal,
+                        "strength": daily_evidence.strength,
+                        "details": daily_evidence.details,
+                    },
+                    "weekly": {
+                        "signal": weekly_evidence.signal,
+                        "strength": weekly_evidence.strength,
+                        "details": weekly_evidence.details,
+                    },
+                    "short_term": {
+                        "signal": short_term_evidence.signal,
+                        "strength": short_term_evidence.strength,
+                        "details": short_term_evidence.details,
+                    },
                 },
-                "reason": self._build_reason(regime, score, daily_evidence, weekly_evidence, short_term_evidence),
+                "reason": self._build_reason(
+                    regime, score, daily_evidence, weekly_evidence, short_term_evidence
+                ),
             }
 
             self._cache = result
@@ -147,8 +202,9 @@ class MultiPeriodRegimeDetector:
             logger.error(f"多周期择时检测失败: {e}")
             return self._fallback()
 
-    def _analyze_period(self, df: pd.DataFrame, period: str,
-                        ma_configs: list[tuple[str, int]]) -> RegimeEvidence:
+    def _analyze_period(
+        self, df: pd.DataFrame, period: str, ma_configs: list[tuple[str, int]]
+    ) -> RegimeEvidence:
         """分析单个周期的市场状态。"""
         close = df["close"].values
         if len(close) < max(m[1] for m in ma_configs):
@@ -162,9 +218,9 @@ class MultiPeriodRegimeDetector:
 
         # 均线排列判断
         ma_values = list(mas.values())
-        if all(ma_values[i] > ma_values[i+1] for i in range(len(ma_values)-1)):
+        if all(ma_values[i] > ma_values[i + 1] for i in range(len(ma_values) - 1)):
             alignment = "bullish"  # 多头排列
-        elif all(ma_values[i] < ma_values[i+1] for i in range(len(ma_values)-1)):
+        elif all(ma_values[i] < ma_values[i + 1] for i in range(len(ma_values) - 1)):
             alignment = "bearish"  # 空头排列
         else:
             alignment = "neutral"  # 交织
@@ -172,7 +228,7 @@ class MultiPeriodRegimeDetector:
         # 趋势强度（价格相对MA的偏离度）
         if mas:
             price = close[-1]
-            ma_ref = list(mas.values())[0]  # 最短周期均线
+            ma_ref = next(iter(mas.values()))  # 最短周期均线
             if ma_ref > 0:
                 deviation = abs(price - ma_ref) / ma_ref
                 strength = min(deviation * 5, 1.0)  # 归一化到0-1
@@ -183,7 +239,9 @@ class MultiPeriodRegimeDetector:
 
         # 成交量验证
         if "volume" in df.columns:
-            vol_ma20 = df["volume"].rolling(20).mean().iloc[-1] if len(df) >= 20 else df["volume"].mean()
+            vol_ma20 = (
+                df["volume"].rolling(20).mean().iloc[-1] if len(df) >= 20 else df["volume"].mean()
+            )
             vol_today = df["volume"].iloc[-1]
             vol_confirm = vol_today > vol_ma20 * 1.2  # 放量20%以上
         else:
@@ -196,22 +254,32 @@ class MultiPeriodRegimeDetector:
             "vol_confirm": vol_confirm,
         }
 
-        return RegimeEvidence(
-            period=period, signal=alignment, strength=strength, details=details
-        )
+        return RegimeEvidence(period=period, signal=alignment, strength=strength, details=details)
 
-    def _build_reason(self, regime: str, score: float,
-                      daily: RegimeEvidence, weekly: RegimeEvidence,
-                      short_term: RegimeEvidence) -> str:
+    def _build_reason(
+        self,
+        regime: str,
+        score: float,
+        daily: RegimeEvidence,
+        weekly: RegimeEvidence,
+        short_term: RegimeEvidence,
+    ) -> str:
         """构建可读的判断理由。"""
-        regime_cn = {"bull": "牛市", "bear": "熊市", "sideways": "震荡",
-                     "crash": "暴跌", "rally": "反弹"}
+        regime_cn = {
+            "bull": "牛市",
+            "bear": "熊市",
+            "sideways": "震荡",
+            "crash": "暴跌",
+            "rally": "反弹",
+        }
         period_cn = {"daily": "日线", "weekly": "周线", "short_term": "短期"}
         signal_cn = {"bullish": "多头", "bearish": "空头", "neutral": "中性"}
 
         parts = [f"综合评分{score:.2f}，判定为{regime_cn.get(regime, regime)}"]
         for ev in [weekly, daily, short_term]:
-            parts.append(f"{period_cn.get(ev.period, ev.period)}{signal_cn.get(ev.signal, ev.signal)}(强度{ev.strength:.2f})")
+            parts.append(
+                f"{period_cn.get(ev.period, ev.period)}{signal_cn.get(ev.signal, ev.signal)}(强度{ev.strength:.2f})"
+            )
         return "；".join(parts)
 
     def _fallback(self) -> dict[str, Any]:

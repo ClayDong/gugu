@@ -52,9 +52,8 @@ class TestFundamentalFilter:
 
     @pytest.fixture(autouse=True)
     def _setup(self) -> None:
-        """每个用例执行前清理缓存确保隔离。"""
-        from gugu.filters.fundamental import _cache
-        _cache.clear()
+        """每个用例执行前清理缓存确保隔离（P1 修复：缓存已改为实例级）。"""
+        pass
 
     @patch("gugu.filters.fundamental.ak.stock_zh_a_spot_em")
     @patch("gugu.filters.fundamental.ak.stock_individual_info_em")
@@ -251,7 +250,7 @@ class TestMoneyFlowFilter:
         self,
         mock_dm: MagicMock,
     ) -> None:
-        """DataFrame 为空 → 宽松降级通过。"""
+        """DataFrame 为空 → 保守拒绝（避免无数据时盲买）。"""
         dm_instance = AsyncMock()
         dm_instance.fetch_stock_flow = AsyncMock()
         dm_instance.fetch_stock_flow.return_value = pd.DataFrame()
@@ -260,11 +259,11 @@ class TestMoneyFlowFilter:
         mf = MoneyFlowFilter()
         result = await mf.check("000001")
 
-        # 空数据时宽松降级通过
-        assert result["pass"] is True
+        # 空数据时保守拒绝
+        assert result["pass"] is False
         assert result["main_net_today"] == 0.0
         assert result["main_pct_today"] == 0.0
-        assert any("降级" in r or "失败" in r for r in result["reasons"])
+        assert any("拒绝" in r or "失败" in r for r in result["reasons"])
 
     @patch("gugu.filters.money_flow.data_manager")
     async def test_zero_flow(

@@ -11,12 +11,12 @@
 - E组 宏观经济: Adam Smith, Macro, Micro, Dashi Xiong, Common Prosperity
 - F组 投资哲学: Soros, Taleb, Malkiel, Baruch, Zeng Shi Qiang, Investing Habits
 """
+
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-from gugu.config import PROJECT_ROOT, settings
+from gugu.config import PROJECT_ROOT
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -162,7 +162,7 @@ class BookPerspectiveRouter:
         elif direction == "sell" and "jesse-livermore-perspective" not in selected:
             selected.append("jesse-livermore-perspective")
 
-        return selected[:MAX_PERSPECTIVES_PER_SCENARIO + 1]
+        return selected[: MAX_PERSPECTIVES_PER_SCENARIO + 1]
 
     def build_context(
         self,
@@ -250,7 +250,9 @@ class BookPerspectiveRouter:
                         result_lines.append(line)
 
             elif current_section == "nevers":
-                if line.strip().startswith("- ") or line.strip().startswith(("1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9.")):
+                if line.strip().startswith("- ") or line.strip().startswith(
+                    ("1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9.")
+                ):
                     result_lines.append(line)
 
             elif current_section == "habits":

@@ -67,8 +67,9 @@ def test_route_too_few_rows() -> None:
 
 
 def test_route_any_buy(df: pd.DataFrame) -> None:
-    with mock.patch("gugu.engine.signal_router.settings") as mock_settings:
-        mock_settings.return_value = {"strategy": {"signal_fusion": "any", "min_confidence": 0.5}}
+    with mock.patch("gugu.engine.signal_router.get_config") as mock_cfg:
+        mock_cfg.return_value.strategy.signal_fusion = "any"
+        mock_cfg.return_value.strategy.min_confidence = 0.5
         router = SignalRouter([AlwaysBuy()])
         sig = router.route(df, "600519", name="茅台")
         assert sig is not None
@@ -79,10 +80,9 @@ def test_route_any_buy(df: pd.DataFrame) -> None:
 
 
 def test_route_unanimous_buy(df: pd.DataFrame) -> None:
-    with mock.patch("gugu.engine.signal_router.settings") as mock_settings:
-        mock_settings.return_value = {
-            "strategy": {"signal_fusion": "unanimous", "min_confidence": 0.5}
-        }
+    with mock.patch("gugu.engine.signal_router.get_config") as mock_cfg:
+        mock_cfg.return_value.strategy.signal_fusion = "unanimous"
+        mock_cfg.return_value.strategy.min_confidence = 0.5
         router = SignalRouter([AlwaysBuy(), AlwaysBuy()])
         sig = router.route(df, "600519")
         assert sig is not None
@@ -90,19 +90,17 @@ def test_route_unanimous_buy(df: pd.DataFrame) -> None:
 
 
 def test_route_unanimous_mixed_no_signal(df: pd.DataFrame) -> None:
-    with mock.patch("gugu.engine.signal_router.settings") as mock_settings:
-        mock_settings.return_value = {
-            "strategy": {"signal_fusion": "unanimous", "min_confidence": 0.5}
-        }
+    with mock.patch("gugu.engine.signal_router.get_config") as mock_cfg:
+        mock_cfg.return_value.strategy.signal_fusion = "unanimous"
+        mock_cfg.return_value.strategy.min_confidence = 0.5
         router = SignalRouter([AlwaysBuy(), AlwaysSell()])
         assert router.route(df, "600519") is None
 
 
 def test_route_majority_buy(df: pd.DataFrame) -> None:
-    with mock.patch("gugu.engine.signal_router.settings") as mock_settings:
-        mock_settings.return_value = {
-            "strategy": {"signal_fusion": "majority", "min_confidence": 0.5}
-        }
+    with mock.patch("gugu.engine.signal_router.get_config") as mock_cfg:
+        mock_cfg.return_value.strategy.signal_fusion = "majority"
+        mock_cfg.return_value.strategy.min_confidence = 0.5
         router = SignalRouter([AlwaysBuy(), AlwaysBuy(), AlwaysSell()])
         sig = router.route(df, "600519")
         assert sig is not None
@@ -110,26 +108,25 @@ def test_route_majority_buy(df: pd.DataFrame) -> None:
 
 
 def test_route_majority_no_majority(df: pd.DataFrame) -> None:
-    with mock.patch("gugu.engine.signal_router.settings") as mock_settings:
-        mock_settings.return_value = {
-            "strategy": {"signal_fusion": "majority", "min_confidence": 0.5}
-        }
+    with mock.patch("gugu.engine.signal_router.get_config") as mock_cfg:
+        mock_cfg.return_value.strategy.signal_fusion = "majority"
+        mock_cfg.return_value.strategy.min_confidence = 0.5
         router = SignalRouter([AlwaysBuy(), AlwaysSell()])
         assert router.route(df, "600519") is None
 
 
 def test_route_low_confidence_filtered(df: pd.DataFrame) -> None:
-    with mock.patch("gugu.engine.signal_router.settings") as mock_settings:
-        mock_settings.return_value = {
-            "strategy": {"signal_fusion": "any", "min_confidence": 0.9}
-        }
+    with mock.patch("gugu.engine.signal_router.get_config") as mock_cfg:
+        mock_cfg.return_value.strategy.signal_fusion = "any"
+        mock_cfg.return_value.strategy.min_confidence = 0.9
         router = SignalRouter([AlwaysBuy()])
         assert router.route(df, "600519") is None
 
 
 def test_route_ignores_hold_strategy(df: pd.DataFrame) -> None:
-    with mock.patch("gugu.engine.signal_router.settings") as mock_settings:
-        mock_settings.return_value = {"strategy": {"signal_fusion": "any", "min_confidence": 0.5}}
+    with mock.patch("gugu.engine.signal_router.get_config") as mock_cfg:
+        mock_cfg.return_value.strategy.signal_fusion = "any"
+        mock_cfg.return_value.strategy.min_confidence = 0.5
         router = SignalRouter([AlwaysHold(), AlwaysBuy()])
         sig = router.route(df, "600519")
         assert sig is not None

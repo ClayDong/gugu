@@ -4,6 +4,7 @@
 统一输入：DataFrame[date, open, high, low, close, volume, amount]
 统一输出：在 df 上加 signal 列（1=买入, -1=卖出, 0=持有）和 confidence 列（0-1）。
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

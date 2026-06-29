@@ -8,11 +8,12 @@
 
 这是项目"验证"环节的关键：信号发出后，到底赚没赚钱？
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -160,9 +161,7 @@ class SignalTracker:
             seen[key] = r  # 后出现的覆盖前面的
         return list(seen.values())
 
-    async def _track_signals(
-        self, signals: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    async def _track_signals(self, signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """追踪每条买入信号的实际收益。
 
         对每条信号拉取 K 线，计算持有 1/3/5/10 日后的收益。
@@ -188,7 +187,7 @@ class SignalTracker:
         """追踪单条信号的收益。"""
         symbol = sig.get("symbol", "")
         ts = sig.get("timestamp", "")
-        signal_price = sig.get("price", 0) or 0
+        sig.get("price", 0) or 0
 
         try:
             signal_date = pd.to_datetime(ts)
@@ -232,9 +231,7 @@ class SignalTracker:
             logger.debug(f"追踪 {symbol} 失败: {e}")
             return {**sig, "error": str(e)}
 
-    def _stats_by_strategy(
-        self, tracked: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def _stats_by_strategy(self, tracked: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """按策略分组统计绩效。"""
         strategy_stats: dict[str, list[float]] = {}
 
@@ -256,14 +253,16 @@ class SignalTracker:
             if not returns:
                 continue
             wins = [r for r in returns if r > 0]
-            result.append({
-                "strategy": s,
-                "count": len(returns),
-                "win_rate": round(len(wins) / len(returns), 4),
-                "avg_return": round(sum(returns) / len(returns), 4),
-                "best_return": round(max(returns), 4),
-                "worst_return": round(min(returns), 4),
-            })
+            result.append(
+                {
+                    "strategy": s,
+                    "count": len(returns),
+                    "win_rate": round(len(wins) / len(returns), 4),
+                    "avg_return": round(sum(returns) / len(returns), 4),
+                    "best_return": round(max(returns), 4),
+                    "worst_return": round(min(returns), 4),
+                }
+            )
 
         result.sort(key=lambda x: x["avg_return"], reverse=True)
         return result

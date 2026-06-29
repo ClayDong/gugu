@@ -11,12 +11,11 @@ from __future__ import annotations
 
 import math
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 import akshare as ak
 import pandas as pd
 
-from gugu.config import settings
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -55,7 +54,7 @@ def _date_str() -> str:
 # ── 数据采集 ──────────────────────────────────────────────────
 
 
-def collect_market_flow() -> Optional[dict[str, Any]]:
+def collect_market_flow() -> dict[str, Any] | None:
     """采集大盘资金流 + 北向资金。"""
     result: dict[str, Any] = {}
 
@@ -103,7 +102,7 @@ def collect_market_flow() -> Optional[dict[str, Any]]:
     return result if result else None
 
 
-def collect_sector_flow() -> Optional[list[dict[str, Any]]]:
+def collect_sector_flow() -> list[dict[str, Any]] | None:
     """采集行业资金流排名（今日）。"""
     try:
         df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流")
@@ -124,7 +123,7 @@ def collect_sector_flow() -> Optional[list[dict[str, Any]]]:
     return None
 
 
-def collect_concept_flow() -> Optional[list[dict[str, Any]]]:
+def collect_concept_flow() -> list[dict[str, Any]] | None:
     """采集概念资金流排名（今日）。"""
     try:
         df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="概念资金流")
@@ -145,7 +144,7 @@ def collect_concept_flow() -> Optional[list[dict[str, Any]]]:
     return None
 
 
-def collect_stock_flow() -> Optional[list[dict[str, Any]]]:
+def collect_stock_flow() -> list[dict[str, Any]] | None:
     """采集个股资金流排行（今日），用于提取强流入个股。"""
     try:
         df = ak.stock_individual_fund_flow_rank(indicator="今日")
@@ -217,13 +216,11 @@ def analyze_sectors(sector_data: list[dict[str, Any]], top_n: int = 5) -> dict[s
 
     # 轮动强度
     top5_inflow = sum(
-        _safe_float(x.get("主力净流入-净额", x.get("f62", 0)))
-        for x in sorted_data[:5]
+        _safe_float(x.get("主力净流入-净额", x.get("f62", 0))) for x in sorted_data[:5]
     )
-    bottom5_outflow = abs(sum(
-        _safe_float(x.get("主力净流入-净额", x.get("f62", 0)))
-        for x in sorted_desc[:5]
-    ))
+    bottom5_outflow = abs(
+        sum(_safe_float(x.get("主力净流入-净额", x.get("f62", 0))) for x in sorted_desc[:5])
+    )
     if bottom5_outflow > 0.01:
         result["rotation_score"] = round(top5_inflow / bottom5_outflow, 2)
     elif top5_inflow > 0:
@@ -236,19 +233,23 @@ def analyze_sectors(sector_data: list[dict[str, Any]], top_n: int = 5) -> dict[s
         pct = _safe_float(x.get("涨跌幅", x.get("f3", 0)))
         name = str(x.get("行业名称", x.get("板块名称", "")))
         if main_in > 1 and pct < -1:
-            result["divergence"].append({
-                "name": name,
-                "type": "底背离",
-                "detail": f"主力+{main_in:.1f}亿 但跌{pct:.1f}%",
-                "action": "资金流入但下跌，可能是吸筹",
-            })
+            result["divergence"].append(
+                {
+                    "name": name,
+                    "type": "底背离",
+                    "detail": f"主力+{main_in:.1f}亿 但跌{pct:.1f}%",
+                    "action": "资金流入但下跌，可能是吸筹",
+                }
+            )
         elif main_in < -1 and pct > 1:
-            result["divergence"].append({
-                "name": name,
-                "type": "顶背离",
-                "detail": f"主力{main_in:.1f}亿 但涨{pct:.1f}%",
-                "action": "资金流出但上涨，警惕出货",
-            })
+            result["divergence"].append(
+                {
+                    "name": name,
+                    "type": "顶背离",
+                    "detail": f"主力{main_in:.1f}亿 但涨{pct:.1f}%",
+                    "action": "资金流出但上涨，警惕出货",
+                }
+            )
 
     return result
 
@@ -281,20 +282,22 @@ def analyze_strong_stocks(stock_data: list[dict[str, Any]], top_n: int = 5) -> l
         main_ratio = _safe_float(x.get("主力净流入-净占比", x.get("f184", 0)))
         main_in = _safe_float(x.get("主力净流入-净额", x.get("f62", 0)))
         if main_ratio > 5.0:
-            strong.append({
-                "code": str(x.get("代码", x.get("f12", ""))),
-                "name": str(x.get("名称", x.get("f14", ""))),
-                "main_ratio": main_ratio,
-                "main_inflow": main_in,
-                "price_change": _safe_float(x.get("涨跌幅", x.get("f3", 0))),
-            })
+            strong.append(
+                {
+                    "code": str(x.get("代码", x.get("f12", ""))),
+                    "name": str(x.get("名称", x.get("f14", ""))),
+                    "main_ratio": main_ratio,
+                    "main_inflow": main_in,
+                    "price_change": _safe_float(x.get("涨跌幅", x.get("f3", 0))),
+                }
+            )
     strong.sort(key=lambda s: s["main_ratio"], reverse=True)
     return strong[:top_n]
 
 
 def analyze_market_overview(
-    market_data: Optional[dict[str, Any]],
-    north_data: Optional[dict[str, Any]],
+    market_data: dict[str, Any] | None,
+    north_data: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """市场全局分析：主力vs散户博弈、北向资金。"""
     result: dict[str, Any] = {
@@ -343,12 +346,12 @@ def _save_to_cache(data: dict[str, Any]) -> None:
         logger.warning(f"资金流数据缓存写入失败: {e}")
 
 
-def _load_from_cache() -> Optional[dict[str, Any]]:
+def _load_from_cache() -> dict[str, Any] | None:
     """从本地缓存加载最近一次成功的资金流数据。"""
     if not _FLOW_CACHE_FILE.exists():
         return None
     try:
-        with open(_FLOW_CACHE_FILE, "r", encoding="utf-8") as f:
+        with open(_FLOW_CACHE_FILE, encoding="utf-8") as f:
             data = _json.load(f)
         logger.info(f"资金流数据从缓存加载: {_FLOW_CACHE_FILE}")
         return data
@@ -402,9 +405,11 @@ async def collect_all() -> dict[str, Any]:
         "timestamp": _now_str(),
     }
 
-    logger.info(f"资金流分析完成: 行业{len(sector_data or [])}个, "
-                f"背离{len(sector_analysis.get('divergence', []))}个, "
-                f"强流入{len(strong_stocks)}只")
+    logger.info(
+        f"资金流分析完成: 行业{len(sector_data or [])}个, "
+        f"背离{len(sector_analysis.get('divergence', []))}个, "
+        f"强流入{len(strong_stocks)}只"
+    )
 
     # 如果采集到有效数据（至少有一个领域有数据），持久化到本地
     if market_data or sector_data or concept_data or stock_data:
@@ -464,7 +469,7 @@ def _rotation_label(score: float) -> str:
 
 def build_morning_card(data: dict[str, Any]) -> dict[str, Any]:
     """构建 08:00 盘前 — 昨日(T-1)资金流复盘卡片。"""
-    from gugu.notifier.formatter import _card  # noqa: PLC0415
+    from gugu.notifier.formatter import _card
 
     market = data.get("market", {})
     north = data.get("north_bound", {})
@@ -541,9 +546,7 @@ def build_morning_card(data: dict[str, Any]) -> dict[str, Any]:
         lines = ["⚠️ **背离预警**"]
         for d in divergences:
             icon = "🔻" if "底" in d.get("type", "") else "🔺"
-            lines.append(
-                f"{icon} {d['name']}: {d['detail']}"
-            )
+            lines.append(f"{icon} {d['name']}: {d['detail']}")
         sections.append("\n".join(lines))
 
     # ── 强流入个股 ──
@@ -556,8 +559,7 @@ def build_morning_card(data: dict[str, Any]) -> dict[str, Any]:
             inflow_val = s.get("main_inflow", 0)
             pct = s.get("price_change", 0)
             lines.append(
-                f"{i}. {name}({code}) 主力+{ratio:.1f}% "
-                f"{_fmt_flow(inflow_val)} ({_fmt(pct, '%')})"
+                f"{i}. {name}({code}) 主力+{ratio:.1f}% {_fmt_flow(inflow_val)} ({_fmt(pct, '%')})"
             )
         sections.append("\n".join(lines))
 
@@ -571,7 +573,7 @@ def build_morning_card(data: dict[str, Any]) -> dict[str, Any]:
 
 def build_close_card(data: dict[str, Any]) -> dict[str, Any]:
     """构建 15:10 收盘 — 今日资金流日报卡片。"""
-    from gugu.notifier.formatter import _card  # noqa: PLC0415
+    from gugu.notifier.formatter import _card
 
     market = data.get("market", {})
     north = data.get("north_bound", {})
@@ -639,9 +641,7 @@ def build_close_card(data: dict[str, Any]) -> dict[str, Any]:
         lines = ["⚠️ **今日背离预警**"]
         for d in divergences:
             icon = "🔻" if "底" in d.get("type", "") else "🔺"
-            lines.append(
-                f"{icon} {d['name']}: {d['detail']} → {d.get('action', '观察')}"
-            )
+            lines.append(f"{icon} {d['name']}: {d['detail']} → {d.get('action', '观察')}")
         sections.append("\n".join(lines))
 
     # ── 强流入个股 ──
@@ -654,8 +654,7 @@ def build_close_card(data: dict[str, Any]) -> dict[str, Any]:
             inflow_val = s.get("main_inflow", 0)
             pct = s.get("price_change", 0)
             lines.append(
-                f"{i}. {name}({code}) 主力+{ratio:.1f}% "
-                f"{_fmt_flow(inflow_val)} ({_fmt(pct, '%')})"
+                f"{i}. {name}({code}) 主力+{ratio:.1f}% {_fmt_flow(inflow_val)} ({_fmt(pct, '%')})"
             )
         sections.append("\n".join(lines))
 

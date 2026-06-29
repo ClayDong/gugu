@@ -9,8 +9,10 @@
 5. StockRanker 综合评分排名（因子30%+基本面25%+资金流25%+板块20%）
 6. 返回买入信号股票
 """
+
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pandas as pd
@@ -79,7 +81,9 @@ class StockSelector:
         for _, row in candidates.iterrows():
             symbol = str(row["symbol"]).zfill(6)
             try:
-                df = await self._dm.fetch_stock_history(symbol, days=60)
+                df = await asyncio.wait_for(
+                    self._dm.fetch_stock_history(symbol, days=60), timeout=10
+                )
                 if df.empty or len(df) < 30:
                     continue
 
@@ -87,10 +91,10 @@ class StockSelector:
                 if signal and signal["direction"] in ("buy", "sell"):
                     signal["name"] = row.get("name", "")
                     signal["price"] = float(row.get("price", df.iloc[-1]["close"]))
-                    # 过滤涨跌停
+                    # 过滤涨跌停（传入买卖方向）
                     prev_close = float(df.iloc[-2]["close"]) if len(df) >= 2 else 0
                     if prev_close > 0 and not self._risk.is_tradable(
-                        symbol, signal["price"], prev_close
+                        symbol, signal["price"], prev_close, direction=signal["direction"]
                     ):
                         logger.info(f"选股：{symbol} 涨跌停，跳过")
                         continue
@@ -126,9 +130,7 @@ class StockSelector:
                     sig["money_flow_score"] = r["money_flow_score"]
                     sig["sector_score"] = r["sector_score"]
             # 按综合评分排序
-            signal_stocks.sort(
-                key=lambda x: x.get("total_score", 0), reverse=True
-            )
+            signal_stocks.sort(key=lambda x: x.get("total_score", 0), reverse=True)
 
         # 无论评分是否成功，都截断到 max_candidates
         signal_stocks = signal_stocks[: self._max_candidates]

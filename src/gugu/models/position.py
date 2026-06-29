@@ -1,4 +1,5 @@
 """公共数据模型：持仓。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -33,6 +34,9 @@ class Position:
     trailing_stop: dict | None = None
     # 危险信号记录
     danger_signals: list[str] | None = None
+    # P1 修复：持仓以来最低价（用于 NoAverageDownChecker 累计最大浮亏检查）
+    # PaperBroker.update_price 在 price < lowest_price 时自动更新
+    lowest_price: float = 0.0
 
     @property
     def market_value(self) -> float:

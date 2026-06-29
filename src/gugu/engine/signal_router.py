@@ -5,13 +5,15 @@
 - majority: 多数通过
 - any: 任一策略触发
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 import pandas as pd
 
-from gugu.config import settings
+from gugu.analysis.strategy_pool import StrategyPool
+from gugu.config import get_config
 from gugu.strategies.base import Strategy
 from gugu.utils.log import get_logger
 
@@ -26,6 +28,8 @@ class SignalRouter:
         strategies: list[Strategy] | None = None,
         fusion_rule: str | None = None,
         min_confidence: float | None = None,
+        *,
+        strategy_pool: StrategyPool | None = None,
     ) -> None:
         """初始化信号路由器。
 
@@ -33,22 +37,27 @@ class SignalRouter:
             strategies: 策略列表，默认从配置加载。
             fusion_rule: 融合规则（any/majority/unanimous），默认从配置读取。
             min_confidence: 最低置信度阈值，默认从配置读取。
+            strategy_pool: 策略池（用于加权融合 + 动态调整），
+                默认创建新实例。传入共享实例可实现策略表现跟踪。
                 显式传入参数时优先于配置，便于测试注入（T-02 修复）。
         """
-        cfg = settings().get("strategy", {})
-        self._fusion_rule = fusion_rule or cfg.get("signal_fusion", "majority")
+        cfg = get_config().strategy
+        self._fusion_rule = fusion_rule or cfg.signal_fusion
         self._min_confidence = (
-            float(min_confidence) if min_confidence is not None else float(cfg.get("min_confidence", 0.6))
+            float(min_confidence) if min_confidence is not None else cfg.min_confidence
         )
         self._strategies = strategies or []
+        # P2 修复：集成 StrategyPool 实现加权融合（代替简单的 majority/any/unanimous）
+        self._pool: StrategyPool | None = strategy_pool
+        # 当 fusion_rule 显式传入 'weighted' 且提供了 pool 时启用加权融合
+        if self._pool is None and self._fusion_rule == "weighted":
+            self._pool = StrategyPool()
 
     def add_strategy(self, strategy: Strategy) -> None:
         """添加策略。"""
         self._strategies.append(strategy)
 
-    def route(
-        self, df: pd.DataFrame, symbol: str, name: str = ""
-    ) -> dict[str, Any] | None:
+    def route(self, df: pd.DataFrame, symbol: str, name: str = "") -> dict[str, Any] | None:
         """对单只股票融合多策略信号。
 
         Args:
@@ -97,7 +106,26 @@ class SignalRouter:
         direction = "hold"
         triggered = []
 
-        if self._fusion_rule == "unanimous":
+        # P2 修复：weighted 模式使用 StrategyPool 加权融合
+        if self._fusion_rule == "weighted" and self._pool is not None:
+            # 将 votes 转为 StrategyPool 可接受的信号格式
+            pool_signals = [
+                {"direction": "buy" if s == 1 else "sell", "confidence": c, "strategy_name": n}
+                for n, s, c in votes
+            ]
+            pool_result = self._pool.weighted_fusion(pool_signals)
+            if pool_result["direction"] == "buy":
+                direction = "buy"
+                triggered = pool_result.get("strategies", ["weighted"])
+                avg_conf = pool_result["confidence"]
+            elif pool_result["direction"] == "sell":
+                direction = "sell"
+                triggered = pool_result.get("strategies", ["weighted"])
+                avg_conf = pool_result["confidence"]
+            else:
+                return None
+
+        elif self._fusion_rule == "unanimous":
             # 所有投票策略方向一致
             if total_votes > 0 and len(buy_votes) == total_votes:
                 direction = "buy"

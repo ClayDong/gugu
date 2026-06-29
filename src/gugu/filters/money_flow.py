@@ -1,4 +1,5 @@
 """资金流因子过滤：基于主力净流入判断资金方向。"""
+
 from __future__ import annotations
 
 from datetime import date
@@ -51,14 +52,14 @@ class MoneyFlowFilter:
         if cached is not None:
             return cached
 
-        # 2. 默认结果（数据获取失败时使用）
+        # 2. 默认结果（数据获取失败时保守拒绝，避免盲买）
         default: dict[str, Any] = {
-            "pass": True,
+            "pass": False,
             "main_net_today": 0.0,
             "main_pct_today": 0.0,
             "main_net_5d": 0.0,
             "score": 0.0,
-            "reasons": ["资金流数据获取失败，宽松降级通过"],
+            "reasons": ["资金流数据获取失败，保守拒绝（需手动确认或重试）"],
         }
 
         # 3. 获取资金流数据
@@ -126,9 +127,9 @@ class MoneyFlowFilter:
 
         # 规则1：近5日主力净流入合计 > 0
         if main_net_5d > 0:
-            reasons.append(f"近5日主力净流入合计 {main_net_5d/1e8:.2f}亿 > 0，资金在流入")
+            reasons.append(f"近5日主力净流入合计 {main_net_5d / 1e8:.2f}亿 > 0，资金在流入")
         else:
-            reasons.append(f"近5日主力净流入合计 {main_net_5d/1e8:.2f}亿 <= 0，资金在流出")
+            reasons.append(f"近5日主力净流入合计 {main_net_5d / 1e8:.2f}亿 <= 0，资金在流出")
 
         # 规则2：今日主力净流入占比 > -5%
         if main_pct_today > -5.0:

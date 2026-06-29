@@ -3,6 +3,7 @@
 用户用自然语言描述策略，调用 LLM 生成符合 gugu Strategy 规范的 Python 代码。
 代码写入 strategies/ 目录并自动注册。
 """
+
 from __future__ import annotations
 
 import ast
@@ -145,7 +146,9 @@ def generate_strategy_code(description: str, strategy_name: str | None = None) -
         )
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        raise RuntimeError(f"LLM API 返回错误: {exc.response.status_code} {exc.response.text}") from exc
+        raise RuntimeError(
+            f"LLM API 返回错误: {exc.response.status_code} {exc.response.text}"
+        ) from exc
     except httpx.RequestError as exc:
         raise RuntimeError(f"LLM API 请求失败: {exc}") from exc
 

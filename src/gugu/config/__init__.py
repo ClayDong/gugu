@@ -2,12 +2,16 @@
 
 向后兼容：
   ``from gugu.config import settings, env, strategy_defaults, load_yaml``
-  仍然可以工作 —— __init__.py 从 _legacy_config.py 重新导出这些函数。
+  仍然可以工作 —— settings() 现在内部委托给 AppConfig 单例的 flatten()。
 
 新代码推荐：
-  ``from gugu.config import AppConfig``
-  ``cfg = AppConfig.from_settings()``
+  ``from gugu.config import get_config``
+  ``cfg = get_config()``
 """
+
+from __future__ import annotations
+
+from functools import lru_cache
 
 # ── Re-export legacy loader functions for backward compatibility ─────
 from gugu._legacy_config import (  # noqa: F401  # fmt: skip
@@ -16,7 +20,6 @@ from gugu._legacy_config import (  # noqa: F401  # fmt: skip
     EnvSettings,
     env,
     load_yaml,
-    settings,
     strategy_defaults,
 )
 
@@ -36,3 +39,23 @@ from gugu.config.models import (  # noqa: F401  # fmt: skip
     WisdomConfig,
     flatten_config,
 )
+
+
+@lru_cache(maxsize=1)
+def get_config() -> AppConfig:
+    """Return the cached AppConfig singleton loaded from settings.yaml.
+
+    Access individual sections with attribute syntax:
+        cfg = get_config()
+        cfg.risk.max_position_ratio   # 0.30
+        cfg.strategy.enabled           # ['box_breakout', 'turtle', 'dual_ma']
+    """
+    return AppConfig.from_settings()
+
+
+def settings() -> dict:
+    """Backward-compatible dict-style access. Delegates to get_config().flatten().
+
+    Prefer ``get_config()`` for new code.
+    """
+    return get_config().flatten()

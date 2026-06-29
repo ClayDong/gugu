@@ -3,6 +3,7 @@
 主源 akshare 连续失败 3 次后降级到此处。
 使用与主源不同的 API 接口，确保真正的数据冗余。
 """
+
 from __future__ import annotations
 
 import akshare as ak
@@ -38,10 +39,16 @@ class SinaCollector(BaseCollector):
 
         if df.empty:
             return df
-        df = df.rename(columns={
-            "date": "date", "open": "open", "high": "high",
-            "low": "low", "close": "close", "volume": "volume",
-        })
+        df = df.rename(
+            columns={
+                "date": "date",
+                "open": "open",
+                "high": "high",
+                "low": "low",
+                "close": "close",
+                "volume": "volume",
+            }
+        )
         df["date"] = pd.to_datetime(df["date"]).dt.date
         df = df.tail(days).reset_index(drop=True)
         return validate_stock_history(df, code)
@@ -67,14 +74,16 @@ class SinaCollector(BaseCollector):
         for code in codes:
             row = spot_df[spot_df["代码"] == code]
             if not row.empty:
-                rows.append({
-                    "symbol": code,
-                    "name": row.iloc[0].get("名称", ""),
-                    "price": row.iloc[0].get("最新价", 0),
-                    "change_pct": row.iloc[0].get("涨跌幅", 0),
-                    "volume": row.iloc[0].get("成交量", 0),
-                    "amount": row.iloc[0].get("成交额", 0),
-                })
+                rows.append(
+                    {
+                        "symbol": code,
+                        "name": row.iloc[0].get("名称", ""),
+                        "price": row.iloc[0].get("最新价", 0),
+                        "change_pct": row.iloc[0].get("涨跌幅", 0),
+                        "volume": row.iloc[0].get("成交量", 0),
+                        "amount": row.iloc[0].get("成交额", 0),
+                    }
+                )
         return pd.DataFrame(rows)
 
     def fetch_sector_flow(self) -> pd.DataFrame:

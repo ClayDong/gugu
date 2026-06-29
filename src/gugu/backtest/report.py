@@ -3,6 +3,7 @@
 Provides a text report for terminal output and a dict for Feishu notification.
 The dict is compatible with gugu.notifier.formatter.format_backtest_report.
 """
+
 from __future__ import annotations
 
 import math

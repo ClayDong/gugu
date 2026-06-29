@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from gugu.macro.models import MacroSnapshot
@@ -79,10 +78,15 @@ class MacroReportBuilder:
             lines.append("衍生品数据暂不可用 ⚠️")
 
         # 置信度
-        valid_count = sum([
-            g["valid"], o["valid"], fx["valid"],
-            b["valid"], dr["valid"],
-        ])
+        valid_count = sum(
+            [
+                g["valid"],
+                o["valid"],
+                fx["valid"],
+                b["valid"],
+                dr["valid"],
+            ]
+        )
         confidence = {5: "高", 4: "中", 3: "低"}.get(valid_count, "低")
         lines += [
             "",

@@ -2,6 +2,7 @@
 
 主源连续失败 fail_threshold 次后降级，冷却 fail_cooldown_seconds 秒后切回。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -11,12 +12,12 @@ from typing import Any
 
 import pandas as pd
 
-from gugu.config import settings
 from gugu.data.cache import cache
 from gugu.data.collectors.akshare_collector import AkshareCollector
 from gugu.data.collectors.base import BaseCollector
 from gugu.data.collectors.fallback import SinaCollector
 from gugu.data.quality import validate_sector_flow, validate_stock_flow, validate_stock_history
+from gugu.data.stock_names import lookup_stock_name
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -27,33 +28,22 @@ _COLLECTOR_REGISTRY: dict[str, type[BaseCollector]] = {
     "sina": SinaCollector,
 }
 
-# 本地股票名称映射（fallback，网络获取失败时使用）
-_STOCK_NAMES: dict[str, str] = {
-    "600519": "贵州茅台", "300750": "宁德时代", "000858": "五粮液",
-    "601318": "中国平安", "000333": "美的集团", "300059": "东方财富",
-    "600030": "中信证券", "000776": "广发证券", "603259": "药明康德",
-    "600600": "青岛啤酒", "002625": "光启技术", "600674": "川投能源",
-    "688396": "华润微", "601238": "广汽集团", "600460": "士兰微",
-    "000977": "浪潮信息", "002049": "紫光国微", "300033": "同花顺",
-    "600026": "中远海能", "600150": "中国船舶", "600489": "中金黄金",
-    "600584": "长电科技", "601899": "紫金矿业", "603019": "中科曙光",
-    "603799": "华友钴业", "600036": "招商银行", "601398": "工商银行",
-    "601939": "建设银行", "000538": "云南白药",
-}
-
 
 class DataManager:
     """数据管理器：封装多源切换逻辑。"""
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        cfg = settings().get("data", {})
-        self._fail_threshold = cfg.get("fail_threshold", 3)
-        self._fail_cooldown = cfg.get("fail_cooldown_seconds", 300)
+        from gugu.config import get_config
+
+        cfg = get_config()
+        dc = cfg.data
+        self._fail_threshold = dc.fail_threshold
+        self._fail_cooldown = dc.fail_cooldown_seconds
 
         # 从配置读取数据源选择（支持通过 settings.yaml 一键切换）
-        primary_name = cfg.get("primary_source", "akshare")
-        fallback_names = cfg.get("fallback_sources", ["sina"])
+        primary_name = dc.primary_source
+        fallback_names = dc.fallback_sources
 
         primary_cls = _COLLECTOR_REGISTRY.get(primary_name)
         if primary_cls is None:
@@ -73,6 +63,8 @@ class DataManager:
 
         self._fail_count = 0
         self._degraded_until = 0.0  # 降级截止时间戳
+        # P2 修复：降级源并发信号量，限制同时运行的 fallback 任务数
+        self._fallback_semaphore = asyncio.Semaphore(len(self._fallbacks))
 
     @property
     def is_degraded(self) -> bool:
@@ -98,9 +90,7 @@ class DataManager:
     async def _on_failure_locked(self, method: str) -> None:
         """主源失败：递增失败计数，达到阈值则降级（在锁内调用，DA-05 修复）。"""
         self._fail_count += 1
-        logger.warning(
-            f"主源 {method} 失败 ({self._fail_count}/{self._fail_threshold})"
-        )
+        logger.warning(f"主源 {method} 失败 ({self._fail_count}/{self._fail_threshold})")
         if self._fail_count >= self._fail_threshold:
             self._degraded_until = time.time() + self._fail_cooldown
             logger.warning(
@@ -154,15 +144,17 @@ class DataManager:
                     await self._on_failure_locked(method)
 
         # 降级源：并发尝试所有 fallback，FIRST_COMPLETED 模式
-        tasks: dict[BaseCollector, asyncio.Task] = {
-            fb: asyncio.create_task(
-                asyncio.wait_for(
-                    asyncio.to_thread(lambda fb=fb: getattr(fb, method)(*args, **kwargs)),
-                    timeout=30.0,
+        # P2 修复：使用信号量限制并发任务数（避免高负载 OOM）
+        async with self._fallback_semaphore:
+            tasks: dict[BaseCollector, asyncio.Task] = {
+                fb: asyncio.create_task(
+                    asyncio.wait_for(
+                        asyncio.to_thread(lambda fb=fb: getattr(fb, method)(*args, **kwargs)),
+                        timeout=30.0,
+                    )
                 )
-            )
-            for fb in self._fallbacks
-        }
+                for fb in self._fallbacks
+            }
         done, pending = await asyncio.wait(tasks.values(), return_when=asyncio.FIRST_COMPLETED)
         for t in done:
             try:
@@ -229,6 +221,30 @@ class DataManager:
     async def fetch_stock_flow(self, symbol: str) -> pd.DataFrame:
         return await self._call_with_fallback("fetch_stock_flow", symbol)
 
+    async def fetch_stock_history_batch(
+        self, symbols: list[str], days: int = 60
+    ) -> dict[str, pd.DataFrame]:
+        """批量拉取多只股票的历史行情数据。
+
+        与 fetch_stock_realtime 对称，避免 N 次串行 HTTP 请求。
+        每只股票独立处理失败，不中断整体。
+
+        Args:
+            symbols: 股票代码列表。
+            days: 回看天数。
+
+        Returns:
+            {symbol: DataFrame} 字典，失败的 symbol 对应空 DataFrame。
+        """
+        results: dict[str, pd.DataFrame] = {}
+        for symbol in symbols:
+            try:
+                results[symbol] = await self.fetch_stock_history(symbol, days=days)
+            except Exception as e:
+                logger.warning(f"批量拉取 {symbol} 历史数据失败: {e}")
+                results[symbol] = pd.DataFrame()
+        return results
+
     async def fetch_stock_meta(self, symbol: str) -> dict[str, Any]:
         """获取股票元数据（用于风控 L3）。
 
@@ -238,7 +254,7 @@ class DataManager:
         code = BaseCollector.normalize_symbol(symbol)
         meta: dict[str, Any] = {
             "symbol": code,
-            "name": _STOCK_NAMES.get(code, ""),
+            "name": lookup_stock_name(code),
             "prev_close": 0.0,
             "is_st": False,
             "is_suspended": False,
@@ -255,7 +271,7 @@ class DataManager:
                 if api_name and api_name != code and api_name != f"{code}":
                     meta["name"] = api_name
                 price = float(row.get("price", 0) or 0)
-                volume = float(row.get("volume", 0) or 0)
+                float(row.get("volume", 0) or 0)
                 # P1-g 修复：停牌判定仅凭 price<=0，不再用 volume<=0
                 # （集合竞价初期/低流动性股票 volume=0 但未停牌）
                 meta["is_suspended"] = price <= 0

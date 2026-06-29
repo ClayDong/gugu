@@ -9,10 +9,12 @@
 - EVENT_STOP_LOSS: 止损触发
 - EVENT_DAILY_LOSS_WARN / EVENT_DAILY_LOSS_HALT: 日亏预警/熔断
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from gugu.utils.log import get_logger
 
@@ -53,11 +55,16 @@ EVENT_DAILY_LOSS_HALT = "daily_loss_halted"
 """日亏熔断（亏损 >= halt_threshold）。data: {loss_pct: float}"""
 
 EVENT_TYPES = [
-    EVENT_CYCLE_START, EVENT_CYCLE_END,
-    EVENT_MARKET_REGIME, EVENT_SIGNAL,
-    EVENT_ORDER_SUBMITTED, EVENT_ORDER_FILLED,
-    EVENT_RISK_ALERT, EVENT_STOP_LOSS,
-    EVENT_DAILY_LOSS_WARN, EVENT_DAILY_LOSS_HALT,
+    EVENT_CYCLE_START,
+    EVENT_CYCLE_END,
+    EVENT_MARKET_REGIME,
+    EVENT_SIGNAL,
+    EVENT_ORDER_SUBMITTED,
+    EVENT_ORDER_FILLED,
+    EVENT_RISK_ALERT,
+    EVENT_STOP_LOSS,
+    EVENT_DAILY_LOSS_WARN,
+    EVENT_DAILY_LOSS_HALT,
 ]
 """所有注册的事件类型列表。"""
 

@@ -16,9 +16,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 import akshare as ak
 import numpy as np
@@ -33,12 +33,13 @@ logger = get_logger()
 @dataclass
 class FundConfig:
     """单只基金的监控配置。"""
+
     fund_code: str = "001480"
     fund_name: str = "财通成长优选混合A"
     # 以下为可选持仓信息（用于计算盈亏/止盈/回撤）
-    cost_price: Optional[float] = None
-    total_shares: Optional[float] = None
-    total_investment: Optional[float] = None
+    cost_price: float | None = None
+    total_shares: float | None = None
+    total_investment: float | None = None
     # 基础定投金额（元）
     base_investment: float = 1000.0
 
@@ -46,44 +47,44 @@ class FundConfig:
 @dataclass
 class FundData:
     """基金净值与涨跌幅数据。"""
+
     date: str
     net_value: float
     daily_change_pct: float
-    weekly_change_pct: Optional[float] = None
-    monthly_change_pct: Optional[float] = None
-    quarterly_change_pct: Optional[float] = None
-    yearly_change_pct: Optional[float] = None
+    weekly_change_pct: float | None = None
+    monthly_change_pct: float | None = None
+    quarterly_change_pct: float | None = None
+    yearly_change_pct: float | None = None
 
 
 @dataclass
 class MonitorAlert:
     """监控告警。"""
+
     alert_type: str  # daily_change / profit / drawdown / volatility
-    level: str       # info / warning / danger
+    level: str  # info / warning / danger
     title: str
     content: str
-    action: Optional[str] = None
+    action: str | None = None
     timestamp: str = ""
 
 
 class FundMonitor:
     """单只基金监控器。"""
 
-    def __init__(self, config: Optional[FundConfig] = None) -> None:
+    def __init__(self, config: FundConfig | None = None) -> None:
         self.config = config or FundConfig()
-        self.fund_data: Optional[FundData] = None
-        self.history_data: Optional[pd.DataFrame] = None
+        self.fund_data: FundData | None = None
+        self.history_data: pd.DataFrame | None = None
         self.alerts: list[MonitorAlert] = []
 
     # ── 数据采集 ──────────────────────────────────────────────────
 
-    def fetch_fund_data(self) -> Optional[FundData]:
+    def fetch_fund_data(self) -> FundData | None:
         """获取基金净值数据（同步，akshare 阻塞调用）。"""
         logger.info(f"获取基金数据: {self.config.fund_code} ({self.config.fund_name})")
         try:
-            df = ak.fund_open_fund_info_em(
-                symbol=self.config.fund_code, indicator="单位净值走势"
-            )
+            df = ak.fund_open_fund_info_em(symbol=self.config.fund_code, indicator="单位净值走势")
             if df is None or df.empty:
                 logger.warning(f"无数据: {self.config.fund_code}")
                 return None
@@ -123,7 +124,7 @@ class FundMonitor:
             return None
 
     @staticmethod
-    def _calc_period_change(df: pd.DataFrame, days: int) -> Optional[float]:
+    def _calc_period_change(df: pd.DataFrame, days: int) -> float | None:
         """计算过去 days 天的涨跌幅。"""
         if len(df) < days:
             return None
@@ -138,13 +139,13 @@ class FundMonitor:
 
     # ── 分析指标 ──────────────────────────────────────────────────
 
-    def calc_profit(self) -> Optional[float]:
+    def calc_profit(self) -> float | None:
         """计算累计收益率（需配置 cost_price）。"""
         if self.fund_data is None or not self.config.cost_price or self.config.cost_price <= 0:
             return None
         return ((self.fund_data.net_value - self.config.cost_price) / self.config.cost_price) * 100
 
-    def calc_drawdown(self) -> Optional[float]:
+    def calc_drawdown(self) -> float | None:
         """计算当前回撤率（从历史最高净值算起）。"""
         if self.history_data is None or self.history_data.empty or self.fund_data is None:
             return None
@@ -157,7 +158,7 @@ class FundMonitor:
             pass
         return None
 
-    def calc_volatility(self, days: int = 20) -> Optional[float]:
+    def calc_volatility(self, days: int = 20) -> float | None:
         """计算年化波动率。"""
         if self.history_data is None or len(self.history_data) < days:
             return None
@@ -185,40 +186,83 @@ class FundMonitor:
 
         # 下跌
         if dc <= -10.0:
-            alerts.append(MonitorAlert("daily_change", "danger",
-                f"日跌幅超10%: {dc:.2f}%",
-                f"建议定投金额×3.0 ({self.config.base_investment * 3:.0f}元)",
-                "加仓", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "daily_change",
+                    "danger",
+                    f"日跌幅超10%: {dc:.2f}%",
+                    f"建议定投金额×3.0 ({self.config.base_investment * 3:.0f}元)",
+                    "加仓",
+                    self._now_ts(),
+                )
+            )
         elif dc <= -8.0:
-            alerts.append(MonitorAlert("daily_change", "danger",
-                f"日跌幅超8%: {dc:.2f}%",
-                f"建议定投金额×2.0 ({self.config.base_investment * 2:.0f}元)",
-                "加仓", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "daily_change",
+                    "danger",
+                    f"日跌幅超8%: {dc:.2f}%",
+                    f"建议定投金额×2.0 ({self.config.base_investment * 2:.0f}元)",
+                    "加仓",
+                    self._now_ts(),
+                )
+            )
         elif dc <= -5.0:
-            alerts.append(MonitorAlert("daily_change", "warning",
-                f"日跌幅超5%: {dc:.2f}%",
-                f"建议定投金额×1.5 ({self.config.base_investment * 1.5:.0f}元)",
-                "加仓", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "daily_change",
+                    "warning",
+                    f"日跌幅超5%: {dc:.2f}%",
+                    f"建议定投金额×1.5 ({self.config.base_investment * 1.5:.0f}元)",
+                    "加仓",
+                    self._now_ts(),
+                )
+            )
         elif dc <= -3.0:
-            alerts.append(MonitorAlert("daily_change", "warning",
-                f"日跌幅超3%: {dc:.2f}%",
-                f"建议定投金额×1.2 ({self.config.base_investment * 1.2:.0f}元)",
-                "加仓", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "daily_change",
+                    "warning",
+                    f"日跌幅超3%: {dc:.2f}%",
+                    f"建议定投金额×1.2 ({self.config.base_investment * 1.2:.0f}元)",
+                    "加仓",
+                    self._now_ts(),
+                )
+            )
         # 上涨
         if dc >= 8.0:
-            alerts.append(MonitorAlert("daily_change", "info",
-                f"日涨幅超8%: {dc:.2f}%",
-                "建议暂停定投1-2日", "暂停定投", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "daily_change",
+                    "info",
+                    f"日涨幅超8%: {dc:.2f}%",
+                    "建议暂停定投1-2日",
+                    "暂停定投",
+                    self._now_ts(),
+                )
+            )
         elif dc >= 5.0:
-            alerts.append(MonitorAlert("daily_change", "info",
-                f"日涨幅超5%: {dc:.2f}%",
-                f"建议定投金额×0.6 ({self.config.base_investment * 0.6:.0f}元)",
-                "减仓", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "daily_change",
+                    "info",
+                    f"日涨幅超5%: {dc:.2f}%",
+                    f"建议定投金额×0.6 ({self.config.base_investment * 0.6:.0f}元)",
+                    "减仓",
+                    self._now_ts(),
+                )
+            )
         elif dc >= 3.0:
-            alerts.append(MonitorAlert("daily_change", "info",
-                f"日涨幅超3%: {dc:.2f}%",
-                f"建议定投金额×0.8 ({self.config.base_investment * 0.8:.0f}元)",
-                "减仓", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "daily_change",
+                    "info",
+                    f"日涨幅超3%: {dc:.2f}%",
+                    f"建议定投金额×0.8 ({self.config.base_investment * 0.8:.0f}元)",
+                    "减仓",
+                    self._now_ts(),
+                )
+            )
         return alerts
 
     def monitor_profit(self) -> list[MonitorAlert]:
@@ -228,21 +272,49 @@ class FundMonitor:
         if profit is None:
             return alerts
         if profit >= 200.0:
-            alerts.append(MonitorAlert("profit", "danger",
-                f"累计收益超200%: {profit:.2f}%", "建议全部止盈",
-                "全部止盈", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "profit",
+                    "danger",
+                    f"累计收益超200%: {profit:.2f}%",
+                    "建议全部止盈",
+                    "全部止盈",
+                    self._now_ts(),
+                )
+            )
         elif profit >= 150.0:
-            alerts.append(MonitorAlert("profit", "warning",
-                f"累计收益超150%: {profit:.2f}%", "建议止盈40%，保留60%",
-                "分批止盈", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "profit",
+                    "warning",
+                    f"累计收益超150%: {profit:.2f}%",
+                    "建议止盈40%，保留60%",
+                    "分批止盈",
+                    self._now_ts(),
+                )
+            )
         elif profit >= 100.0:
-            alerts.append(MonitorAlert("profit", "warning",
-                f"累计收益超100%: {profit:.2f}%", "建议止盈30%，保留70%",
-                "分批止盈", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "profit",
+                    "warning",
+                    f"累计收益超100%: {profit:.2f}%",
+                    "建议止盈30%，保留70%",
+                    "分批止盈",
+                    self._now_ts(),
+                )
+            )
         elif profit >= 50.0:
-            alerts.append(MonitorAlert("profit", "info",
-                f"累计收益超50%: {profit:.2f}%", "建议止盈30%，保留70%",
-                "分批止盈", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "profit",
+                    "info",
+                    f"累计收益超50%: {profit:.2f}%",
+                    "建议止盈30%，保留70%",
+                    "分批止盈",
+                    self._now_ts(),
+                )
+            )
         return alerts
 
     def monitor_drawdown(self) -> list[MonitorAlert]:
@@ -252,20 +324,38 @@ class FundMonitor:
         if dd is None:
             return alerts
         if dd <= -25.0:
-            alerts.append(MonitorAlert("drawdown", "danger",
-                f"回撤超25%: {dd:.2f}%",
-                f"建议增加150%定投金额 ({self.config.base_investment * 2.5:.0f}元)",
-                "加仓", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "drawdown",
+                    "danger",
+                    f"回撤超25%: {dd:.2f}%",
+                    f"建议增加150%定投金额 ({self.config.base_investment * 2.5:.0f}元)",
+                    "加仓",
+                    self._now_ts(),
+                )
+            )
         elif dd <= -15.0:
-            alerts.append(MonitorAlert("drawdown", "warning",
-                f"回撤超15%: {dd:.2f}%",
-                f"建议增加100%定投金额 ({self.config.base_investment * 2:.0f}元)",
-                "加仓", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "drawdown",
+                    "warning",
+                    f"回撤超15%: {dd:.2f}%",
+                    f"建议增加100%定投金额 ({self.config.base_investment * 2:.0f}元)",
+                    "加仓",
+                    self._now_ts(),
+                )
+            )
         elif dd <= -10.0:
-            alerts.append(MonitorAlert("drawdown", "warning",
-                f"回撤超10%: {dd:.2f}%",
-                f"建议增加50%定投金额 ({self.config.base_investment * 1.5:.0f}元)",
-                "加仓", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "drawdown",
+                    "warning",
+                    f"回撤超10%: {dd:.2f}%",
+                    f"建议增加50%定投金额 ({self.config.base_investment * 1.5:.0f}元)",
+                    "加仓",
+                    self._now_ts(),
+                )
+            )
         return alerts
 
     def monitor_volatility(self) -> list[MonitorAlert]:
@@ -275,23 +365,49 @@ class FundMonitor:
         if vol is None:
             return alerts
         if vol >= 60.0:
-            alerts.append(MonitorAlert("volatility", "danger",
-                f"波动率极高: {vol:.2f}%", "建议暂停定投，观察市场",
-                "暂停定投", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "volatility",
+                    "danger",
+                    f"波动率极高: {vol:.2f}%",
+                    "建议暂停定投，观察市场",
+                    "暂停定投",
+                    self._now_ts(),
+                )
+            )
         elif vol >= 50.0:
-            alerts.append(MonitorAlert("volatility", "warning",
-                f"波动率高: {vol:.2f}%",
-                f"建议增加50%定投金额 ({self.config.base_investment * 1.5:.0f}元)",
-                "加仓", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "volatility",
+                    "warning",
+                    f"波动率高: {vol:.2f}%",
+                    f"建议增加50%定投金额 ({self.config.base_investment * 1.5:.0f}元)",
+                    "加仓",
+                    self._now_ts(),
+                )
+            )
         elif vol >= 40.0:
-            alerts.append(MonitorAlert("volatility", "info",
-                f"波动率中等: {vol:.2f}%",
-                f"建议增加20%定投金额 ({self.config.base_investment * 1.2:.0f}元)",
-                "加仓", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "volatility",
+                    "info",
+                    f"波动率中等: {vol:.2f}%",
+                    f"建议增加20%定投金额 ({self.config.base_investment * 1.2:.0f}元)",
+                    "加仓",
+                    self._now_ts(),
+                )
+            )
         elif vol <= 30.0:
-            alerts.append(MonitorAlert("volatility", "info",
-                f"波动率低: {vol:.2f}%", "建议正常定投",
-                "正常定投", self._now_ts()))
+            alerts.append(
+                MonitorAlert(
+                    "volatility",
+                    "info",
+                    f"波动率低: {vol:.2f}%",
+                    "建议正常定投",
+                    "正常定投",
+                    self._now_ts(),
+                )
+            )
         return alerts
 
     # ── 完整监控 ──────────────────────────────────────────────────
@@ -302,6 +418,7 @@ class FundMonitor:
 
         # 通过线程池运行同步的 akshare 调用
         import asyncio
+
         await asyncio.get_event_loop().run_in_executor(None, self.fetch_fund_data)
         if self.fund_data is None:
             logger.warning("无基金数据，跳过监控")
@@ -363,14 +480,16 @@ def load_fund_configs() -> list[FundConfig]:
 
     configs: list[FundConfig] = []
     for f in raw_funds:
-        configs.append(FundConfig(
-            fund_code=f.get("code", "001480"),
-            fund_name=f.get("name", ""),
-            cost_price=f.get("cost_price"),
-            total_shares=f.get("total_shares"),
-            total_investment=f.get("total_investment"),
-            base_investment=f.get("base_investment", 1000.0),
-        ))
+        configs.append(
+            FundConfig(
+                fund_code=f.get("code", "001480"),
+                fund_name=f.get("name", ""),
+                cost_price=f.get("cost_price"),
+                total_shares=f.get("total_shares"),
+                total_investment=f.get("total_investment"),
+                base_investment=f.get("base_investment", 1000.0),
+            )
+        )
     logger.info(f"加载 {len(configs)} 只基金配置: {[c.fund_name for c in configs]}")
     return configs
 
@@ -396,12 +515,14 @@ async def run_all_fund_monitors() -> dict[str, Any]:
                 latest_date = result["date"]
         except Exception as e:
             logger.error(f"监控基金 {cfg.fund_code} 失败: {e}")
-            results.append({
-                "status": "error",
-                "fund_code": cfg.fund_code,
-                "fund_name": cfg.fund_name,
-                "message": str(e),
-            })
+            results.append(
+                {
+                    "status": "error",
+                    "fund_code": cfg.fund_code,
+                    "fund_name": cfg.fund_name,
+                    "message": str(e),
+                }
+            )
 
     return {
         "results": results,
@@ -421,7 +542,7 @@ def fmt_pct(val: Any) -> str:
 
 def build_fund_monitor_card(monitor_result: dict[str, Any]) -> dict[str, Any]:
     """构建基金监控飞书卡片（兼容 gugu 的 _card 结构）。"""
-    from gugu.notifier.formatter import _card  # noqa: PLC0415
+    from gugu.notifier.formatter import _card
 
     fund_name = monitor_result.get("fund_name", "")
     fund_code = monitor_result.get("fund_code", "")
@@ -437,7 +558,7 @@ def build_fund_monitor_card(monitor_result: dict[str, Any]) -> dict[str, Any]:
     volatility = monitor_result.get("volatility")
     alerts = monitor_result.get("alerts", [])
     timestamp = monitor_result.get("timestamp", "")
-    cost_warnings = monitor_result.get("warnings", [])
+    monitor_result.get("warnings", [])
 
     icon = "🟢" if daily_change >= 0 else "🔴"
     market_status = "上涨" if daily_change >= 0 else "下跌"
@@ -518,7 +639,9 @@ def build_fund_monitor_card(monitor_result: dict[str, Any]) -> dict[str, Any]:
 
         alert_lines: list[str] = []
         for a in alerts[:5]:
-            lv_icon = {"danger": "🔴", "warning": "🟡", "info": "🟢"}.get(a.get("level", "info"), "⚪")
+            lv_icon = {"danger": "🔴", "warning": "🟡", "info": "🟢"}.get(
+                a.get("level", "info"), "⚪"
+            )
             title = a.get("title", "")
             content = a.get("content", "")
             action = a.get("action", "")
@@ -530,9 +653,7 @@ def build_fund_monitor_card(monitor_result: dict[str, Any]) -> dict[str, Any]:
         # 最紧急操作建议
         urgent = [a.get("action", "") for a in alerts if a.get("level") in ("danger", "warning")]
         if urgent:
-            sections.append(
-                f"🎯 **本次建议**\n基于当前结果，建议：**{'/'.join(set(urgent[:3]))}**"
-            )
+            sections.append(f"🎯 **本次建议**\n基于当前结果，建议：**{'/'.join(set(urgent[:3]))}**")
 
     # ── 底部 ──
     note = f"明策 · gugu · 基金监控 | 📈 {timestamp} | ⚠️ 仅供参考"

@@ -50,19 +50,19 @@ data:
 
 # ========== 策略 ==========
 strategy:
-  # 启用的策略列表（基于回测评估调整）
-  # 回测结果（沪深300前30只，250日）：
-  #   box_breakout: +30.02% 盈亏比1.43  ← 最优，保留
-  #   turtle:       +10.98% 盈亏比2.78  ← 盈利，保留
-  #   dual_ma:       +2.98% 盈亏比1.78  ← 微利，保留
-  #   bollinger:     -6.85% 盈亏比1.04  ← 亏损，禁用
-  #   rsi_reversal:  -5.33% 盈亏比51.41 ← 亏损（虚假高盈亏比），禁用
+  # 启用的策略列表（v0.3.0：启用趋势+均值回归互补策略，weighted 融合）
+  # 趋势跟踪（牛市/趋势市有效）：box_breakout, turtle, dual_ma
+  # 均值回归（震荡市有效）：bollinger, rsi_reversal
+  # 回测基准：box_breakout +30.02%, turtle +10.98%, dual_ma +2.98%
+  # 注释掉的策略在回测中表现不佳，但可能与趋势策略形成低相关互补
   enabled:
     - box_breakout
     - turtle
     - dual_ma
-  # 信号融合规则：unanimous（全票通过）/ majority（多数）/ any（任一）
-  signal_fusion: majority
+    - bollinger
+    - rsi_reversal
+  # 信号融合规则：unanimous（全票通过）/ majority（多数）/ any（任一）/ weighted（策略池加权）
+  signal_fusion: weighted
   min_confidence: 0.6            # 最低置信度阈值
   auto_select: false             # 是否启用自动选股
   select_top_n: 50               # 全市场按资金流排序取前 N

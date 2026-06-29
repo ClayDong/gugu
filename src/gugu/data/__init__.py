@@ -1,4 +1,5 @@
 """数据层统一导出。"""
+
 from gugu.data.collectors.akshare_collector import AkshareCollector
 from gugu.data.collectors.base import BaseCollector
 from gugu.data.collectors.fallback import SinaCollector
@@ -11,13 +12,13 @@ from gugu.data.quality import (
 )
 
 __all__ = [
-    "BaseCollector",
     "AkshareCollector",
-    "SinaCollector",
+    "BaseCollector",
     "DataManager",
-    "data_manager",
     "DataQualityError",
+    "SinaCollector",
+    "data_manager",
+    "validate_sector_flow",
     "validate_stock_flow",
     "validate_stock_history",
-    "validate_sector_flow",
 ]

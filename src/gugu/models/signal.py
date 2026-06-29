@@ -3,11 +3,11 @@
 替代所有模块间传递的 dict[str, Any] 信号，
 提供 IDE 补全、运行时类型校验和默认值。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Literal
-
 
 Direction = Literal["buy", "sell"]
 """信号方向。"""

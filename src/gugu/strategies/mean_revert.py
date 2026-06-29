@@ -1,4 +1,5 @@
 """均值回归策略：布林带、RSI、KDJ。"""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -66,14 +67,12 @@ class RSIStrategy(Strategy):
         # 回升确认流派：RSI 离开超卖区时触发（价格已反弹），更安全
         df.loc[(df["rsi"] >= oversold) & (df["rsi"].shift(1) < oversold), "signal"] = 1
         # RSI 从超买区回落
-        df.loc[
-            (df["rsi"] <= overbought) & (df["rsi"].shift(1) > overbought), "signal"
-        ] = -1
+        df.loc[(df["rsi"] <= overbought) & (df["rsi"].shift(1) > overbought), "signal"] = -1
 
         # 置信度：回升确认时用进入超卖区的深度衡量（shift(1) 时的 RSI 偏离程度）
         prev_rsi = df["rsi"].shift(1)
-        buy_conf = ((oversold - prev_rsi).clip(lower=0) / oversold)
-        sell_conf = ((prev_rsi - overbought).clip(lower=0) / (100 - overbought))
+        buy_conf = (oversold - prev_rsi).clip(lower=0) / oversold
+        sell_conf = (prev_rsi - overbought).clip(lower=0) / (100 - overbought)
         df["confidence"] = (buy_conf + sell_conf).clip(0, 1)
         # 无信号时置信度为 0
         df.loc[df["signal"] == 0, "confidence"] = 0.0
@@ -110,12 +109,14 @@ class KDJStrategy(Strategy):
         golden = (df["k"] > df["d"]) & (df["k"].shift(1) <= df["d"].shift(1)) & (df["k"] < oversold)
         df.loc[golden, "signal"] = 1
         # K 在超买区死叉 D
-        death = (df["k"] < df["d"]) & (df["k"].shift(1) >= df["d"].shift(1)) & (df["k"] > overbought)
+        death = (
+            (df["k"] < df["d"]) & (df["k"].shift(1) >= df["d"].shift(1)) & (df["k"] > overbought)
+        )
         df.loc[death, "signal"] = -1
 
         # 置信度：用 K 值在超卖/超买区的深度衡量
-        buy_conf = ((oversold - df["k"]).clip(lower=0) / oversold)
-        sell_conf = ((df["k"] - overbought).clip(lower=0) / (100 - overbought))
+        buy_conf = (oversold - df["k"]).clip(lower=0) / oversold
+        sell_conf = (df["k"] - overbought).clip(lower=0) / (100 - overbought)
         df["confidence"] = (buy_conf + sell_conf).clip(0, 1)
         # 无信号时置信度为 0
         df.loc[df["signal"] == 0, "confidence"] = 0.0

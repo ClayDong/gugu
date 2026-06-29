@@ -13,10 +13,10 @@
 - 如果亏损，阻止任何买入信号
 - 提供明确的拒绝理由
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from gugu.utils.log import get_logger
 
@@ -26,11 +26,12 @@ logger = get_logger()
 @dataclass
 class AverageDownCheckResult:
     """向下摊平检查结果。"""
-    allowed: bool          # 是否允许加仓
-    reason: str            # 检查理由
-    current_cost: float    # 当前成本价
-    current_price: float   # 当前现价
-    profit_pct: float      # 浮动盈亏比例
+
+    allowed: bool  # 是否允许加仓
+    reason: str  # 检查理由
+    current_cost: float  # 当前成本价
+    current_price: float  # 当前现价
+    profit_pct: float  # 浮动盈亏比例
 
 
 class NoAverageDownChecker:
@@ -46,7 +47,8 @@ class NoAverageDownChecker:
     """
 
     # 微亏容忍阈值：亏损<2%时不阻止加仓
-    MICRO_LOSS_THRESHOLD = -0.02
+    MICRO_LOSS_THRESHOLD = -0.02  # 微亏容忍阈值：当前亏损<2%时可加仓
+    MAX_DRAWDOWN_THRESHOLD = -0.05  # P1 修复：累计最大回撤容忍阈值
 
     def check(
         self,
@@ -55,6 +57,8 @@ class NoAverageDownChecker:
         cost_price: float,
         current_price: float,
         quantity: int = 0,
+        *,
+        lowest_price_since_position: float = 0.0,
     ) -> AverageDownCheckResult:
         """检查是否允许加仓。
 
@@ -64,6 +68,7 @@ class NoAverageDownChecker:
             cost_price: 持仓成本价
             current_price: 当前现价
             quantity: 持仓数量
+            lowest_price_since_position: 持仓以来最低价（用于累计最大浮亏检查）
 
         Returns:
             AverageDownCheckResult 检查结果
@@ -77,6 +82,28 @@ class NoAverageDownChecker:
                 current_price=current_price,
                 profit_pct=0.0,
             )
+
+        # P1 修复：累计最大浮亏检查（防止连续微跌场景下反复加仓）
+        if lowest_price_since_position > 0:
+            max_drawdown_pct = (lowest_price_since_position - cost_price) / cost_price
+            if max_drawdown_pct < self.MAX_DRAWDOWN_THRESHOLD:
+                logger.warning(
+                    f"[no-avg-down] {symbol} 累计最大浮亏 {max_drawdown_pct:.2%} "
+                    f"超过阈值 {self.MAX_DRAWDOWN_THRESHOLD:.2%}，"
+                    f"拒绝加仓（当前盈亏 {(current_price - cost_price) / cost_price:.2%}，"
+                    f"持仓以来最低价 {lowest_price_since_position:.2f}）"
+                )
+                return AverageDownCheckResult(
+                    allowed=False,
+                    reason=(
+                        f"累计最大浮亏 {max_drawdown_pct:.2%} 超过 {self.MAX_DRAWDOWN_THRESHOLD:.2%} 阈值，"
+                        f"禁止向下摊平。持仓以来最低价 {lowest_price_since_position:.2f}。"
+                        f"即使当前微亏，但累计跌幅已超容忍范围。"
+                    ),
+                    current_cost=cost_price,
+                    current_price=current_price,
+                    profit_pct=(current_price - cost_price) / cost_price,
+                )
 
         # 计算浮动盈亏
         if cost_price <= 0:

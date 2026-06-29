@@ -1,4 +1,5 @@
 """策略注册表。按名称获取策略实例。"""
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -48,9 +49,9 @@ def list_strategies() -> list[str]:
 @lru_cache(maxsize=1)
 def get_enabled_strategies() -> list[Strategy]:
     """获取配置中启用的策略实例列表（带缓存，全局共享同一批实例）。"""
-    from gugu.config import settings
+    from gugu.config import get_config
 
-    enabled = settings().get("strategy", {}).get("enabled", [])
+    enabled = get_config().strategy.enabled
     return [get_strategy(name) for name in enabled if name in _REGISTRY]
 
 

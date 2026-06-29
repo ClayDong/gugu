@@ -313,17 +313,16 @@ class TestPositionController:
         }
 
     @pytest.fixture(autouse=True)
-    def mock_settings(self):
-        """Mock settings() before each test in this class."""
-        with patch("gugu.analysis.position_controller.settings") as mock:
-            mock.return_value = {
-                "risk": {
-                    "max_position_ratio": 0.30,
-                    "max_total_positions": 5,
-                    "daily_loss_halt": 0.05,
-                }
-            }
-            yield mock
+    def mock_config(self):
+        """Mock get_config() before each test in this class."""
+        with patch("gugu.analysis.position_controller.get_config") as mock_cfg:
+            from gugu.config.models import RiskConfig
+            mock_cfg.return_value.risk = RiskConfig(
+                max_position_ratio=0.30,
+                max_total_positions=5,
+                daily_loss_halt=0.05,
+            )
+            yield mock_cfg
 
     def test_bull_calculate(self) -> None:
         """牛市下应得到较高的总仓位上限。"""
@@ -638,15 +637,11 @@ class TestStrategyPool:
     """StrategyPool 策略池管理测试。"""
 
     @pytest.fixture(autouse=True)
-    def mock_settings(self):
-        """Mock settings() 让 StrategyPool 初始化时有已知策略列表。"""
-        with patch("gugu.analysis.strategy_pool.settings") as mock:
-            mock.return_value = {
-                "strategy": {
-                    "enabled": ["mean_revert", "breakout", "trend"],
-                }
-            }
-            yield mock
+    def mock_config(self):
+        """Mock get_config() 让 StrategyPool 初始化时有已知策略列表。"""
+        with patch("gugu.analysis.strategy_pool.get_config") as mock_cfg:
+            mock_cfg.return_value.strategy.enabled = ["mean_revert", "breakout", "trend"]
+            yield mock_cfg
 
     def test_add_strategy(self) -> None:
         """初始化的策略应存在于池中。"""
@@ -682,8 +677,8 @@ class TestStrategyPool:
 
     def test_empty_pool(self) -> None:
         """空策略池应返回空字典。"""
-        with patch("gugu.analysis.strategy_pool.settings") as mock:
-            mock.return_value = {"strategy": {"enabled": []}}
+        with patch("gugu.analysis.strategy_pool.get_config") as mock_cfg:
+            mock_cfg.return_value.strategy.enabled = []
             pool = StrategyPool()
 
         assert pool.get_weights() == {}

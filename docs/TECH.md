@@ -462,19 +462,16 @@ tests/
 
 ### 7.2 覆盖率
 
-当前覆盖率：**47%**（506 测试，全部通过）
-
-> 注：迭代 6 新增 5 个 P0 模块（1,338 行新代码），覆盖率暂时下降。
-> 新模块自身有 33 个专项测试覆盖，但整体行数增长导致百分比下降。
+当前覆盖率：**70%**（541 测试，全部通过，v0.3.0）
 
 | 模块 | 覆盖率 | 说明 |
 |------|--------|------|
 | models/ | 94-100% | Signal 数据类 + Position 模型 |
 | strategies/ | 95-100% | 7 个策略全覆盖 + 基准 CSV 断言 |
 | risk/ | 86-95% | L1/L2/L3 全覆盖，含熔断持久化 |
-| backtest/ | 84-94% | 含 enable_wisdom、L3 涨跌停 |
+| backtest/ | 84-94% | 含 enable_wisdom、L3 涨跌停、认知引擎 |
 | engine/main.py | 76% | 核心编排，含 wisdom/事件推送 |
-| engine/signal_pipeline.py | 69% | 独立测试覆盖过滤链全路径 |
+| engine/signal_pipeline.py | 81% | 独立测试覆盖过滤链全路径 |
 | engine/event_engine.py | 66% | 14 个独立测试覆盖 |
 | engine/scheduler.py | 98% | 充分覆盖 |
 | data/quality.py | 91% | 链式校验全路径 |
@@ -487,11 +484,6 @@ tests/
 | analysis/ | 76-97% | 7/10 模块 90%+，3 个 70%+ |
 | web/ | 0% | FastAPI 前端（阶段四前） |
 | execution/qmt.py | 43% | QMT 骨架（阶段四实现） |
-| analysis/stage_detector.py | 43% | P0 四阶段判断器（新增） |
-| analysis/trailing_stop.py | 43% | P0 移动止损引擎（新增） |
-| analysis/danger_signal.py | — | P0 危险信号检测器（新增） |
-| analysis/no_average_down.py | — | P0 向下摊平检查器（新增） |
-| wisdom/book_router.py | 79% | P0 28 本书多视角路由器（新增） |
 
 ## 八、已知限制与技术债务
 
@@ -504,13 +496,61 @@ tests/
 | 5 | 降级源仅行情无资金流 | 主源故障时自动选股跳过 | 未修复 |
 | 6 | Web 前端零测试 | 覆盖率 0% | 阶段四前 |
 | 7 | 日志为纯文本 | 监控系统解析困难 | 未修复 |
-| 8 | AppConfig 尚未全面替换 settings() | 双模式共存 | 下一轮 |
+| 8 | AppConfig 尚未全面替换 settings() | 双模式共存 | ✅ 已修复（v0.3.0） |
 | 9 | P0 规则引擎参数未经验证 | 止损比例/浪谷窗口/收紧比例均为经验值 | 需回测验证 |
-| 10 | 移动止损未集成到回测引擎 | 无法回测验证止损效果 | 下一迭代 |
+| 10 | 移动止损未集成到回测引擎 | 无法回测验证止损效果 | ✅ 已修复（v0.3.0） |
 | 11 | Python 版本更新 | 文档标 3.14，实际 venv 使用 3.12.13 | 2026-06 已修 |
 | 12 | BookPerspectiveRouter 静态路由 | 不考虑市场环境变化 | 需动态路由 |
 | 13 | 危险信号"坏消息"依赖人工 | 无法自动检测利空消息 | 需新闻 API |
-| 14 | SignalPipeline 新增 4 个检查点未独立测试 | 过滤链集成测试覆盖不足 | 下一轮 |
+| 14 | SignalPipeline 新增 4 个检查点未独立测试 | 过滤链集成测试覆盖不足 | ✅ 已覆盖（v0.3.0） |
+
+### 八之一、v0.3.0 新增修复
+
+| # | 修复 | 涉及文件 |
+|---|------|----------|
+| 15 | 配置双轨制消除：13 模块迁移到 `get_config()` 单例 | `config/__init__.py`, `main.py`, `risk/manager.py`, `data/manager.py`, `engine/*.py`, `execution/paper.py`, `strategies/registry.py`, `backtest/engine.py`, `wisdom/advisor.py`, `filters/*.py`, `analysis/position_controller.py`, `analysis/strategy_pool.py`, `analysis/sector_rotation.py` |
+| 16 | `_STOCK_NAMES` 三份重复去重 | 新增 `data/stock_names.py`，`main.py`/`signal_pipeline.py`/`manager.py` 统一引用 |
+| 17 | ATR 自适应止损优先 + wisdom 止损上限补齐 | `main.py:_process_signal` |
+| 18 | 熔断跨日同步：`last_reset_date` 持久化 | `risk/manager.py`, `main.py:run_daily_cycle` |
+| 19 | 止损检查批量拉取 `fetch_stock_history_batch` | `data/manager.py`, `main.py:_check_stop_loss` |
+| 20 | 板块轮动缓存 TTL 3600s | `engine/signal_pipeline.py:_check_sector_rotation` |
+| 21 | PlausiblePriceRule 成交量辅助校验 | `data/quality.py` |
+| 22 | 认知引擎异常不再静默吞（`logger.debug`） | `backtest/engine.py:268,303` |
+| 23 | 周线 resample 前视偏差（`closed="left"`） | `analysis/regime_detector.py:86` |
+| 24 | 仓位基准改为当前净值 | `backtest/engine.py:_execute_buy` |
+| 25 | 信号值 NaN/浮点校验到 `{-1,0,1}` | `backtest/engine.py:193` |
+| 26 | 资金流默认保守拒绝 | `filters/money_flow.py:57` |
+| 27 | 选股器/筛股器 per-stock 超时 | `selector/stock_selector.py`, `screener/terminal_screener.py` |
+| 28 | `is_tradable` 传入方向参数 | `selector/stock_selector.py:94` |
+| 29 | 错误消息密钥脱敏纵深防御 | `notifier/formatter.py`, `notifier/feishu.py` |
+| 30 | `formatter.py` `_STOCK_NAMES` 去重 | `notifier/formatter.py` |
+
+### 八之二、v0.3.0 产品化（迭代 22）
+
+| # | 功能 | 涉及文件 |
+|---|------|----------|
+| 31 | 信号卡片 30 秒摘要行（置信度/仓位/止损/止盈） | `notifier/formatter.py` |
+| 32 | ATR 波动率动态仓位调整 | `engine/main.py:_process_signal` |
+| 33 | 止盈双目标方案 + ATR 自适应校准 | `wisdom/advisor.py:_compute_take_profit` |
+| 34 | 信号融合 majority→weighted | `config/settings.yaml` |
+| 35 | 5 策略启用（Bollinger+RSI 加入） | `config/settings.yaml` |
+| 36 | 组合相关性监控（>85% 告警） | `risk/manager.py:check_correlation` |
+| 37 | 组合最大回撤熔断（15%） | `risk/manager.py:check_portfolio_drawdown` |
+| 38 | Walk-forward 参数优化 + 网格扫描 | `backtest/engine.py:walk_forward_optimize` |
+| 39 | 仓位分层递进（试仓→加仓→确认加仓） | `wisdom/advisor.py:_advise_fallback` |
+| 40 | Web 信号绩效 `/api/signals/performance` | `web/app.py` |
+| 41 | Web 相关性检查 `/api/portfolio/correlation` | `web/app.py` |
+
+### 八之三、仍待实施（不依赖付费数据）
+
+| # | 功能 | 优先级 |
+|---|------|--------|
+| 1 | 实盘模拟验证（signal_only→paper 模式，积累 3 个月交易记录） | P0 |
+| 2 | 信号绩效自动推送（飞书卡片附历史胜率） | P1 |
+| 3 | 策略参数敏感性分析（回测优化止损/窗口参数） | P1 |
+| 4 | 交易日志 + 归因分析（每笔完成交易后自动分析盈亏原因） | P1 |
+| 5 | 盘前预案推送（跳空高开/低开应对策略） | P2 |
+| 6 | 流动性仓位约束（基于日均成交额限制单笔仓位） | P2 |
 
 ## 九、可观测性数据文件
 

@@ -10,12 +10,11 @@
 7. 分时跑赢大盘（简化：今日涨幅 > 大盘涨幅）
 8. 尾盘创当天新高且回踩不破（简化：14:30后最高价 == 全天最高价）
 """
+
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any
 
 import akshare as ak
 import numpy as np
@@ -26,30 +25,31 @@ from gugu.utils.log import get_logger
 logger = get_logger()
 
 # ── 参数 ────────────────────────────────────────────
-MIN_CHG_PCT = 3.0      # 最低涨幅 %
-MAX_CHG_PCT = 5.0      # 最高涨幅 %
-MIN_VOL_RATIO = 1.0    # 量比下限
-MIN_TURNOVER = 5.0     # 最低换手率 %
-MAX_TURNOVER = 10.0    # 最高换手率 %
-MIN_MCAP = 5_000_000_000   # 最小流通市值 50亿
+MIN_CHG_PCT = 3.0  # 最低涨幅 %
+MAX_CHG_PCT = 5.0  # 最高涨幅 %
+MIN_VOL_RATIO = 1.0  # 量比下限
+MIN_TURNOVER = 5.0  # 最低换手率 %
+MAX_TURNOVER = 10.0  # 最高换手率 %
+MIN_MCAP = 5_000_000_000  # 最小流通市值 50亿
 MAX_MCAP = 20_000_000_000  # 最大流通市值 200亿
-MAX_CANDIDATES = 10    # 上报最多几只
+MAX_CANDIDATES = 10  # 上报最多几只
 
 
 @dataclass
 class ScreeningResult:
     """单只股票的筛选结果。"""
+
     symbol: str
     name: str
     price: float
-    change_pct: float      # 今日涨幅 %
-    volume_ratio: float     # 量比
-    turnover_pct: float     # 换手率 %
-    mcap_billion: float     # 流通市值（亿）
-    volume_trend: str       # 成交量趋势描述
-    beats_index: bool       # 是否跑赢大盘
-    late_session_high: bool # 尾盘是否创全天新高
-    passed: bool            # 是否全部通过
+    change_pct: float  # 今日涨幅 %
+    volume_ratio: float  # 量比
+    turnover_pct: float  # 换手率 %
+    mcap_billion: float  # 流通市值（亿）
+    volume_trend: str  # 成交量趋势描述
+    beats_index: bool  # 是否跑赢大盘
+    late_session_high: bool  # 尾盘是否创全天新高
+    passed: bool  # 是否全部通过
     failed_conditions: list[str] = field(default_factory=list)
 
     @property
@@ -100,11 +100,19 @@ class TerminalScreener:
             price = float(row["最新价"])
             chg_pct = float(row["涨跌幅"])
             today_vol = float(row["成交量"])
-            r = await self._check_stock(code, name, price, chg_pct, today_vol, index_chg)
-            if isinstance(r, ScreeningResult):
-                results.append(r)
+            try:
+                r = await asyncio.wait_for(
+                    self._check_stock(code, name, price, chg_pct, today_vol, index_chg),
+                    timeout=15,
+                )
+                if isinstance(r, ScreeningResult):
+                    results.append(r)
+            except TimeoutError:
+                logger.warning(f"尾盘选股: {code} 超时，跳过")
+            except Exception as e:
+                logger.warning(f"尾盘选股: {code} 处理异常: {e}")
             if (idx + 1) % 50 == 0 or idx == total - 1:
-                logger.info(f"尾盘选股: 进度 {idx+1}/{total}")
+                logger.info(f"尾盘选股: 进度 {idx + 1}/{total}")
 
         # 5. 排序：通过条件数降序 → 涨幅降序
         passed = [r for r in results if r.passed]
@@ -119,9 +127,7 @@ class TerminalScreener:
     async def _fetch_index_change(self) -> float:
         """获取上证指数今日涨幅（用于条件7简化版）。"""
         try:
-            df = await asyncio.to_thread(
-                ak.stock_zh_index_daily, symbol="sh000001"
-            )
+            df = await asyncio.to_thread(ak.stock_zh_index_daily, symbol="sh000001")
             if not df.empty and len(df) >= 2:
                 today = df.iloc[-1]
                 yesterday = df.iloc[-2]
@@ -144,9 +150,7 @@ class TerminalScreener:
         try:
             # 获取日K线历史（含换手率、流通股、成交量）
             prefix = _symbol_prefix(code)
-            df = await asyncio.to_thread(
-                ak.stock_zh_a_daily, symbol=prefix, adjust="qfq"
-            )
+            df = await asyncio.to_thread(ak.stock_zh_a_daily, symbol=prefix, adjust="qfq")
             if df.empty or len(df) < 6:
                 return None
 
@@ -164,7 +168,7 @@ class TerminalScreener:
 
             # 条件3: 量比 > 1
             volumes = recent["volume"].values.astype(float)
-            avg_5d = volumes[:-1].mean()  # 前5日平均成交量
+            avg_5d = float(np.nanmean(volumes[:-1])) if len(volumes) > 1 else 0.0  # P1: NaN-safe
             vol_ratio = volumes[-1] / avg_5d if avg_5d > 0 else 0
             if vol_ratio <= 1:
                 failed.append(f"量比{vol_ratio:.2f}")
@@ -218,7 +222,7 @@ class TerminalScreener:
         if len(vols) < 3:
             return "✅"
         # 至少连续3天不递减（温和放量）
-        increasing = sum(1 for i in range(1, len(vols)) if vols[i] > vols[i-1])
+        increasing = sum(1 for i in range(1, len(vols)) if vols[i] > vols[i - 1])
         if increasing >= len(vols) - 2:  # 允许1天微调
             return "✅ 量增"
         # 高位维持: 5日均量 > 20日均量

@@ -1,11 +1,11 @@
-"""仓位总控：根据市场状态 + 账户风险 + 持仓集中度，动态计算总仓位上限。
-"""
+"""仓位总控：根据市场状态 + 账户风险 + 持仓集中度，动态计算总仓位上限。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
-from gugu.config import settings
+from gugu.config import get_config
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -14,11 +14,12 @@ logger = get_logger()
 @dataclass
 class PositionBudget:
     """仓位预算"""
-    total_limit: float        # 总仓位上限（占总资产比）
-    single_limit: float       # 单股仓位上限
-    available_budget: float   # 可用资金
-    max_positions: int        # 最大持仓数
-    reason: str               # 预算理由
+
+    total_limit: float  # 总仓位上限（占总资产比）
+    single_limit: float  # 单股仓位上限
+    available_budget: float  # 可用资金
+    max_positions: int  # 最大持仓数
+    reason: str  # 预算理由
 
 
 class PositionController:
@@ -32,9 +33,10 @@ class PositionController:
     """
 
     def __init__(self) -> None:
-        self._max_single = float(settings().get("risk", {}).get("max_position_ratio", 0.30))
-        self._max_positions = int(settings().get("risk", {}).get("max_total_positions", 5))
-        self._daily_loss_halt = float(settings().get("risk", {}).get("daily_loss_halt", 0.05))
+        rc = get_config().risk
+        self._max_single = rc.max_position_ratio
+        self._max_positions = rc.max_total_positions
+        self._daily_loss_halt = rc.daily_loss_halt
 
     def calculate(
         self,
@@ -57,9 +59,11 @@ class PositionController:
         # 1. 熔断时零仓位
         if is_halted:
             return PositionBudget(
-                total_limit=0.0, single_limit=0.0,
-                available_budget=0.0, max_positions=0,
-                reason="日亏熔断，禁止新开仓"
+                total_limit=0.0,
+                single_limit=0.0,
+                available_budget=0.0,
+                max_positions=0,
+                reason="日亏熔断，禁止新开仓",
             )
 
         # 2. 市场状态基准
@@ -69,9 +73,11 @@ class PositionController:
 
         if not buy_allowed:
             return PositionBudget(
-                total_limit=0.0, single_limit=0.0,
-                available_budget=0.0, max_positions=0,
-                reason=f"市场状态 {regime.get('regime')} 禁止买入"
+                total_limit=0.0,
+                single_limit=0.0,
+                available_budget=0.0,
+                max_positions=0,
+                reason=f"市场状态 {regime.get('regime')} 禁止买入",
             )
 
         # 3. 账户风险调整
@@ -85,13 +91,13 @@ class PositionController:
         total_limit = regime_limit * risk_multiplier
 
         # 4. 持仓集中度调整
-        current_positions = len(account.positions) if hasattr(account, 'positions') else 0
+        current_positions = len(account.positions) if hasattr(account, "positions") else 0
         remaining_slots = max(0, self._max_positions - current_positions)
         if remaining_slots <= 0:
             total_limit = 0.0
 
         # 5. 计算可用预算
-        total_value = account.total_value if hasattr(account, 'total_value') else 0
+        total_value = account.total_value if hasattr(account, "total_value") else 0
         available_budget = total_value * total_limit
 
         # 6. 单股上限（考虑剩余仓位槽位）

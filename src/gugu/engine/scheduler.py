@@ -12,15 +12,17 @@
 - 15:35  基金监控推送
 - 每 10 分钟重试失败的通知队列
 """
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from gugu.config import settings
+from gugu.config import get_config
 from gugu.engine.main import TradingEngine
 from gugu.screener.terminal_screener import TerminalScreener
 from gugu.utils.calendar import is_trading_day
@@ -30,9 +32,9 @@ logger = get_logger()
 
 # 盘中扫描时刻（hour, minute）
 SCAN_TIMES = [
-    (9, 30),   # 开盘
+    (9, 30),  # 开盘
     (10, 30),  # 上午中段
-    (13, 5),   # 午盘开盘
+    (13, 5),  # 午盘开盘
     (14, 30),  # 尾盘
 ]
 
@@ -41,8 +43,8 @@ class TradingScheduler:
     """交易调度器。"""
 
     def __init__(self) -> None:
-        cfg = settings().get("scheduler", {})
-        tz = cfg.get("timezone", "Asia/Shanghai")
+        cfg = get_config()
+        tz = cfg.scheduler.timezone
         self._scheduler = AsyncIOScheduler(timezone=tz)
         self._engine = TradingEngine()
 
@@ -51,15 +53,15 @@ class TradingScheduler:
         # 清除所有旧 job，防止多次调用 setup 导致重复注册
         self._scheduler.remove_all_jobs()
 
-        feishu_cfg = settings().get("feishu", {})
-        report_times = feishu_cfg.get("daily_report_times", ["09:10", "15:10"])
+        feishu_cfg = get_config().feishu
+        report_times = feishu_cfg.daily_report_times
 
         # 盘中多轮扫描：每个扫描时刻执行一次完整交易循环
         for i, (h, m) in enumerate(SCAN_TIMES):
             self._scheduler.add_job(
                 self._safe_run,
                 CronTrigger(hour=h, minute=m, day_of_week="mon-fri"),
-                id=f"scan_{i+1}",
+                id=f"scan_{i + 1}",
                 name=f"盘中扫描-{h:02d}:{m:02d}",
             )
 
@@ -94,6 +96,7 @@ class TradingScheduler:
 
         # 宏观日报推送：独立于信号报告，覆盖全时段
         from gugu.macro.scheduler import register_macro_jobs
+
         register_macro_jobs(self._scheduler)
 
         # 基金监控推送：15:35（交易日）
@@ -105,7 +108,7 @@ class TradingScheduler:
         )
 
         # 资金流日报
-        flow_cfg = settings().get("flow_report", {})
+        flow_cfg = get_config().flatten().get("flow_report", {})
         if flow_cfg.get("enabled", True):
             morning_t = flow_cfg.get("morning_time", "08:00")
             close_t = flow_cfg.get("close_time", "15:10")
@@ -241,14 +244,13 @@ class TradingScheduler:
         await self._engine.shutdown()
         logger.info("调度器已停止")
 
+
 def _main() -> None:
     """命令行入口：启动交易调度器守护进程。"""
     logging.basicConfig(level=logging.INFO)
     scheduler = TradingScheduler()
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(scheduler.start())
-    except KeyboardInterrupt:
-        pass
 
 
 if __name__ == "__main__":

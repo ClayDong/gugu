@@ -10,12 +10,11 @@
 - 不再加仓
 - 准备随时离场
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from gugu.utils.log import get_logger
@@ -26,10 +25,11 @@ logger = get_logger()
 @dataclass
 class DangerSignalResult:
     """危险信号检测结果。"""
+
     signals: list[str] = field(default_factory=list)  # 触发的危险信号列表
     severity: str = "none"  # none / low / medium / high
-    description: str = ""   # 信号描述
-    action: str = ""        # 建议操作
+    description: str = ""  # 信号描述
+    action: str = ""  # 建议操作
 
     @property
     def has_signal(self) -> bool:
@@ -50,14 +50,14 @@ class DangerSignalDetector:
     """
 
     # 检测参数
-    VOLUME_MA_SHORT = 5          # 短期成交量均线
-    VOLUME_MA_LONG = 20          # 长期成交量均线
-    VOLUME_SURGE_RATIO = 1.5     # 成交量放大倍数
-    PRICE_STALL_THRESHOLD = 0.02 # 价格停滞阈值（2%）
-    GAP_DOWN_THRESHOLD = -0.03   # 跳空低开阈值（-3%）
-    BIG_DROP_THRESHOLD = -0.05   # 大跌阈值（-5%）
-    HIGH_LOOKBACK = 20           # 新高回看周期
-    SHADOW_BODY_RATIO = 2.0     # 上影线/实体倍数
+    VOLUME_MA_SHORT = 5  # 短期成交量均线
+    VOLUME_MA_LONG = 20  # 长期成交量均线
+    VOLUME_SURGE_RATIO = 1.5  # 成交量放大倍数
+    PRICE_STALL_THRESHOLD = 0.02  # 价格停滞阈值（2%）
+    GAP_DOWN_THRESHOLD = -0.03  # 跳空低开阈值（-3%）
+    BIG_DROP_THRESHOLD = -0.05  # 大跌阈值（-5%）
+    HIGH_LOOKBACK = 20  # 新高回看周期
+    SHADOW_BODY_RATIO = 2.0  # 上影线/实体倍数
 
     def detect(
         self,
@@ -134,8 +134,7 @@ class DangerSignalDetector:
 
         if signals:
             logger.warning(
-                f"[danger-signal] 检测到 {len(signals)} 个危险信号: {signals}, "
-                f"严重程度={severity}"
+                f"[danger-signal] 检测到 {len(signals)} 个危险信号: {signals}, 严重程度={severity}"
             )
 
         return result
@@ -148,8 +147,8 @@ class DangerSignalDetector:
         if volume is None or len(volume) < self.VOLUME_MA_LONG + self.VOLUME_MA_SHORT:
             return False
 
-        vol_short = volume.iloc[-self.VOLUME_MA_SHORT:].mean()
-        vol_long = volume.iloc[-self.VOLUME_MA_LONG:].mean()
+        vol_short = volume.iloc[-self.VOLUME_MA_SHORT :].mean()
+        vol_long = volume.iloc[-self.VOLUME_MA_LONG :].mean()
 
         if vol_long <= 0:
             return False
@@ -157,22 +156,26 @@ class DangerSignalDetector:
         vol_ratio = vol_short / vol_long
 
         # 价格近5日涨幅
-        price_change = (close.iloc[-1] - close.iloc[-self.VOLUME_MA_SHORT]) / close.iloc[-self.VOLUME_MA_SHORT]
+        price_change = (close.iloc[-1] - close.iloc[-self.VOLUME_MA_SHORT]) / close.iloc[
+            -self.VOLUME_MA_SHORT
+        ]
 
         # 量增（>1.5倍）+ 价不涨（<2%）
-        return vol_ratio > self.VOLUME_SURGE_RATIO and abs(price_change) < self.PRICE_STALL_THRESHOLD
+        return (
+            vol_ratio > self.VOLUME_SURGE_RATIO and abs(price_change) < self.PRICE_STALL_THRESHOLD
+        )
 
     def _check_two_day_reversal(self, df: pd.DataFrame) -> bool:
         """检测两天转头。"""
         close = df["close"].astype(float)
-        high = df["high"].astype(float) if "high" in df.columns else close
+        df["high"].astype(float) if "high" in df.columns else close
         low = df["low"].astype(float) if "low" in df.columns else close
 
         if len(close) < self.HIGH_LOOKBACK + 2:
             return False
 
         # 找最近20日的最高价位置
-        recent_high_idx = close.iloc[-self.HIGH_LOOKBACK:].idxmax()
+        recent_high_idx = close.iloc[-self.HIGH_LOOKBACK :].idxmax()
         high_pos = close.index.get_loc(recent_high_idx)
 
         # 最高价必须在最近5日之内（否则不是"近期"创新高）
@@ -212,10 +215,7 @@ class DangerSignalDetector:
 
         # 单日跌幅 > 5%
         daily_return = (today_close - ref_close) / ref_close
-        if daily_return < self.BIG_DROP_THRESHOLD:
-            return True
-
-        return False
+        return daily_return < self.BIG_DROP_THRESHOLD
 
     def _check_price_volume_divergence(self, df: pd.DataFrame) -> bool:
         """检测量价背离（简化版：价格新高但成交量未新高）。"""
@@ -227,14 +227,14 @@ class DangerSignalDetector:
 
         # 价格创新高
         current_price = close.iloc[-1]
-        past_high = close.iloc[-self.HIGH_LOOKBACK:-1].max()
+        past_high = close.iloc[-self.HIGH_LOOKBACK : -1].max()
 
         if current_price <= past_high:
             return False  # 未创新高
 
         # 成交量未创新高
         current_vol = volume.iloc[-1]
-        past_vol_max = volume.iloc[-self.HIGH_LOOKBACK:-1].max()
+        past_vol_max = volume.iloc[-self.HIGH_LOOKBACK : -1].max()
 
         return current_vol < past_vol_max * 0.8  # 成交量低于历史最高的80%
 
@@ -243,7 +243,7 @@ class DangerSignalDetector:
         close = df["close"].astype(float)
         open_ = df["open"].astype(float) if "open" in df.columns else close
         high = df["high"].astype(float) if "high" in df.columns else close
-        low = df["low"].astype(float) if "low" in df.columns else close
+        df["low"].astype(float) if "low" in df.columns else close
 
         if len(close) < self.HIGH_LOOKBACK:
             return False
@@ -262,7 +262,7 @@ class DangerSignalDetector:
             # 上影线 > 实体 * 2
             if upper_shadow > body * self.SHADOW_BODY_RATIO:
                 # 且处于相对高位（近20日最高价附近）
-                recent_high = close.iloc[-self.HIGH_LOOKBACK:].max()
+                recent_high = close.iloc[-self.HIGH_LOOKBACK :].max()
                 if close.iloc[i] > recent_high * 0.95:
                     return True
 

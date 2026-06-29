@@ -1,4 +1,5 @@
 """数据缓存。内存缓存 + SQLite 持久化。"""
+
 from __future__ import annotations
 
 import time

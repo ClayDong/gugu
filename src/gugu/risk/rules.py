@@ -5,6 +5,7 @@ Three-level risk control for A-share trading:
 - L2: Daily loss circuit breaker (warn at 3%, halt at 5% by default)
 - L3: System rules (T+1 settlement, price limits, suspension)
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,7 +13,7 @@ from enum import Enum
 
 from gugu.models import Position
 
-__all__ = ["RiskLevel", "RiskAction", "RiskCheckResult", "Position"]
+__all__ = ["Position", "RiskAction", "RiskCheckResult", "RiskLevel"]
 
 
 class RiskLevel(Enum):

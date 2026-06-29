@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -52,10 +50,10 @@ async def scheduled_macro_report(version: str) -> None:
 def register_macro_jobs(scheduler: AsyncIOScheduler) -> None:
     """在 APScheduler 中注册宏观日报定时任务。"""
     jobs = [
-        ("macro_early",   "早间全球简报",   8,  0),
-        ("macro_morning", "A股盘前简报",    9,  10),
-        ("macro_noon",    "午间盘面简报",   11, 35),
-        ("macro_close",   "收盘全球概览",   15, 10),
+        ("macro_early", "早间全球简报", 8, 0),
+        ("macro_morning", "A股盘前简报", 9, 10),
+        ("macro_noon", "午间盘面简报", 11, 35),
+        ("macro_close", "收盘全球概览", 15, 10),
     ]
     for job_id, name, hour, minute in jobs:
         scheduler.add_job(

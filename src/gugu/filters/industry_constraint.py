@@ -5,13 +5,14 @@
 - 通过 akshare 获取股票所属行业信息，带缓存避免重复请求
 - 在 RiskManager.check_order 买入流程中调用
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 import akshare as ak
 
-from gugu.config import settings
+from gugu.config import get_config
 from gugu.utils.log import get_logger
 
 
@@ -23,7 +24,7 @@ class IndustryConstraint:
     """
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
-        cfg = config if config is not None else settings().get("risk", {})
+        cfg = config if config is not None else get_config().flatten().get("risk", {})
         self.max_same_industry: int = int(cfg.get("max_same_industry", 2))
         self._industry_cache: dict[str, str] = {}  # symbol -> industry 缓存
         self._logger = get_logger()

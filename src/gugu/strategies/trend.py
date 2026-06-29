@@ -1,4 +1,5 @@
 """趋势跟踪策略：海龟、双均线、MACD。"""
+
 from __future__ import annotations
 
 import pandas as pd

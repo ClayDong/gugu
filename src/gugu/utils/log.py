@@ -1,4 +1,5 @@
 """日志配置。基于 loguru，统一格式和输出。"""
+
 from __future__ import annotations
 
 import sys

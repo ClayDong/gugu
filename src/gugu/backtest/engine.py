@@ -13,6 +13,7 @@ Cognitive engine integration (enable_cognitive_engine=True):
 - NoAverageDownChecker: 亏损仓位不加码
 - TrailingStopEngine: 浪谷递进动态止损（替代纯策略卖出信号）
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -20,7 +21,7 @@ from typing import Any
 
 import pandas as pd
 
-from gugu.config import settings
+from gugu.config import get_config
 from gugu.risk import RiskManager
 from gugu.strategies.base import Strategy
 from gugu.utils.log import get_logger
@@ -104,9 +105,7 @@ class BacktestEngine:
         self.slippage = slippage
         # 默认与风控 L1 保持一致，避免回测与模拟盘行为脱节
         if position_ratio is None:
-            position_ratio = float(
-                settings().get("risk", {}).get("max_position_ratio", 0.30)
-            )
+            position_ratio = get_config().risk.max_position_ratio
         self.position_ratio = max(0.0, min(1.0, position_ratio))
         # P1-m 修复：回测接入 L3 风控（涨跌停检查），与模拟盘行为一致
         self._risk = RiskManager()
@@ -133,9 +132,9 @@ class BacktestEngine:
         self._trailing_stop_engine = None
         if enable_cognitive_engine:
             try:
-                from gugu.analysis.stage_detector import StageDetector
                 from gugu.analysis.danger_signal import DangerSignalDetector
                 from gugu.analysis.no_average_down import NoAverageDownChecker
+                from gugu.analysis.stage_detector import StageDetector
                 from gugu.analysis.trailing_stop import TrailingStopEngine
 
                 self._stage_detector = StageDetector()
@@ -186,8 +185,23 @@ class BacktestEngine:
         trailing_state = None  # TrailingStopState
 
         # 一次性对全 df 生成信号，避免 O(n²) 重算（D-05 修复）
-        # 策略内部使用 .shift(1) 避免前视偏差，全量生成与逐行 expanding 结果一致
+        # P1 修复：shift(1) 确保第 i 天信号基于 <= i-1 天的数据，
+        # 消除 rolling 窗口含当日收盘价引入的隐性前视偏差。
+        # 即使策略内部使用 .shift(1)，移动平均类指标（SMA/布林带等）
+        # 默认含当日值，shift(1) 信号列保证回测不"看到未来"。
         signals_df = strategy.generate_signals(df)
+        signals_df["signal"] = signals_df["signal"].shift(1).fillna(0)
+        # P1 修复：验证信号值在 {-1, 0, 1} 范围内，非标准值强制截断到合法区间
+        raw = signals_df["signal"]
+        invalid = ~raw.isin([-1, 0, 1])
+        if invalid.any():
+            self._logger.warning(
+                f"策略 {strategy.name} 返回非标准信号值，"
+                f"已截断到 [-1,1]: {raw[invalid].head(5).tolist()}"
+            )
+            raw[raw > 1] = 1
+            raw[raw < -1] = -1
+        signals_df["signal"] = raw.astype(int)
 
         for i in range(len(df)):
             row = df.iloc[i]
@@ -218,34 +232,32 @@ class BacktestEngine:
                 try:
                     from gugu.analysis.trailing_stop import TrailingStopSignal
 
-                    window_df = df.iloc[max(0, i - 60):i + 1]
+                    window_df = df.iloc[max(0, i - 60) : i + 1]
                     new_state, ts_signal = self._trailing_stop_engine.update(
                         trailing_state, window_df
                     )
                     trailing_state = new_state
 
                     if ts_signal == TrailingStopSignal.EXIT:
-                        cognitive_log.append({
-                            "date": str(current_date),
-                            "action": "trailing_stop_exit",
-                            "stop_price": trailing_state.current_stop_price,
-                            "close": close,
-                            "signal": ts_signal.value,
-                        })
+                        cognitive_log.append(
+                            {
+                                "date": str(current_date),
+                                "action": "trailing_stop_exit",
+                                "stop_price": trailing_state.current_stop_price,
+                                "close": close,
+                                "signal": ts_signal.value,
+                            }
+                        )
                         # 执行止损卖出
                         if buy_date is not None and pd.Timestamp(current_date) <= buy_date:
                             pass  # T+1
-                        elif self._risk.is_tradable(
-                            symbol, close, prev_close, direction="sell"
-                        ):
+                        elif self._risk.is_tradable(symbol, close, prev_close, direction="sell"):
                             trade = self._execute_sell(
                                 symbol, current_date, close, position_qty, position_cost
                             )
                             trades.append(trade)
                             proceeds = (
-                                trade.price * trade.quantity
-                                - trade.commission
-                                - trade.stamp_tax
+                                trade.price * trade.quantity - trade.commission - trade.stamp_tax
                             )
                             cash += proceeds
                             position_qty = 0
@@ -264,23 +276,25 @@ class BacktestEngine:
                     try:
                         from gugu.analysis.stage_detector import MarketStage
 
-                        window_df = df.iloc[max(0, i - 80):i + 1]
+                        window_df = df.iloc[max(0, i - 80) : i + 1]
                         stage_result = self._stage_detector.detect(window_df)
                         if stage_result.stage in (MarketStage.FRENZY, MarketStage.FINAL):
-                            cognitive_log.append({
-                                "date": str(current_date),
-                                "action": "stage_filter",
-                                "stage": stage_result.stage.value,
-                                "reason": stage_result.description,
-                            })
+                            cognitive_log.append(
+                                {
+                                    "date": str(current_date),
+                                    "action": "stage_filter",
+                                    "stage": stage_result.stage.value,
+                                    "reason": stage_result.description,
+                                }
+                            )
                             cognitive_skip_buy = True
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        self._logger.debug(f"Stage detection failed for {symbol}: {e}")
 
                 # 认知引擎：危险信号检查
                 if not cognitive_skip_buy and self._danger_detector is not None:
                     try:
-                        window_df = df.iloc[max(0, i - 20):i + 1]
+                        window_df = df.iloc[max(0, i - 20) : i + 1]
                         danger_result = self._danger_detector.detect(
                             window_df, prev_close=prev_close
                         )
@@ -288,43 +302,49 @@ class BacktestEngine:
                             "medium",
                             "high",
                         ):
-                            cognitive_log.append({
-                                "date": str(current_date),
-                                "action": "danger_filter",
-                                "signals": danger_result.signals,
-                                "severity": danger_result.severity,
-                            })
+                            cognitive_log.append(
+                                {
+                                    "date": str(current_date),
+                                    "action": "danger_filter",
+                                    "signals": danger_result.signals,
+                                    "severity": danger_result.severity,
+                                }
+                            )
                             cognitive_skip_buy = True
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        self._logger.debug(f"Danger detection failed for {symbol}: {e}")
 
                 # 认知引擎：向下摊平检查
-                if not cognitive_skip_buy and self._no_avg_down_checker is not None:
-                    if position_qty > 0 and position_cost > 0:
-                        avg_cost = position_cost / position_qty
-                        avg_down_result = self._no_avg_down_checker.check(
-                            symbol=symbol,
-                            has_position=True,
-                            cost_price=avg_cost,
-                            current_price=close,
-                            quantity=position_qty,
-                        )
-                        if not avg_down_result.allowed:
-                            cognitive_log.append({
+                if (
+                    not cognitive_skip_buy
+                    and self._no_avg_down_checker is not None
+                    and position_qty > 0
+                    and position_cost > 0
+                ):
+                    avg_cost = position_cost / position_qty
+                    avg_down_result = self._no_avg_down_checker.check(
+                        symbol=symbol,
+                        has_position=True,
+                        cost_price=avg_cost,
+                        current_price=close,
+                        quantity=position_qty,
+                    )
+                    if not avg_down_result.allowed:
+                        cognitive_log.append(
+                            {
                                 "date": str(current_date),
                                 "action": "no_avg_down",
                                 "reason": avg_down_result.reason,
-                            })
-                            cognitive_skip_buy = True
+                            }
+                        )
+                        cognitive_skip_buy = True
 
                 if cognitive_skip_buy:
-                    pass  # 认知引擎拦截，跳过买入
+                    continue  # P1 修复：认知引擎拦截，跳过买入（避免后续 buy_cash 未定义错误）
                 # 启用 wisdom 时，先经过决策层过滤
                 elif self.enable_wisdom and self._wisdom is not None:
                     # P1-j 修复：仓位基准与模拟盘一致（max_ratio * 0.8）
-                    max_ratio = float(
-                        settings().get("risk", {}).get("max_position_ratio", 0.30)
-                    )
+                    max_ratio = get_config().risk.max_position_ratio
                     base_ratio = max_ratio * 0.8
                     # P0-3 修复：正确传递 has_position 和 current_position_ratio
                     current_position_ratio = (
@@ -356,15 +376,16 @@ class BacktestEngine:
                     buy_cash = cash
 
                 # P1-m: L3 涨跌停检查（涨停时不可买入，与模拟盘一致）
-                if not self._risk.is_tradable(
-                    symbol, close, prev_close, direction="buy"
-                ):
+                if not self._risk.is_tradable(symbol, close, prev_close, direction="buy"):
                     self._logger.debug(
                         f"SKIP BUY {symbol}: 涨停 close={close} prev_close={prev_close}"
                     )
                 else:
                     # Buy with adjusted cash (wisdom may reduce position)
-                    trade = self._execute_buy(symbol, current_date, close, buy_cash)
+                    equity = cash + position_qty * close
+                    trade = self._execute_buy(
+                        symbol, current_date, close, buy_cash, current_equity=equity
+                    )
                     if trade is not None:
                         trades.append(trade)
                         cash -= trade.price * trade.quantity + trade.commission
@@ -372,7 +393,7 @@ class BacktestEngine:
                         if position_qty > 0:
                             # 加仓：更新加权平均成本
                             position_cost = (
-                                (position_cost + trade.price * trade.quantity + trade.commission)
+                                position_cost + trade.price * trade.quantity + trade.commission
                             )
                         else:
                             position_cost = trade.price * trade.quantity + trade.commission
@@ -392,15 +413,15 @@ class BacktestEngine:
                 if buy_date is not None and pd.Timestamp(current_date) <= buy_date:
                     pass  # 跳过当天卖出
                 # P1-m: L3 涨跌停检查（跌停时不可卖出，与模拟盘一致）
-                elif not self._risk.is_tradable(
-                    symbol, close, prev_close, direction="sell"
-                ):
+                elif not self._risk.is_tradable(symbol, close, prev_close, direction="sell"):
                     self._logger.debug(
                         f"SKIP SELL {symbol}: 跌停 close={close} prev_close={prev_close}"
                     )
                 else:
                     # Sell all shares (clear position)
-                    trade = self._execute_sell(symbol, current_date, close, position_qty, position_cost)
+                    trade = self._execute_sell(
+                        symbol, current_date, close, position_qty, position_cost
+                    )
                     trades.append(trade)
                     proceeds = trade.price * trade.quantity - trade.commission - trade.stamp_tax
                     cash += proceeds
@@ -440,6 +461,8 @@ class BacktestEngine:
         date: Any,
         close: float,
         cash: float,
+        *,
+        current_equity: float | None = None,
     ) -> Trade | None:
         """Execute a buy order with slippage and commission.
 
@@ -449,11 +472,15 @@ class BacktestEngine:
         保底机制：常规计算为 0 但现金够买 100 股时，买入 100 股
         （与 TradingEngine._process_signal 的行为一致）。
 
+        Args:
+            current_equity: 当前账户总净值。若未传则退回到 initial_capital。
+
         Returns None if not enough cash for even one lot.
         """
         buy_price = close * (1 + self.slippage)
         cost_per_share = buy_price * (1 + self.commission_rate)
-        max_value = min(cash, self.initial_capital * self.position_ratio)
+        ref = current_equity if current_equity is not None else self.initial_capital
+        max_value = min(cash, ref * self.position_ratio)
         max_qty = int(max_value / cost_per_share)
         quantity = (max_qty // _BOARD_LOT) * _BOARD_LOT
         if quantity <= 0:
@@ -470,9 +497,7 @@ class BacktestEngine:
                 return None
 
         commission = buy_price * quantity * self.commission_rate
-        self._logger.debug(
-            f"BUY {symbol} {quantity}@{buy_price:.2f} commission={commission:.2f}"
-        )
+        self._logger.debug(f"BUY {symbol} {quantity}@{buy_price:.2f} commission={commission:.2f}")
         return Trade(
             date=date,
             direction="buy",
@@ -513,3 +538,106 @@ class BacktestEngine:
             profit=profit,
             stamp_tax=stamp_tax,
         )
+
+
+def walk_forward_optimize(
+    strategy_cls: type,
+    df: pd.DataFrame,
+    symbol: str = "",
+    param_grid: dict[str, list] | None = None,
+    train_ratio: float = 0.6,
+    n_splits: int = 3,
+) -> list[dict]:
+    """Walk-forward 参数优化 + 滚动前向验证。
+
+    将历史数据按时间顺序分为 n_splits 个滑窗，
+    每窗用前 60% 训练（grid search 最优参数），
+    后 40% 测试（记录真实样本外表现）。
+
+    Args:
+        strategy_cls: Strategy 类（非实例）。
+        df: 完整历史 OHLCV 数据。
+        symbol: 股票代码。
+        param_grid: 参数网格（如 {"breakout_window": [10,20,30]}）。
+        train_ratio: 训练集占比。
+        n_splits: 滚动窗口数。
+
+    Returns:
+        每个窗口的优化结果列表 [{window, best_params, train_metrics, test_metrics}, ...]
+    """
+    import itertools
+
+    if param_grid is None:
+        param_grid = {}
+
+    n = len(df)
+    if n < 120:
+        return [{"error": "数据不足 120 行，无法做 walk-forward"}]
+
+    window_size = n // n_splits
+    step = max(1, n // (n_splits * 2))
+    results: list[dict] = []
+
+    logger = get_logger()
+
+    for w in range(n_splits):
+        split_start = w * step
+        train_end = split_start + int(window_size * train_ratio)
+        test_start = train_end
+        test_end = min(split_start + window_size, n)
+
+        if test_end - test_start < 20:
+            break
+
+        train_df = df.iloc[split_start:train_end]
+        test_df = df.iloc[test_start:test_end]
+
+        best_params: dict[str, Any] = {}
+        best_sharpe = -999.0
+
+        # Grid search on train set
+        keys = list(param_grid.keys())
+        if keys:
+            for values in itertools.product(*param_grid.values()):
+                params = dict(zip(keys, values, strict=True))
+                try:
+                    strategy = strategy_cls(params)
+                    engine = BacktestEngine()
+                    result = engine.run(strategy, train_df, symbol)
+                    sharpe = result.metrics.get("sharpe", 0)
+                    if sharpe > best_sharpe:
+                        best_sharpe = sharpe
+                        best_params = dict(params)
+                except Exception as e:
+                    logger.debug(f"Grid search failed for {params}: {e}")
+                    continue
+        else:
+            best_params = {}
+
+        # Test on out-of-sample
+        test_strategy = strategy_cls(best_params)
+        engine = BacktestEngine()
+        test_result = engine.run(test_strategy, test_df, symbol)
+
+        results.append(
+            {
+                "window": w + 1,
+                "train_start": split_start,
+                "train_end": train_end,
+                "test_start": test_start,
+                "test_end": test_end,
+                "best_params": best_params,
+                "train_sharpe": round(best_sharpe, 4),
+                "test_sharpe": round(test_result.metrics.get("sharpe", 0), 4),
+                "test_return": round(test_result.metrics.get("total_return", 0), 4),
+                "test_max_dd": round(test_result.metrics.get("max_drawdown", 0), 4),
+                "test_win_rate": round(test_result.metrics.get("win_rate", 0), 4),
+                "trades": len(test_result.trades),
+            }
+        )
+
+    logger.info(
+        f"Walk-forward 完成: {len(results)} 窗口, "
+        f"平均测试 Sharpe {sum(r['test_sharpe'] for r in results) / max(len(results), 1):.4f}"
+    )
+    return results

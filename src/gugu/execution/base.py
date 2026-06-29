@@ -2,6 +2,7 @@
 
 所有 broker（模拟盘/QMT实盘）继承此类。
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

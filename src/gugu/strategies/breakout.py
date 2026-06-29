@@ -1,4 +1,5 @@
 """突破策略：达尔文箱体、Dual Thrust、支撑阻力。"""
+
 from __future__ import annotations
 
 import numpy as np

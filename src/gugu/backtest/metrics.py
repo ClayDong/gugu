@@ -3,6 +3,7 @@
 Calculates risk/return metrics from an equity curve and a list of trades.
 All metrics return plain Python floats for JSON compatibility.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -26,7 +27,9 @@ def calc_metrics(equity_curve: pd.Series, trades: list[Any]) -> dict[str, float]
         Dict with total_return, annual_return, sharpe, max_drawdown,
         win_rate, profit_factor, total_trades, avg_hold_days.
     """
-    returns = equity_curve.pct_change().dropna() if len(equity_curve) > 1 else pd.Series(dtype=float)
+    returns = (
+        equity_curve.pct_change().dropna() if len(equity_curve) > 1 else pd.Series(dtype=float)
+    )
     return {
         "total_return": _total_return(equity_curve),
         "annual_return": _annual_return(equity_curve),

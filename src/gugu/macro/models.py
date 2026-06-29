@@ -12,11 +12,12 @@ from typing import Any
 @dataclass
 class GoldData:
     """贵金属：黄金、白银"""
-    gold_price: float = 0.0          # COMEX 黄金，美元/盎司
+
+    gold_price: float = 0.0  # COMEX 黄金，美元/盎司
     gold_change_pct: float = 0.0
-    silver_price: float = 0.0        # COMEX 白银
+    silver_price: float = 0.0  # COMEX 白银
     silver_change_pct: float = 0.0
-    gold_silver_ratio: float = 0.0   # 金银比
+    gold_silver_ratio: float = 0.0  # 金银比
     source: str = ""
     valid: bool = False
 
@@ -24,11 +25,12 @@ class GoldData:
 @dataclass
 class OilData:
     """原油：布伦特、WTI"""
-    brent_price: float = 0.0         # ICE 布伦特，美元/桶
+
+    brent_price: float = 0.0  # ICE 布伦特，美元/桶
     brent_change_pct: float = 0.0
-    wti_price: float = 0.0           # NYMEX WTI
+    wti_price: float = 0.0  # NYMEX WTI
     wti_change_pct: float = 0.0
-    spread: float = 0.0              # 布伦特-WTI 价差
+    spread: float = 0.0  # 布伦特-WTI 价差
     source: str = ""
     valid: bool = False
 
@@ -36,13 +38,14 @@ class OilData:
 @dataclass
 class FxData:
     """外汇：美元指数、USDCNY、EUR/USD"""
-    usd_index: float = 0.0           # 美元指数
+
+    usd_index: float = 0.0  # 美元指数
     usd_index_change_pct: float = 0.0
-    usd_cny: float = 0.0             # 美元/人民币
+    usd_cny: float = 0.0  # 美元/人民币
     usd_cny_change_pct: float = 0.0
-    eur_usd: float = 0.0             # 欧元/美元
+    eur_usd: float = 0.0  # 欧元/美元
     eur_usd_change_pct: float = 0.0
-    usd_jpy: float = 0.0             # 美元/日元
+    usd_jpy: float = 0.0  # 美元/日元
     source: str = ""
     valid: bool = False
 
@@ -50,13 +53,14 @@ class FxData:
 @dataclass
 class BondData:
     """债券：美债收益率、LPR、Shibor"""
-    us10y_yield: float = 0.0         # 美国 10 年期国债收益率
-    us2y_yield: float = 0.0          # 美国 2 年期
-    us10y_2y_spread: float = 0.0     # 期限利差（10Y-2Y）
-    inverted: bool = False            # 倒挂标志
-    lpr_1y: float = 0.0              # LPR 1 年期
-    lpr_5y: float = 0.0              # LPR 5 年期
-    shibor_7d: float = 0.0           # Shibor 7 天
+
+    us10y_yield: float = 0.0  # 美国 10 年期国债收益率
+    us2y_yield: float = 0.0  # 美国 2 年期
+    us10y_2y_spread: float = 0.0  # 期限利差（10Y-2Y）
+    inverted: bool = False  # 倒挂标志
+    lpr_1y: float = 0.0  # LPR 1 年期
+    lpr_5y: float = 0.0  # LPR 5 年期
+    shibor_7d: float = 0.0  # Shibor 7 天
     source: str = ""
     valid: bool = False
 
@@ -64,15 +68,16 @@ class BondData:
 @dataclass
 class DerivativeData:
     """衍生品与综合：VIX、BDI、BTC、北向资金"""
-    vix: float = 0.0                 # 恐慌指数
+
+    vix: float = 0.0  # 恐慌指数
     vix_change_pct: float = 0.0
-    bdi: float = 0.0                 # 波罗的海干散货指数
+    bdi: float = 0.0  # 波罗的海干散货指数
     bdi_change_pct: float = 0.0
-    btc_price: float = 0.0           # 比特币
+    btc_price: float = 0.0  # 比特币
     btc_change_pct: float = 0.0
-    eth_price: float = 0.0           # 以太坊
+    eth_price: float = 0.0  # 以太坊
     eth_change_pct: float = 0.0
-    north_flow: float = 0.0          # 北向资金当日净流入（亿元）
+    north_flow: float = 0.0  # 北向资金当日净流入（亿元）
     source: str = ""
     valid: bool = False
 
@@ -80,6 +85,7 @@ class DerivativeData:
 @dataclass
 class MacroSnapshot:
     """一次采集的完整宏观快照"""
+
     gold: GoldData = field(default_factory=GoldData)
     oil: OilData = field(default_factory=OilData)
     fx: FxData = field(default_factory=FxData)

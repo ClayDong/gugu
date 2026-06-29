@@ -10,6 +10,7 @@
   - 营收增长率 > -20%（排除衰退股）
   - 任一指标获取失败时，该指标不参与过滤（宽松降级）
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -18,7 +19,7 @@ from typing import Any
 import akshare as ak
 import pandas as pd
 
-from gugu.config import settings
+from gugu.config import get_config
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -50,13 +51,50 @@ class _Cache:
         self._store.clear()
 
 
-# 全局缓存实例
-_cache = _Cache()
+# 模块级 _cache 已被替代为实例级缓存（P1 修复）
+# 保留 _Cache 类定义和 DataClass 但不再实例化
+
+
+@dataclass
+class _SnapshotCache:
+    """P1 修复：全市场快照缓存（避免每次 check 都拉全量数据）。
+
+    缓存整个 ak.stock_zh_a_spot_em() 返回的 DataFrame，
+    盘中有效期内复用，减少 HTTP 请求。
+    """
+
+    _df: Any = None  # pd.DataFrame | None
+    _cached_at: float = 0.0
+    _ttl: float = 120.0  # 缓存 2 分钟（与 data.fetch_interval_seconds 一致）
+
+    def get(self) -> Any:
+        import time
+
+        if self._df is not None and time.time() - self._cached_at < self._ttl:
+            return self._df
+        return None
+
+    def set(self, df: Any) -> None:
+        import time
+
+        self._df = df
+        self._cached_at = time.time()
 
 
 def _load_thresholds() -> dict[str, Any]:
-    """从 settings.yaml 加载基本面过滤阈值，缺失字段用默认值。"""
-    cfg = settings().get("fundamental", {})
+    """从 AppConfig 加载基本面过滤阈值，缺失字段用默认值。"""
+    try:
+        fc = get_config().fundamental
+        cfg = {
+            "pe_min": fc.pe_min,
+            "pe_max": fc.pe_max,
+            "pb_min": fc.pb_min,
+            "pb_max": fc.pb_max,
+            "roe_min": fc.roe_min,
+            "revenue_growth_min": fc.revenue_growth_min,
+        }
+    except Exception:
+        cfg = {}
     merged = {**_DEFAULT_THRESHOLDS, **cfg}
     return merged
 
@@ -80,6 +118,9 @@ class FundamentalFilter:
 
     def __init__(self) -> None:
         self._thresholds = _load_thresholds()
+        # P1 修复：实例级缓存，避免测试间相互污染
+        self._cache = _Cache()
+        self._snapshot_cache = _SnapshotCache()
 
     def check(self, symbol: str) -> dict[str, Any]:
         """检查个股是否通过基本面过滤。
@@ -91,7 +132,7 @@ class FundamentalFilter:
             过滤结果字典，包含 pass、pe、pb、roe、revenue_growth、industry、reasons。
         """
         # 查缓存
-        cached = _cache.get(symbol)
+        cached = self._cache.get(symbol)
         if cached is not None:
             logger.debug(f"基本面过滤：{symbol} 使用缓存数据")
             return cached
@@ -179,7 +220,7 @@ class FundamentalFilter:
         }
 
         # 写入缓存
-        _cache.set(symbol, result)
+        self._cache.set(symbol, result)
 
         status = "通过" if passed else "未通过"
         logger.info(f"基本面过滤：{symbol} {status}，原因：{'; '.join(reasons)}")
@@ -187,9 +228,12 @@ class FundamentalFilter:
         return result
 
     def _fetch_pe_pb(self, code: str) -> tuple[float | None, float | None]:
-        """从实时行情快照获取 PE/PB。"""
+        """从实时行情快照获取 PE/PB（带全量快照缓存，P1 修复）。"""
         try:
-            df = ak.stock_zh_a_spot_em()
+            df = self._snapshot_cache.get()
+            if df is None:
+                df = ak.stock_zh_a_spot_em()
+                self._snapshot_cache.set(df)
             row = df[df["代码"] == code]
             if row.empty:
                 logger.warning(f"基本面过滤：{code} 未在实时行情中找到")

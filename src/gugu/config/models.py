@@ -11,9 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 from pydantic import BaseModel, Field
-from pydantic.functional_validators import model_validator
 
 # ──────────────────────────────────────────────────────────────────────
 #  Individual section models
@@ -23,53 +21,25 @@ from pydantic.functional_validators import model_validator
 class RiskConfig(BaseModel):
     """三级风控参数."""
 
-    max_position_ratio: float = Field(
-        default=0.30, ge=0.0, le=1.0, description="单股仓位上限"
-    )
-    daily_loss_warn: float = Field(
-        default=0.03, ge=0.0, le=1.0, description="日亏预警阈值"
-    )
-    daily_loss_halt: float = Field(
-        default=0.05, ge=0.0, le=1.0, description="日亏熔断阈值"
-    )
-    max_total_positions: int = Field(
-        default=5, ge=1, description="最大持仓数"
-    )
-    max_same_industry: int = Field(
-        default=2, ge=1, description="同行业最大持仓数"
-    )
-    t_plus_1: bool = Field(
-        default=True, description="T+1 限制（系统默认开启）"
-    )
+    max_position_ratio: float = Field(default=0.30, ge=0.0, le=1.0, description="单股仓位上限")
+    daily_loss_warn: float = Field(default=0.03, ge=0.0, le=1.0, description="日亏预警阈值")
+    daily_loss_halt: float = Field(default=0.05, ge=0.0, le=1.0, description="日亏熔断阈值")
+    max_total_positions: int = Field(default=5, ge=1, description="最大持仓数")
+    max_same_industry: int = Field(default=2, ge=1, description="同行业最大持仓数")
+    t_plus_1: bool = Field(default=True, description="T+1 限制（系统默认开启）")
 
 
 class DataConfig(BaseModel):
     """数据源配置."""
 
-    primary_source: str = Field(
-        default="akshare", description="主数据源"
-    )
-    fallback_sources: list[str] = Field(
-        default_factory=lambda: ["sina"], description="降级源列表"
-    )
-    fetch_interval_seconds: int = Field(
-        default=120, ge=10, description="实时采集间隔（秒）"
-    )
-    fail_threshold: int = Field(
-        default=3, ge=1, description="连续失败 N 次触发降级"
-    )
-    fail_cooldown_seconds: int = Field(
-        default=300, ge=0, description="降级冷却时间（秒）"
-    )
-    cache_ttl_seconds: int = Field(
-        default=120, ge=1, description="实时数据缓存 TTL（秒）"
-    )
-    history_db: str = Field(
-        default="sqlite:///data/gugu.db", description="历史数据库 URL"
-    )
-    parquet_dir: str = Field(
-        default="data/parquet", description="Parquet 文件目录"
-    )
+    primary_source: str = Field(default="akshare", description="主数据源")
+    fallback_sources: list[str] = Field(default_factory=lambda: ["sina"], description="降级源列表")
+    fetch_interval_seconds: int = Field(default=120, ge=10, description="实时采集间隔（秒）")
+    fail_threshold: int = Field(default=3, ge=1, description="连续失败 N 次触发降级")
+    fail_cooldown_seconds: int = Field(default=300, ge=0, description="降级冷却时间（秒）")
+    cache_ttl_seconds: int = Field(default=120, ge=1, description="实时数据缓存 TTL（秒）")
+    history_db: str = Field(default="sqlite:///data/gugu.db", description="历史数据库 URL")
+    parquet_dir: str = Field(default="data/parquet", description="Parquet 文件目录")
 
     # ── syntactic-sugar aliases for callers transitioning from dict keys ──
     @property
@@ -95,18 +65,10 @@ class StrategyConfig(BaseModel):
     signal_fusion: str = Field(
         default="majority", description="信号融合规则: unanimous / majority / any"
     )
-    min_confidence: float = Field(
-        default=0.6, ge=0.0, le=1.0, description="最低置信度阈值"
-    )
-    auto_select: bool = Field(
-        default=False, description="是否启用自动选股"
-    )
-    select_top_n: int = Field(
-        default=50, ge=1, description="全市场资金流排序取前 N"
-    )
-    select_max_candidates: int = Field(
-        default=10, ge=1, description="最大选股数量"
-    )
+    min_confidence: float = Field(default=0.6, ge=0.0, le=1.0, description="最低置信度阈值")
+    auto_select: bool = Field(default=False, description="是否启用自动选股")
+    select_top_n: int = Field(default=50, ge=1, description="全市场资金流排序取前 N")
+    select_max_candidates: int = Field(default=10, ge=1, description="最大选股数量")
 
     # ── aliases ──
     @property
@@ -117,35 +79,23 @@ class StrategyConfig(BaseModel):
 class PaperConfig(BaseModel):
     """模拟盘资金参数."""
 
-    initial_capital: float = Field(
-        default=1_000_000, ge=1, description="模拟本金"
-    )
-    commission_rate: float = Field(
-        default=0.00025, ge=0.0, lt=1.0, description="佣金费率"
-    )
-    stamp_tax: float = Field(
-        default=0.0005, ge=0.0, lt=1.0, description="印花税（卖出）"
-    )
-    slippage: float = Field(
-        default=0.002, ge=0.0, lt=1.0, description="滑点"
-    )
+    initial_capital: float = Field(default=1_000_000, ge=1, description="模拟本金")
+    commission_rate: float = Field(default=0.00025, ge=0.0, lt=1.0, description="佣金费率")
+    stamp_tax: float = Field(default=0.0005, ge=0.0, lt=1.0, description="印花税（卖出）")
+    slippage: float = Field(default=0.002, ge=0.0, lt=1.0, description="滑点")
 
 
 class LiveConfig(BaseModel):
     """实盘配置."""
 
     broker: str = Field(default="qmt", description="实盘券商接口")
-    confirm_required: bool = Field(
-        default=True, description="下单前人工确认"
-    )
+    confirm_required: bool = Field(default=True, description="下单前人工确认")
 
 
 class ExecutionConfig(BaseModel):
     """执行层配置."""
 
-    mode: str = Field(
-        default="paper", description="运行模式: backtest / paper / live"
-    )
+    mode: str = Field(default="paper", description="运行模式: backtest / paper / live")
     paper: PaperConfig = Field(default_factory=PaperConfig)
     live: LiveConfig = Field(default_factory=LiveConfig)
 
@@ -176,12 +126,8 @@ class FeishuConfig(BaseModel):
 class SchedulerConfig(BaseModel):
     """调度器配置."""
 
-    timezone: str = Field(
-        default="Asia/Shanghai", description="时区"
-    )
-    trading_days_only: bool = Field(
-        default=True, description="仅在交易日执行"
-    )
+    timezone: str = Field(default="Asia/Shanghai", description="时区")
+    trading_days_only: bool = Field(default=True, description="仅在交易日执行")
     scan_times: list[str] = Field(
         default_factory=lambda: ["09:30", "10:30", "13:05", "14:30"],
         description="盘中扫描时刻",
@@ -191,12 +137,8 @@ class SchedulerConfig(BaseModel):
 class WisdomConfig(BaseModel):
     """交易智慧配置."""
 
-    skill_dir: str = Field(
-        default="src/gugu/wisdom/skills", description="项目内 skill 目录"
-    )
-    fallback_dirs: list[str] = Field(
-        default_factory=list, description="额外的 skill 目录"
-    )
+    skill_dir: str = Field(default="src/gugu/wisdom/skills", description="项目内 skill 目录")
+    fallback_dirs: list[str] = Field(default_factory=list, description="额外的 skill 目录")
     skill_names: list[str] = Field(
         default_factory=lambda: [
             "stock-entry-decision",
@@ -218,9 +160,7 @@ class FundamentalConfig(BaseModel):
     pb_min: float = Field(default=0, description="PB 下限")
     pb_max: float = Field(default=15, description="PB 上限")
     roe_min: float = Field(default=0, description="ROE 下限（%）")
-    revenue_growth_min: float = Field(
-        default=-20, description="营收增长率下限（%）"
-    )
+    revenue_growth_min: float = Field(default=-20, description="营收增长率下限（%）")
 
 
 class LogConfig(BaseModel):

@@ -6,12 +6,13 @@
 3. 策略淘汰：连续表现差的策略自动降权或禁用
 4. 信号加权：多策略信号按权重加权融合
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
 
-from gugu.config import settings
+from gugu.config import get_config
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -20,12 +21,13 @@ logger = get_logger()
 @dataclass
 class StrategyWeight:
     """策略权重"""
+
     name: str
-    weight: float            # 当前权重 0-1
-    enabled: bool            # 是否启用
-    win_count: int = 0       # 近期盈利次数
-    loss_count: int = 0      # 近期亏损次数
-    total_signals: int = 0   # 总信号数
+    weight: float  # 当前权重 0-1
+    enabled: bool  # 是否启用
+    win_count: int = 0  # 近期盈利次数
+    loss_count: int = 0  # 近期亏损次数
+    total_signals: int = 0  # 总信号数
     recent_returns: list[float] = field(default_factory=list)  # 近期收益记录
 
 
@@ -45,12 +47,10 @@ class StrategyPool:
 
     def _init_weights(self) -> None:
         """初始化策略权重（从配置读取）"""
-        enabled = settings().get("strategy", {}).get("enabled", [])
+        enabled = get_config().strategy.enabled
         n = max(len(enabled), 1)
         for name in enabled:
-            self._weights[name] = StrategyWeight(
-                name=name, weight=1.0 / n, enabled=True
-            )
+            self._weights[name] = StrategyWeight(name=name, weight=1.0 / n, enabled=True)
 
     def get_weights(self) -> dict[str, float]:
         """获取当前策略权重"""

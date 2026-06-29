@@ -1,4 +1,5 @@
 """FastAPI 应用：gugu 交易系统 Web 仪表盘。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,6 +12,26 @@ from gugu.config import settings
 from gugu.data import data_manager
 from gugu.execution import PaperBroker
 from gugu.risk import RiskManager
+
+# P1 修复：全局单例 Broker/RiskManager，避免每次 HTTP 请求从磁盘重载状态
+_web_broker: Any = None
+_web_risk: Any = None
+
+
+def _get_web_broker():
+    global _web_broker
+    if _web_broker is None:
+        _web_broker = PaperBroker()
+    return _web_broker
+
+
+def _get_web_risk():
+    global _web_risk
+    if _web_risk is None:
+        _web_risk = RiskManager()
+    return _web_risk
+
+
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -33,7 +54,7 @@ def create_app() -> FastAPI:
     @app.get("/api/account")
     async def get_account() -> dict[str, Any]:
         """获取账户信息。"""
-        broker = PaperBroker()
+        broker = _get_web_broker()
         account = broker.get_account()
         return {
             "cash": account.cash,
@@ -45,34 +66,36 @@ def create_app() -> FastAPI:
     @app.get("/api/portfolio")
     async def get_portfolio() -> dict[str, Any]:
         """获取持仓详情。"""
-        broker = PaperBroker()
+        broker = _get_web_broker()
         portfolio = broker.get_portfolio()
         positions = []
         for sym, pos in portfolio.items():
-            positions.append({
-                "symbol": sym,
-                "quantity": pos.quantity,
-                "available": pos.available,
-                "avg_cost": round(pos.avg_cost, 2),
-                "current_price": round(pos.current_price, 2),
-                "market_value": round(pos.market_value, 2),
-                "profit": round(pos.profit, 2),
-                "profit_ratio": round(pos.profit_ratio, 4),
-            })
+            positions.append(
+                {
+                    "symbol": sym,
+                    "quantity": pos.quantity,
+                    "available": pos.available,
+                    "avg_cost": round(pos.avg_cost, 2),
+                    "current_price": round(pos.current_price, 2),
+                    "market_value": round(pos.market_value, 2),
+                    "profit": round(pos.profit, 2),
+                    "profit_ratio": round(pos.profit_ratio, 4),
+                }
+            )
         return {"positions": positions}
 
     @app.get("/api/trades")
     async def get_trades() -> dict[str, Any]:
         """获取交易记录。"""
-        broker = PaperBroker()
+        broker = _get_web_broker()
         trades = broker.trades
         return {"trades": trades, "count": len(trades)}
 
     @app.get("/api/risk")
     async def get_risk_status() -> dict[str, Any]:
         """获取风控状态。"""
-        risk = RiskManager()
-        broker = PaperBroker()
+        risk = _get_web_risk()
+        broker = _get_web_broker()
         account = broker.get_account()
         start_value = broker.daily_start_value
         loss_pct = 0.0
@@ -90,6 +113,7 @@ def create_app() -> FastAPI:
         hb_path = Path("data/heartbeat.json")
         if hb_path.exists():
             import json
+
             try:
                 return json.loads(hb_path.read_text(encoding="utf-8"))
             except Exception:
@@ -120,13 +144,15 @@ def create_app() -> FastAPI:
                     ts = datetime.fromisoformat(rec.get("last_cycle_at", ""))
                     if ts < cutoff:
                         continue
-                    points.append({
-                        "timestamp": rec["last_cycle_at"],
-                        "total_value": rec.get("total_value", 0),
-                        "cash": rec.get("cash", 0),
-                        "status": rec.get("status", ""),
-                        "halted": rec.get("halted", False),
-                    })
+                    points.append(
+                        {
+                            "timestamp": rec["last_cycle_at"],
+                            "total_value": rec.get("total_value", 0),
+                            "cash": rec.get("cash", 0),
+                            "status": rec.get("status", ""),
+                            "halted": rec.get("halted", False),
+                        }
+                    )
                 except (json.JSONDecodeError, ValueError, KeyError):
                     continue
         except Exception as e:
@@ -154,27 +180,29 @@ def create_app() -> FastAPI:
                     continue
                 try:
                     rec = json.loads(line)
-                    signals.append({
-                        "timestamp": rec.get("timestamp", ""),
-                        "symbol": rec.get("symbol", ""),
-                        "name": rec.get("name", ""),
-                        "direction": rec.get("direction", ""),
-                        "price": rec.get("price", 0),
-                        "confidence": rec.get("confidence", 0),
-                        "strategies": rec.get("strategies", []),
-                        "wisdom_filtered": rec.get("wisdom_filtered", False),
-                        "filter_reason": rec.get("filter_reason", ""),
-                        "wisdom_decision": rec.get("wisdom_decision", {}),
-                        "suggested_position_ratio": rec.get("suggested_position_ratio", 0),
-                        "stop_loss_price": rec.get("stop_loss_price"),
-                        "stage": rec.get("stage", {}),
-                        "danger_signals": rec.get("danger_signals", {}),
-                        "decision_chain": rec.get("decision_chain", []),
-                        "order_success": rec.get("order_success"),
-                        "order_quantity": rec.get("order_quantity", 0),
-                        "order_price": rec.get("order_price", 0),
-                        "is_today": rec.get("timestamp", "").startswith(today_str),
-                    })
+                    signals.append(
+                        {
+                            "timestamp": rec.get("timestamp", ""),
+                            "symbol": rec.get("symbol", ""),
+                            "name": rec.get("name", ""),
+                            "direction": rec.get("direction", ""),
+                            "price": rec.get("price", 0),
+                            "confidence": rec.get("confidence", 0),
+                            "strategies": rec.get("strategies", []),
+                            "wisdom_filtered": rec.get("wisdom_filtered", False),
+                            "filter_reason": rec.get("filter_reason", ""),
+                            "wisdom_decision": rec.get("wisdom_decision", {}),
+                            "suggested_position_ratio": rec.get("suggested_position_ratio", 0),
+                            "stop_loss_price": rec.get("stop_loss_price"),
+                            "stage": rec.get("stage", {}),
+                            "danger_signals": rec.get("danger_signals", {}),
+                            "decision_chain": rec.get("decision_chain", []),
+                            "order_success": rec.get("order_success"),
+                            "order_quantity": rec.get("order_quantity", 0),
+                            "order_price": rec.get("order_price", 0),
+                            "is_today": rec.get("timestamp", "").startswith(today_str),
+                        }
+                    )
                     if len(signals) >= limit:
                         break
                 except json.JSONDecodeError:
@@ -189,6 +217,7 @@ def create_app() -> FastAPI:
         """获取仓颉蒸馏的书籍视角列表。"""
         try:
             from gugu.wisdom.book_router import BookPerspectiveRouter
+
             router = BookPerspectiveRouter()
             books = []
             for name in router.available_perspectives:
@@ -223,7 +252,7 @@ def create_app() -> FastAPI:
 
         # 熔断状态
         try:
-            risk = RiskManager()
+            risk = _get_web_risk()
             is_halted = risk.is_halted
         except Exception:
             is_halted = False
@@ -245,10 +274,52 @@ def create_app() -> FastAPI:
             "pid": os.getpid(),
         }
 
+    @app.get("/api/signals/performance")
+    async def signal_performance(days: int = 30) -> dict[str, Any]:
+        """信号绩效统计（Web 看板展示用）。"""
+        from gugu.analysis.signal_tracker import SignalTracker
+
+        try:
+            tracker = SignalTracker()
+            report = await tracker.generate_report(days=days)
+            return {"success": True, "data": report}
+        except Exception as e:
+            logger.exception(f"获取信号绩效失败: {e}")
+            return {"success": False, "message": str(e)[:200]}
+
+    @app.get("/api/portfolio/correlation")
+    async def portfolio_correlation() -> dict[str, Any]:
+        """持仓相关性检查（高相关对告警）。"""
+        import json as _json
+
+        from gugu.data import data_manager
+        from gugu.execution.paper import STATE_FILE
+
+        try:
+            if not STATE_FILE.exists():
+                return {"success": True, "data": [], "message": "无持仓状态文件"}
+            state = _json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            positions = state.get("positions", {})
+            if not positions:
+                return {"success": True, "data": [], "message": "当前无持仓"}
+
+            from gugu.models import Position as PosModel
+            from gugu.risk import RiskManager
+
+            dm = data_manager()
+            portfolio = {k: PosModel(**v) for k, v in positions.items()}
+            rm = RiskManager()
+            alerts = rm.check_correlation(portfolio, dm)
+            return {"success": True, "data": alerts}
+        except Exception as e:
+            logger.exception(f"相关性检查失败: {e}")
+            return {"success": False, "message": str(e)[:200]}
+
     @app.post("/api/halt/reset")
     async def reset_halt() -> dict[str, Any]:
         """手动解除 L2 熔断。"""
         from gugu.engine.main import TradingEngine
+
         engine = TradingEngine()
         engine.reset_halt()
         return {"success": True, "message": "L2 熔断已手动解除"}
@@ -256,8 +327,8 @@ def create_app() -> FastAPI:
     @app.post("/api/engine/run")
     async def trigger_engine_run() -> dict[str, Any]:
         """触发一次交易循环。"""
-        import asyncio
         from gugu.engine.main import TradingEngine
+
         engine = TradingEngine()
         try:
             await engine.run_daily_cycle()
@@ -269,7 +340,7 @@ def create_app() -> FastAPI:
     @app.get("/api/portfolio/detail")
     async def get_portfolio_detail() -> dict[str, Any]:
         """获取持仓详情（含移动止损状态和危险信号）。"""
-        broker = PaperBroker()
+        broker = _get_web_broker()
         portfolio = broker.get_portfolio()
         positions = []
         for sym, pos in portfolio.items():

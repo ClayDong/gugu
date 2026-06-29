@@ -6,10 +6,12 @@ Never raises to caller to avoid blocking the main trading flow.
 失败重试队列：信号通知失败时持久化到 data/notify_queue.jsonl，定期重试。
 确保买卖信号不因飞书临时故障而丢失。
 """
+
 from __future__ import annotations
 
 import contextlib
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -291,7 +293,22 @@ class FeishuNotifier:
         return await self.send_card(card)
 
     async def notify_error(self, error: dict[str, Any]) -> bool:
-        """Format and send a system error notification."""
+        """Format and send a system error notification.
+
+        P0 安全修复：自动对 error message 做密钥脱敏，
+        防止异常信息中泄露 app_secret / api_key / token / password。
+        """
+        msg = error.get("message", "")
+        # P0 脱敏：替换常见密钥模式
+        for pattern in (
+            r"(app_secret[\"\'\s]*[:=]\s*[\"\']?)[^\"\'\s,}]+",
+            r"(api_key[\"\'\s]*[:=]\s*[\"\']?)[^\"\'\s,}]+",
+            r"(api-key[\"\'\s]*[:=]\s*[\"\']?)[^\"\'\s,}]+",
+            r"(Bearer\s+)[A-Za-z0-9._\-]{16,}",
+        ):
+            msg = re.sub(pattern, r"\1***REDACTED***", msg, flags=re.IGNORECASE)
+        error = dict(error)
+        error["message"] = msg
         return await self.send_card(format_system_error(error))
 
     async def notify_fund_monitor(self, result: dict[str, Any]) -> bool:

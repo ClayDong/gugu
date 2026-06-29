@@ -1,4 +1,5 @@
 """市场状态判断模块：根据沪深300指数判断当前市场状态（牛市/熊市/震荡市）。"""
+
 from __future__ import annotations
 
 from datetime import date
@@ -114,9 +115,13 @@ class MarketRegimeDetector:
         else:
             regime = "sideways"
             if ma20 > ma60:
-                reason = f"MA20({ma20:.2f}) > MA60({ma60:.2f})，但MA20斜率向下({slope:.4f})，震荡格局"
+                reason = (
+                    f"MA20({ma20:.2f}) > MA60({ma60:.2f})，但MA20斜率向下({slope:.4f})，震荡格局"
+                )
             elif ma20 < ma60:
-                reason = f"MA20({ma20:.2f}) < MA60({ma60:.2f})，但MA20斜率向上({slope:.4f})，震荡格局"
+                reason = (
+                    f"MA20({ma20:.2f}) < MA60({ma60:.2f})，但MA20斜率向上({slope:.4f})，震荡格局"
+                )
             else:
                 reason = f"MA20({ma20:.2f}) ≈ MA60({ma60:.2f})，震荡格局"
 
@@ -142,7 +147,7 @@ class MarketRegimeDetector:
         y = valid.values
         x_mean = sum(x) / n
         y_mean = sum(y) / n
-        numerator = sum((xi - x_mean) * (yi - y_mean) for xi, yi in zip(x, y))
+        numerator = sum((xi - x_mean) * (yi - y_mean) for xi, yi in zip(x, y, strict=False))
         denominator = sum((xi - x_mean) ** 2 for xi in x)
         if denominator == 0:
             return 0.0

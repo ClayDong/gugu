@@ -6,23 +6,17 @@ Color semantics:
 - yellow: warning
 - grey: info
 """
+
 from __future__ import annotations
 
+import re
 from typing import Any
 
-# 内置股票名称映射（fallback，当信号中 name 缺失或异常时使用）
-_STOCK_NAMES: dict[str, str] = {
-    "600519": "贵州茅台", "300750": "宁德时代", "000858": "五粮液",
-    "601318": "中国平安", "000333": "美的集团", "300059": "东方财富",
-    "600030": "中信证券", "000776": "广发证券", "603259": "药明康德",
-    "600600": "青岛啤酒", "002625": "光启技术", "600674": "川投能源",
-    "688396": "华润微", "601238": "广汽集团", "600460": "士兰微",
-    "000977": "浪潮信息", "002049": "紫光国微", "300033": "同花顺",
-    "600026": "中远海能", "600150": "中国船舶", "600489": "中金黄金",
-    "600584": "长电科技", "601899": "紫金矿业", "603019": "中科曙光",
-    "603799": "华友钴业", "600036": "招商银行", "601398": "工商银行",
-    "601939": "建设银行", "000538": "云南白药",
-}
+from gugu.data.stock_names import lookup_stock_name
+
+# 优先级：signal["name"]（有效时）> stock_names 模块映射 > signal["symbol"]
+# _STOCK_NAMES 保留为兼容别名，实际查询通过 lookup_stock_name() 统一管理
+_STOCK_NAMES: dict[str, str] = {}
 
 
 def _resolve_name(signal: dict[str, Any]) -> str:
@@ -35,7 +29,7 @@ def _resolve_name(signal: dict[str, Any]) -> str:
     name = signal.get("name", "") or ""
     # 如果 name 为空或等于代码（API 脏数据），用内置映射
     if not name or name == symbol:
-        name = _STOCK_NAMES.get(symbol, "")
+        name = lookup_stock_name(symbol)
     # 仍然为空，回退为代码
     return name or symbol
 
@@ -45,6 +39,7 @@ def _card(
     template: str,
     sections: list[str],
     note: str = "",
+    subtitle: str = "",
 ) -> dict[str, Any]:
     """Build a Feishu interactive card message.
 
@@ -53,6 +48,7 @@ def _card(
         template: Header color template (green/red/yellow/grey).
         sections: List of markdown content blocks, separated by hr.
         note: Optional footer note text.
+        subtitle: Optional subtitle under header.
 
     Returns:
         Feishu interactive card message dict.
@@ -61,9 +57,7 @@ def _card(
     for i, section in enumerate(sections):
         if i > 0:
             elements.append({"tag": "hr"})
-        elements.append(
-            {"tag": "div", "text": {"tag": "lark_md", "content": section}}
-        )
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": section}})
 
     if note:
         if elements:
@@ -75,15 +69,16 @@ def _card(
             }
         )
 
+    header_payload: dict[str, Any] = {
+        "title": {"tag": "plain_text", "content": title},
+        "template": template,
+    }
+    if subtitle:
+        header_payload["subtitle"] = {"tag": "plain_text", "content": subtitle}
+
     return {
         "msg_type": "interactive",
-        "card": {
-            "header": {
-                "title": {"tag": "plain_text", "content": title},
-                "template": template,
-            },
-            "elements": elements,
-        },
+        "card": {"header": header_payload, "elements": elements},
     }
 
 
@@ -189,18 +184,22 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     reason = signal.get("reason", "") or ""
     confidence = signal.get("confidence") or 0.0  # None → 0.0, keeps 0.0 as-is
     position = signal.get("suggested_position", "")
-    if not position and signal.get("suggested_position_ratio") is not None:
-        ratio = float(signal["suggested_position_ratio"])
-        position = f"{ratio:.0%}"
+    position_ratio = float(signal.get("suggested_position_ratio", 0))
+    if not position and position_ratio > 0:
+        position = f"{position_ratio:.0%}"
     price = signal.get("price") or 0.0
     wisdom = signal.get("wisdom", {})
     wisdom_decision = signal.get("wisdom_decision", {})
+    stop_loss = signal.get("stop_loss_price", 0)
+    take_profit = signal.get("take_profit", {})
 
     # 信号强度标签
     strength = ""
     if wisdom_decision.get("entry_filtered"):
         strength = "⚠️ 已过滤"
-    elif signal.get("sector_check", {}).get("is_hot") and signal.get("multi_period", {}).get("weekly_aligned"):
+    elif signal.get("sector_check", {}).get("is_hot") and signal.get("multi_period", {}).get(
+        "weekly_aligned"
+    ):
         strength = "🟢 强信号"
     elif signal.get("weekly_misaligned") or signal.get("sector_check", {}).get("is_cold"):
         strength = "🟡 弱信号"
@@ -212,7 +211,21 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
         template = "yellow"
         action = f"{action}（已过滤）"
 
+    # ===== 30秒决策摘要行 =====
+    summary_parts = [f"{action}信号", f"置信度 {confidence:.0%}"]
+    if position_ratio > 0:
+        summary_parts.append(f"建议仓位 {position_ratio:.0%}")
+    if stop_loss and stop_loss > 0:
+        sl_pct = (price - stop_loss) / price * 100 if price > 0 else 0
+        summary_parts.append(f"止损 -{sl_pct:.1f}%")
+    if take_profit:
+        tp_pct = take_profit.get("target_1_pct", 0)
+        if tp_pct:
+            summary_parts.append(f"止盈目标 +{tp_pct:.0f}%")
+    summary_line = " | ".join(summary_parts)
+
     title = f"{action}信号 · {name}({symbol})"
+    subtitle = f"💰 ￥{price:.2f} | {summary_line}" if price else summary_line
     if strength and not wisdom_decision.get("entry_filtered"):
         title = f"{strength} {title}"
 
@@ -252,7 +265,38 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     if wisdom_text:
         sections.append(f"**交易智慧参考**\n{wisdom_text}")
 
-    return _card(title, template, sections, note="明策 · gugu · 信号通知")
+    # 信号绩效摘要（历史胜率/平均收益，帮助 30 秒决策）
+    perf = signal.get("performance_summary")
+    if perf:
+        perf_lines = [
+            f"📈 **同类信号历史表现（{perf.get('sample_count', 0)} 条）**",
+            f"胜率：{perf.get('win_rate', 0):.0%}",
+            f"5日平均收益：{perf.get('avg_return_5d', 0):.1%}",
+        ]
+        if perf.get("best_return") is not None:
+            perf_lines.append(f"最佳：{perf['best_return']:.1%}")
+        if perf.get("worst_return") is not None:
+            perf_lines.append(f"最差：{perf['worst_return']:.1%}")
+        sections.append("\n".join(perf_lines))
+
+    # 止盈方案
+    if take_profit:
+        tp_lines = ["🎯 **止盈方案**"]
+        if take_profit.get("target_1_pct"):
+            tp_lines.append(
+                f"第一目标：+{take_profit['target_1_pct']:.0%}（￥{take_profit.get('target_1', 0):.2f}）"
+                f" | 建议减仓 {take_profit.get('reduce_at_target1', '50%')}"
+            )
+        if take_profit.get("target_2_pct"):
+            tp_lines.append(
+                f"第二目标：+{take_profit['target_2_pct']:.0%}（￥{take_profit.get('target_2', 0):.2f}）"
+                f" | 建议清仓"
+            )
+        if take_profit.get("note"):
+            tp_lines.append(f"💡 {take_profit['note']}")
+        sections.append("\n".join(tp_lines))
+
+    return _card(title, template, sections, note="明策 · gugu · 信号通知", subtitle=subtitle)
 
 
 def _format_market_summary(summary: dict[str, Any]) -> str:
@@ -262,11 +306,7 @@ def _format_market_summary(summary: dict[str, Any]) -> str:
     total_value = summary.get("total_value", 0)
     cash = summary.get("cash", 0)
     positions_count = summary.get("positions_count", 0)
-    return (
-        f"总资产: ￥{total_value:,.0f} | "
-        f"现金: ￥{cash:,.0f} | "
-        f"持仓: {positions_count} 只"
-    )
+    return f"总资产: ￥{total_value:,.0f} | 现金: ￥{cash:,.0f} | 持仓: {positions_count} 只"
 
 
 def _format_sector_top(sector_top: list[dict[str, Any]]) -> str:
@@ -284,9 +324,7 @@ def _format_sector_top(sector_top: list[dict[str, Any]]) -> str:
         except (TypeError, ValueError):
             net_val = 0.0
             pct_val = 0.0
-        lines.append(
-            f"- {sector}: 主力净流入 ￥{net_val/1e8:,.2f}亿 ({pct_val:+.2%})"
-        )
+        lines.append(f"- {sector}: 主力净流入 ￥{net_val / 1e8:,.2f}亿 ({pct_val:+.2%})")
     return "\n".join(lines) if lines else ""
 
 
@@ -297,7 +335,7 @@ def _format_portfolio_summary(portfolio: dict[str, Any]) -> str:
     lines: list[str] = []
     for sym, info in portfolio.items():
         raw = info.get("name", "") or ""
-        name = raw if (raw and raw != sym) else _STOCK_NAMES.get(sym, raw)
+        name = raw if (raw and raw != sym) else (lookup_stock_name(sym) or raw)
         stock_label = f"{name}({sym})" if name else sym
         quantity = info.get("quantity", 0)
         profit = info.get("profit", 0)
@@ -309,9 +347,7 @@ def _format_portfolio_summary(portfolio: dict[str, Any]) -> str:
             profit_val = 0.0
             mv_val = 0.0
         profit_str = f"+{profit_val:,.0f}" if profit_val >= 0 else f"-{abs(profit_val):,.0f}"
-        lines.append(
-            f"- {stock_label}: {quantity}股 | 市值 ￥{mv_val:,.0f} | 盈亏 {profit_str}"
-        )
+        lines.append(f"- {stock_label}: {quantity}股 | 市值 ￥{mv_val:,.0f} | 盈亏 {profit_str}")
     return "\n".join(lines) if lines else ""
 
 
@@ -369,9 +405,7 @@ def format_daily_report(period: str, data: dict[str, Any]) -> dict[str, Any]:
                 stop = s.get("current_stop", 0)
                 highest = s.get("highest", 0)
                 sig = s.get("signal", "hold")
-                stop_lines.append(
-                    f"- {sym}: 止损 {stop:.2f} / 最高 {highest:.2f} ({sig})"
-                )
+                stop_lines.append(f"- {sym}: 止损 {stop:.2f} / 最高 {highest:.2f} ({sig})")
             sections.append("**移动止损**\n" + "\n".join(stop_lines))
 
     if signals:
@@ -405,8 +439,7 @@ def _format_performance(perf: dict[str, Any]) -> str:
     period_days = perf.get("period_days", 30)
 
     lines = [
-        f"近 {period_days} 天: {total} 信号, "
-        f"{buy_count} 买, {executed} 已执行, {tracked} 可追踪",
+        f"近 {period_days} 天: {total} 信号, {buy_count} 买, {executed} 已执行, {tracked} 可追踪",
         f"5日命中率: {win_rate:.1%} | 平均收益: {avg_return:+.2%}",
     ]
 
@@ -496,6 +529,10 @@ def format_system_error(error: dict[str, Any]) -> dict[str, Any]:
     message = error.get("message", "")
     suggestion = error.get("suggestion", "")
 
+    # P1 修复：对 error message 做二次脱敏（防御纵深）
+    # 主脱敏在 feishu.py notify_error 中，此处作为最后防线
+    message = _sanitize_message(message)
+
     title = f"系统异常 · {module}"
 
     sections = [
@@ -504,6 +541,19 @@ def format_system_error(error: dict[str, Any]) -> dict[str, Any]:
     ]
 
     return _card(title, "red", sections, note="明策 · gugu · 异常告警")
+
+
+def _sanitize_message(msg: str) -> str:
+    """对错误消息中的敏感凭证做正则脱敏（防御纵深，主脱敏在 feishu.py）。"""
+    for pattern in (
+        r"(app_secret[\"\'\s]*[:=]\s*[\"\']?)[^\"\'\s,}]+",
+        r"(api_key[\"\'\s]*[:=]\s*[\"\']?)[^\"\'\s,}]+",
+        r"(api-key[\"\'\s]*[:=]\s*[\"\']?)[^\"\'\s,}]+",
+        r"(Bearer\s+)[A-Za-z0-9._\-]{16,}",
+        r"(Authorization:\s*Bearer\s+)[^\s]+",
+    ):
+        msg = re.sub(pattern, r"\1***REDACTED***", msg, flags=re.IGNORECASE)
+    return msg
 
 
 def format_holdings_sell_alert(stocks: list[dict]) -> dict[str, Any]:
@@ -516,8 +566,13 @@ def format_holdings_sell_alert(stocks: list[dict]) -> dict[str, Any]:
     if not stocks:
         return {
             "msg_type": "interactive",
-            "card": {"header": {"title": {"tag": "plain_text", "content": "持仓卖出检查"}, "template": "green"},
-                     "elements": []},
+            "card": {
+                "header": {
+                    "title": {"tag": "plain_text", "content": "持仓卖出检查"},
+                    "template": "green",
+                },
+                "elements": [],
+            },
         }
 
     lines = ["**以下持仓股出现卖出信号：**", ""]

@@ -5,6 +5,7 @@
 - 个股资金流: DataFrame[date, main_net, main_pct, super_large_net, large_net, medium_net, small_net]
 - 行业资金流: DataFrame[date, sector, main_net, main_pct, super_large_net]
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -21,9 +22,7 @@ class BaseCollector(ABC):
     source: Source = "akshare"
 
     @abstractmethod
-    def fetch_stock_history(
-        self, symbol: str, days: int = 60
-    ) -> pd.DataFrame:
+    def fetch_stock_history(self, symbol: str, days: int = 60) -> pd.DataFrame:
         """获取个股历史行情。
 
         Args:

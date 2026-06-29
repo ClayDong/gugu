@@ -698,6 +698,7 @@ class TestEndToEndIntegrationNoBusinessMock:
         engine._notifier = MockNotifier()
         engine._wisdom = None
         engine._watchlist = []
+        engine._lock = __import__('asyncio').Lock()
         engine._running = False
         engine._last_cycle_date = None
 
@@ -870,6 +871,7 @@ class TestEndToEndFullCycle:
         )
         engine._selector = None  # auto_select 关闭，不需要
         engine._watchlist = ["000858"]
+        engine._lock = __import__('asyncio').Lock()
         engine._running = False
         engine._last_cycle_date = None
         engine._app_config = None

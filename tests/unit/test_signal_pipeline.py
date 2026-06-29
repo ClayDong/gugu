@@ -458,6 +458,8 @@ class TestSectorRotationCheck:
         )
         assert signal is not None
         sector = signal.get("sector_check", {})
+        assert signal is not None
+        sector = signal.get("sector_check", {})
         assert sector.get("is_hot") is False
         assert sector.get("is_cold") is True
 

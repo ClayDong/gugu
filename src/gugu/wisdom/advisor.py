@@ -11,13 +11,14 @@ LLM 决策优势：
 - 根据具体信号上下文灵活决策，而非硬编码阈值
 - 可解释：每次决策附带基于书中原则的理由
 """
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 from typing import Any, cast
 
-from gugu.config import PROJECT_ROOT, env, settings
+from gugu.config import PROJECT_ROOT, env, get_config
 from gugu.models.signal import Signal
 from gugu.utils.log import get_logger
 from gugu.wisdom.book_router import BookPerspectiveRouter
@@ -31,6 +32,8 @@ FALLBACK_TRIAL_RATIO = 0.20  # 试仓比例 20%
 FALLBACK_ADD_RATIO = 0.40  # 加码比例 40%
 FALLBACK_STOP_LOSS_PCT = 0.08  # 默认止损比例 8%
 FALLBACK_ENTRY_MIN_CONFIDENCE = 0.6  # 最低入场置信度
+FALLBACK_TAKE_PROFIT_T1 = 0.10  # 第一止盈目标 +10%
+FALLBACK_TAKE_PROFIT_T2 = 0.20  # 第二止盈目标 +20%
 
 # ========== LLM 安全护栏 ==========
 LLM_MAX_TRIAL_RATIO = 0.15  # LLM 首次试仓硬上限 15%
@@ -40,19 +43,53 @@ LLM_MAX_STOP_LOSS_PCT = 0.10  # LLM 止损最大幅度 10%
 
 def _max_single_position() -> float:
     """从配置读取单股最大仓位上限，与风控 L1 保持一致。"""
-    return float(settings().get("risk", {}).get("max_position_ratio", 0.30))
+    return get_config().risk.max_position_ratio
+
+
+def _compute_take_profit(entry_price: float, atr: float = 0) -> dict:
+    """计算止盈方案：第一目标 +10%、第二目标 +20%。
+
+    若有 ATR 数据，用 ATR 校准止盈幅度；
+    若无 ATR 则用固定百分比 fallback。
+
+    Returns:
+        {"target_1": float, "target_1_pct": float,
+         "target_2": float, "target_2_pct": float,
+         "reduce_at_target1": str, "note": str}
+    """
+    tp1_pct = FALLBACK_TAKE_PROFIT_T1
+    tp2_pct = FALLBACK_TAKE_PROFIT_T2
+
+    # ATR 校准：若 ATR/price > 3%，目标上调；若 < 1%，目标下调
+    if atr > 0 and entry_price > 0:
+        atr_ratio = atr / entry_price
+        if atr_ratio > 0.03:
+            tp1_pct = min(0.15, tp1_pct * 1.5)
+            tp2_pct = min(0.30, tp2_pct * 1.5)
+        elif atr_ratio < 0.01:
+            tp1_pct = max(0.05, tp1_pct * 0.5)
+            tp2_pct = max(0.10, tp2_pct * 0.5)
+
+    return {
+        "target_1": round(entry_price * (1 + tp1_pct), 2),
+        "target_1_pct": tp1_pct,
+        "target_2": round(entry_price * (1 + tp2_pct), 2),
+        "target_2_pct": tp2_pct,
+        "reduce_at_target1": "50%",
+        "note": f"止损 {FALLBACK_STOP_LOSS_PCT:.0%} / 止盈 {tp1_pct:.0%}-{tp2_pct:.0%}，盈亏比 1:{tp2_pct / FALLBACK_STOP_LOSS_PCT:.1f}",
+    }
 
 
 def _wisdom_dirs() -> list[Path]:
     """返回所有可能的 skill 目录（项目内优先，外部 fallback）。"""
-    cfg = settings().get("wisdom", {})
+    wc = get_config().wisdom
     dirs: list[Path] = []
 
-    project_dir = cfg.get("skill_dir")
+    project_dir = wc.skill_dir
     if project_dir:
         dirs.append(PROJECT_ROOT / project_dir)
 
-    for d in cfg.get("fallback_dirs", []):
+    for d in wc.fallback_dirs:
         dirs.append(PROJECT_ROOT / d)
 
     return dirs
@@ -80,17 +117,7 @@ class WisdomAdvisor:
 
     def __init__(self) -> None:
         self._skills: dict[str, str] = {}
-        self._skill_names: list[str] = settings().get("wisdom", {}).get(
-            "skill_names",
-            [
-                "stock-entry-decision",
-                "stock-stop-loss-decision",
-                "stock-position-sizing",
-                "stock-profit-taking-decision",
-                "stock-trailing-stop",
-                "stock-psychology-check",
-            ],
-        )
+        self._skill_names: list[str] = get_config().wisdom.skill_names
         self._load_skills()
 
         # 加载仓颉蒸馏的多视角书籍认知
@@ -101,8 +128,7 @@ class WisdomAdvisor:
         self._llm_available = bool(cfg.llm_api_key and cfg.llm_base_url and cfg.llm_model)
         if self._llm_available:
             logger.info(
-                f"[wisdom] LLM 决策已启用: model={cfg.llm_model}, "
-                f"base_url={cfg.llm_base_url}"
+                f"[wisdom] LLM 决策已启用: model={cfg.llm_model}, base_url={cfg.llm_base_url}"
             )
         else:
             logger.warning(
@@ -139,7 +165,9 @@ class WisdomAdvisor:
                 "未加载到任何交易智慧 skill。"
                 "如需启用，请将 books2skill 的 skill 复制到 config/settings.yaml 中配置的 wisdom.skill_dir。"
             )
-        logger.info(f"[wisdom] 加载 {len(self._skills)} 个交易智慧 skill: {list(self._skills.keys())}")
+        logger.info(
+            f"[wisdom] 加载 {len(self._skills)} 个交易智慧 skill: {list(self._skills.keys())}"
+        )
 
     @staticmethod
     def _as_dict(signal: dict[str, Any] | Signal) -> dict[str, Any]:
@@ -186,7 +214,13 @@ class WisdomAdvisor:
         signal_context = self._build_signal_context(signal)
 
         # 2.5 构建多视角书籍认知上下文
-        scenario = "entry" if direction == "buy" else "profit_taking" if direction == "sell" else "psychology_check"
+        scenario = (
+            "entry"
+            if direction == "buy"
+            else "profit_taking"
+            if direction == "sell"
+            else "psychology_check"
+        )
         book_context = self._book_router.build_context(scenario, direction, signal)
 
         # 3. 构建 prompt
@@ -229,7 +263,7 @@ class WisdomAdvisor:
             "海龟交易法则、范·撒普《通向财务自由之路》、邱国鹭《投资中最简单的事》等经典。\n"
             "你的职责是根据策略信号和多视角交易智慧，给出结构化的交易决策。\n\n"
             "你必须输出 JSON 格式，包含以下字段：\n"
-            "- action: \"buy\" | \"sell\" | \"hold\" | \"filter\"\n"
+            '- action: "buy" | "sell" | "hold" | "filter"\n'
             "  - buy: 建议买入\n"
             "  - sell: 建议卖出\n"
             "  - hold: 维持持仓不变\n"
@@ -328,9 +362,17 @@ class WisdomAdvisor:
             # 检测段落标题
             if line.startswith("## "):
                 # 只保留 I 段（方法论骨架）、E 段（执行步骤）、B 段（边界）
-                if ("I —" in line or "I—" in line or "方法论" in line
-                        or "E —" in line or "E—" in line or "执行步骤" in line
-                        or "B —" in line or "B—" in line or "边界" in line):
+                if (
+                    "I —" in line
+                    or "I—" in line
+                    or "方法论" in line
+                    or "E —" in line
+                    or "E—" in line
+                    or "执行步骤" in line
+                    or "B —" in line
+                    or "B—" in line
+                    or "边界" in line
+                ):
                     in_section = True
                     result_lines.append(line)
                 else:
@@ -355,6 +397,7 @@ class WisdomAdvisor:
         except json.JSONDecodeError:
             # 尝试从 markdown code block 中提取
             import re
+
             match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", content, re.DOTALL)
             if match:
                 try:
@@ -372,7 +415,9 @@ class WisdomAdvisor:
 
         return data
 
-    def _apply_llm_decision(self, signal: dict[str, Any], llm_decision: dict[str, Any]) -> dict[str, Any]:
+    def _apply_llm_decision(
+        self, signal: dict[str, Any], llm_decision: dict[str, Any]
+    ) -> dict[str, Any]:
         """将 LLM 决策应用到信号。"""
         action = llm_decision["action"]
         reason = llm_decision.get("reason", "")
@@ -474,6 +519,12 @@ class WisdomAdvisor:
                 decision["stop_loss_price"] = round(default_stop, 2)
                 decision["stop_loss_source"] = "fallback"
 
+            # 止盈方案（基于入场价 + 固定百分比）
+            if price > 0:
+                tp = _compute_take_profit(price, signal.get("atr", 0))
+                signal["take_profit"] = tp
+                decision["take_profit"] = tp
+
         elif direction == "sell" and action == "sell":
             # LLM 同意卖出
             decision["sell_reason"] = reason
@@ -531,13 +582,19 @@ class WisdomAdvisor:
                     f"信心度 {confidence:.2f} < {FALLBACK_ENTRY_MIN_CONFIDENCE}"
                 )
 
-            # 仓位调整——分层下注
+            # 仓位调整——分层下注（三档：试仓/加仓/满仓）
             original_ratio = signal.get("suggested_position_ratio", 0.0)
             if original_ratio > 0:
                 has_position = signal.get("has_position", False)
+                profit_pct = signal.get("profit_pct", 0.0)
                 if has_position:
-                    adjusted_ratio = original_ratio * FALLBACK_ADD_RATIO
-                    strategy_label = "add"
+                    # 持仓盈利 >5% → 趋势确认，允许加码更多
+                    if profit_pct > 0.05:
+                        adjusted_ratio = original_ratio * FALLBACK_ADD_RATIO * 1.5
+                        strategy_label = "add_confirmed"
+                    else:
+                        adjusted_ratio = original_ratio * FALLBACK_ADD_RATIO
+                        strategy_label = "add"
                 else:
                     adjusted_ratio = original_ratio * FALLBACK_TRIAL_RATIO
                     strategy_label = "trial"
@@ -565,15 +622,27 @@ class WisdomAdvisor:
                 stop_price = price * (1 - FALLBACK_STOP_LOSS_PCT)
                 decision["stop_loss_price"] = round(stop_price, 2)
                 signal["stop_loss_price"] = round(stop_price, 2)
+                # 止盈方案
+                tp = _compute_take_profit(price, signal.get("atr", 0))
+                signal["take_profit"] = tp
+                decision["take_profit"] = tp
                 logger.info(
                     f"[wisdom-fallback] {signal.get('symbol', '')} 止损预设: "
                     f"{stop_price:.2f} (-{FALLBACK_STOP_LOSS_PCT:.0%})"
+                    f" | 止盈目标: +{tp.get('target_1_pct', 0):.0%}/+{tp.get('target_2_pct', 0):.0%}"
                 )
 
         elif direction == "sell":
             advice["profit_taking"] = self._get_skill_advice("stock-profit-taking-decision")
             advice["trailing_stop"] = self._get_skill_advice("stock-trailing-stop")
-            if price > 0:
+
+            # P1 修复：fallback 卖出信号校验——无持仓时过滤卖出信号
+            has_position = signal.get("has_position", False)
+            if not has_position:
+                signal["wisdom_filtered"] = True
+                decision["filter_reason"] = "无持仓，过滤卖出信号"
+                logger.info(f"[wisdom-fallback] {signal.get('symbol', '')} 卖出过滤: 无持仓")
+            elif price > 0:
                 decision["sell_reason"] = "策略信号触发卖出"
                 logger.info(f"[wisdom-fallback] {signal.get('symbol', '')} 卖出决策: 策略信号触发")
 

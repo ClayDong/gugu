@@ -3,6 +3,7 @@
 阶段四启用。当前为骨架，方法未实现。
 接入时需安装 xtquant（QMT Python SDK）。
 """
+
 from __future__ import annotations
 
 from gugu.config import env
@@ -57,9 +58,7 @@ class QmtBroker(BaseBroker):
         - IP 白名单
         """
         logger.warning("QMT 下单未实现（阶段四）")
-        return OrderResult(
-            False, symbol, direction, 0, 0, 0, message="QMT 实盘未启用（阶段四）"
-        )
+        return OrderResult(False, symbol, direction, 0, 0, 0, message="QMT 实盘未启用（阶段四）")
 
     def get_position(self, symbol: str) -> Position | None:
         logger.warning("QMT 查询持仓未实现（阶段四）")

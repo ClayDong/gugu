@@ -11,15 +11,14 @@ A股板块轮动规律：
 - sector_scores: 各板块评分
 - recommended_sectors: 推荐的3-5个板块
 """
+
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import akshare as ak
 import pandas as pd
 
-from gugu.config import settings
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -58,6 +57,17 @@ SW_INDUSTRY_MAP = {
 
 
 class SectorRotation:
+    """板块轮动检测器。"""
+
+    @staticmethod
+    def get_industry_category(industry: str) -> str:
+        """获取行业所属大类分类。
+
+        P2 修复：封装 SW_INDUSTRY_MAP 的访问，
+        外部模块通过此方法获取行业分类而非直接访问模块内部常量。
+        """
+        return SW_INDUSTRY_MAP.get(industry, "")
+
     """板块轮动检测器。
 
     使用东方财富行业板块数据，综合判断板块强弱：
@@ -78,6 +88,7 @@ class SectorRotation:
             dict with: hot_sectors, sector_scores, recommended_sectors, reason
         """
         from datetime import date
+
         today = str(date.today())
         if self._cache_date == today and self._cache:
             return self._cache
@@ -103,7 +114,7 @@ class SectorRotation:
 
             result = {
                 "hot_sectors": recommended,
-                "sector_scores": {s: v for s, v in top_sectors},
+                "sector_scores": dict(top_sectors),
                 "recommended_sectors": recommended[:3],
                 "categories": list(categories),
                 "reason": f"强势板块: {', '.join(recommended[:3])} (大类: {', '.join(categories)})",
@@ -131,7 +142,9 @@ class SectorRotation:
 
             # 综合评分：涨跌幅60% + 资金流入40%
             # 涨跌幅归一化到0-1
-            pct_score = min(max(pct_change / 5, 0), 1) if pct_change > 0 else max(pct_change / 5, -1)
+            pct_score = (
+                min(max(pct_change / 5, 0), 1) if pct_change > 0 else max(pct_change / 5, -1)
+            )
             # 资金流归一化
             flow_score = min(max(main_net / 10, -1), 1)
 
@@ -147,8 +160,9 @@ class SectorRotation:
 
         return scores
 
-    async def filter_stocks_by_sector(self, symbols: list[str],
-                                      hot_sectors: list[str]) -> list[str]:
+    async def filter_stocks_by_sector(
+        self, symbols: list[str], hot_sectors: list[str]
+    ) -> list[str]:
         """根据强势板块筛选股票。
 
         Args:

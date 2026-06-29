@@ -9,21 +9,24 @@
 4. 市场状态仓位修正（RegimeDetector 已体现在 budget 中）
 5. Wisdom 决策层（WisdomAdvisor）
 """
+
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 import pandas as pd
 
+from gugu import config as gugu_config
+from gugu.analysis.danger_signal import DangerSignalDetector
+from gugu.analysis.no_average_down import NoAverageDownChecker
 from gugu.analysis.position_controller import PositionBudget, PositionController
 from gugu.analysis.regime_detector import MultiPeriodRegimeDetector
 from gugu.analysis.sector_rotation import SectorRotation
-from gugu.analysis.stage_detector import StageDetector, MarketStage
-from gugu.analysis.danger_signal import DangerSignalDetector
-from gugu.analysis.no_average_down import NoAverageDownChecker
-from gugu import config as gugu_config
+from gugu.analysis.stage_detector import MarketStage, StageDetector
 from gugu.data.manager import DataManager
+from gugu.data.stock_names import lookup_stock_name
 from gugu.engine.signal_router import SignalRouter
 from gugu.filters.fundamental import FundamentalFilter
 from gugu.filters.industry_constraint import IndustryConstraint
@@ -32,6 +35,9 @@ from gugu.utils.log import get_logger
 from gugu.wisdom import WisdomAdvisor
 
 logger = get_logger()
+
+# 板块轮动缓存 TTL（秒），每日更新一次
+_SECTOR_CACHE_TTL = 3600
 
 
 class SignalPipeline:
@@ -76,6 +82,7 @@ class SignalPipeline:
         self._industry_constraint = industry_constraint or IndustryConstraint()
         self._sector_rotation = sector_rotation or SectorRotation()
         self._hot_sectors_cache: dict[str, Any] | None = None  # 当日热板块缓存
+        self._hot_sectors_ts: float = 0.0  # 缓存时间戳
 
         # P0 新增：四阶段判断器、危险信号检测器、向下摊平检查器
         self._stage_detector = StageDetector()
@@ -115,9 +122,7 @@ class SignalPipeline:
 
             # L3 元数据注入
             signal["prev_close"] = (
-                float(df.iloc[-2]["close"])
-                if len(df) >= 2
-                else float(df.iloc[-1]["close"])
+                float(df.iloc[-2]["close"]) if len(df) >= 2 else float(df.iloc[-1]["close"])
             )
             signal["is_st"] = bool(meta.get("is_st", False))
             signal["is_suspended"] = bool(meta.get("is_suspended", False))
@@ -158,9 +163,7 @@ class SignalPipeline:
                 "data_source": "degraded" if self._dm.is_degraded else "normal",
                 "portfolio_count": len(portfolio),
                 "cash_ratio": (
-                    account.cash / account.total_value
-                    if account.total_value > 0
-                    else 1.0
+                    account.cash / account.total_value if account.total_value > 0 else 1.0
                 ),
                 "regime": "",  # 由调用方填充，此处留空
             }
@@ -181,9 +184,7 @@ class SignalPipeline:
             )
 
             # 0.5 危险信号检测（新增：检测量增价不涨/两天转头/坏消息）
-            danger_result = self._danger_detector.detect(
-                df, prev_close=signal.get("prev_close")
-            )
+            danger_result = self._danger_detector.detect(df, prev_close=signal.get("prev_close"))
             signal["danger_signals"] = {
                 "signals": danger_result.signals,
                 "severity": danger_result.severity,
@@ -192,14 +193,11 @@ class SignalPipeline:
             }
             if danger_result.has_signal and danger_result.severity in ("high", "medium"):
                 logger.warning(
-                    f"{symbol} 危险信号: {danger_result.signals}, "
-                    f"严重程度={danger_result.severity}"
+                    f"{symbol} 危险信号: {danger_result.signals}, 严重程度={danger_result.severity}"
                 )
                 if signal["direction"] == "buy":
                     signal["wisdom_filtered"] = True
-                    signal["filter_reason"] = (
-                        f"危险信号: {danger_result.description}"
-                    )
+                    signal["filter_reason"] = f"危险信号: {danger_result.description}"
 
             # 0.6 多周期趋势确认（仅买入信号，A-07 修复）
             # 日线信号 + 周线趋势向上 + 月线非下降 = 强入场信号
@@ -229,26 +227,18 @@ class SignalPipeline:
                 fund_result = self._fundamental_filter.check(symbol)
                 signal["fundamental"] = fund_result
                 if not fund_result["pass"]:
-                    logger.info(
-                        f"{symbol} 基本面过滤: {', '.join(fund_result['reasons'])}"
-                    )
+                    logger.info(f"{symbol} 基本面过滤: {', '.join(fund_result['reasons'])}")
                     signal["wisdom_filtered"] = True
-                    signal["filter_reason"] = (
-                        f"基本面: {', '.join(fund_result['reasons'])}"
-                    )
+                    signal["filter_reason"] = f"基本面: {', '.join(fund_result['reasons'])}"
 
             # 2. 资金流过滤（仅买入信号）
             if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
                 flow_result = await self._money_flow_filter.check(symbol)
                 signal["money_flow"] = flow_result
                 if not flow_result["pass"]:
-                    logger.info(
-                        f"{symbol} 资金流过滤: {', '.join(flow_result['reasons'])}"
-                    )
+                    logger.info(f"{symbol} 资金流过滤: {', '.join(flow_result['reasons'])}")
                     signal["wisdom_filtered"] = True
-                    signal["filter_reason"] = (
-                        f"资金流: {', '.join(flow_result['reasons'])}"
-                    )
+                    signal["filter_reason"] = f"资金流: {', '.join(flow_result['reasons'])}"
 
             # 2.2 板块轮动感知（仅买入信号，A-09 修复）
             # 热点板块内的个股获得置信度加成，冷门板块的个股被标记
@@ -258,7 +248,9 @@ class SignalPipeline:
                     sector_check = await self._check_sector_rotation(symbol)
                     signal["sector_check"] = sector_check
                     if sector_check.get("is_hot"):
-                        logger.info(f"{symbol} 所属板块 {sector_check.get('industry', '?')} 是热点板块")
+                        logger.info(
+                            f"{symbol} 所属板块 {sector_check.get('industry', '?')} 是热点板块"
+                        )
                     elif sector_check.get("industry"):
                         logger.info(
                             f"{symbol} 所属板块 {sector_check.get('industry', '?')} "
@@ -281,6 +273,7 @@ class SignalPipeline:
                     cost_price=getattr(pos, "avg_cost", 0) or getattr(pos, "cost_price", 0),
                     current_price=signal.get("price", 0),
                     quantity=getattr(pos, "quantity", 0),
+                    lowest_price_since_position=float(getattr(pos, "lowest_price", 0) or 0),
                 )
                 signal["avg_down_check"] = {
                     "allowed": avg_down_result.allowed,
@@ -315,13 +308,10 @@ class SignalPipeline:
                 and not signal.get("wisdom_filtered")
                 and stage_result.stage in (MarketStage.FRENZY, MarketStage.FINAL)
             ):
-                logger.warning(
-                    f"{symbol} 阶段过滤: {stage_result.stage.value}，不建议入场"
-                )
+                logger.warning(f"{symbol} 阶段过滤: {stage_result.stage.value}，不建议入场")
                 signal["wisdom_filtered"] = True
                 signal["filter_reason"] = (
-                    f"阶段过滤: {stage_result.description}。"
-                    f"{stage_result.suggestion}"
+                    f"阶段过滤: {stage_result.description}。{stage_result.suggestion}"
                 )
 
             # 4. 市场状态仓位修正（已在 budget.single_limit 中体现，此处仅记录）
@@ -405,14 +395,22 @@ class SignalPipeline:
         Returns:
             dict: {is_hot, is_cold, industry, hot_sectors}
         """
-        # 懒加载热板块数据（每日缓存）
-        if self._hot_sectors_cache is None:
+        # 懒加载热板块数据（每日缓存，含 TTL）
+        now = time.time()
+        if self._hot_sectors_cache is None or now - self._hot_sectors_ts > _SECTOR_CACHE_TTL:
             try:
                 result = await self._sector_rotation.detect(top_n=5)
                 self._hot_sectors_cache = result
+                self._hot_sectors_ts = now
             except Exception as e:
                 logger.debug(f"获取板块轮动数据失败: {e}")
-                return {"is_hot": False, "is_cold": False, "industry": "", "hot_sectors": [], "error": str(e)}
+                return {
+                    "is_hot": False,
+                    "is_cold": False,
+                    "industry": "",
+                    "hot_sectors": [],
+                    "error": str(e),
+                }
 
         hot_sectors = self._hot_sectors_cache.get("hot_sectors", [])
         if not hot_sectors:
@@ -428,10 +426,10 @@ class SignalPipeline:
         is_cold = False
         hot_categories = set()
         for s in hot_sectors:
-            cat = self._sector_rotation.SW_INDUSTRY_MAP.get(s, "")
+            cat = SectorRotation.get_industry_category(s)
             if cat:
                 hot_categories.add(cat)
-        stock_cat = self._sector_rotation.SW_INDUSTRY_MAP.get(industry, "")
+        stock_cat = SectorRotation.get_industry_category(industry)
         if not is_hot and stock_cat and stock_cat not in hot_categories:
             is_cold = True
 
@@ -443,9 +441,7 @@ class SignalPipeline:
         }
 
 
-def record_signal_history(
-    signal: dict[str, Any], risk_result: Any, order_result: Any
-) -> None:
+def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result: Any) -> None:
     """将信号、风控结果、下单结果持久化到 signals_history.jsonl。
 
     BIZ-01 修复。每行一个 JSON，含完整决策链路，便于回溯分析。
@@ -466,107 +462,120 @@ def record_signal_history(
         # 步骤0: 四阶段判断
         stage_info = signal.get("stage", {})
         if stage_info:
-            decision_chain.append({
-                "step": 0,
-                "name": "四阶段判断",
-                "result": stage_info.get("stage", "unknown"),
-                "confidence": stage_info.get("confidence", 0),
-                "description": stage_info.get("description", ""),
-                "passed": True,
-            })
+            decision_chain.append(
+                {
+                    "step": 0,
+                    "name": "四阶段判断",
+                    "result": stage_info.get("stage", "unknown"),
+                    "confidence": stage_info.get("confidence", 0),
+                    "description": stage_info.get("description", ""),
+                    "passed": True,
+                }
+            )
 
         # 步骤0.5: 危险信号检测
         danger_info = signal.get("danger_signals", {})
         if danger_info:
             severity = danger_info.get("severity", "none")
-            decision_chain.append({
-                "step": 0.5,
-                "name": "危险信号检测",
-                "result": severity,
-                "signals": danger_info.get("signals", []),
-                "description": danger_info.get("description", ""),
-                "passed": severity not in ("medium", "high"),
-            })
+            decision_chain.append(
+                {
+                    "step": 0.5,
+                    "name": "危险信号检测",
+                    "result": severity,
+                    "signals": danger_info.get("signals", []),
+                    "description": danger_info.get("description", ""),
+                    "passed": severity not in ("medium", "high"),
+                }
+            )
 
         # 步骤1: 基本面过滤
         fund_info = signal.get("fundamental", {})
         if fund_info:
-            decision_chain.append({
-                "step": 1,
-                "name": "基本面过滤",
-                "result": "pass" if fund_info.get("pass") else "fail",
-                "reasons": fund_info.get("reasons", []),
-                "passed": fund_info.get("pass", True),
-            })
+            decision_chain.append(
+                {
+                    "step": 1,
+                    "name": "基本面过滤",
+                    "result": "pass" if fund_info.get("pass") else "fail",
+                    "reasons": fund_info.get("reasons", []),
+                    "passed": fund_info.get("pass", True),
+                }
+            )
 
         # 步骤2: 资金流过滤
         flow_info = signal.get("money_flow", {})
         if flow_info:
-            decision_chain.append({
-                "step": 2,
-                "name": "资金流过滤",
-                "result": "pass" if flow_info.get("pass") else "fail",
-                "reasons": flow_info.get("reasons", []),
-                "passed": flow_info.get("pass", True),
-            })
+            decision_chain.append(
+                {
+                    "step": 2,
+                    "name": "资金流过滤",
+                    "result": "pass" if flow_info.get("pass") else "fail",
+                    "reasons": flow_info.get("reasons", []),
+                    "passed": flow_info.get("pass", True),
+                }
+            )
 
         # 步骤2.2: 板块轮动感知
         sector_info = signal.get("sector_check", {})
         if sector_info and "is_hot" in sector_info:
-            decision_chain.append({
-                "step": 2.2,
-                "name": "板块轮动感知",
-                "result": "hot" if sector_info.get("is_hot") else ("cold" if sector_info.get("is_cold") else "neutral"),
-                "industry": sector_info.get("industry", ""),
-                "passed": True,  # 板块不过滤，仅参考
-            })
+            decision_chain.append(
+                {
+                    "step": 2.2,
+                    "name": "板块轮动感知",
+                    "result": "hot"
+                    if sector_info.get("is_hot")
+                    else ("cold" if sector_info.get("is_cold") else "neutral"),
+                    "industry": sector_info.get("industry", ""),
+                    "passed": True,  # 板块不过滤，仅参考
+                }
+            )
 
         # 步骤2.5: 向下摊平检查
         avg_down_info = signal.get("avg_down_check", {})
         if avg_down_info:
-            decision_chain.append({
-                "step": 2.5,
-                "name": "向下摊平检查",
-                "result": "allowed" if avg_down_info.get("allowed") else "blocked",
-                "reason": avg_down_info.get("reason", ""),
-                "profit_pct": avg_down_info.get("profit_pct", 0),
-                "passed": avg_down_info.get("allowed", True),
-            })
+            decision_chain.append(
+                {
+                    "step": 2.5,
+                    "name": "向下摊平检查",
+                    "result": "allowed" if avg_down_info.get("allowed") else "blocked",
+                    "reason": avg_down_info.get("reason", ""),
+                    "profit_pct": avg_down_info.get("profit_pct", 0),
+                    "passed": avg_down_info.get("allowed", True),
+                }
+            )
 
         # 步骤3: 行业约束
         ind_info = signal.get("industry_check", {})
         if ind_info:
-            decision_chain.append({
-                "step": 3,
-                "name": "行业约束",
-                "result": "allowed" if ind_info.get("allowed") else "blocked",
-                "reason": ind_info.get("reason", ""),
-                "passed": ind_info.get("allowed", True),
-            })
+            decision_chain.append(
+                {
+                    "step": 3,
+                    "name": "行业约束",
+                    "result": "allowed" if ind_info.get("allowed") else "blocked",
+                    "reason": ind_info.get("reason", ""),
+                    "passed": ind_info.get("allowed", True),
+                }
+            )
 
         # 步骤5: Wisdom决策
         wisdom_dec = signal.get("wisdom_decision", {})
         if wisdom_dec:
-            decision_chain.append({
-                "step": 5,
-                "name": "Wisdom决策",
-                "result": wisdom_dec.get("action", ""),
-                "position_ratio": wisdom_dec.get("position_ratio", 0),
-                "stop_loss_price": wisdom_dec.get("stop_loss_price", 0),
-                "reason": wisdom_dec.get("reason", ""),
-                "passed": not signal.get("wisdom_filtered", False),
-            })
+            decision_chain.append(
+                {
+                    "step": 5,
+                    "name": "Wisdom决策",
+                    "result": wisdom_dec.get("action", ""),
+                    "position_ratio": wisdom_dec.get("position_ratio", 0),
+                    "stop_loss_price": wisdom_dec.get("stop_loss_price", 0),
+                    "reason": wisdom_dec.get("reason", ""),
+                    "passed": not signal.get("wisdom_filtered", False),
+                }
+            )
 
         # 信号 name fallback（防止信号无 name 时的脏数据）
         _sym = signal.get("symbol", "")
         _raw_name = signal.get("name", "") or ""
         if not _raw_name or _raw_name == _sym:
-            _local_names = {
-                "600519": "贵州茅台", "300750": "宁德时代", "000858": "五粮液",
-                "601318": "中国平安", "000333": "美的集团", "603259": "药明康德",
-                "600600": "青岛啤酒", "002625": "光启技术", "600674": "川投能源",
-            }
-            _raw_name = _local_names.get(_sym, _raw_name)
+            _raw_name = lookup_stock_name(_sym) or _raw_name
 
         record = {
             "timestamp": pd.Timestamp.now().isoformat(),
