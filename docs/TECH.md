@@ -8,9 +8,9 @@
 
 | 层 | 技术 | 说明 |
 |----|------|------|
-| 语言 | Python 3.12+ | venv 使用 3.12.13 |
+| 语言 | Python 3.12+ | venv 推荐 3.12+，当前已验证 3.14 |
 | 依赖管理 | uv | pyproject.toml + uv.lock |
-| 数据源 | akshare（主）+ 新浪（降级） | 免费，使用不同底层 API 确保冗余 |
+| 数据源 | sina（主）+ akshare（降级） | 免费，使用不同底层 API 确保冗余 |
 | 数据处理 | pandas / numpy / pyarrow | |
 | 调度 | APScheduler | CronTrigger |
 | 通知 | 飞书开放平台 API | 卡片消息（interactive card） |
@@ -36,16 +36,16 @@ gugu/
 │   ├── __init__.py
 │   ├── config/                  # 配置层
 │   │   ├── __init__.py          # 导出 + 向后兼容
-│   │   ├── models.py            # AppConfig + 10 section BaseModel
-│   │   └── _legacy_config.py    # 旧 settings() 函数
+│   │   └── models.py            # AppConfig + 10 section BaseModel
+│   ├── _legacy_config.py        # 旧 settings() 函数（不在 config/ 内）
 │   ├── data/                    # 数据层
 │   │   ├── manager.py           # DataManager（统一入口，async + 并发降级）
 │   │   ├── quality.py           # 链式校验（6 个 ValidationRule 类）
 │   │   ├── cache.py             # 内存缓存（2 分钟 TTL）
 │   │   └── collectors/
 │   │       ├── base.py          # BaseCollector 抽象
-│   │       ├── akshare_collector.py  # 主源（东方财富 API）
-│   │       └── fallback.py      # 降级源（新浪 API）
+│   │       ├── akshare_collector.py  # 降级源（东方财富 API）
+│   │       └── fallback.py      # 主源（新浪 API）
 │   ├── models/
 │   │   ├── position.py          # Position 统一模型
 │   │   └── signal.py            # Signal 强类型数据类 + OrderResult
@@ -69,7 +69,10 @@ gugu/
 │   │   └── qmt.py               # QMT 实盘（阶段四骨架）
 │   ├── notifier/                # 通知层
 │   │   ├── feishu.py            # 飞书推送（含 tenacity 重试）
-│   │   └── formatter.py         # 卡片格式化（类型安全）
+│   │   ├── formatter.py         # 卡片格式化（类型安全）
+│   │   ├── fund_monitor.py      # 基金净值监控
+│   │   └── flow_report.py       # 资金流日报
+│   ├── macro/                   # 宏观五维模块
 │   ├── selector/                # 选股层
 │   │   └── stock_selector.py    # 资金流 + 策略筛选
 │   ├── filters/                 # 过滤层
@@ -130,7 +133,7 @@ gugu/
 └── docs/
     ├── PRODUCT.md               # 产品文档
     ├── TECH.md                  # 本文件
-    ├── ITERATION_1.md ~ ITERATION_5.md  # 迭代记录
+    ├── ITERATION_1.md ~ ITERATION_6.md  # 迭代记录
 ```
 
 ## 三、核心架构
@@ -138,7 +141,7 @@ gugu/
 ### 3.1 分层架构
 
 ```
-数据层(data/)        采集器(akshare主+新浪降级) → 链式质量校验 → 内存缓存(2min TTL)
+数据层(data/)        采集器(sina主+akshare降级) → 链式质量校验 → 内存缓存(2min TTL)
        ↓
 策略层(strategies/)  8个内置策略 + LLM自然语言生成器
        ↓
@@ -252,8 +255,8 @@ gugu/
 
 `DataManager`（[data/manager.py](src/gugu/data/manager.py)）：
 
-- 主源 `AkshareCollector`：东方财富 API
-- 降级源 `SinaCollector`：新浪 API（不同底层，真实冗余）
+- 主源 `SinaCollector`：新浪 API
+- 降级源 `AkshareCollector`：东方财富 API
 - 连续失败 3 次 → 降级，冷却 5 分钟后切回
 - **并发降级**：主源失败后 `asyncio.wait(FIRST_COMPLETED)` 并发尝试所有降级源
 - 所有源共享数据质量校验（DataValidator 链）
@@ -281,7 +284,8 @@ STOCK_FLOW_VALIDATOR:
 `SignalRouter`（[engine/signal_router.py](src/gugu/engine/signal_router.py)）：
 
 - `any`：任一策略产生信号即输出
-- `majority`：多数策略同方向才输出（默认）
+- `weighted`：加权评分融合（默认）
+- `majority`：多数策略同方向才输出
 - `unanimous`：全部策略同方向才输出
 
 ## 四、配置体系
@@ -444,7 +448,7 @@ tests/
 ├── fixtures/
 │   ├── __init__.py
 │   └── benchmark_600519.csv       # 基准测试数据（300 行固定 OHLCV）
-├── unit/                          # 单元测试（~40 个文件）
+├── unit/                          # 单元测试（~24 个文件）
 │   ├── test_analysis.py           # 8 个测试类覆盖全部 analysis 模块
 │   ├── test_filters.py            # 4 个测试类覆盖全部 filter 模块
 │   ├── test_alpha_factory.py      # 16 个因子计算测试
@@ -453,7 +457,6 @@ tests/
 │   ├── test_event_engine.py       # 14 个事件引擎测试
 │   ├── test_backtest_benchmark.py # 10 个基准回测测试
 │   ├── test_data_manager_extended.py # 16 个数据管理器测试
-│   ├── test_strategies.py         # 策略测试
 │   ├── test_strategies_benchmark.py # 30 个策略基准测试（所有7策略）
 │   └── ...
 └── integration/
@@ -462,7 +465,7 @@ tests/
 
 ### 7.2 覆盖率
 
-当前覆盖率：**70%**（541 测试，全部通过，v0.3.0）
+当前覆盖率：**67%**（550 测试，全部通过，v0.3.2）
 
 | 模块 | 覆盖率 | 说明 |
 |------|--------|------|

@@ -45,21 +45,22 @@ class MoneyFlowFilter:
             symbol: 股票代码，如 "600519"。
 
         Returns:
-            包含 pass / main_net_today / main_pct_today / main_net_5d / score / reasons 的字典。
+            包含 pass / main_net_today / main_pct_today / main_net_5d / score / reasons / data_missing 的字典。
         """
         # 1. 查缓存
         cached = self._get_cached(symbol)
         if cached is not None:
             return cached
 
-        # 2. 默认结果（数据获取失败时保守拒绝，避免盲买）
+        # 2. 默认结果（数据获取失败时默认放行，避免数据源降级时拦截所有信号）
         default: dict[str, Any] = {
-            "pass": False,
+            "pass": True,
             "main_net_today": 0.0,
             "main_pct_today": 0.0,
             "main_net_5d": 0.0,
             "score": 0.0,
-            "reasons": ["资金流数据获取失败，保守拒绝（需手动确认或重试）"],
+            "reasons": [],
+            "data_missing": True,
         }
 
         # 3. 获取资金流数据

@@ -1,6 +1,6 @@
 [project]
 name = "gugu"
-version = "0.1.0"
+version = "0.3.2"
 description = "Automated A-share trading system with strategy selection, execution and Feishu notification"
 requires-python = ">=3.11"
 dependencies = [

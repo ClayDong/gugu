@@ -250,7 +250,7 @@ class TestMoneyFlowFilter:
         self,
         mock_dm: MagicMock,
     ) -> None:
-        """DataFrame 为空 → 保守拒绝（避免无数据时盲买）。"""
+        """DataFrame 为空 → 默认放行（数据源降级时不拦截信号）。"""
         dm_instance = AsyncMock()
         dm_instance.fetch_stock_flow = AsyncMock()
         dm_instance.fetch_stock_flow.return_value = pd.DataFrame()
@@ -259,11 +259,12 @@ class TestMoneyFlowFilter:
         mf = MoneyFlowFilter()
         result = await mf.check("000001")
 
-        # 空数据时保守拒绝
-        assert result["pass"] is False
+        # 空数据时默认放行（降级场景）
+        assert result["pass"] is True
+        assert result["data_missing"] is True
         assert result["main_net_today"] == 0.0
         assert result["main_pct_today"] == 0.0
-        assert any("拒绝" in r or "失败" in r for r in result["reasons"])
+        assert result["reasons"] == []
 
     @patch("gugu.filters.money_flow.data_manager")
     async def test_zero_flow(

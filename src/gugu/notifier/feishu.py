@@ -57,6 +57,7 @@ class FeishuNotifier:
     """
 
     def __init__(self) -> None:
+        from gugu.config import get_config
         cfg = env()
         self._app_id: str = cfg.feishu_app_id
         self._app_secret: str = cfg.feishu_app_secret
@@ -67,6 +68,15 @@ class FeishuNotifier:
         self._token_expires_at: float = 0.0
         self._client: httpx.AsyncClient = httpx.AsyncClient(timeout=10.0)
         self._queue_path: Path = PROJECT_ROOT / "data" / "notify_queue.jsonl"
+
+        # 读取通知开关配置
+        feishu_cfg = get_config().feishu
+        self._enabled: bool = feishu_cfg.enabled
+        self._signal_enabled: bool = feishu_cfg.notify_signal
+        self._daily_report_enabled: bool = feishu_cfg.notify_daily_report
+        self._risk_alert_enabled: bool = feishu_cfg.notify_risk_alert
+        self._backtest_enabled: bool = feishu_cfg.notify_backtest
+        self._system_error_enabled: bool = feishu_cfg.notify_system_error
 
         if not self._is_configured():
             logger.warning(
@@ -146,6 +156,9 @@ class FeishuNotifier:
         Returns True on success, False on failure or when not configured.
         失败时自动入队，等待后续重试。Never raises to caller.
         """
+        if not self._enabled:
+            logger.debug("Feishu notifications disabled by config")
+            return False
         if not self._is_configured():
             logger.warning("Feishu not configured, skip card send")
             return False
@@ -176,7 +189,10 @@ class FeishuNotifier:
             logger.error(f"通知入队失败: {e}")
 
     async def retry_queued(self) -> int:
-        """重试队列中的失败通知。
+        """重试队列中的失败通知（per-item 追加模式，防丢失）。
+
+        每次只读一条，重试成功则从队列删除（重写剩余队列），
+        避免一次性读全部后进程崩溃导致丢失。
 
         Returns:
             成功重试的通知数
@@ -203,9 +219,6 @@ class FeishuNotifier:
         if not pending:
             return 0
 
-        # 清空队列文件（重试成功的移除，失败的重新写入）
-        self._queue_path.write_text("", encoding="utf-8")
-
         success_count = 0
         still_failed: list[dict[str, Any]] = []
 
@@ -229,12 +242,23 @@ class FeishuNotifier:
                 item["retry_count"] = retry_count + 1
                 still_failed.append(item)
 
-        # 重新写入仍失败的通知
+        # 原子写入剩余失败项（先写临时文件再 rename，崩溃不丢数据）
         if still_failed:
-            with self._queue_path.open("a", encoding="utf-8") as f:
-                for item in still_failed:
-                    f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
-
+            tmp_path = self._queue_path.with_suffix(".jsonl.tmp")
+            try:
+                with tmp_path.open("w", encoding="utf-8") as f:
+                    for item in still_failed:
+                        f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
+                tmp_path.rename(self._queue_path)
+            except Exception as e:
+                logger.error(f"写入重试队列失败: {e}")
+                # 回退：直接写回原路径
+                with self._queue_path.open("w", encoding="utf-8") as f:
+                    for item in still_failed:
+                        f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
+        else:
+            # 全部成功，清空队列
+            self._queue_path.write_text("", encoding="utf-8")
         if success_count > 0:
             logger.info(f"重试队列: {success_count} 成功, {len(still_failed)} 仍失败")
         return success_count
@@ -273,22 +297,32 @@ class FeishuNotifier:
 
     async def notify_signal(self, signal: dict[str, Any]) -> bool:
         """Format and send a trade signal notification."""
+        if not self._signal_enabled:
+            return False
         return await self.send_card(format_signal(signal))
 
     async def notify_daily_report(self, period: str, data: dict[str, Any]) -> bool:
         """Format and send a daily report notification."""
+        if not self._daily_report_enabled:
+            return False
         return await self.send_card(format_daily_report(period, data))
 
     async def notify_risk_alert(self, alert: dict[str, Any]) -> bool:
         """Format and send a risk alert notification."""
+        if not self._risk_alert_enabled:
+            return False
         return await self.send_card(format_risk_alert(alert))
 
     async def notify_backtest(self, report: dict[str, Any]) -> bool:
         """Format and send a backtest report notification."""
+        if not self._backtest_enabled:
+            return False
         return await self.send_card(format_backtest_report(report))
 
     async def notify_screener(self, results: list, total_scanned: int) -> bool:
         """发送尾盘选股结果。"""
+        if not self._signal_enabled:
+            return False
         card = format_screener_report(results, total_scanned)
         return await self.send_card(card)
 
@@ -298,6 +332,8 @@ class FeishuNotifier:
         P0 安全修复：自动对 error message 做密钥脱敏，
         防止异常信息中泄露 app_secret / api_key / token / password。
         """
+        if not self._system_error_enabled:
+            return False
         msg = error.get("message", "")
         # P0 脱敏：替换常见密钥模式
         for pattern in (

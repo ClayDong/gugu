@@ -232,10 +232,25 @@ class TradingScheduler:
             except Exception as e:
                 logger.exception(f"启动扫描异常: {e}")
 
+        # 独立心跳协程：每 60 秒写入一次，区分"进程活着"和"交易循环运行中"
+        async def _heartbeat_loop() -> None:
+            """每 60 秒写入心跳，独立于交易循环。"""
+            while True:
+                try:
+                    self._engine._write_heartbeat("alive")
+                except Exception:
+                    pass
+                await asyncio.sleep(60)
+
+        hb_task = asyncio.create_task(_heartbeat_loop())
+
         try:
             while True:
                 await asyncio.sleep(3600)
         except (KeyboardInterrupt, SystemExit):
+            hb_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await hb_task
             await self.shutdown()
 
     async def shutdown(self) -> None:

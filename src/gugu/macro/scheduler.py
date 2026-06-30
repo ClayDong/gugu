@@ -14,12 +14,16 @@ from gugu.utils.log import get_logger
 logger = get_logger()
 
 
-async def _push_macro_report(version: str) -> None:
+async def _push_macro_report(
+    version: str,
+    notifier: FeishuNotifier | None = None,
+) -> None:
     """采集宏观数据并推送飞书卡片。"""
     collector = MacroCollector()
     snapshot = await collector.collect()
     builder = MacroReportBuilder()
-    notifier = FeishuNotifier()
+    if notifier is None:
+        notifier = FeishuNotifier()
 
     card_builders = {
         "early": builder.build_early_card,
@@ -33,7 +37,7 @@ async def _push_macro_report(version: str) -> None:
     if ok:
         logger.info(f"[macro] {version} 日报推送成功")
     else:
-        logger.warning(f"[macro] {version} 日报推送失败")
+        logger.warning(f"[macro] {version} 日报推送失败（已入重试队列）")
 
 
 async def scheduled_macro_report(version: str) -> None:

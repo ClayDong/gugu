@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 from unittest import mock
 
 import pandas as pd
@@ -30,10 +31,18 @@ def _make_basic_df(n: int = 60) -> pd.DataFrame:
 
 
 def _fresh_dm() -> DataManager:
-    """创建一个干净的 DataManager 实例。"""
-    dm = DataManager()
+    """创建一个干净的 DataManager 实例（主源 sina，降级 akshare）。"""
+    dm = object.__new__(DataManager)
+    dm._lock = asyncio.Lock()
+    dm._primary = SinaCollector()
+    dm._fallbacks = [AkshareCollector()]
+    dm._fallback_semaphore = asyncio.Semaphore(1)
+    dm._fail_threshold = 3
+    dm._fail_cooldown = 300
     dm._fail_count = 0
     dm._degraded_until = 0.0
+    dm._parquet_cache = mock.MagicMock()
+    dm._parquet_cache.get.return_value = pd.DataFrame()
     return dm
 
 

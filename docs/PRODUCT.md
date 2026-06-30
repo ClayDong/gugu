@@ -23,7 +23,7 @@
 | 缺统一风控 | 三级风控（L1 仓位 / L2 日亏 / L3 系统规则），铁律不可绕过，熔断持久化防重启绕过 |
 | 信号/持仓/盈亏信息分散 | 飞书卡片消息统一推送（信号 / 日报 / 告警 / 回测 / 异常） |
 | 策略验证成本高 | 自研回测引擎（含涨跌停检查 + wisdom 可选项）+ 模拟盘，零资金风险验证策略 |
-| 数据源单点故障 | 主源（akshare/东方财富）+ 降级源（新浪财经），不同底层 API 确保冗余，并发降级 |
+| 数据源单点故障 | 主源（sina）+ 降级源（akshare），不同底层 API 确保冗余，并发降级 |
 
 ## 三、五阶段架构（渐进式）
 
@@ -103,16 +103,34 @@
 
 | 类型 | 触发时机 | 内容 | 来源 |
 |------|----------|------|------|
-| 买卖信号 | 策略产生信号 | 股票/方向/策略/理由/建议仓位/wisdom | `formatter.py` |
+| 买卖信号 | 策略产生信号 | 股票名称+代码/方向/策略/置信度/建议仓位/wisdom/历史胜率 | `formatter.py` |
 | 信号汇总 | 09:10 / 11:35 / 15:10 | 市场概览/今日信号/持仓概况/绩效验证 | `formatter.py` |
 | 风控告警 | 触发风控规则 | 级别/详情/建议动作 | `formatter.py` |
 | 回测报告 | 回测完成 | 收益/夏普/回撤/胜率 | `formatter.py` |
-| 系统异常 | 采集失败/引擎崩溃 | 异常详情/恢复建议 | `formatter.py` |
+| 系统异常 | 采集失败/引擎崩溃 | 异常详情/恢复建议（密钥自动脱敏） | `formatter.py` |
 | 基金监控 | 15:35（交易日） | 基金净值/涨跌幅/波动率/回撤/定投建议 | `fund_monitor.py` |
 | 资金流复盘 | 08:00（交易日） | 大盘资金流/行业TOP5/轮动强度/背离预警/概念热点/强流入个股 | `flow_report.py` |
 | 资金流日报 | 15:10（交易日） | 当日大盘/行业TOP/轮动/背离/强流入个股/热门概念 | `flow_report.py` |
 | 持仓卖出告警 | 收盘后（15:10 日报附送） | 检查持仓股卖出信号，主动推送告警 | `main.py:_check_holdings_sell_signals()` |
 | 宏观简报 | 08:00/09:10/11:35/15:10 | 金/油/汇/债/G 五维全球宏观数据 | `macro/report.py` |
+
+**配置开关**：通过 `config/settings.yaml` 中 `feishu` 段的开关控制：
+
+```yaml
+feishu:
+  enabled: true              # 全局开关，false 禁用所有通知
+  signal: true               # 信号通知
+  daily_report: true         # 日报
+  risk_alert: true           # 风控告警
+  backtest: true             # 回测报告
+  system_error: true         # 系统异常
+```
+
+**可靠性保证**：
+- 失败通知自动持久化到 `data/notify_queue.jsonl`（原子写入 tmp + rename）
+- 每 10 分钟重试队列中的失败通知，最多重试 5 次
+- 所有通知类型共享同一个重试队列，包括宏观推送
+- 密钥脱敏：错误消息中的 app_secret / api_key / token / Bearer 自动替换为 `***REDACTED***`
 
 ### 4.6 回测引擎
 
@@ -134,10 +152,11 @@
 
 | 源 | API 接口 | 能力 |
 |----|----------|------|
-| AkshareCollector（主） | 东方财富 `ak.stock_zh_a_hist()` + `ak.stock_zh_a_spot_em()` | 历史行情 + 实时行情 + 资金流 |
-| SinaCollector（降级） | 新浪 `ak.stock_zh_a_daily()` + `ak.stock_zh_a_spot()` | 仅行情，无资金流 |
+| SinaCollector（主） | 新浪 `hq.sinajs.cn` + 网易 `quotes.money.163.com`（直连 HTTP） | 仅行情，无资金流 |
+| AkshareCollector（降级） | 东方财富 `ak.stock_zh_a_hist()` + `ak.stock_zh_a_spot_em()` | 历史行情 + 实时行情 + 资金流 |
 
-- 主源连续失败 3 次 → 降级到 SinaCollector
+- `fallback.py`（SinaCollector）不依赖 `akshare`，通过 `httpx` 直连新浪/网易原生 HTTP 接口
+- 主源连续失败 3 次 → 降级到 AkshareCollector（东方财富）
 - 冷却 5 分钟后尝试切回主源
 - 降级源也做数据质量校验
 - **并发降级**：主源失败后并发尝试所有降级源，最快响应
@@ -233,6 +252,7 @@ uv run python scripts/run_live.py
 | 21 | 2026-06-30 | **对抗性审查修复**：背测引擎认知模块异常不再静默吞（`logger.debug`）、周线 resample 消除前视偏差（`closed="left"`）、仓位基准改用当前净值（`current_equity` 替代 `initial_capital`）、资金流默认保守拒绝（`pass: False`）、选股器/筛股器 per-stock 超时保护、`is_tradable` 传入方向参数、错误消息密钥脱敏纵深防御、`formatter.py` `_STOCK_NAMES` 去重 |
 | 22 | 2026-06-30 | **产品化 v1**：信号卡片 30 秒决策摘要行（置信度/仓位/止损/止盈一目了然）、ATR 波动率动态调整仓位（高波减 30%/低波加 30%）、止盈双目标方案（+10%/+20% + ATR 自适应校准）、信号融合切换为 weighted 模式、Bollinger+RSI 策略启用形成趋势/均值回归互补、`RiskManager` 新增组合相关性监控（>85%告警）和最大回撤熔断（15%）、`walk_forward_optimize()` 滚动前向验证+参数网格扫描、仓位分层递进（试仓 20%→盈利确认加码 60%→上限 30%）、Web 看板 `/api/signals/performance` 和 `/api/portfolio/correlation` 端点、文档同步更新 |
 | 23 | 2026-06-30 | **Bug 修复 + 信号可信度闭环（v0.3.1）**：修复 `RiskManager.check_correlation` 在 FastAPI 中 `asyncio.run()` 死循环（改为 async）、修复 Feishu 卡片 subtitle 被静默丢弃（移至 card element 渲染）、修复 Web `/api/halt/reset` 操作错误的 RiskManager 实例（改用 `_web_risk` 单例）、修复 `_portfolio_peak` 跨实例类变量共享（移至实例属性）、移除 `signal_tracker.py` 死代码、修复 `walk_forward_optimize` 空参数网格时 `best_sharpe=-999`、新增 `_inject_performance_summary()` 将同类信号历史胜率注入飞书卡片（反馈闭环）、测试 541→550、覆盖率 70%→67%（新增 800 行） |
+| 24 | 2026-06-30 | **产品完善 v2**：修复 SinaCollector 测试 mock 不兼容 Python 3.14 httpx 接口、修复 DataManager 测试 `_fresh_dm()` 实例化方式（`object.__new__` 规避配置读取）、统一数据源角色描述（sina 为主源、akshare 为降级源，含代码注释 + 配置默认值）、daemon 添加 watchdog 自动重启（崩溃自动拉起最多 10 次）、FeishuNotifier 接入配置开关（`enabled/notify_signal/daily_report/risk_alert/backtest/system_error` 全类型检查）、macro 通知支持外部 notifier 实例、PRODUCT.md 补充通知配置开关和重试队列说明、README.md 补充守护模式示例 |
 
 ## 九、项目关系与合并计划
 
@@ -241,7 +261,7 @@ uv run python scripts/run_live.py
 | 项目 | 状态 | 关系 |
 |------|------|------|
 | **MakingMoney** (`~/workspace/MakingMoney/`) | 🟡 冻结 | 全栈量化平台 v1.0。所含功能已被 gugu 重构替代。不再修改 |
-| **MingCe（明策）** (`~/workspace/MingCe/`) | 🟡 逐步迁移中 | 日报 Bot v1.5。当前生产运行（端口 8000），计划将日报/宏观功能逐步迁移到 gugu 后归档 |
+| **MingCe（明策）** (`~/workspace/MingCe/`) | 🟢 已迁移 | 日报 Bot v1.5。当前生产运行（端口 8000），计划将日报/宏观功能逐步迁移到 gugu 后归档 |
 | **realtime-flow** | 🔴 已归档 | 资金流监测系统。核心逻辑已被 gugu 的 `src/gugu/analysis/` + `src/gugu/filters/` 吸收 |
 | **gugu** | 🟢 **唯一活跃** | 未来所有迭代只在此进行 |
 
@@ -259,4 +279,4 @@ uv run python scripts/run_live.py
 
 详见 `docs/PROJECT_LANDSCAPE_ANALYSIS.md`（第一性原理 + 对抗性审查报告）
 
-**当前状态**：506 测试，全部通过。
+**当前状态**：550 tests passed with 67% coverage v0.3.2

@@ -32,8 +32,8 @@ class RiskConfig(BaseModel):
 class DataConfig(BaseModel):
     """数据源配置."""
 
-    primary_source: str = Field(default="akshare", description="主数据源")
-    fallback_sources: list[str] = Field(default_factory=lambda: ["sina"], description="降级源列表")
+    primary_source: str = Field(default="sina", description="主数据源")
+    fallback_sources: list[str] = Field(default_factory=lambda: ["akshare"], description="降级源列表")
     fetch_interval_seconds: int = Field(default=120, ge=10, description="实时采集间隔（秒）")
     fail_threshold: int = Field(default=3, ge=1, description="连续失败 N 次触发降级")
     fail_cooldown_seconds: int = Field(default=300, ge=0, description="降级冷却时间（秒）")

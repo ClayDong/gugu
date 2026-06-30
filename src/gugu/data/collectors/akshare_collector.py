@@ -1,7 +1,8 @@
-"""akshare 采集器（主源）。
+"""akshare 采集器（降级源）。
 
-akshare 已封装东方财富/新浪等数据，统一通过 akshare 接口采集。
-失败时由 fallback.py 的新浪/腾讯采集器降级。
+akshare 封装东方财富数据，通过 settings.yaml 中 fallback_sources 配置。
+当主源 sina 连续失败达阈值时切换到此采集器。
+注意：akshare 在部分网络环境下可能被封锁。
 """
 
 from __future__ import annotations

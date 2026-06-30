@@ -135,42 +135,89 @@ def is_running(pid_file: Path) -> int | None:
         return None
 
 
-def start_daemon() -> None:
-    """以守护模式启动引擎 + Web 服务器。"""
-    existing = is_running(PID_FILE)
-    if existing:
-        print(f"ℹ️  交易引擎已在运行 (PID={existing})")
-    else:
-        print("🚀 启动交易引擎守护进程...")
+def start_daemon(watch: bool = True) -> None:
+    """以守护模式启动引擎 + Web 服务器。
+
+    Args:
+        watch: 是否启用 watchdog 自动重启（进程崩溃时自动拉起）。
+    """
+    def _launch(cmd: list[str], pid_file: Path, name: str) -> subprocess.Popen | None:
+        existing = is_running(pid_file)
+        if existing:
+            print(f"ℹ️  {name} 已在运行 (PID={existing})")
+            return None
+        print(f"🚀 启动{name}...")
         proc = subprocess.Popen(
-            [sys.executable, "-m", "gugu.engine.scheduler"],
+            cmd,
             cwd=PROJECT,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        PID_FILE.parent.mkdir(parents=True, exist_ok=True)
-        PID_FILE.write_text(str(proc.pid))
+        pid_file.parent.mkdir(parents=True, exist_ok=True)
+        pid_file.write_text(str(proc.pid))
         print(f"   PID: {proc.pid}")
+        return proc
 
-    web_existing = is_running(WEB_PID_FILE)
-    if web_existing:
-        print(f"ℹ️  Web 仪表盘已在运行 (PID={web_existing})")
-    else:
-        print("🚀 启动 Web 仪表盘 (端口 8000)...")
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "gugu.web.app:app",
-             "--host", "127.0.0.1", "--port", "8000"],
-            cwd=PROJECT,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        WEB_PID_FILE.write_text(str(proc.pid))
-        print(f"   PID: {proc.pid}")
-        print(f"   访问: http://127.0.0.1:8000")
+    engine_proc = _launch(
+        [sys.executable, "-m", "gugu.engine.scheduler"],
+        PID_FILE, "交易引擎",
+    )
+    web_proc = _launch(
+        [sys.executable, "-m", "uvicorn", "gugu.web.app:app",
+         "--host", "127.0.0.1", "--port", "8000"],
+        WEB_PID_FILE, "Web仪表盘",
+    )
 
-    print("\n✅ 已启动。执行以下命令检查状态：")
-    print(f"   python {sys.argv[0]} --status")
-    print(f"   python {sys.argv[0]} --stop")
+    if not watch:
+        print("\n✅ 已启动。执行以下命令检查状态：")
+        print(f"   python {sys.argv[0]} --status")
+        print(f"   python {sys.argv[0]} --stop")
+        return
+
+    # ── watchdog：监控子进程，崩溃后自动重启 ──
+    max_restarts = 10
+    restart_count = 0
+    cooldown = 5  # 重启前等待秒数
+    print("\n👀 watchdog 监控中 (Ctrl+C 退出)...")
+    print(f"   最大重启次数: {max_restarts}")
+    try:
+        while restart_count < max_restarts:
+            time.sleep(cooldown)
+            any_restarted = False
+            for pid_file, proc_var, cmd, disp_name in [
+                (PID_FILE, engine_proc, [sys.executable, "-m", "gugu.engine.scheduler"], "交易引擎"),
+                (WEB_PID_FILE, web_proc, [sys.executable, "-m", "uvicorn", "gugu.web.app:app",
+                 "--host", "127.0.0.1", "--port", "8000"], "Web仪表盘"),
+            ]:
+                if proc_var is None:
+                    continue
+                ret = proc_var.poll()
+                if ret is not None:
+                    restart_count += 1
+                    remaining = max_restarts - restart_count
+                    print(f"🔄 {disp_name} 已退出 (code={ret})，第 {restart_count} 次重启..."
+                            f" 剩余 {remaining} 次")
+                    if remaining <= 0:
+                        print(f"❌ {disp_name} 已达最大重启次数")
+                        continue
+                    time.sleep(2)
+                    new_proc = subprocess.Popen(
+                        cmd, cwd=PROJECT,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    )
+                    pid_file.write_text(str(new_proc.pid))
+                    if pid_file == PID_FILE:
+                        engine_proc = new_proc
+                    else:
+                        web_proc = new_proc
+                    print(f"   ✅ 已重启 (新 PID={new_proc.pid})")
+                    any_restarted = True
+            if not any_restarted:
+                # 所有进程正常，延长检查间隔
+                time.sleep(25)
+    except KeyboardInterrupt:
+        print("\n🛑 收到退出信号，停止所有进程...")
+        stop_daemon()
 
 
 def stop_daemon() -> None:
@@ -258,6 +305,7 @@ def run_web_only() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="gugu 交易系统 - 一键启动")
     parser.add_argument("--daemon", action="store_true", help="以守护模式启动")
+    parser.add_argument("--no-watch", action="store_true", help="关闭 watchdog 自动重启")
     parser.add_argument("--status", action="store_true", help="检查运行状态")
     parser.add_argument("--stop", action="store_true", help="停止运行")
     parser.add_argument("--web-only", action="store_true", help="仅启动 Web 仪表盘")
@@ -270,7 +318,7 @@ def main() -> None:
         stop_daemon()
     elif args.daemon:
         _ensure_env()
-        start_daemon()
+        start_daemon(watch=not args.no_watch)
     elif args.web_only:
         run_web_only()
     else:

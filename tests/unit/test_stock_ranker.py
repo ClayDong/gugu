@@ -1,6 +1,6 @@
 """StockRanker 单元测试。
 
-纯逻辑测试，mock 外部数据依赖。
+纯逻辑测试，mock 所有外部数据依赖，禁止真实 API 调用。
 """
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from gugu.analysis.stock_ranker import StockRanker
+from gugu.filters.industry_constraint import IndustryConstraint
 
 
 @pytest.fixture
@@ -20,27 +21,26 @@ def ranker() -> StockRanker:
 class TestStockRanker:
     """StockRanker 功能测试。"""
 
-    def test_rank_empty_list(self, ranker: StockRanker) -> None:
+    @pytest.mark.asyncio
+    async def test_rank_empty_list(self, ranker: StockRanker) -> None:
         """空股票列表返回空结果。"""
-        result = ranker.rank([], top_n=10)
-        # rank 是 async 方法，但没 await，实际上返回 coroutine
-        # 需要 await
-        ...
+        with patch.object(IndustryConstraint, "get_industry", return_value=""):
+            result = await ranker.rank([], top_n=10)
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_rank_no_data(self, ranker: StockRanker) -> None:
         """数据源返回空时返回空结果。"""
-        # Mock 所有外部调用返回空
         ranker._dm.fetch_stock_history = AsyncMock(return_value=pd.DataFrame())
         ranker._dm.fetch_stock_meta = AsyncMock(return_value={})
 
-        result = await ranker.rank(["600519", "000001"], top_n=10)
+        with patch.object(IndustryConstraint, "get_industry", return_value=""):
+            result = await ranker.rank(["600519", "000001"], top_n=10)
         assert result == []
 
     @pytest.mark.asyncio
     async def test_rank_single_stock(self, ranker: StockRanker) -> None:
         """单只股票评分。"""
-        # Mock 外部依赖
         n = 60
         df = pd.DataFrame({
             "close": [100.0 + i * 0.5 for i in range(n)],
@@ -54,14 +54,15 @@ class TestStockRanker:
             "name": "测试股票", "symbol": "600519",
         })
 
-        with patch.object(ranker._fundamental, "check", return_value={
-            "pass": True, "pe": 15.0, "pb": 2.5, "roe": 12.0,
-            "reasons": [],
-        }):
-            with patch.object(ranker._money_flow, "check", AsyncMock(return_value={
-                "pass": True, "score": 0.6, "reasons": [],
-            })):
-                result = await ranker.rank(["600519"], top_n=10)
+        with patch.object(IndustryConstraint, "get_industry", return_value="白酒"):
+            with patch.object(ranker._fundamental, "check", return_value={
+                "pass": True, "pe": 15.0, "pb": 2.5, "roe": 12.0,
+                "reasons": [],
+            }):
+                with patch.object(ranker._money_flow, "check", AsyncMock(return_value={
+                    "pass": True, "score": 0.6, "reasons": [],
+                })):
+                    result = await ranker.rank(["600519"], top_n=10)
 
         assert len(result) == 1
         assert result[0]["symbol"] == "600519"
@@ -93,7 +94,7 @@ class TestStockRanker:
             "volume": [500_000] * n,
         })
 
-        def mock_history(symbol: str, days: int = 60) -> pd.DataFrame:
+        async def mock_history(symbol: str, days: int = 60) -> pd.DataFrame:
             return df1 if symbol == "600519" else df2
 
         ranker._dm.fetch_stock_history = AsyncMock(side_effect=mock_history)
@@ -101,14 +102,15 @@ class TestStockRanker:
             "name": "测试", "symbol": "600519",
         })
 
-        with patch.object(ranker._fundamental, "check", side_effect=[
-            {"pass": True, "pe": 15.0, "pb": 2.0, "roe": 10.0, "reasons": []},
-            {"pass": False, "pe": None, "pb": None, "roe": None, "reasons": ["PE too high"]},
-        ]):
-            with patch.object(ranker._money_flow, "check", AsyncMock(return_value={
-                "pass": True, "score": 0.6, "reasons": [],
-            })):
-                result = await ranker.rank(["600519", "000001"], top_n=10)
+        with patch.object(IndustryConstraint, "get_industry", return_value="白酒"):
+            with patch.object(ranker._fundamental, "check", side_effect=[
+                {"pass": True, "pe": 15.0, "pb": 2.0, "roe": 10.0, "reasons": []},
+                {"pass": False, "pe": None, "pb": None, "roe": None, "reasons": ["PE too high"]},
+            ]):
+                with patch.object(ranker._money_flow, "check", AsyncMock(return_value={
+                    "pass": True, "score": 0.6, "reasons": [],
+                })):
+                    result = await ranker.rank(["600519", "000001"], top_n=10)
 
         assert len(result) == 2
         # 600519 评分应高于 000001（上升趋势 + 基本面通过）
@@ -129,16 +131,17 @@ class TestStockRanker:
         ranker._dm.fetch_stock_history = AsyncMock(return_value=df)
         ranker._dm.fetch_stock_meta = AsyncMock(return_value={"name": "测试"})
 
-        with patch.object(ranker._fundamental, "check", return_value={
-            "pass": True, "pe": 15.0, "pb": 2.0, "roe": 10.0, "reasons": [],
-        }):
-            with patch.object(ranker._money_flow, "check", AsyncMock(return_value={
-                "pass": True, "score": 0.6, "reasons": [],
-            })):
-                result = await ranker.rank(
-                    ["600519", "000001", "000002", "000003"],
-                    top_n=2,
-                )
+        with patch.object(IndustryConstraint, "get_industry", return_value=""):
+            with patch.object(ranker._fundamental, "check", return_value={
+                "pass": True, "pe": 15.0, "pb": 2.0, "roe": 10.0, "reasons": [],
+            }):
+                with patch.object(ranker._money_flow, "check", AsyncMock(return_value={
+                    "pass": True, "score": 0.6, "reasons": [],
+                })):
+                    result = await ranker.rank(
+                        ["600519", "000001", "000002", "000003"],
+                        top_n=2,
+                    )
 
         assert len(result) == 2
 
@@ -156,18 +159,19 @@ class TestStockRanker:
         ranker._dm.fetch_stock_history = AsyncMock(return_value=df)
         ranker._dm.fetch_stock_meta = AsyncMock(return_value={"name": "test"})
 
-        with patch.object(ranker._fundamental, "check", return_value={
-            "pass": True, "pe": 15.0, "pb": 2.0, "roe": 10.0, "reasons": [],
-        }):
-            with patch.object(ranker._money_flow, "check", AsyncMock(return_value={
-                "pass": True, "score": 0.6, "reasons": [],
-            })):
-                # 不传 hot_sectors
-                result_no_sector = await ranker.rank(["600519"], top_n=10)
-                # 传空 hot_sectors
-                result_empty_sector = await ranker.rank(["600519"], hot_sectors=[], top_n=10)
-                # 两者评分应相等
-                assert result_no_sector[0]["total_score"] == result_empty_sector[0]["total_score"]
+        with patch.object(IndustryConstraint, "get_industry", return_value="白酒"):
+            with patch.object(ranker._fundamental, "check", return_value={
+                "pass": True, "pe": 15.0, "pb": 2.0, "roe": 10.0, "reasons": [],
+            }):
+                with patch.object(ranker._money_flow, "check", AsyncMock(return_value={
+                    "pass": True, "score": 0.6, "reasons": [],
+                })):
+                    # 不传 hot_sectors
+                    result_no_sector = await ranker.rank(["600519"], top_n=10)
+                    # 传空 hot_sectors
+                    result_empty_sector = await ranker.rank(["600519"], hot_sectors=[], top_n=10)
+                    # 两者评分应相等
+                    assert result_no_sector[0]["total_score"] == result_empty_sector[0]["total_score"]
 
     @pytest.mark.asyncio
     async def test_partial_failure_one_stock(self, ranker: StockRanker) -> None:
@@ -188,13 +192,14 @@ class TestStockRanker:
         ranker._dm.fetch_stock_history = AsyncMock(side_effect=mock_history)
         ranker._dm.fetch_stock_meta = AsyncMock(return_value={"name": "test"})
 
-        with patch.object(ranker._fundamental, "check", return_value={
-            "pass": True, "pe": 15.0, "pb": 2.0, "roe": 10.0, "reasons": [],
-        }):
-            with patch.object(ranker._money_flow, "check", AsyncMock(return_value={
-                "pass": True, "score": 0.6, "reasons": [],
-            })):
-                result = await ranker.rank(["600519", "BAD_STOCK"], top_n=10)
+        with patch.object(IndustryConstraint, "get_industry", return_value=""):
+            with patch.object(ranker._fundamental, "check", return_value={
+                "pass": True, "pe": 15.0, "pb": 2.0, "roe": 10.0, "reasons": [],
+            }):
+                with patch.object(ranker._money_flow, "check", AsyncMock(return_value={
+                    "pass": True, "score": 0.6, "reasons": [],
+                })):
+                    result = await ranker.rank(["600519", "BAD_STOCK"], top_n=10)
 
         # 只有 600519 有结果
         assert len(result) == 1

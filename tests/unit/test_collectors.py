@@ -171,10 +171,27 @@ class TestSinaCollectorRealtime:
 
     def test_fetch_stock_realtime_returns_dataframe(self, monkeypatch):
         """新浪实时行情应返回 DataFrame。"""
-        df_raw = make_realtime_df()
+        # 新浪实时行情返回 33+ 个逗号分隔字段（mock 至少 32 个）
+        fields = [
+            "贵州茅台", "1734.00", "1732.00", "1735.00", "1728.00",
+            "1730.00", "1726.00", "1000000", "50000000",
+        ] + [""] * 24
+        mock_text = 'var hq_str_sh600519="' + ",".join(fields) + '";\n'
+
+        class MockResponse:
+            def __init__(self):
+                self.text = mock_text
+                self.status_code = 200
+            def raise_for_status(self):
+                pass
+
+        class MockClient:
+            def get(self, url, **kwargs):
+                return MockResponse()
+
         monkeypatch.setattr(
-            "gugu.data.collectors.fallback.ak.stock_zh_a_spot",
-            lambda: df_raw,
+            "gugu.data.collectors.fallback.SinaCollector._get_client",
+            lambda self: MockClient(),
         )
 
         collector = SinaCollector()
@@ -184,6 +201,8 @@ class TestSinaCollectorRealtime:
         assert "symbol" in df.columns
         assert "price" in df.columns
         assert df.iloc[0]["symbol"] == "600519"
+        assert "name" in df.columns
+        assert df.iloc[0]["name"] == "贵州茅台"
 
     def test_fetch_stock_realtime_empty_symbols(self):
         """空 symbols 列表应返回空 DataFrame。"""
@@ -193,12 +212,13 @@ class TestSinaCollectorRealtime:
 
     def test_fetch_stock_realtime_handles_api_error(self, monkeypatch):
         """API 异常应返回空 DataFrame，不抛出。"""
-        def raise_error():
-            raise RuntimeError("network error")
+        class ErrorClient:
+            def get(self, url, **kwargs):
+                raise RuntimeError("network error")
 
         monkeypatch.setattr(
-            "gugu.data.collectors.fallback.ak.stock_zh_a_spot",
-            lambda: raise_error(),
+            "gugu.data.collectors.fallback.SinaCollector._get_client",
+            lambda self: ErrorClient(),
         )
 
         collector = SinaCollector()

@@ -80,17 +80,27 @@ gugu/
 ├── src/
 │   └── gugu/
 │       ├── __init__.py
-│       ├── config.py            # 配置加载（YAML + env）
+│       ├── config/             # 配置层（AppConfig 强类型 + 向后兼容）
+│       │   ├── __init__.py     # 导出 + get_config()
+│       │   └── models.py       # AppConfig + 10 section BaseModel
+│       ├── _legacy_config.py   # 旧版 settings() 函数（迁移桥接）
 │       ├── data/                # 数据层
 │       │   ├── manager.py       # DataManager（统一数据入口）
 │       │   ├── quality.py       # 数据质量校验
 │       │   ├── cache.py         # 本地缓存
 │       │   └── collectors/      # 采集器
 │       │       ├── base.py      # BaseCollector 抽象
-│       │       ├── akshare_collector.py  # 主源
-│       │       └── fallback.py   # 降级源（Sina/Tencent）
+│       │       ├── fallback.py  # 主源（新浪，设置中 primary）
+│       │       └── akshare_collector.py # 降级源（东方财富）
 │       ├── models/              # 数据模型
-│       │   └── position.py      # Position 统一模型
+│       │   ├── position.py      # Position 统一模型
+│       │   └── signal.py        # Signal 强类型数据类
+│       ├── filters/             # 过滤层
+│       │   ├── fundamental.py   # 基本面过滤
+│       │   ├── money_flow.py    # 资金流过滤
+│       │   └── industry_constraint.py # 行业分散约束
+│       ├── macro/               # 宏观简报（五维：金/油/汇/债/G）
+│       │   └── report.py
 │       ├── strategies/          # 策略层
 │       │   ├── base.py          # 策略抽象基类
 │       │   ├── trend.py         # 趋势跟踪（海龟/双均线/MACD/SAR）
@@ -189,7 +199,7 @@ gugu/
 
 ## 五、数据源约定
 
-- **主源**：akshare + 东方财富（免费）
+- **数据源**：sina（主）+ akshare（降级）+ 东方财富
 - **降级源**：新浪财经 / 腾讯财经（仅行情，无资金流明细）
 - **降级策略**：主源连续失败 3 次，跳过 5 分钟，降级源顶上，主源恢复后切回
 - **数据质量**：采集后必须校验（缺失/异常值/时间戳），不合格数据不进系统
@@ -282,10 +292,10 @@ gugu/
 ## 元数据
 
 - 创建日期：2026-06-22
-- 版本：v0.3.1
+- 版本：v0.3.2
 - 阶段：阶段三（信号监控）+ P0 认知引擎落地 + 产品化完成 + 信号可信度反馈闭环
-- 测试：550 passed, 67% coverage
-- 最近评审：2026-06-29（第一轮第一性原理+对抗性审查）、2026-06-30（第二轮深度审查+产品化）
+- 测试：550 passed, 67% coverage (24% pure unit)
+- 最近评审：2026-06-30（第一轮第一性原理+对抗性审查、第二轮深度审查+产品化、代码修复+文档同步）
 
 
 ## 十、质量门禁

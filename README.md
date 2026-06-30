@@ -17,7 +17,7 @@
 - **认知引擎** — 四阶段判断、五大危险信号检测、向下摊平检查、多周期趋势确认
 - **Walk-Forward 参数优化** — 滚动窗口网格搜索，自动写回最优参数
 - **三级缓存** — Parquet 持久化缓存 + 内存 LRU 缓存 + API 实时请求
-- **数据源降级** — 主源连续失败自动降级到备选源，冷却后自动切回
+- **数据源降级** — 主源（sina）连续失败自动降级到备选源（akshare），冷却后自动切回
 - **飞书通知** — 信号卡片、日报、风控告警、回测报告、基金监控
 - **Web 仪表盘** — FastAPI + 持仓/信号/风险/净值历史可视化
 - **盈亏归因分析** — 消费 signals_history.jsonl，生成按过滤步骤/策略/Wisdom 决策的归因报告
@@ -46,6 +46,18 @@ python scripts/optimize_params.py --symbol 600519 --days 500 --write
 
 # 信号监控模式
 python scripts/run_live.py --signal-only
+
+# 守护模式（带 watchdog 自动重启）
+python scripts/quickstart.py --daemon
+
+# 守护模式（不启用 watchdog）
+python scripts/quickstart.py --daemon --no-watch
+
+# 查看守护进程状态
+python scripts/quickstart.py --status
+
+# 停止守护进程
+python scripts/quickstart.py --stop
 ```
 
 ## 系统架构
@@ -71,9 +83,12 @@ python scripts/run_live.py --signal-only
 | 分析 | `analysis/` | 移动止损、四阶段、危险信号、归因分析 |
 | 决策 | `wisdom/` | 28本书视角、LLM/fallback 决策 |
 | 通知 | `notifier/` | 飞书卡片消息 |
+| 宏观 | `macro/` | 五维宏观数据采集与飞书简报 |
 | Web | `web/` | FastAPI 仪表盘 |
 
 ## 测试
+
+550+ 测试，67% 覆盖率。
 
 ```bash
 # 运行全部测试
@@ -88,7 +103,7 @@ uv run pytest tests/integration/ -v
 
 ## 环境要求
 
-- Python 3.12+
+- Python 3.12+（3.14 已验证）
 - uv（推荐）或 pip
 - 飞书开放平台应用（用于通知）
 - （可选）LLM API Key（用于 Wisdom 决策）

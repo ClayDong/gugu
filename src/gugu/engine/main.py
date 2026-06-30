@@ -13,9 +13,9 @@ from typing import Any
 
 import pandas as pd
 
-from gugu.analysis.danger_signal import DangerSignalDetector
 from gugu.analysis.position_controller import PositionController
 from gugu.analysis.regime_detector import MultiPeriodRegimeDetector
+from gugu.analysis.signal_tracker import SignalTracker
 from gugu.analysis.trailing_stop import TrailingStopEngine, TrailingStopSignal
 from gugu.config import PROJECT_ROOT, get_config
 from gugu.config.models import AppConfig
@@ -74,6 +74,8 @@ class TradingEngine:
         self._watchlist: list[str] = self._load_watchlist()
         # 执行模式缓存（signal_only/paper/live）
         self._exec_mode: str = self._app_config.execution.mode if self._app_config else "paper"
+        # P1 修复：_last_cycle_date 必须在 run_daily_cycle 使用前初始化
+        self._last_cycle_date: date | None = None
 
         # 过滤器
         self._fundamental_filter = FundamentalFilter()
@@ -87,9 +89,8 @@ class TradingEngine:
         self._regime_detector = MultiPeriodRegimeDetector()
         self._position_controller = PositionController()
 
-        # 移动止损引擎 + 危险信号检测器
+        # 移动止损引擎
         self._trailing_stop_engine = TrailingStopEngine()
-        self._danger_detector = DangerSignalDetector()
 
         # 信号过滤流水线
         self._pipeline = SignalPipeline(
@@ -101,6 +102,7 @@ class TradingEngine:
             fundamental_filter=self._fundamental_filter,
             money_flow_filter=self._money_flow_filter,
             industry_constraint=self._industry_constraint,
+            exec_mode=self._exec_mode,
         )
 
         # 注册事件处理器
@@ -1026,8 +1028,6 @@ class TradingEngine:
         供 formatter 在卡片中展示。
         """
         try:
-            from gugu.analysis.signal_tracker import SignalTracker
-
             tracker = SignalTracker()
             records = tracker.load_history(days=30)
             if len(records) < 3:
