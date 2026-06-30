@@ -191,6 +191,7 @@ class DataManager:
                     await self._on_failure_locked(method)
 
         # 降级源：并发尝试所有 fallback，FIRST_COMPLETED 模式
+        # 信号量保护整个 fallback 请求 + 等待过程，防止并发降级请求过多
         async with self._fallback_semaphore:
             tasks: dict[BaseCollector, asyncio.Task] = {
                 fb: asyncio.create_task(
@@ -201,7 +202,7 @@ class DataManager:
                 )
                 for fb in self._fallbacks
             }
-        done, pending = await asyncio.wait(tasks.values(), return_when=asyncio.FIRST_COMPLETED)
+            done, pending = await asyncio.wait(tasks.values(), return_when=asyncio.FIRST_COMPLETED)
         for t in done:
             try:
                 df = t.result()

@@ -117,13 +117,15 @@ class ParquetPersistentCache:
             # 检查 freshness：最后一条数据日期
             if "date" in df.columns:
                 last_date = pd.to_datetime(df["date"].iloc[-1])
-                # 如果最后数据日期早于昨天，视为过期
                 from datetime import datetime, timedelta
 
-                yesterday = datetime.now() - timedelta(days=2)
-                if last_date < pd.Timestamp(yesterday):
+                calendar_days = (datetime.now() - last_date.to_pydatetime()).days
+                # 允许最长 7 天的缓存老化（覆盖长假场景如春节/国庆 5 个交易日）
+                max_stale_days = 7
+                if calendar_days > max_stale_days:
                     logger.debug(
-                        f"Parquet 缓存过期: {symbol} {days}d, 最后日期={last_date.date()}, 清理"
+                        f"Parquet 缓存过期: {symbol} {days}d, "
+                        f"最后日期={last_date.date()}, 距今 {calendar_days} 天"
                     )
                     path.unlink(missing_ok=True)
                     return None

@@ -197,7 +197,9 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
 
     # 信号强度标签
     strength = ""
-    if wisdom_decision.get("entry_filtered"):
+    if signal.get("wisdom_filtered"):
+        strength = "⚠️ 危险信号"
+    elif wisdom_decision.get("entry_filtered"):
         strength = "⚠️ 已过滤"
     elif signal.get("sector_check", {}).get("is_hot") and signal.get("multi_period", {}).get(
         "weekly_aligned"
@@ -209,6 +211,9 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
         strength = "🔵 中信号" if confidence >= 0.6 else "🟡 弱信号"
 
     # entry-filtered signals use yellow card
+    if signal.get("wisdom_filtered"):
+        template = "yellow"
+        action = f"{action}（危险信号）"
     if wisdom_decision.get("entry_filtered"):
         template = "yellow"
         action = f"{action}（已过滤）"

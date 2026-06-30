@@ -193,12 +193,11 @@ class SignalPipeline:
 
             # signal_only 模式：跳过 Wisdom 决策层（降低 LLM cost 和阻塞时间）
             if self._exec_mode == "signal_only":
-                # 在 signal_only 模式下，不对买入信号做硬过滤（让用户自行判断）
-                # 仅记录基本面/资金流/行业信息供参考
+                # signal_only 模式下，不对买入信号做硬过滤（让用户自行判断）
+                # 但保留危险信号标记，用于通知时提醒用户
                 if signal["direction"] == "buy":
                     fund_result = self._fundamental_filter.check(symbol)
                     signal["fundamental"] = fund_result
-                signal.pop("wisdom_filtered", None)
                 logger.info(
                     f"信号(仅通知): {signal['symbol']} {signal['direction']} "
                     f"置信度 {signal['confidence']} 策略 {signal['strategies']}"

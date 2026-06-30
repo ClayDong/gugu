@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 from io import StringIO
 
@@ -19,7 +20,11 @@ from gugu.utils.log import get_logger
 
 logger = get_logger()
 
+# 网易财经历史 CSV 接口（主历史行情）
 SINA_HISTORY_URL = "https://quotes.money.163.com/service/chddata.html?code={sina_code}&start={start}&end={end}&fields=TCLOSE"
+# 新浪 K 线 JSON 接口（备用历史行情，网易 502 时自动降级）
+SINA_KLINE_URL = "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketData.getKLineData?symbol={exch_code}&scale=240&datalen={datalen}"
+# 新浪实时行情接口
 SINA_REALTIME_URL = "https://hq.sinajs.cn/list={codes}"
 
 _SINA_PREFIX_MAP: dict[str, str] = {
@@ -60,6 +65,22 @@ class SinaCollector(BaseCollector):
     def fetch_stock_history(self, symbol: str, days: int = 60) -> pd.DataFrame:
         code = self.normalize_symbol(symbol)
         sina_code = _to_sina_csv_code(code)
+        exch_code = _to_sina_code(code)
+
+        # 优先尝试网易财经历史 CSV 接口
+        df = self._try_netease_history(code, sina_code, days)
+        if df is not None:
+            return df
+
+        # 网易失败，降级到新浪 K 线 JSON 接口
+        df = self._try_sina_kline(code, exch_code, days)
+        if df is not None:
+            return df
+
+        return pd.DataFrame()
+
+    def _try_netease_history(self, code: str, sina_code: str, days: int) -> pd.DataFrame | None:
+        """尝试网易财经历史 CSV 接口。失败返回 None。"""
         url = SINA_HISTORY_URL.format(
             sina_code=sina_code,
             start="20200101",
@@ -73,20 +94,79 @@ class SinaCollector(BaseCollector):
             })
             resp.raise_for_status()
         except Exception as e:
-            logger.error(f"新浪 HTTP 历史行情 {code} 失败: {e}")
-            raise
+            logger.warning(f"网易财经历史行情 {code} 不可用: {e}")
+            return None
 
         if not resp.text.strip():
-            return pd.DataFrame()
+            return None
 
         try:
             df = pd.read_csv(StringIO(resp.text), encoding="gbk")
         except Exception:
-            df = pd.read_csv(StringIO(resp.text), encoding="utf-8")
+            try:
+                df = pd.read_csv(StringIO(resp.text), encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"网易财经 CSV 解析失败 {code}: {e}")
+                return None
 
         if df.empty:
-            return df
+            return None
 
+        return self._normalize_history(df, code, days)
+
+    def _try_sina_kline(self, code: str, exch_code: str, days: int) -> pd.DataFrame | None:
+        """尝试新浪 K 线 JSON 接口（备用）。失败返回 None。"""
+        # 新浪 K 线接口最多返回 100 条，取略多于 days 确保足够
+        datalen = max(days + 10, 100)
+        datalen = min(datalen, 200)
+        url = SINA_KLINE_URL.format(exch_code=exch_code, datalen=datalen)
+        try:
+            client = self._get_client()
+            resp = client.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+                "Referer": "https://finance.sina.com.cn/",
+            })
+            resp.raise_for_status()
+        except Exception as e:
+            logger.warning(f"新浪 K 线 {code} 不可用: {e}")
+            return None
+
+        text = resp.text.strip()
+        if not text:
+            return None
+
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as e:
+            logger.warning(f"新浪 K 线 JSON 解析失败 {code}: {e}")
+            return None
+
+        if not data:
+            return None
+
+        rows = []
+        for item in data:
+            try:
+                rows.append({
+                    "date": item["day"],
+                    "open": float(item["open"]),
+                    "high": float(item["high"]),
+                    "low": float(item["low"]),
+                    "close": float(item["close"]),
+                    "volume": float(item.get("volume", 0)),
+                    "amount": float(item.get("amount", 0)) if item.get("amount") else 0.0,
+                })
+            except (KeyError, ValueError, TypeError):
+                continue
+
+        if not rows:
+            return None
+
+        df = pd.DataFrame(rows)
+        return self._normalize_history(df, code, days)
+
+    def _normalize_history(self, df: pd.DataFrame, code: str, days: int) -> pd.DataFrame:
+        """统一标准化历史行情 DataFrame。"""
         col_map = {
             "日期": "date", "股票代码": "code",
             "开盘价": "open", "最高价": "high", "最低价": "low",
