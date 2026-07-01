@@ -17,6 +17,13 @@ from gugu.execution.base import AccountInfo, OrderResult
 from gugu.risk.rules import RiskAction, RiskCheckResult, RiskLevel
 
 
+@pytest.fixture(autouse=True)
+def _mock_record_signal_history():
+    """防止测试 _process_signal 时写入生产数据文件 signals_history.jsonl。"""
+    with mock.patch("gugu.engine.main.record_signal_history"):
+        yield
+
+
 @pytest.fixture
 def mock_data_manager() -> mock.MagicMock:
     """Mock DataManager：返回可控的行情数据。"""

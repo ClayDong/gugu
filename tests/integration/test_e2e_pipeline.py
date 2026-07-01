@@ -729,6 +729,8 @@ class TestEndToEndIntegrationNoBusinessMock:
         from gugu.engine.main import TradingEngine
 
         monkeypatch.setattr("gugu.execution.paper.STATE_FILE", tmp_path / "state.json")
+        # 防止测试写入生产数据文件
+        monkeypatch.setattr("gugu.engine.main.record_signal_history", lambda *a, **kw: None)
 
         broker = PaperBroker(initial_capital=1_000_000)
         risk = RiskManager()
