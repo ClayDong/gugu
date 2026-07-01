@@ -460,6 +460,23 @@ class TradingEngine:
         # signal_only 模式：只发信号通知，不下单（监控验证用）
         if self._exec_mode == "signal_only":
             logger.info(f"{symbol} {direction} 信号（signal_only 模式，仅通知不下单）")
+            # 前置硬校验：避免脏数据进入通知和历史记录
+            try:
+                sig_price = float(signal.get("price", 0)) if signal.get("price") is not None else 0.0
+            except (TypeError, ValueError):
+                sig_price = 0.0
+            sig_confidence = signal.get("confidence")
+            sig_strategies = signal.get("strategies", [])
+            if sig_price <= 1.0:
+                logger.error(f"{symbol} signal_only 模式价格异常 price={sig_price}，拒绝通知并跳过历史记录")
+                return
+            if sig_confidence is None or (isinstance(sig_confidence, (int, float)) and sig_confidence <= 0):
+                logger.error(f"{symbol} signal_only 模式置信度异常 confidence={sig_confidence}，拒绝通知并跳过历史记录")
+                return
+            if not sig_strategies or (isinstance(sig_strategies, list) and len(sig_strategies) == 0):
+                logger.error(f"{symbol} signal_only 模式策略为空，拒绝通知并跳过历史记录")
+                return
+
             # 记录信号历史（不下单，order_result=None）
             try:
                 record_signal_history(signal, None, None)

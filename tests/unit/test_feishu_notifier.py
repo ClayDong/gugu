@@ -82,8 +82,10 @@ async def test_notify_signal_sends_post_with_correct_url_and_payload(mock_env):
             "name": "贵州茅台",
             "direction": "buy",
             "strategy": "turtle",
+            "strategies": ["turtle"],
             "reason": "突破上轨",
             "price": 1500.0,
+            "confidence": 0.85,
         }
         result = await notifier.notify_signal(signal)
 
@@ -119,7 +121,7 @@ async def test_notify_signal_returns_true_on_http_200(mock_env):
 
     try:
         result = await notifier.notify_signal(
-            {"symbol": "600519", "direction": "buy", "price": 1.0}
+            {"symbol": "600519", "direction": "buy", "price": 1500.0, "confidence": 0.85, "strategies": ["turtle"], "reason": "突破"}
         )
         assert result is True
     finally:
@@ -144,7 +146,7 @@ async def test_notify_signal_returns_false_on_http_error(mock_env, no_sleep):
 
     try:
         result = await notifier.notify_signal(
-            {"symbol": "600519", "direction": "buy", "price": 1.0}
+            {"symbol": "600519", "direction": "buy", "price": 1500.0, "confidence": 0.85, "strategies": ["turtle"], "reason": "突破"}
         )
         assert result is False
     finally:
@@ -164,11 +166,46 @@ async def test_notify_signal_returns_false_on_network_exception(mock_env, no_sle
 
     try:
         result = await notifier.notify_signal(
-            {"symbol": "600519", "direction": "buy", "price": 1.0}
+            {"symbol": "600519", "direction": "buy", "price": 1500.0, "confidence": 0.85, "strategies": ["turtle"], "reason": "突破"}
         )
         assert result is False
     finally:
         await mock_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_notify_signal_rejects_invalid_price(mock_env):
+    """价格异常（<=1.0）时拒绝发送，不调用 HTTP。"""
+    notifier = FeishuNotifier()
+    result = await notifier.notify_signal(
+        {"symbol": "600519", "direction": "buy", "price": 1.0, "confidence": 0.85, "strategies": ["turtle"], "reason": "突破"}
+    )
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_notify_signal_rejects_invalid_confidence(mock_env):
+    """置信度异常（None 或 <=0）时拒绝发送，不调用 HTTP。"""
+    notifier = FeishuNotifier()
+    result = await notifier.notify_signal(
+        {"symbol": "600519", "direction": "buy", "price": 1500.0, "confidence": None, "strategies": ["turtle"], "reason": "突破"}
+    )
+    assert result is False
+
+    result = await notifier.notify_signal(
+        {"symbol": "600519", "direction": "buy", "price": 1500.0, "confidence": 0.0, "strategies": ["turtle"], "reason": "突破"}
+    )
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_notify_signal_rejects_empty_strategies(mock_env):
+    """策略为空时拒绝发送，不调用 HTTP。"""
+    notifier = FeishuNotifier()
+    result = await notifier.notify_signal(
+        {"symbol": "600519", "direction": "buy", "price": 1500.0, "confidence": 0.85, "strategies": [], "reason": "突破"}
+    )
+    assert result is False
 
 
 # ========== notify_risk_alert ==========
@@ -292,7 +329,7 @@ async def test_retry_logic_retries_up_to_max_attempts(mock_env, no_sleep):
 
     try:
         result = await notifier.notify_signal(
-            {"symbol": "600519", "direction": "buy", "price": 1.0}
+            {"symbol": "600519", "direction": "buy", "price": 1500.0, "confidence": 0.85, "strategies": ["turtle"], "reason": "突破"}
         )
 
         assert result is False

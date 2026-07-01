@@ -210,6 +210,11 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
         missing_fields.append("策略")
     if price <= 0:
         missing_fields.append("价格")
+    # 硬校验：A 股正常股价不会 <= 1.0，置信度必须 > 0
+    if price <= 1.0:
+        missing_fields.append("价格异常(<=1.0)")
+    if confidence is None:
+        missing_fields.append("置信度缺失")
     data_incomplete = len(missing_fields) > 0
 
     # 信号强度标签

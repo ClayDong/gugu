@@ -360,3 +360,45 @@ async def test_process_signal_respects_wisdom_position_ratio(
     # quantity = int(1_000_000 * 0.20 / 10.0 / 100) * 100 = 20000
     call_args = mock_broker.order.call_args
     assert call_args[0][2] == 20000  # quantity
+
+
+@pytest.mark.asyncio
+async def test_process_signal_signal_only_rejects_invalid_signal(
+    engine: TradingEngine,
+    mock_broker: mock.MagicMock,
+    mock_notifier: mock.AsyncMock,
+) -> None:
+    """signal_only 模式下，异常信号（价格<=1.0/置信度异常/空策略）应直接返回，不通知不下单。"""
+    engine._exec_mode = "signal_only"
+    invalid_signals = [
+        {"symbol": "600519", "direction": "buy", "price": 1.0, "confidence": 0.85, "strategies": ["turtle"]},
+        {"symbol": "600519", "direction": "buy", "price": 1500.0, "confidence": None, "strategies": ["turtle"]},
+        {"symbol": "600519", "direction": "buy", "price": 1500.0, "confidence": 0.85, "strategies": []},
+    ]
+    for signal in invalid_signals:
+        mock_notifier.notify_signal.reset_mock()
+        mock_broker.order.reset_mock()
+        await engine._process_signal(signal)
+        mock_broker.order.assert_not_called()
+        mock_notifier.notify_signal.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_process_signal_signal_only_sends_valid_signal(
+    engine: TradingEngine,
+    mock_broker: mock.MagicMock,
+    mock_notifier: mock.AsyncMock,
+) -> None:
+    """signal_only 模式下，合法信号应发送通知但不下单。"""
+    engine._exec_mode = "signal_only"
+    signal = {
+        "symbol": "600519",
+        "direction": "buy",
+        "price": 1500.0,
+        "confidence": 0.85,
+        "strategies": ["turtle"],
+        "reason": "突破",
+    }
+    await engine._process_signal(signal)
+    mock_broker.order.assert_not_called()
+    mock_notifier.notify_signal.assert_called_once()

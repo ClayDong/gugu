@@ -1,9 +1,18 @@
 """测试共享 fixture。"""
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
+
+# 将 src 加入 Python 路径，使 pytest 可直接运行（无需预先 editable install）
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_SRC_DIR = _PROJECT_ROOT / "src"
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
 
 
 @pytest.fixture(autouse=True)

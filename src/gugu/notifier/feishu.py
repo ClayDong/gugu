@@ -329,6 +329,34 @@ class FeishuNotifier:
             signal.setdefault("strategies", [])
             signal.setdefault("reason", "")
             signal.setdefault("price", 0.0)
+
+        # 硬校验关键字段合法性：拒绝异常价格/置信度/空策略，避免脏数据发送到飞书
+        price = signal.get("price", 0.0)
+        confidence = signal.get("confidence")
+        strategies = signal.get("strategies", [])
+        try:
+            price = float(price) if price is not None else 0.0
+        except (TypeError, ValueError):
+            price = 0.0
+        if price <= 1.0:
+            logger.error(
+                f"信号价格异常: price={price} <= 1.0，拒绝发送。"
+                f" symbol={signal.get('symbol', 'N/A')}"
+            )
+            return False
+        if confidence is None or (isinstance(confidence, (int, float)) and confidence <= 0):
+            logger.error(
+                f"信号置信度异常: confidence={confidence}，拒绝发送。"
+                f" symbol={signal.get('symbol', 'N/A')}"
+            )
+            return False
+        if not strategies or (isinstance(strategies, list) and len(strategies) == 0):
+            logger.error(
+                f"信号策略为空: strategies={strategies}，拒绝发送。"
+                f" symbol={signal.get('symbol', 'N/A')}"
+            )
+            return False
+
         return await self.send_card(format_signal(signal))
 
     async def notify_daily_report(self, period: str, data: dict[str, Any]) -> bool:

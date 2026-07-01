@@ -149,6 +149,7 @@ def test_format_signal_uses_strategies_fallback():
         "strategies": ["dual_ma", "bollinger"],
         "suggested_position_ratio": 0.24,
         "price": 1500.0,
+        "confidence": 0.8,
     }
     card = format_signal(signal)
     # P0 修复：卡片首元素改为摘要行（subtitle_div + hr），section 后移 2 位
@@ -156,6 +157,20 @@ def test_format_signal_uses_strategies_fallback():
     content = card["card"]["elements"][5]["text"]["content"]
     assert "dual_ma,bollinger" in content
     assert "24%" in content
+
+
+def test_format_signal_marks_data_anomaly():
+    """价格 <=1.0 或置信度缺失时卡片标记数据异常。"""
+    signal = {
+        "symbol": "600519",
+        "direction": "buy",
+        "strategies": ["turtle"],
+        "price": 1.0,
+        "confidence": None,
+    }
+    card = format_signal(signal)
+    title = card["card"]["header"]["title"]["content"]
+    assert "数据异常" in title
 
 
 def test_feishu_notifier_skip_when_unconfigured():
@@ -192,7 +207,7 @@ async def test_feishu_notifier_token_and_send():
         mock_env.return_value.feishu_chat_id = "chat-id"
         notifier = FeishuNotifier()
         notifier._client = mock_client
-        ok = await notifier.notify_signal({"symbol": "600519", "direction": "buy", "price": 1.0})
+        ok = await notifier.notify_signal({"symbol": "600519", "direction": "buy", "price": 1500.0, "confidence": 0.85, "strategies": ["turtle"], "reason": "突破"})
         assert ok is True
         assert len(requests) == 2  # token + message
 
