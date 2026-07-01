@@ -929,6 +929,52 @@ class TestEndToEndFullCycle:
             )
 
 
+class TestMarketFilterIntegration:
+    """大市过滤集成测试：验证《炒股的智慧》铁律——大市不佳/数据失败时跳过选股。"""
+
+    def _make_minimal_engine(self):
+        """构造最小化引擎，仅设置 _scan_signals 所需的依赖。"""
+        import asyncio
+
+        from gugu.engine.main import TradingEngine
+        from gugu.engine.event_engine import EventEngine
+
+        engine = TradingEngine.__new__(TradingEngine)
+        engine._watchlist = ["000858"]
+        engine._event_engine = EventEngine()
+        engine._lock = asyncio.Lock()
+        return engine
+
+    def test_bear_market_skips_selection(self):
+        """熊市时 _scan_signals 应跳过选股，返回空列表。"""
+        import asyncio
+
+        engine = self._make_minimal_engine()
+        mock_mf = mock.MagicMock()
+        mock_mf.check_market = mock.AsyncMock(
+            return_value={"bullish": False, "regime": "bear", "reason": "收盘价<MA200"}
+        )
+        engine._market_filter = mock_mf
+
+        result = asyncio.run(engine._scan_signals())
+        assert result == [], "熊市应跳过选股返回空列表"
+
+    def test_market_data_failure_blocks_selection(self):
+        """大市数据失败（fail-safe）时 _scan_signals 应跳过选股。"""
+        import asyncio
+
+        engine = self._make_minimal_engine()
+        mock_mf = mock.MagicMock()
+        # 模拟 MarketFilter.check_market 内部 fail-safe 后返回的结果
+        mock_mf.check_market = mock.AsyncMock(
+            return_value={"bullish": False, "regime": "unknown", "reason": "fail-safe 拒绝"}
+        )
+        engine._market_filter = mock_mf
+
+        result = asyncio.run(engine._scan_signals())
+        assert result == [], "数据失败 fail-safe 应跳过选股返回空列表"
+
+
 class TestAtomicStateWrite:
     """DA-01+OP-02 修复验证：状态文件原子写入。"""
 

@@ -67,18 +67,18 @@ class MarketFilter:
         try:
             df = await self.fetch_index_data(days=250)
             result = self._analyze(df)
+            # 仅缓存成功结果，失败不缓存以便后续重试
+            self._cache_date = today
+            self._cache = result
         except Exception as e:
-            # 数据获取失败不阻塞交易，默认放行并记录 warning
-            logger.warning(f"大市数据获取失败，默认放行: {e}")
+            # fail-safe：《炒股的智慧》铁律——只在牛市操作。
+            # 无法确认大市状态时保守不进场，但不缓存以便后续重试。
+            logger.warning(f"大市数据获取失败，fail-safe 拒绝选股: {e}")
             result = {
-                "bullish": True,
+                "bullish": False,
                 "regime": "unknown",
-                "reason": "大市数据获取失败，默认放行",
+                "reason": f"大市数据获取失败，fail-safe 拒绝: {e}",
             }
-
-        # 写入缓存
-        self._cache_date = today
-        self._cache = result
         return result
 
     async def fetch_index_data(self, days: int = 250) -> pd.DataFrame:
@@ -145,15 +145,15 @@ class MarketFilter:
 
         三个条件全部满足 → bull；全部不满足 → bear；部分满足 → range。
         """
-        # 数据不足时默认放行，避免误伤
+        # 数据不足时 fail-safe 拒绝（保守不进场），避免误伤
         if df is None or df.empty or len(df) < _MA200:
             logger.warning(
-                f"指数数据不足（需 {_MA200} 行，实际 {len(df) if df is not None else 0} 行），默认放行"
+                f"指数数据不足（需 {_MA200} 行，实际 {len(df) if df is not None else 0} 行），fail-safe 拒绝"
             )
             return {
-                "bullish": True,
+                "bullish": False,
                 "regime": "unknown",
-                "reason": "大市数据不足，默认放行",
+                "reason": "大市数据不足，fail-safe 拒绝",
                 "index_close": 0.0,
                 "ma200": 0.0,
             }

@@ -188,17 +188,34 @@ class SignalPipeline:
                     signal["wisdom_filtered"] = True
                     signal["filter_reason"] = f"危险信号: {danger_result.description}"
 
-            # 量价背离检测（卖出信号增强：《炒股的智慧》量价背离卖出）
-            if signal["direction"] == "sell":
-                try:
-                    div_result = self._divergence_detector.detect(df)
-                    signal["divergence"] = div_result
-                    if div_result["signals"]:
-                        logger.info(
-                            f"{symbol} 量价背离检测: {', '.join(div_result['signals'])}"
+            # 量价背离检测（《炒股的智慧》量价背离卖出）
+            # 对所有信号检测：买入遇背离应拦截（上涨乏力），卖出遇背离应增强
+            try:
+                div_result = self._divergence_detector.detect(df)
+                signal["divergence"] = div_result
+                if div_result["signals"]:
+                    logger.warning(
+                        f"{symbol} 量价背离检测: {', '.join(div_result['signals'])}"
+                    )
+                    if signal["direction"] == "buy":
+                        # 量价背离说明上涨乏力，拦截买入
+                        signal["wisdom_filtered"] = True
+                        if not signal.get("filter_reason"):
+                            signal["filter_reason"] = (
+                                f"量价背离: {', '.join(div_result['signals'])}"
+                            )
+                    elif signal["direction"] == "sell":
+                        # 量价背离增强卖出信号置信度
+                        signal["confidence"] = min(
+                            1.0, float(signal.get("confidence", 0.5)) + 0.15
                         )
-                except Exception as e:
-                    logger.debug(f"量价背离检测失败 {symbol}: {e}")
+                        if signal.get("reason"):
+                            signal["reason"] += (
+                                f"；量价背离({', '.join(div_result['signals'])})"
+                            )
+            except Exception as e:
+                logger.warning(f"量价背离检测失败 {symbol}: {e}")
+                signal["divergence"] = {"error": str(e)}
 
             if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
                 try:

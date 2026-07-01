@@ -60,12 +60,12 @@ class TestMarketFilter:
         assert result["regime"] in ("bear", "range")
 
     @pytest.mark.asyncio
-    async def test_api_failure_defaults_to_bullish(self):
-        """数据获取失败时默认放行（不阻塞交易）。"""
+    async def test_api_failure_defaults_to_bearish(self):
+        """数据获取失败时 fail-safe 拒绝（《炒股的智慧》铁律：只在牛市操作）。"""
         mf = MarketFilter()
         mf.fetch_index_data = mock.AsyncMock(side_effect=RuntimeError("network error"))
         result = await mf.check_market()
-        assert result["bullish"] is True
+        assert result["bullish"] is False
         assert result["regime"] == "unknown"
         assert "失败" in result["reason"]
 
@@ -87,11 +87,11 @@ class TestMarketFilter:
         assert result1 == result2
 
     @pytest.mark.asyncio
-    async def test_insufficient_data_defaults_to_bullish(self):
-        """数据不足时默认放行。"""
+    async def test_insufficient_data_defaults_to_bearish(self):
+        """数据不足时 fail-safe 拒绝（保守不进场）。"""
         mf = MarketFilter()
         short_df = _make_bullish_index_data(50)  # 只有50天，不足200日
         mf.fetch_index_data = mock.AsyncMock(return_value=short_df)
         result = await mf.check_market()
-        assert result["bullish"] is True
-        assert result["regime"] in ("unknown", "bull")
+        assert result["bullish"] is False
+        assert result["regime"] == "unknown"
