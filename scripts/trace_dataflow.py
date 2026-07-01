@@ -172,9 +172,20 @@ def trace_filtered_signal_pipeline():
     print("链路2：入场过滤信号链路（低置信度信号应仅通知不下单）")
     print("=" * 70)
 
+    # 从真实行情获取贵州茅台最新收盘价，不使用硬编码价格
+    import asyncio
+    dm = DataManager()
+    symbol = "600519"
+    df = asyncio.run(dm.fetch_stock_history(symbol, days=5))
+    if df.empty:
+        print(f"  ⚠️ 无法获取 {symbol} 行情数据，跳过链路2")
+        return None
+    real_price = float(df.iloc[-1]["close"])
+    print(f"  {symbol} 真实收盘价: {real_price:.2f}")
+
     wisdom = WisdomAdvisor()
     low_conf_signal = {
-        "symbol": "600519",
+        "symbol": symbol,
         "name": "贵州茅台",
         "direction": "buy",
         "confidence": 0.35,  # 低置信度
@@ -182,7 +193,7 @@ def trace_filtered_signal_pipeline():
         "strategies": ["turtle"],
         "reason": "突破20日高点",
         "suggested_position_ratio": 0.24,
-        "price": 1500.0,
+        "price": real_price,
     }
 
     print(f"\n[WisdomAdvisor 输入] confidence={low_conf_signal['confidence']}")
