@@ -28,6 +28,7 @@ from gugu.analysis.no_average_down import NoAverageDownChecker
 from gugu.analysis.position_controller import PositionBudget, PositionController
 from gugu.analysis.regime_detector import MultiPeriodRegimeDetector
 from gugu.analysis.sector_rotation import SectorRotation
+from gugu.detectors.divergence_detector import DivergenceDetector
 from gugu.analysis.stage_detector import MarketStage, StageDetector
 from gugu.data.manager import DataManager
 from gugu.data.stock_names import lookup_stock_name
@@ -86,6 +87,7 @@ class SignalPipeline:
         self._stage_detector = StageDetector()
         self._danger_detector = DangerSignalDetector()
         self._no_avg_down_checker = NoAverageDownChecker()
+        self._divergence_detector = DivergenceDetector()
 
     async def process(
         self,
@@ -185,6 +187,18 @@ class SignalPipeline:
                 if signal["direction"] == "buy":
                     signal["wisdom_filtered"] = True
                     signal["filter_reason"] = f"危险信号: {danger_result.description}"
+
+            # 量价背离检测（卖出信号增强：《炒股的智慧》量价背离卖出）
+            if signal["direction"] == "sell":
+                try:
+                    div_result = self._divergence_detector.detect(df)
+                    signal["divergence"] = div_result
+                    if div_result["signals"]:
+                        logger.info(
+                            f"{symbol} 量价背离检测: {', '.join(div_result['signals'])}"
+                        )
+                except Exception as e:
+                    logger.debug(f"量价背离检测失败 {symbol}: {e}")
 
             if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
                 try:

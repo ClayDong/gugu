@@ -104,8 +104,13 @@ def engine(
         mock.patch("gugu.engine.main.RiskManager", return_value=mock_risk),
         mock.patch("gugu.engine.main.WisdomAdvisor"),
         mock.patch("gugu.engine.main.StockSelector"),
+        mock.patch("gugu.engine.main.MarketFilter") as mock_mf,
         mock.patch("gugu.engine.main.get_config") as mock_cfg,
     ):
+        # 大市过滤默认放行（牛市）
+        mock_mf.return_value.check_market = mock.AsyncMock(
+            return_value={"bullish": True, "regime": "bull", "reason": "mock放行"}
+        )
         mock_cfg.return_value.execution.mode = "paper"
         mock_cfg.return_value.execution.paper.initial_capital = 1_000_000
         mock_cfg.return_value.watchlist = ["600519", "000858"]

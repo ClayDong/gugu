@@ -8,6 +8,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
+from unittest import mock
 
 from gugu.analysis.position_controller import PositionController
 from gugu.analysis.regime_detector import MultiPeriodRegimeDetector
@@ -805,6 +806,13 @@ class TestEndToEndFullCycle:
         monkeypatch.setattr("gugu.engine.main.PROJECT_ROOT", tmp_path)
         monkeypatch.setattr("gugu.risk.manager.RISK_STATE_FILE", tmp_path / "risk_state.json")
 
+        # Mock 大市过滤（避免网络请求）
+        from gugu.engine.market_filter import MarketFilter as _MF
+        mock_mf = mock.MagicMock()
+        mock_mf.check_market = mock.AsyncMock(
+            return_value={"bullish": True, "regime": "bull", "reason": "mock放行"}
+        )
+
         # 准备 fixture 数据（触发布林带买入信号）
         df = make_bollinger_buy_df(60, 100.0)
         latest_price = float(df["close"].iloc[-1])
@@ -872,6 +880,7 @@ class TestEndToEndFullCycle:
             industry_constraint=engine._industry_constraint,
         )
         engine._selector = None  # auto_select 在测试中通过 monkeypatch 关闭
+        engine._market_filter = mock_mf
         # 确保测试中 auto_select 不触发（避免依赖外部数据源）
         monkeypatch.setattr(
             type(engine), "auto_select_enabled", property(lambda self: False)

@@ -25,10 +25,20 @@ class TurtleStrategy(Strategy):
         df["exit_low"] = df["low"].rolling(ew).min().shift(1)
         df["atr"] = self._atr(df, aw)
 
+        # 成交量均线：用于《炒股的智慧》阻力突破买点的成交量确认
+        # 要求当日成交量 ≥ 近 20 日均量的 1.5 倍
+        df["vol_ma"] = df["volume"].rolling(20).mean()
+
         df["signal"] = 0
         # 突破上轨买入
-        df.loc[df["close"] > df["upper"], "signal"] = 1
-        # 跌破出场线卖出
+        breakout = df["close"] > df["upper"]
+        if self.params.get("volume_confirm", True):
+            # 根据《炒股的智慧》策略体系：阻力突破需成交量放大配合
+            vol_ok = df["volume"] > df["vol_ma"] * float(self.params.get("vol_ratio", 1.5))
+            df.loc[breakout & vol_ok, "signal"] = 1
+        else:
+            df.loc[breakout, "signal"] = 1
+        # 跌破出场线卖出（卖出不需要量配合）
         df.loc[df["close"] < df["exit_low"], "signal"] = -1
 
         # 置信度：买入用突破上轨幅度，卖出用跌破出场线幅度

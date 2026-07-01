@@ -34,6 +34,7 @@ from gugu.engine.event_engine import (
     EVENT_STOP_LOSS,
     EventEngine,
 )
+from gugu.engine.market_filter import MarketFilter
 from gugu.engine.signal_pipeline import SignalPipeline, record_signal_history
 from gugu.engine.signal_router import SignalRouter
 from gugu.execution import PaperBroker
@@ -123,6 +124,7 @@ class TradingEngine:
             industry_constraint if industry_constraint is not None else IndustryConstraint()
         )
         self._event_engine = event_engine if event_engine is not None else EventEngine()
+        self._market_filter = MarketFilter()
 
         # 自选股列表
         if watchlist is not None:
@@ -373,6 +375,15 @@ class TradingEngine:
         for s in extra_symbols or []:
             if s not in scan_list:
                 scan_list.append(s)
+
+        # 大市过滤：《炒股的智慧》铁律——大市不满足顺势条件时仅观察不选股
+        market_status = await self._market_filter.check_market()
+        if not market_status["bullish"]:
+            logger.warning(
+                f"大市过滤: {market_status['regime']} — {market_status['reason']}，"
+                f"跳过本轮选股扫描"
+            )
+            return []
 
         # 市场状态判断（每日一次，影响所有信号的仓位修正）
         regime = await self._regime_detector.detect()
