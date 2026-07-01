@@ -127,6 +127,20 @@ class SignalPipeline:
 
             signal["suggested_position_ratio"] = budget.single_limit
             signal["has_position"] = symbol in portfolio
+
+            # P0 修复：信号数据合理性校验（防止错误数据发送飞书）
+            price = signal.get("price", 0)
+            confidence = signal.get("confidence")
+            if price <= 1.0:
+                logger.warning(
+                    f"{symbol} 信号价格异常 price={price}，丢弃该信号。"
+                    f" name={meta.get('name', '')} df_close={float(df.iloc[-1]['close']) if len(df) > 0 else 'N/A'}"
+                    f" rt_available={rt_all is not None and not rt_all.empty}"
+                )
+                return None
+            if confidence is None or confidence <= 0.0:
+                logger.warning(f"{symbol} 信号置信度无效 confidence={confidence}，丢弃该信号")
+                return None
             if symbol in portfolio and account.total_value > 0:
                 pos = portfolio[symbol]
                 signal["current_position_ratio"] = (
@@ -300,8 +314,14 @@ class SignalPipeline:
                 )
 
             # 4. 市场状态仓位修正（已在 budget.single_limit 中体现）
-            # 5. Wisdom 决策层
-            signal = self._wisdom.advise(signal)
+            # 5. Wisdom 决策层（异步不阻塞，后台运行，主路径不等待 LLM）
+            asyncio.create_task(self._wisdom.advise_async(signal))
+            signal["llm_pending"] = True
+            # LLM 完成前，使用基本的 fallback 决策
+            if "wisdom_decision" not in signal:
+                signal["wisdom_decision"] = {"source": "pending_llm"}
+            if "wisdom" not in signal:
+                signal["wisdom"] = {}
 
             logger.info(
                 f"信号: {signal['symbol']} {signal['direction']} "
@@ -394,11 +414,31 @@ class SignalPipeline:
         }
 
 
+# signals_history.jsonl 最大行数，超过时截断保留后半部分
+_SIGNAL_HISTORY_MAX_LINES = 5000
+
+
+def _rotate_jsonl(path: Path, max_lines: int = _SIGNAL_HISTORY_MAX_LINES) -> None:
+    """JSONL 文件行数超过 max_lines 时截断，保留最新 max_lines//2 行。"""
+    try:
+        if path.exists():
+            with path.open("r", encoding="utf-8") as f:
+                lines = f.readlines()
+            if len(lines) > max_lines:
+                keep = lines[-max_lines // 2 :]
+                with path.open("w", encoding="utf-8") as f:
+                    f.writelines(keep)
+                logger.info(f"历史文件轮转: {path.name} {len(lines)}→{len(keep)} 行")
+    except Exception as e:
+        logger.warning(f"历史文件轮转失败: {e}")
+
+
 def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result: Any) -> None:
     try:
         hb_dir = gugu_config.PROJECT_ROOT / "data"
         hb_dir.mkdir(exist_ok=True)
         path = hb_dir / "signals_history.jsonl"
+        _rotate_jsonl(path)
 
         decision_chain: list[dict] = []
 

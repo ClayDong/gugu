@@ -1,0 +1,402 @@
+[
+  {
+    "id": "safety_margin",
+    "name": "安全边际",
+    "definition": "以低于内在价值的价格买入，差额即为安全边际，用于吸收估值错误和市场波动。",
+    "related_books": ["聪明的投资者", "证券分析"],
+    "related_perspective": "benjamin-graham-perspective",
+    "kb_query": "格雷厄姆 安全边际 内在价值"
+  },
+  {
+    "id": "mr_market",
+    "name": "市场先生",
+    "definition": "格雷厄姆比喻：市场每天报价，情绪不定，你不必跟随，应利用其疯狂而非被引导。",
+    "related_books": ["聪明的投资者"],
+    "related_perspective": "benjamin-graham-perspective",
+    "kb_query": "市场先生 格雷厄姆 情绪"
+  },
+  {
+    "id": "circle_of_competence",
+    "name": "能力圈",
+    "definition": "只投资自己能理解的公司，不懂的不做，承认无知比假装聪明更安全。",
+    "related_books": ["穷查理宝典", "巴菲特寫給股東的信"],
+    "related_perspective": "charles-munger-perspective",
+    "kb_query": "能力圈 巴菲特 芒格 不懂不做"
+  },
+  {
+    "id": "moat",
+    "name": "护城河",
+    "definition": "企业维持竞争优势、抵御对手的结构性壁垒，如品牌、网络效应、转换成本、成本优势。",
+    "related_books": ["股市真规则"],
+    "related_perspective": "pat-dorsey-perspective",
+    "kb_query": "护城河 竞争优势 巴菲特"
+  },
+  {
+    "id": "intrinsic_value",
+    "name": "内在价值",
+    "definition": "企业未来现金流的折现值，是价格的锚；价格会回归价值，但时机不确定。",
+    "related_books": ["聪明的投资者", "巴菲特寫給股東的信"],
+    "related_perspective": "warren-buffett-perspective",
+    "kb_query": "内在价值 现金流折现 巴菲特"
+  },
+  {
+    "id": "value_trap",
+    "name": "价值陷阱",
+    "definition": "看起来便宜（低PE/PB）但基本面持续恶化的股票，便宜有便宜的原因。",
+    "related_books": ["投资中最简单的事"],
+    "related_perspective": "qiu-guo-lu-perspective",
+    "kb_query": "价值陷阱 邱国鹭 低估值"
+  },
+  {
+    "id": "compounding",
+    "name": "复利",
+    "definition": "收益再投资产生指数增长，时间是优质公司的朋友，是平庸公司的敌人。",
+    "related_books": ["巴菲特寫給股東的信", "穷查理宝典"],
+    "related_perspective": "warren-buffett-perspective",
+    "kb_query": "复利 巴菲特 时间 长期"
+  },
+  {
+    "id": "peg_ratio",
+    "name": "PEG比率",
+    "definition": "市盈率÷盈利增长率，PEG<1视为低估，兼顾估值与成长性。",
+    "related_books": ["彼得·林奇的成功投资"],
+    "related_perspective": "peter-lynch-perspective",
+    "kb_query": "PEG 林奇 市盈率 增长"
+  },
+  {
+    "id": "tens_bagger",
+    "name": "十倍股",
+    "definition": "林奇概念：能涨10倍的股票，来自生活中能观察到的高成长公司。",
+    "related_books": ["彼得·林奇的成功投资", "战胜华尔街"],
+    "related_perspective": "peter-lynch-perspective",
+    "kb_query": "十倍股 林奇 生活中的公司"
+  },
+  {
+    "id": "canslim",
+    "name": "CANSLIM法则",
+    "definition": "欧奈尔选股七要素：当前每股收益、年度收益、新事物、供需、领涨股、机构持股、市场方向。",
+    "related_books": ["笑傲股市 股票买卖原则"],
+    "related_perspective": "william-oneil-perspective",
+    "kb_query": "CANSLIM 欧奈尔 选股"
+  },
+  {
+    "id": "pivot_point",
+    "name": "关键点",
+    "definition": "利弗莫尔概念：趋势开始加速的价格位置，确认后进场，之前耐心等待。",
+    "related_books": ["股票大作手回忆录", "股票大作手操盘术"],
+    "related_perspective": "jesse-livermore-perspective",
+    "kb_query": "关键点 利弗莫尔 趋势加速"
+  },
+  {
+    "id": "line_of_least_resistance",
+    "name": "最小阻力线",
+    "definition": "价格沿阻力最小方向运动，确认方向后跟随，不必分析为什么。",
+    "related_books": ["股票大作手回忆录"],
+    "related_perspective": "jesse-livermore-perspective",
+    "kb_query": "最小阻力 利弗莫尔 价格方向"
+  },
+  {
+    "id": "stop_loss_iron_rule",
+    "name": "止损铁律",
+    "definition": "入场前预设止损价，到点必执行，绝不摊平亏损，这是最高行为准则。",
+    "related_books": ["炒股的智慧", "股票大作手回忆录"],
+    "related_perspective": "chen-jiang-ting-perspective",
+    "kb_query": "止损铁律 陈江挺 不摊平亏损"
+  },
+  {
+    "id": "trailing_stop",
+    "name": "移动止损",
+    "definition": "浮盈后上移止损价，让利润奔跑的同时锁定收益，用移动止损代替固定止盈。",
+    "related_books": ["炒股的智慧", "通向财务自由之路"],
+    "related_perspective": "van-tharp-perspective",
+    "kb_query": "移动止损 让利润奔跑 跟踪止损"
+  },
+  {
+    "id": "layered_position",
+    "name": "分层下注",
+    "definition": "首次试仓小仓位，趋势确认后加码，分批建仓控制风险。",
+    "related_books": ["炒股的智慧", "股票大作手操盘术"],
+    "related_perspective": "chen-jiang-ting-perspective",
+    "kb_query": "分层下注 试仓 加码 陈江挺"
+  },
+  {
+    "id": "r_multiple",
+    "name": "R乘数",
+    "definition": "范·撒普概念：以初始风险R为单位衡量收益，2R盈利=2倍风险，盈亏比至少1:2。",
+    "related_books": ["通向财务自由之路"],
+    "related_perspective": "van-tharp-perspective",
+    "kb_query": "R乘数 范·撒普 盈亏比 风险单位"
+  },
+  {
+    "id": "reward_risk_ratio",
+    "name": "盈亏比",
+    "definition": "潜在盈利÷潜在亏损，至少1:2才值得交易，高盈亏比容错率高。",
+    "related_books": ["通向财务自由之路", "海龟交易法则"],
+    "related_perspective": "van-tharp-perspective",
+    "kb_query": "盈亏比 风险收益比 交易"
+  },
+  {
+    "id": "trend_following",
+    "name": "顺势交易",
+    "definition": "大势是唯一的朋友，永远不要逆势交易，趋势形成后跟随而非预测。",
+    "related_books": ["股票大作手回忆录", "海龟交易法则"],
+    "related_perspective": "turtle-trader-perspective",
+    "kb_query": "顺势交易 趋势 海龟"
+  },
+  {
+    "id": "trial_position",
+    "name": "试仓",
+    "definition": "用小仓位（5-10%）试探方向，验证正确后再加码，错了小亏。",
+    "related_books": ["炒股的智慧"],
+    "related_perspective": "chen-jiang-ting-perspective",
+    "kb_query": "试仓 小仓位 陈江挺"
+  },
+  {
+    "id": "add_position_rule",
+    "name": "加码法则",
+    "definition": "只在盈利仓位加码，绝不摊平亏损；加码量递减（首仓>二仓>三仓）。",
+    "related_books": ["股票大作手操盘术", "海龟交易法则"],
+    "related_perspective": "jesse-livermore-perspective",
+    "kb_query": "加码法则 摊平亏损 利弗莫尔"
+  },
+  {
+    "id": "systematic_trading",
+    "name": "系统化交易",
+    "definition": "用规则替代情绪，进场/出场/仓位都按既定系统执行，纪律高于判断。",
+    "related_books": ["海龟交易法则", "通向财务自由之路"],
+    "related_perspective": "turtle-trader-perspective",
+    "kb_query": "系统化交易 海龟 规则 纪律"
+  },
+  {
+    "id": "trading_discipline",
+    "name": "心理纪律",
+    "definition": "知行合一是最大挑战，知道规则不等于能做到，纪律是交易者的核心竞争力。",
+    "related_books": ["交易心理分析", "股票大作手回忆录"],
+    "related_perspective": "mark-douglas-perspective",
+    "kb_query": "交易心理 纪律 知行合一 马克道格拉斯"
+  },
+  {
+    "id": "kline_pattern",
+    "name": "K线形态",
+    "definition": "单根/多根K线组合反映买卖力量对比，如十字星、吞没、锤子线等。",
+    "related_books": ["K线图快速入门", "日本蜡烛图技术"],
+    "related_perspective": "steve-nison-perspective",
+    "kb_query": "K线形态 蜡烛图 买卖力量"
+  },
+  {
+    "id": "trendline",
+    "name": "趋势线",
+    "definition": "连接两个以上低点（上升趋势）或高点（下降趋势）的直线，判断趋势方向与突破。",
+    "related_books": ["股市趋势技术分析", "股市趋势技术分析-圣经"],
+    "related_perspective": "richard-schabacker-perspective",
+    "kb_query": "趋势线 技术分析 突破"
+  },
+  {
+    "id": "support_resistance",
+    "name": "支撑与阻力",
+    "definition": "价格历史上多次无法跌破的价位（支撑）或无法突破的价位（阻力）。",
+    "related_books": ["股市趋势技术分析"],
+    "related_perspective": "technical-analysis-perspective",
+    "kb_query": "支撑 阻力 技术分析"
+  },
+  {
+    "id": "volume_analysis",
+    "name": "成交量分析",
+    "definition": "量价关系：放量突破有效，缩量下跌健康，量价背离是反转信号。",
+    "related_books": ["股市趋势技术分析", "笑傲股市 股票买卖原则"],
+    "related_perspective": "william-oneil-perspective",
+    "kb_query": "成交量 量价关系 放量 缩量"
+  },
+  {
+    "id": "candlestick",
+    "name": "蜡烛图",
+    "definition": "日本K线图，包含开盘/收盘/最高/最低，反映一段周期内的多空博弈。",
+    "related_books": ["日本蜡烛图技术"],
+    "related_perspective": "steve-nison-perspective",
+    "kb_query": "蜡烛图 K线 史蒂夫尼森"
+  },
+  {
+    "id": "gap_theory",
+    "name": "缺口理论",
+    "definition": "价格跳空未成交的区域，突破缺口、中继缺口、衰竭缺口预示不同走势。",
+    "related_books": ["股市趋势技术分析"],
+    "related_perspective": "richard-schabacker-perspective",
+    "kb_query": "缺口 跳空 突破缺口 衰竭缺口"
+  },
+  {
+    "id": "supply_demand",
+    "name": "供需关系",
+    "definition": "价格由供给与需求决定，买盘强于卖盘则涨，反之则跌，这是市场的基础。",
+    "related_books": ["经济学原理第7版 微观经济学分册 曼昆"],
+    "related_perspective": "microeconomics-perspective",
+    "kb_query": "供需关系 价格 曼昆 微观经济学"
+  },
+  {
+    "id": "monetary_policy",
+    "name": "货币政策",
+    "definition": "央行通过利率、准备金率等工具调节货币供应，影响股市流动性与估值。",
+    "related_books": ["经济学原理第7版 宏观经济学分册 曼昆"],
+    "related_perspective": "macroeconomics-perspective",
+    "kb_query": "货币政策 央行 利率 宏观经济"
+  },
+  {
+    "id": "economic_cycle",
+    "name": "经济周期",
+    "definition": "经济经历繁荣-衰退-萧条-复苏的循环，不同阶段适配不同资产配置。",
+    "related_books": ["经济学原理第7版 宏观经济学分册 曼昆", "漫步华尔街"],
+    "related_perspective": "macroeconomics-perspective",
+    "kb_query": "经济周期 繁荣 衰退 复苏"
+  },
+  {
+    "id": "inflation_impact",
+    "name": "通货膨胀",
+    "definition": "物价持续上涨侵蚀购买力，温和通胀利好股市，恶性通胀不利于估值。",
+    "related_books": ["经济学原理第7版 宏观经济学分册 曼昆"],
+    "related_perspective": "macroeconomics-perspective",
+    "kb_query": "通货膨胀 物价 购买力"
+  },
+  {
+    "id": "interest_rate_effect",
+    "name": "利率影响",
+    "definition": "利率上升提升资金成本、压低估值；利率下降利好成长股与高估值资产。",
+    "related_books": ["经济学原理第7版 宏观经济学分册 曼昆"],
+    "related_perspective": "macroeconomics-perspective",
+    "kb_query": "利率 估值 资金成本"
+  },
+  {
+    "id": "reflexivity",
+    "name": "反身性",
+    "definition": "索罗斯理论：市场参与者的认知影响市场，市场又反过来影响认知，形成反馈循环。",
+    "related_books": ["金融炼金术"],
+    "related_perspective": "george-soros-perspective",
+    "kb_query": "反身性 索罗斯 反馈循环"
+  },
+  {
+    "id": "black_swan",
+    "name": "黑天鹅",
+    "definition": "塔勒布概念：极低概率但影响巨大的事件，无法预测但可防范，需保持韧性。",
+    "related_books": ["黑天鹅"],
+    "related_perspective": "nassim-taleb-perspective",
+    "kb_query": "黑天鹅 塔勒布 极端事件"
+  },
+  {
+    "id": "random_walk",
+    "name": "随机漫步",
+    "definition": "马尔基尔理论：股价短期变动随机不可预测，被动指数投资优于主动选股。",
+    "related_books": ["漫步华尔街"],
+    "related_perspective": "burton-malkiel-perspective",
+    "kb_query": "随机漫步 指数投资 马尔基尔"
+  },
+  {
+    "id": "risk_management",
+    "name": "风险管理",
+    "definition": "识别、评估、控制风险，确保单笔亏损可控，组合回撤在承受范围内。",
+    "related_books": ["通向财务自由之路", "在股市大崩溃前抛出的人"],
+    "related_perspective": "bernard-baruch-perspective",
+    "kb_query": "风险管理 控制 仓位 巴鲁克"
+  },
+  {
+    "id": "contrarian_thinking",
+    "name": "逆向思维",
+    "definition": "在众人恐惧时贪婪，众人贪婪时恐惧，逆向布局获取超额收益。",
+    "related_books": ["穷查理宝典", "在股市大崩溃前抛出的人"],
+    "related_perspective": "bernard-baruch-perspective",
+    "kb_query": "逆向思维 贪婪恐惧 巴鲁克 芒格"
+  },
+  {
+    "id": "long_termism",
+    "name": "长期主义",
+    "definition": "以年为单位持有优质公司，复利效应在长期才显现，频繁交易侵蚀收益。",
+    "related_books": ["巴菲特寫給股東的信", "穷查理宝典"],
+    "related_perspective": "warren-buffett-perspective",
+    "kb_query": "长期主义 持有 复利 巴菲特"
+  },
+  {
+    "id": "probabilistic_thinking",
+    "name": "概率思维",
+    "definition": "不追求确定性，按概率下注，长期看概率优势会显现，单次结果是样本。",
+    "related_books": ["通向财务自由之路", "黑天鹅"],
+    "related_perspective": "van-tharp-perspective",
+    "kb_query": "概率思维 范撒普 概率优势"
+  },
+  {
+    "id": "ghost_rule",
+    "name": "幽灵法则",
+    "definition": "华尔街幽灵：规则一不要保留亏损仓位，规则二加码盈利仓位，规则三持盈止损。",
+    "related_books": ["华尔街幽灵"],
+    "related_perspective": "ghost-trader-perspective",
+    "kb_query": "幽灵法则 华尔街幽灵 持盈止损"
+  },
+  {
+    "id": "turtle_breakout",
+    "name": "海龟突破",
+    "definition": "唐奇安通道突破：价格创20日新高买入，创10日新低卖出，机械化执行。",
+    "related_books": ["海龟交易法则"],
+    "related_perspective": "turtle-trader-perspective",
+    "kb_query": "海龟 唐奇安通道 突破 20日新高"
+  },
+  {
+    "id": "atr_position",
+    "name": "ATR仓位管理",
+    "definition": "用ATR(真实波幅)衡量波动率，波动大减仓，波动小加仓，单笔风险恒定。",
+    "related_books": ["通向财务自由之路", "海龟交易法则"],
+    "related_perspective": "van-tharp-perspective",
+    "kb_query": "ATR 真实波幅 仓位管理 波动率"
+  },
+  {
+    "id": "market_psychology",
+    "name": "市场心理",
+    "definition": "贪婪与恐惧驱动市场波动，理解群体心理有助于在极端时点逆向行动。",
+    "related_books": ["交易心理分析", "炒股的智慧"],
+    "related_perspective": "mark-douglas-perspective",
+    "kb_query": "市场心理 贪婪恐惧 群体心理"
+  },
+  {
+    "id": "edge_consistency",
+    "name": "一致性原则",
+    "definition": "马克道格拉斯：交易者必须有确定性优势，并一致执行，不被单次结果动摇。",
+    "related_books": ["交易心理分析"],
+    "related_perspective": "mark-douglas-perspective",
+    "kb_query": "一致性 优势 马克道格拉斯 执行"
+  },
+  {
+    "id": "dashi_xiong_sector",
+    "name": "板块轮动",
+    "definition": "大师兄理论：板块间资金轮动，龙头板块领涨市场，跟随主力资金切换。",
+    "related_books": ["宏观经济-大师兄"],
+    "related_perspective": "dashi-xiong-perspective",
+    "kb_query": "板块轮动 龙头 主力资金"
+  },
+  {
+    "id": "common_prosperity_policy",
+    "name": "共同富裕政策",
+    "definition": "政策导向影响行业兴衰，符合共同富裕方向的行业获政策红利。",
+    "related_books": ["共同富裕"],
+    "related_perspective": "common-prosperity-perspective",
+    "kb_query": "共同富裕 政策 行业"
+  },
+  {
+    "id": "value_investing_patience",
+    "name": "价值投资耐心",
+    "definition": "等待好价格出现，持有优质公司多年，不因短期波动卖出。",
+    "related_books": ["聪明的投资者", "巴菲特寫給股東的信"],
+    "related_perspective": "benjamin-graham-perspective",
+    "kb_query": "价值投资 耐心 等待 格雷厄姆"
+  },
+  {
+    "id": "psychological_capital",
+    "name": "心理资本",
+    "definition": "交易者最重要的资本不是金钱而是心理承受力，亏损后保持冷静才能反弹。",
+    "related_books": ["交易心理分析", "炒股的智慧"],
+    "related_perspective": "mark-douglas-perspective",
+    "kb_query": "心理资本 心理承受 亏损 冷静"
+  },
+  {
+    "id": "buffett_habits",
+    "name": "巴菲特习惯",
+    "definition": "巴菲特与索罗斯的共同习惯：保本第一、不亏钱、独立思考、不预测市场。",
+    "related_books": ["巴菲特与索罗斯的投资习惯"],
+    "related_perspective": "investing-habits-perspective",
+    "kb_query": "巴菲特 索罗斯 投资习惯 保本"
+  }
+]

@@ -194,10 +194,11 @@ class StageDetector:
 
     @staticmethod
     def _find_swings(series: pd.Series, window: int, high: bool = True) -> list[float]:
-        """识别波浪的高点或低点。"""
+        """识别波浪的高点或低点（仅使用历史窗口，无未来函数）。"""
         swings: list[float] = []
-        for i in range(window, len(series) - window):
-            segment = series.iloc[i - window : i + window + 1]
+        for i in range(0, len(series)):
+            left = max(0, i - window)
+            segment = series.iloc[left : i + 1]
             if high:
                 if series.iloc[i] == segment.max():
                     swings.append(float(series.iloc[i]))

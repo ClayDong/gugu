@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -25,6 +26,11 @@ from apscheduler.triggers.cron import CronTrigger
 from gugu.config import get_config
 from gugu.engine.main import TradingEngine
 from gugu.screener.terminal_screener import TerminalScreener
+from gugu.screener.validator import (
+    ScreenerRecord,
+    save_screener_records,
+    validate_yesterday_screener,
+)
 from gugu.utils.calendar import is_trading_day
 from gugu.utils.log import get_logger
 
@@ -73,6 +79,14 @@ class TradingScheduler:
             name="尾盘选股-14:30",
         )
 
+        # 尾盘选股次日验证（09:35，开盘价已更新）
+        self._scheduler.add_job(
+            self._safe_validate_screener,
+            CronTrigger(hour=9, minute=35, day_of_week="mon-fri"),
+            id="screener_validate_0935",
+            name="尾盘验证-09:35",
+        )
+
         # 日报推送
         period_map = {"09:10": "morning", "11:35": "noon", "15:10": "close"}
         for t in report_times:
@@ -105,6 +119,14 @@ class TradingScheduler:
             CronTrigger(hour=15, minute=35, day_of_week="mon-fri"),
             id="fund_monitor_1535",
             name="基金监控-15:35",
+        )
+
+        # 小白学堂每日概念推送：20:00（交易日）
+        self._scheduler.add_job(
+            self._safe_concept_daily,
+            CronTrigger(hour=20, minute=0, day_of_week="mon-fri"),
+            id="concept_daily_2000",
+            name="每日概念-20:00",
         )
 
         # 资金流日报
@@ -164,12 +186,50 @@ class TradingScheduler:
         if not is_trading_day():
             return
         try:
-            screener = TerminalScreener()
+            screener = TerminalScreener(dm=self._engine._dm)
             results = await screener.scan()
-            total = 5526  # 全市场约数，实际在 scan 中动态获取
+            total = len(results) if results else 0
+            # 保存选股结果到 JSONL（供次日验证使用）
+            if results:
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                records = [
+                    ScreenerRecord(
+                        symbol=r.symbol,
+                        name=r.name,
+                        close_price=r.price,
+                        change_pct=r.change_pct,
+                        volume_ratio=r.volume_ratio,
+                        screener_date=today_str,
+                        passed=r.passed,
+                        failed_conditions=r.failed_conditions,
+                    )
+                    for r in results
+                ]
+                save_screener_records(records)
             await self._engine._notifier.notify_screener(results, total)
         except Exception as e:
             logger.exception(f"尾盘选股异常: {e}")
+
+    async def _safe_validate_screener(self) -> None:
+        """安全执行尾盘选股次日验证（非交易日跳过）。"""
+        if not is_trading_day():
+            return
+        try:
+            results = await validate_yesterday_screener()
+            if results:
+                # 统计并记录日志
+                win_open = sum(1 for v in results if v.open_premium > 0)
+                win_high = sum(1 for v in results if v.intraday_high_premium > 0)
+                n = len(results)
+                logger.info(
+                    f"📊 尾盘验证日报: "
+                    f"昨日选股 {n} 只 | "
+                    f"高开 {win_open}/{n}({win_open/n*100:.0f}%) | "
+                    f"日内冲高 {win_high}/{n}({win_high/n*100:.0f}%) | "
+                    f"平均开盘溢价 {sum(v.open_premium for v in results)/n:+.2f}%"
+                )
+        except Exception as e:
+            logger.exception(f"尾盘选股验证异常: {e}")
 
     async def _safe_fund_monitor(self) -> None:
         """安全执行基金监控（非交易日跳过）。"""
@@ -217,6 +277,38 @@ class TradingScheduler:
             logger.info("资金流日报(收盘)推送完成")
         except Exception as e:
             logger.exception(f"资金流日报(收盘)异常: {e}")
+
+    async def _safe_concept_daily(self) -> None:
+        """安全执行每日概念推送（20:00，非交易日跳过）。"""
+        if not is_trading_day():
+            return
+        try:
+            from gugu.wisdom.tutor import get_daily_concept
+
+            concept = get_daily_concept()
+            if not concept:
+                logger.info("每日概念: 无可用概念")
+                return
+
+            # 用 KB Agent 检索详细解释
+            explanation = ""
+            citations: list[dict[str, str]] = []
+            try:
+                from gugu.wisdom.kb_agent import get_kb_agent
+
+                agent = get_kb_agent()
+                answer = await agent.ask(concept.get("kb_query", concept["name"]))
+                explanation = answer.answer
+                citations = [c.to_dict() if hasattr(c, "to_dict") else c for c in answer.citations]
+            except Exception as e:
+                logger.debug(f"KB Agent 检索概念解释失败: {e}")
+
+            await self._engine._notifier.notify_concept(
+                concept["name"], concept["definition"], explanation, citations
+            )
+            logger.info(f"每日概念推送完成: {concept['name']}")
+        except Exception as e:
+            logger.exception(f"每日概念推送异常: {e}")
 
     async def start(self) -> None:
         """启动调度器。启动后立即执行一次盘中扫描（如果是交易日）。"""

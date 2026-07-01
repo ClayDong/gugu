@@ -19,6 +19,7 @@ class Position:
         prev_close: 前收盘价（L3 涨跌停检查用，0 表示未知）。
         is_st: 是否 ST（影响涨跌停幅度）。
         is_suspended: 是否停牌。
+        dividend_adjusted: 是否经过除权除息调整。
     """
 
     symbol: str
@@ -37,6 +38,8 @@ class Position:
     # P1 修复：持仓以来最低价（用于 NoAverageDownChecker 累计最大浮亏检查）
     # PaperBroker.update_price 在 price < lowest_price 时自动更新
     lowest_price: float = 0.0
+    # 是否经过除权除息调整
+    dividend_adjusted: bool = False
 
     @property
     def market_value(self) -> float:

@@ -54,46 +54,91 @@ logger = get_logger()
 
 
 class TradingEngine:
-    """交易主引擎。"""
+    """交易主引擎。
 
-    def __init__(self) -> None:
+    依赖注入支持：所有依赖参数可选，不传时使用默认实现（向后兼容）。
+    传入参数时覆盖默认实现，便于测试 mock 和切换 broker。
+    """
+
+    def __init__(
+        self,
+        *,
+        data_mgr: Any = None,
+        broker: Any = None,
+        notifier: Any = None,
+        risk: Any = None,
+        wisdom: Any = None,
+        router: Any = None,
+        selector: Any = None,
+        regime_detector: Any = None,
+        position_controller: Any = None,
+        trailing_stop_engine: Any = None,
+        fundamental_filter: Any = None,
+        money_flow_filter: Any = None,
+        industry_constraint: Any = None,
+        event_engine: Any = None,
+        pipeline: Any = None,
+        strategies: list | None = None,
+        exec_mode: str | None = None,
+        watchlist: list[str] | None = None,
+    ) -> None:
         # P1 修复：_lock 必须在可能跳过后续初始化的 mock 测试前初始化
         self._lock = asyncio.Lock()
         self._running: bool = False
-        self._dm = data_manager()
+
+        # 读取配置
         self._app_config: AppConfig | None = None
         with contextlib.suppress(Exception):
             self._app_config = get_config()
-        self._strategies = get_enabled_strategies()
-        self._router = SignalRouter(self._strategies)
-        self._risk = RiskManager()
-        self._broker = PaperBroker()
-        self._notifier = FeishuNotifier()
-        self._wisdom = WisdomAdvisor()
-        self._selector = StockSelector(self._dm)
-        self._watchlist: list[str] = self._load_watchlist()
-        # 执行模式缓存（signal_only/paper/live）
-        self._exec_mode: str = self._app_config.execution.mode if self._app_config else "paper"
+
+        # ---- 依赖注入：若传入则用传入的，否则创建默认实现 ----
+        self._dm = data_mgr if data_mgr is not None else data_manager()
+        self._broker = broker if broker is not None else PaperBroker()
+        self._notifier = notifier if notifier is not None else FeishuNotifier()
+        self._risk = risk if risk is not None else RiskManager()
+        self._wisdom = wisdom if wisdom is not None else WisdomAdvisor()
+        self._strategies = strategies if strategies is not None else get_enabled_strategies()
+        self._router = router if router is not None else SignalRouter(self._strategies)
+        self._selector = selector if selector is not None else StockSelector(
+            self._dm,
+            top_n=get_config().strategy.select_top_n,
+            max_candidates=get_config().strategy.select_max_candidates,
+        )
+        self._regime_detector = (
+            regime_detector if regime_detector is not None else MultiPeriodRegimeDetector()
+        )
+        self._position_controller = (
+            position_controller if position_controller is not None else PositionController()
+        )
+        self._trailing_stop_engine = (
+            trailing_stop_engine if trailing_stop_engine is not None else TrailingStopEngine()
+        )
+        self._fundamental_filter = (
+            fundamental_filter if fundamental_filter is not None else FundamentalFilter()
+        )
+        self._money_flow_filter = (
+            money_flow_filter if money_flow_filter is not None else MoneyFlowFilter()
+        )
+        self._industry_constraint = (
+            industry_constraint if industry_constraint is not None else IndustryConstraint()
+        )
+        self._event_engine = event_engine if event_engine is not None else EventEngine()
+
+        # 自选股列表
+        if watchlist is not None:
+            self._watchlist = watchlist
+        else:
+            self._watchlist = self._load_watchlist()
+
+        # 执行模式
+        cfg_mode = self._app_config.execution.mode if self._app_config else "paper"
+        self._exec_mode = exec_mode if exec_mode is not None else cfg_mode
+
         # P1 修复：_last_cycle_date 必须在 run_daily_cycle 使用前初始化
         self._last_cycle_date: date | None = None
 
-        # 过滤器
-        self._fundamental_filter = FundamentalFilter()
-        self._money_flow_filter = MoneyFlowFilter()
-        self._industry_constraint = IndustryConstraint()
-
-        # 事件引擎
-        self._event_engine = EventEngine()
-
-        # 多周期择时（替换旧的 market_regime）
-        self._regime_detector = MultiPeriodRegimeDetector()
-        self._position_controller = PositionController()
-
-        # 移动止损引擎
-        self._trailing_stop_engine = TrailingStopEngine()
-
         # 信号过滤流水线
-        self._pipeline = SignalPipeline(
+        self._pipeline = pipeline if pipeline is not None else SignalPipeline(
             data_manager=self._dm,
             signal_router=self._router,
             wisdom_advisor=self._wisdom,
@@ -172,18 +217,52 @@ class TradingEngine:
                 # 2. 采集行情
                 await self._update_prices()
 
+                # 2.5 组合回撤检查（T+1 结算后、止损前）
+                # 先更新组合峰值，再检查回撤是否触发熔断
+                account_snapshot = self._broker.get_account()
+                self._risk.update_portfolio_peak(account_snapshot.total_value)
+                drawdown_result = self._risk.check_portfolio_drawdown(account_snapshot.total_value)
+                if drawdown_result.action == RiskAction.HALT:
+                    self._event_engine.put(EVENT_DAILY_LOSS_HALT, {"drawdown": True})
+                    logger.warning(f"组合回撤触发熔断: {drawdown_result.message}")
+                    await self._notifier.notify_risk_alert({
+                        "level": "halt",
+                        "message": drawdown_result.message,
+                        "suggestion": "组合回撤过大，已自动熔断，需人工 reset_halt 后恢复",
+                    })
+                    self._write_heartbeat("halted")
+                    return
+                elif drawdown_result.action == RiskAction.WARN:
+                    logger.warning(f"组合回撤预警: {drawdown_result.message}")
+
                 # 3. 持仓止损检查：先止损再扫描信号（A-05 修复）
                 # 止损卖出会改变持仓与资金，必须在信号扫描前执行，
                 # 确保后续信号基于最新持仓状态生成
                 await self._check_stop_loss()
 
-                # 3.5 止损后立即检查日亏（P1-d 修复）
+                # 3.5 止损后立即检查日亏 & 组合回撤（P1-d 修复）
                 # 止损可能造成大亏，若不先检查则后续买单会在已熔断状态下继续执行
                 await self._check_daily_loss()
                 if self._risk.is_halted:
                     logger.warning("止损后触发 L2 熔断，跳过本次信号扫描与下单")
                     self._write_heartbeat("halted")
                     return
+                # 止损后净值可能进一步下降，需再次检查组合回撤
+                account_after_stop = self._broker.get_account()
+                self._risk.update_portfolio_peak(account_after_stop.total_value)
+                dd_after_stop = self._risk.check_portfolio_drawdown(account_after_stop.total_value)
+                if dd_after_stop.action == RiskAction.HALT:
+                    self._event_engine.put(EVENT_DAILY_LOSS_HALT, {"drawdown": True})
+                    logger.warning(f"止损后组合回撤触发熔断: {dd_after_stop.message}")
+                    await self._notifier.notify_risk_alert({
+                        "level": "halt",
+                        "message": dd_after_stop.message,
+                        "suggestion": "组合回撤过大，已自动熔断，需人工 reset_halt 后恢复",
+                    })
+                    self._write_heartbeat("halted")
+                    return
+                elif dd_after_stop.action == RiskAction.WARN:
+                    logger.warning(f"止损后组合回撤预警: {dd_after_stop.message}")
 
                 # 4. 自动选股 + 自选股扫描
                 # 当日自动选股候选：仅作用于本次扫描，不写入实例 watchlist（A-01 修复）
@@ -214,8 +293,23 @@ class TradingEngine:
                     except Exception as sig_err:
                         logger.exception(f"处理信号 {signal.get('symbol')} 失败，跳过: {sig_err}")
 
-                # 6. 检查日亏
+                # 6. 检查日亏 & 组合回撤
                 await self._check_daily_loss()
+
+                # 6.5 信号处理后再次检查组合回撤（账户净值已因订单执行而变化）
+                account_after = self._broker.get_account()
+                self._risk.update_portfolio_peak(account_after.total_value)
+                dd_result = self._risk.check_portfolio_drawdown(account_after.total_value)
+                if dd_result.action == RiskAction.HALT:
+                    self._event_engine.put(EVENT_DAILY_LOSS_HALT, {"drawdown": True})
+                    logger.warning(f"信号处理后组合回撤触发熔断: {dd_result.message}")
+                    await self._notifier.notify_risk_alert({
+                        "level": "halt",
+                        "message": dd_result.message,
+                        "suggestion": "组合回撤过大，已自动熔断，需人工 reset_halt 后恢复",
+                    })
+                elif dd_result.action == RiskAction.WARN:
+                    logger.warning(f"信号处理后组合回撤预警: {dd_result.message}")
 
                 # 事件推送：交易循环完成
                 self._event_engine.put(
@@ -926,6 +1020,21 @@ class TradingEngine:
             f"{data.get('direction')} {data.get('quantity')}@{data.get('price')}"
         )
 
+    @staticmethod
+    def _rotate_jsonl(path: Path, max_lines: int = 5000) -> None:
+        """JSONL 文件行数超过 max_lines 时截断，保留最新 max_lines//2 行。"""
+        try:
+            if path.exists():
+                with path.open("r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                if len(lines) > max_lines:
+                    keep = lines[-max_lines // 2 :]
+                    with path.open("w", encoding="utf-8") as f:
+                        f.writelines(keep)
+                    logger.info(f"历史文件轮转: {path.name} {len(lines)}→{len(keep)} 行")
+        except Exception as e:
+            logger.warning(f"历史文件轮转失败: {e}")
+
     def _write_heartbeat(self, status: str) -> None:
         """写入心跳文件，便于外部监控。
 
@@ -937,6 +1046,7 @@ class TradingEngine:
             hb_dir.mkdir(exist_ok=True)
             path = hb_dir / "heartbeat.json"
             history_path = hb_dir / "heartbeat_history.jsonl"
+            self._rotate_jsonl(history_path)
             account = self._broker.get_account()
             payload = {
                 "last_cycle_at": pd.Timestamp.now().isoformat(),

@@ -134,7 +134,7 @@ def test_format_signals_list_of_dicts():
 
     signals = [
         {"direction": "buy", "symbol": "600519", "name": "茅台"},
-        {"direction": "sell", "symbol": "000001", "name": "平安"},
+        {"direction": "sell", "symbol": "000001", "name": "平安银行"},
     ]
     text = _format_signals(signals)
     assert "买入" in text

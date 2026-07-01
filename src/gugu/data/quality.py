@@ -170,11 +170,32 @@ class PlausiblePriceRule(ValidationRule):
                         logger.warning(msg)
                         return False, pd.DataFrame(), msg
                     else:
+                        # BUG-02 修复：价格平坦 (<0.5%) 但成交量真实变化，且绝对低价 (<50)，
+                        # 这是数据源返回了错误的价格字段（成交量来自正确源但价格被污染）。
+                        # 真实股票的 60 天波动不可能 <0.5%（即使是最稳定的工商银行也 >1%）。
+                        if p_max < 50.0:
+                            msg = (
+                                f"{symbol} 价格平坦但成交量有变化 (price_ratio={range_ratio:.4f}, "
+                                f"p_max={p_max:.2f})，价格字段来自错误数据源，丢弃"
+                            )
+                            logger.warning(msg)
+                            return False, pd.DataFrame(), msg
                         # 价格稳定但成交量有变化 = 低波动蓝筹，合理，放行
                         logger.debug(
                             f"{symbol} 价格稳定 ({range_ratio:.4f}) 但成交量有变化 "
                             f"({v_max / v_min:.2f})，判断为低波动股，放行"
                         )
+
+        # Check 3: 绝对价格下限检查（BUG-02 修复）
+        # 捕获全区间一致性错误数据（如所有价格 ~10，MA=10，无偏差）
+        # 当 max_price < 0.5 元时，判定为数据源返回了分单位或错误数据
+        if p_min > 0 and p_max < 0.5:
+            msg = (
+                f"{symbol} 全区间价格低于 0.5 元 (p_max={p_max:.4f})，"
+                f"怀疑数据源返回了错误数据（分/毛单位或占位数据），丢弃"
+            )
+            logger.warning(msg)
+            return False, pd.DataFrame(), msg
 
         return True, "price is plausible"
 
@@ -308,18 +329,26 @@ class DataValidator:
 
         规则可以 inplace 修改 df，或通过 3 元组返回新 DataFrame。
         如果规则抛出异常，校验链中断并向上传播。
+
+        BUG-01 修复：2 元组 passed=False 现在硬拒绝，返回空 DataFrame。
+        之前的代码只打了 warning 就继续，导致 FreshnessRule 的过时数据拒绝被静默忽略。
         """
         result = df.copy()
         for rule in self._rules:
             ret = rule.check(result, symbol)
             # 支持 2 元组 (passed, msg) 和 3 元组 (passed, new_df, msg)
             if len(ret) == 3:
-                _, new_df, _ = ret
+                _, new_df, msg = ret
+                if new_df.empty and not result.empty:
+                    logger.warning(f"[quality] {symbol} 规则 {type(rule).__name__} 返回空 DF: {msg}")
+                    return new_df
                 result = new_df
             elif len(ret) == 2:
                 passed, msg = ret
                 if not passed:
-                    logger.warning(f"[quality] {msg}")
+                    logger.warning(f"[quality] {symbol} 规则 {type(rule).__name__} 拒绝: {msg}")
+                    # BUG-01 修复：硬拒绝，返回空 DataFrame
+                    return pd.DataFrame()
         return result
 
 

@@ -24,6 +24,7 @@ box_breakout:
   box_window: 20                 # 箱体识别窗口
   volume_confirm: true           # 成交量确认
   volume_ratio: 1.5              # 量比阈值
+  confirm_days: 1                # 突破后需 1 根 K 线确认（防假突破）
 
 rsi_reversal:
   # RSI 均值回归：超卖买入，超买卖出

@@ -17,7 +17,7 @@ class BoxBreakoutStrategy(Strategy):
 
     name = "box_breakout"
 
-    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         self._ensure_columns(df)
         df = df.copy()
 

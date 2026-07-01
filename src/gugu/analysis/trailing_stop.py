@@ -220,20 +220,26 @@ class TrailingStopEngine:
             )
 
         # 4. 危险信号收紧止损
-        if danger_signals and not state.tightened:
-            tighten_price = round(
-                state.current_stop_price
-                + (current_price - state.current_stop_price) * self.TIGHTEN_FACTOR,
-                2,
-            )
-            if tighten_price > state.current_stop_price:
-                old_stop = state.current_stop_price
-                state.current_stop_price = tighten_price
-                state.tightened = True
-                logger.warning(
-                    f"[trailing-stop] 危险信号收紧止损: {old_stop:.2f} → {tighten_price:.2f}, "
-                    f"信号={danger_signals}"
+        if danger_signals:
+            if not state.tightened:
+                tighten_price = round(
+                    state.current_stop_price
+                    + (current_price - state.current_stop_price) * self.TIGHTEN_FACTOR,
+                    2,
                 )
+                if tighten_price > state.current_stop_price:
+                    old_stop = state.current_stop_price
+                    state.current_stop_price = tighten_price
+                    state.tightened = True
+                    logger.warning(
+                        f"[trailing-stop] 危险信号收紧止损: {old_stop:.2f} → {tighten_price:.2f}, "
+                        f"信号={danger_signals}"
+                    )
+        else:
+            # 危险信号解除后复位收紧状态，下次收紧可再次触发
+            if state.tightened:
+                state.tightened = False
+                logger.info("[trailing-stop] 危险信号解除，收紧状态已复位")
 
         # 5. 最大回撤止损兜底
         max_dd_stop = round(state.highest_price * (1 - self.MAX_DRAWDOWN_STOP_PCT), 2)

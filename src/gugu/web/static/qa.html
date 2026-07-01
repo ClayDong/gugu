@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>gugu 知识库问答</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f5f7fa; color: #333; line-height: 1.6; }
+.container { max-width: 900px; margin: 0 auto; padding: 20px; }
+h1 { color: #1a73e8; margin-bottom: 8px; }
+.subtitle { color: #666; margin-bottom: 24px; font-size: 14px; }
+.card { background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 20px; }
+.input-row { display: flex; gap: 12px; margin-bottom: 16px; }
+input[type="text"] { flex: 1; padding: 12px 16px; border: 1px solid #ddd; border-radius: 8px; font-size: 15px; }
+input[type="text"]:focus { outline: none; border-color: #1a73e8; }
+button { padding: 12px 24px; background: #1a73e8; color: #fff; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; }
+button:hover { background: #1557b0; }
+button:disabled { background: #ccc; cursor: not-allowed; }
+.answer-box { background: #f8f9fa; border-radius: 8px; padding: 16px; margin-top: 12px; white-space: pre-wrap; }
+.citations { margin-top: 16px; }
+.citation { background: #e8f0fe; border-left: 3px solid #1a73e8; padding: 8px 12px; margin: 8px 0; border-radius: 4px; font-size: 14px; }
+.citation strong { color: #1a73e8; }
+.tabs { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 2px solid #e0e0e0; }
+.tab { padding: 10px 20px; cursor: pointer; color: #666; border-bottom: 2px solid transparent; margin-bottom: -2px; }
+.tab.active { color: #1a73e8; border-bottom-color: #1a73e8; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.concept-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.concept-card { background: #f8f9fa; padding: 12px; border-radius: 8px; cursor: pointer; }
+.concept-card:hover { background: #e8f0fe; }
+.concept-card h3 { font-size: 14px; color: #1a73e8; margin-bottom: 4px; }
+.concept-card p { font-size: 12px; color: #666; }
+.profile-form label { display: block; margin: 8px 0 4px; font-weight: 500; }
+.profile-form select { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 12px; }
+.stats { display: flex; gap: 20px; margin-bottom: 16px; }
+.stat { text-align: center; }
+.stat .num { font-size: 24px; font-weight: bold; color: #1a73e8; }
+.stat .label { font-size: 12px; color: #666; }
+.history-item { padding: 12px; border-bottom: 1px solid #eee; }
+.history-item .q { font-weight: 500; color: #333; }
+.history-item .a { color: #666; font-size: 14px; margin-top: 4px; }
+.loading { text-align: center; padding: 20px; color: #666; }
+.error { color: #d93025; padding: 12px; background: #fce8e6; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>📚 gugu 知识库问答</h1>
+  <p class="subtitle">基于28本股书的专业知识库，为小白提供专业炒股指导</p>
+
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('qa')">💬 问答</div>
+    <div class="tab" onclick="switchTab('concepts')">📖 概念库</div>
+    <div class="tab" onclick="switchTab('profile')">⚙️ 用户画像</div>
+    <div class="tab" onclick="switchTab('history')">📜 历史</div>
+  </div>
+
+  <!-- 问答 Tab -->
+  <div id="tab-qa" class="tab-content active">
+    <div class="card">
+      <div class="stats" id="kb-stats"></div>
+      <div class="input-row">
+        <input type="text" id="question-input" placeholder="问任何炒股问题，如：什么是安全边际？利弗莫尔怎么看止损？" onkeypress="if(event.key==='Enter')askQA()">
+        <button id="ask-btn" onclick="askQA()">提问</button>
+      </div>
+      <div id="qa-result"></div>
+    </div>
+  </div>
+
+  <!-- 概念库 Tab -->
+  <div id="tab-concepts" class="tab-content">
+    <div class="card">
+      <div class="stats" id="concept-stats"></div>
+      <div class="concept-grid" id="concept-grid"></div>
+    </div>
+  </div>
+
+  <!-- 用户画像 Tab -->
+  <div id="tab-profile" class="tab-content">
+    <div class="card">
+      <h2>用户画像设置</h2>
+      <p class="subtitle">影响冲突裁决器的视角权重和概念推送顺序</p>
+      <div class="profile-form">
+        <label>风险偏好</label>
+        <select id="risk-tolerance">
+          <option value="conservative">保守型</option>
+          <option value="balanced" selected>平衡型</option>
+          <option value="aggressive">激进型</option>
+        </select>
+        <label>投资风格</label>
+        <select id="investment-style">
+          <option value="value">价值投资</option>
+          <option value="growth">成长投资</option>
+          <option value="trend">趋势交易</option>
+          <option value="mixed" selected>混合风格</option>
+        </select>
+        <label>经验等级</label>
+        <select id="experience">
+          <option value="novice" selected>新手</option>
+          <option value="intermediate">进阶</option>
+          <option value="expert">专家</option>
+        </select>
+        <label>投资期限</label>
+        <select id="horizon">
+          <option value="short">短期</option>
+          <option value="medium" selected>中期</option>
+          <option value="long">长期</option>
+        </select>
+        <button onclick="saveProfile()">保存画像</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 历史 Tab -->
+  <div id="tab-history" class="tab-content">
+    <div class="card">
+      <h2>问答历史</h2>
+      <div id="history-list"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    t.classList.toggle('active', ['qa','concepts','profile','history'][i] === name);
+  });
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'concepts') loadConcepts();
+  if (name === 'profile') loadProfile();
+  if (name === 'history') loadHistory();
+}
+
+async function askQA() {
+  const q = document.getElementById('question-input').value.trim();
+  if (!q) return;
+  const btn = document.getElementById('ask-btn');
+  const result = document.getElementById('qa-result');
+  btn.disabled = true;
+  result.innerHTML = '<div class="loading">⏳ 正在检索28本股书知识库...</div>';
+  try {
+    const resp = await fetch('/api/qa/ask', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({question: q})
+    });
+    const data = await resp.json();
+    if (data.error) {
+      result.innerHTML = '<div class="error">❌ ' + data.error + '</div>';
+    } else {
+      let html = '<div class="answer-box">' + (data.answer || '').replace(/\n/g, '<br>') + '</div>';
+      if (data.citations && data.citations.length > 0) {
+        html += '<div class="citations"><strong>📚 引用来源</strong>';
+        data.citations.forEach(c => {
+          html += '<div class="citation"><strong>《' + c.book + '》</strong><br>' + (c.snippet || '').substring(0, 100) + '...</div>';
+        });
+        html += '</div>';
+      }
+      if (data.related_concepts && data.related_concepts.length > 0) {
+        html += '<div class="citations"><strong>🔗 相关概念</strong>: ' + data.related_concepts.join(', ') + '</div>';
+      }
+      result.innerHTML = html;
+    }
+  } catch (e) {
+    result.innerHTML = '<div class="error">❌ 请求失败: ' + e.message + '</div>';
+  }
+  btn.disabled = false;
+}
+
+async function loadKBStats() {
+  try {
+    const resp = await fetch('/api/qa/stats');
+    const data = await resp.json();
+    if (data.loaded) {
+      document.getElementById('kb-stats').innerHTML =
+        '<div class="stat"><div class="num">' + data.book_count + '</div><div class="label">书籍</div></div>' +
+        '<div class="stat"><div class="num">' + data.chunk_count + '</div><div class="label">文本块</div></div>';
+    } else {
+      document.getElementById('kb-stats').innerHTML = '<div class="stat"><div class="num">⚠️</div><div class="label">索引未构建</div></div>';
+    }
+  } catch (e) {}
+}
+
+async function loadConcepts() {
+  try {
+    const resp = await fetch('/api/concepts');
+    const data = await resp.json();
+    const grid = document.getElementById('concept-grid');
+    const stats = document.getElementById('concept-stats');
+    if (data.stats) {
+      stats.innerHTML =
+        '<div class="stat"><div class="num">' + data.stats.total_concepts + '</div><div class="label">总概念</div></div>' +
+        '<div class="stat"><div class="num">' + data.stats.shown_count + '</div><div class="label">已学习</div></div>';
+    }
+    grid.innerHTML = data.concepts.map(c =>
+      '<div class="concept-card"><h3>' + c.name + '</h3><p>' + c.definition.substring(0, 60) + '...</p></div>'
+    ).join('');
+  } catch (e) {
+    document.getElementById('concept-grid').innerHTML = '<div class="error">加载失败</div>';
+  }
+}
+
+async function loadProfile() {
+  try {
+    const resp = await fetch('/api/profile');
+    const data = await resp.json();
+    document.getElementById('risk-tolerance').value = data.risk_tolerance || 'balanced';
+    document.getElementById('investment-style').value = data.investment_style || 'mixed';
+    document.getElementById('experience').value = data.experience || 'novice';
+    document.getElementById('horizon').value = data.horizon || 'medium';
+  } catch (e) {}
+}
+
+async function saveProfile() {
+  const body = {
+    risk_tolerance: document.getElementById('risk-tolerance').value,
+    investment_style: document.getElementById('investment-style').value,
+    experience: document.getElementById('experience').value,
+    horizon: document.getElementById('horizon').value,
+  };
+  try {
+    const resp = await fetch('/api/profile', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    const data = await resp.json();
+    if (data.status === 'ok') alert('画像已保存');
+    else alert('保存失败: ' + (data.error || ''));
+  } catch (e) {
+    alert('保存失败: ' + e.message);
+  }
+}
+
+async function loadHistory() {
+  try {
+    const resp = await fetch('/api/qa/history');
+    const data = await resp.json();
+    const list = document.getElementById('history-list');
+    if (!data.history || data.history.length === 0) {
+      list.innerHTML = '<p style="color:#666">暂无问答历史</p>';
+      return;
+    }
+    list.innerHTML = data.history.map(h =>
+      '<div class="history-item"><div class="q">Q: ' + h.question + '</div><div class="a">A: ' + (h.answer || '').substring(0, 150) + '...</div></div>'
+    ).join('');
+  } catch (e) {
+    document.getElementById('history-list').innerHTML = '<div class="error">加载失败</div>';
+  }
+}
+
+loadKBStats();
+</script>
+</body>
+</html>

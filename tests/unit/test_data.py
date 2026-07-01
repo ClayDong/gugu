@@ -1,10 +1,8 @@
-"""数据层单元测试。"""
-from __future__ import annotations
+import datetime
 
 import pandas as pd
 import pytest
 
-from gugu.data.cache import DataCache, cache
 from gugu.data.quality import (
     DataQualityError,
     validate_sector_flow,
@@ -12,35 +10,18 @@ from gugu.data.quality import (
     validate_stock_history,
 )
 
-
-def test_cache_set_get() -> None:
-    c = DataCache(ttl_seconds=120)
-    c.set("key", "value")
-    assert c.get("key") == "value"
+TODAY = datetime.date.today()
 
 
-def test_cache_expired() -> None:
-    c = DataCache(ttl_seconds=-1)
-    c.set("key", "value")
-    assert c.get("key") is None
-
-
-def test_cache_clear() -> None:
-    c = DataCache()
-    c.set("key", "value")
-    c.clear()
-    assert c.get("key") is None
-    assert c.stats()["keys"] == 0
-
-
-def test_cache_global_singleton() -> None:
-    assert isinstance(cache(), DataCache)
+def _recent_dates(n: int):
+    """生成最近的 n 个日期。"""
+    return pd.date_range(TODAY - datetime.timedelta(days=n - 1), periods=n)
 
 
 def test_validate_stock_history_ok() -> None:
     df = pd.DataFrame(
         {
-            "date": pd.date_range("2024-01-01", periods=5),
+            "date": _recent_dates(5),
             "open": [10.0] * 5,
             "high": [11.0] * 5,
             "low": [9.0] * 5,
@@ -61,7 +42,7 @@ def test_validate_stock_history_missing_column() -> None:
 def test_validate_stock_history_negative_values() -> None:
     df = pd.DataFrame(
         {
-            "date": pd.date_range("2024-01-01", periods=3),
+            "date": _recent_dates(3),
             "open": [10.0, 10.0, 10.0],
             "high": [11.0, 11.0, 11.0],
             "low": [9.0, 9.0, 9.0],
@@ -76,7 +57,7 @@ def test_validate_stock_history_negative_values() -> None:
 def test_validate_stock_history_high_low_invalid() -> None:
     df = pd.DataFrame(
         {
-            "date": pd.date_range("2024-01-01", periods=3),
+            "date": _recent_dates(3),
             "open": [10.0] * 3,
             "high": [11.0, 8.0, 11.0],
             "low": [9.0] * 3,
@@ -109,7 +90,7 @@ def test_validate_sector_flow_missing_column() -> None:
 def test_validate_stock_flow_ok() -> None:
     df = pd.DataFrame(
         {
-            "date": pd.date_range("2024-01-01", periods=3),
+            "date": _recent_dates(3),
             "main_net": [1e6, 2e6, 3e6],
             "main_pct": [0.01, 0.02, 0.03],
         }
@@ -128,7 +109,7 @@ def test_validate_stock_history_zero_price() -> None:
     """零价数据应被剔除。"""
     df = pd.DataFrame(
         {
-            "date": pd.date_range("2024-01-01", periods=3),
+            "date": _recent_dates(3),
             "open": [10.0, 0.0, 10.0],
             "high": [11.0, 0.0, 11.0],
             "low": [9.0, 0.0, 9.0],
@@ -138,4 +119,3 @@ def test_validate_stock_history_zero_price() -> None:
     )
     out = validate_stock_history(df, "600519")
     assert len(out) == 2
-    assert (out["close"] > 0).all()

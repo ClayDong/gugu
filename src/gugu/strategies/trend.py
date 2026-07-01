@@ -12,7 +12,7 @@ class TurtleStrategy(Strategy):
 
     name = "turtle"
 
-    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         self._ensure_columns(df)
         df = df.copy()
 
@@ -44,7 +44,7 @@ class DualMAStrategy(Strategy):
 
     name = "dual_ma"
 
-    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         self._ensure_columns(df)
         df = df.copy()
 
@@ -79,11 +79,55 @@ class DualMAStrategy(Strategy):
 
 
 class MACDStrategy(Strategy):
-    """MACD 策略：金叉买入，死叉卖出。"""
+    """MACD 策略：金叉买入，死叉卖出，并加入顶背离/底背离检测作为独立卖出信号。"""
 
     name = "macd"
 
-    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _detect_divergence(
+        self, df: pd.DataFrame, n: int = 20
+    ) -> pd.Series:
+        """检测 MACD 顶背离和底背离。
+
+        顶背离：价格创新高但 MACD DIF 值未创新高 → 强卖出信号。
+        底背离：价格创新低但 MACD DIF 值未创新低 → 买入参考信号。
+
+        Args:
+            df: 含高、低、macd（DIF）列的 DataFrame
+            n: 背离检测窗口（默认 20 个交易日）
+
+        Returns:
+            pd.Series，值为 1（顶背离卖出）、-1（底背离买入参考）、0（无信号）
+        """
+        half = n // 2
+        high = df["high"]
+        low = df["low"]
+        dif = df["macd"]
+
+        # 最近 half 日的最高价 / 最低价
+        recent_high = high.rolling(half).max()
+        recent_low = low.rolling(half).min()
+
+        # 之前 half 日的最高价 / 最低价（shift half 以对齐两个时间段）
+        prior_high = high.rolling(half).max().shift(half)
+        prior_low = low.rolling(half).min().shift(half)
+
+        # 之前 half 日 DIF 的最大值 / 最小值
+        prior_dif_max = dif.rolling(half).max().shift(half)
+        prior_dif_min = dif.rolling(half).min().shift(half)
+
+        divergence = pd.Series(0, index=df.index)
+
+        # 顶背离：价格创新高（当前 half 最高 > 前 half 最高），但 DIF 未创新高
+        top_div = (recent_high > prior_high) & (dif < prior_dif_max)
+        divergence.loc[top_div] = 1
+
+        # 底背离：价格创新低（当前 half 最低 < 前 half 最低），但 DIF 未创新低
+        bot_div = (recent_low < prior_low) & (dif > prior_dif_min)
+        divergence.loc[bot_div] = -1
+
+        return divergence
+
+    def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         self._ensure_columns(df)
         df = df.copy()
 
@@ -107,9 +151,27 @@ class MACDStrategy(Strategy):
         )
         df.loc[death, "signal"] = -1
 
-        # 置信度：交叉信号用基线 + 柱状图斜率，与 DualMA 同理
+        # ── 背离检测 ──────────────────────────────────────────────
+        n = int(self.params.get("divergence_window", 20))
+        div = self._detect_divergence(df, n)
+
+        # 顶背离：强卖出信号，覆盖买入信号（卖出优先）
+        top_div_mask = div == 1
+        df.loc[top_div_mask, "signal"] = -1
+
+        # 底背离：仅当无已有信号时，作为买入参考
+        bot_div_mask = (div == -1) & (df["signal"] == 0)
+        df.loc[bot_div_mask, "signal"] = 1
+
+        # ── 置信度 ──────────────────────────────────────────────
+        # 交叉信号置信度
         hist_slope = df["macd_hist"].diff().abs()
         price_safe = df["close"].replace(0, 1)
         df["confidence"] = (0.65 + (hist_slope / price_safe * 50).clip(0, 0.35)).clip(0, 1)
+
+        # 顶背离置信度设为 0.7（高于金叉死叉的基线）
+        df.loc[top_div_mask, "confidence"] = 0.7
+
+        # 无信号时置信度为 0
         df.loc[df["signal"] == 0, "confidence"] = 0.0
         return df

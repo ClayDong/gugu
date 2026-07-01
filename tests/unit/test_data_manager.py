@@ -17,16 +17,20 @@ from gugu.data.manager import DataManager
 
 
 def _make_basic_df(n: int = 60) -> pd.DataFrame:
-    """构造基础 OHLCV DataFrame（带微小波动以通过 PlausiblePriceRule）。"""
+    """构造基础 OHLCV DataFrame（带微小波动以通过 PlausiblePriceRule）。
+    日期使用最近的 n 天，避免 FreshnessRule 拒绝。
+    """
+    import datetime
+    today = datetime.date.today()
     prices = [10.0 + (i * 0.01) for i in range(n)]  # 60 天内从 10.0 缓慢涨到 10.59
     return pd.DataFrame({
-        "date": pd.date_range("2024-01-01", periods=n, freq="D"),
+        "date": pd.date_range(today - datetime.timedelta(days=n - 1), periods=n, freq="D"),
         "open": [p - 0.02 for p in prices],
-        "high": [p + 0.05 for p in prices],
-        "low": [p - 0.05 for p in prices],
+        "high": [p + 0.2 for p in prices],
+        "low": [p - 0.2 for p in prices],
         "close": prices,
         "volume": [1_000_000] * n,
-        "amount": [10_000_000] * n,
+        "amount": [100_000_000] * n,
     })
 
 

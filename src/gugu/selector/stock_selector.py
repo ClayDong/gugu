@@ -76,35 +76,51 @@ class StockSelector:
             candidates = candidates.sort_values("main_pct", ascending=False)
         candidates = candidates.head(self._top_n)
 
-        # 4. 跑策略信号，收集有信号的股票
-        signal_stocks: list[dict[str, Any]] = []
-        for _, row in candidates.iterrows():
-            symbol = str(row["symbol"]).zfill(6)
-            try:
-                df = await asyncio.wait_for(
-                    self._dm.fetch_stock_history(symbol, days=60), timeout=10
-                )
-                if df.empty or len(df) < 30:
-                    continue
+        # 4. 跑策略信号，并发处理所有候选股
+        sem = asyncio.Semaphore(10)
 
-                signal = self._router.route(df, symbol)
-                if signal and signal["direction"] in ("buy", "sell"):
+        async def _process_stock(row: pd.Series) -> dict[str, Any] | None:
+            """处理单只候选股票，返回信号字典或 None。"""
+            symbol = str(row["symbol"]).zfill(6)
+            async with sem:
+                try:
+                    df = await asyncio.wait_for(
+                        self._dm.fetch_stock_history(symbol, days=60), timeout=10
+                    )
+                    if df.empty or len(df) < 30:
+                        return None
+
+                    signal = self._router.route(df, symbol)
+                    if not signal or signal["direction"] not in ("buy", "sell"):
+                        return None
+
                     signal["name"] = row.get("name", "")
                     signal["price"] = float(row.get("price", df.iloc[-1]["close"]))
                     # 过滤涨跌停（传入买卖方向）
                     prev_close = float(df.iloc[-2]["close"]) if len(df) >= 2 else 0
                     if prev_close > 0 and not self._risk.is_tradable(
-                        symbol, signal["price"], prev_close, direction=signal["direction"]
+                        symbol,
+                        signal["price"],
+                        prev_close,
+                        direction=signal["direction"],
                     ):
                         logger.info(f"选股：{symbol} 涨跌停，跳过")
-                        continue
-                    signal_stocks.append(signal)
+                        return None
 
-                if len(signal_stocks) >= self._max_candidates * 2:
-                    break
-            except Exception as e:
-                logger.warning(f"选股：{symbol} 处理失败: {e}")
-                continue
+                    return signal
+                except Exception as e:
+                    logger.warning(f"选股：{symbol} 处理失败: {e}")
+                    return None
+
+        # 启动所有候选股的处理任务
+        tasks = [_process_stock(row) for _, row in candidates.iterrows()]
+        results = await asyncio.gather(*tasks)
+
+        # 收集非空结果
+        signal_stocks = [r for r in results if r is not None]
+        # 如果收集到的结果已超过上限，只取前 max_candidates*2 个
+        if len(signal_stocks) > self._max_candidates * 2:
+            signal_stocks = signal_stocks[: self._max_candidates * 2]
 
         if not signal_stocks:
             logger.info("选股完成：无候选股")

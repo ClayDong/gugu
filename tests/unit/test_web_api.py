@@ -331,3 +331,221 @@ class TestPortfolioDetailEndpoint:
             assert pos["stop_loss_price"] == 1900.0
             assert pos["trailing_stop"]["current_stop_price"] == 1950
             assert "volume_price_stall" in pos["danger_signals"]
+
+
+# ===== 知识库 QA 端点测试 =====
+
+
+def _make_kb_answer(question: str = "测试问题") -> object:
+    """构造一个 KBAnswer 对象用于 mock 返回。"""
+    from gugu.wisdom.kb_agent import Citation, KBAnswer
+
+    return KBAnswer(
+        question=question,
+        answer="测试答案：安全边际是格雷厄姆提出的核心概念。",
+        citations=[Citation(book="聪明的投资者", snippet="安全边际是投资的核心原则")],
+        related_concepts=["安全边际"],
+        source="llm",
+    )
+
+
+@pytest.fixture
+def clean_qa_history():
+    """每个 QA 测试前后清理模块级 _qa_history。"""
+    from gugu.web import qa
+
+    qa._qa_history.clear()
+    yield
+    qa._qa_history.clear()
+
+
+class TestQAPage:
+    """/api/qa 页面测试。"""
+
+    def test_qa_page_returns_html(self):
+        """GET /api/qa 返回 200 且含 HTML 内容。"""
+        app = create_app()
+        client = TestClient(app)
+        resp = client.get("/api/qa")
+        assert resp.status_code == 200
+        assert "text/html" in resp.headers.get("content-type", "")
+
+
+class TestQAAsk:
+    """/api/qa/ask 问答测试。"""
+
+    def test_ask_returns_answer(self, clean_qa_history):
+        """POST /api/qa/ask mock KB Agent 后返回 answer + citations。"""
+        app = create_app()
+        client = TestClient(app)
+        with mock.patch("gugu.wisdom.kb_agent.get_kb_agent") as mock_get:
+            mock_agent = mock.MagicMock()
+            mock_agent.ask = mock.AsyncMock(return_value=_make_kb_answer())
+            mock_get.return_value = mock_agent
+
+            resp = client.post("/api/qa/ask", json={"question": "什么是安全边际"})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "answer" in data
+            assert "citations" in data
+            assert len(data["citations"]) >= 1
+            assert data["source"] == "llm"
+
+    def test_ask_empty_question_returns_400(self, clean_qa_history):
+        """空 question 返回 400。"""
+        app = create_app()
+        client = TestClient(app)
+        resp = client.post("/api/qa/ask", json={"question": ""})
+        assert resp.status_code == 400
+
+    def test_ask_kb_failure_returns_500(self, clean_qa_history):
+        """KB Agent 抛异常时返回 500。"""
+        app = create_app()
+        client = TestClient(app)
+        with mock.patch("gugu.wisdom.kb_agent.get_kb_agent") as mock_get:
+            mock_agent = mock.MagicMock()
+            mock_agent.ask = mock.AsyncMock(side_effect=RuntimeError("KB 故障"))
+            mock_get.return_value = mock_agent
+
+            resp = client.post("/api/qa/ask", json={"question": "测试"})
+            assert resp.status_code == 500
+
+
+class TestQAHistory:
+    """/api/qa/history 历史测试。"""
+
+    def test_history_returns_list(self, clean_qa_history):
+        """GET /api/qa/history 返回 history 列表。"""
+        app = create_app()
+        client = TestClient(app)
+        resp = client.get("/api/qa/history")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "history" in data
+        assert isinstance(data["history"], list)
+
+    def test_history_grows_after_ask(self, clean_qa_history):
+        """ask 后 history 数量增加。"""
+        app = create_app()
+        client = TestClient(app)
+        # 初始历史为空
+        resp1 = client.get("/api/qa/history")
+        assert len(resp1.json()["history"]) == 0
+
+        with mock.patch("gugu.wisdom.kb_agent.get_kb_agent") as mock_get:
+            mock_agent = mock.MagicMock()
+            mock_agent.ask = mock.AsyncMock(return_value=_make_kb_answer())
+            mock_get.return_value = mock_agent
+            client.post("/api/qa/ask", json={"question": "测试"})
+
+        resp2 = client.get("/api/qa/history")
+        assert len(resp2.json()["history"]) == 1
+
+
+class TestQAStats:
+    """/api/qa/stats 统计测试。"""
+
+    def test_stats_returns_dict(self, clean_qa_history):
+        """GET /api/qa/stats mock KB Agent 后返回统计。"""
+        app = create_app()
+        client = TestClient(app)
+        with mock.patch("gugu.wisdom.kb_agent.get_kb_agent") as mock_get:
+            mock_agent = mock.MagicMock()
+            mock_agent.get_stats.return_value = {
+                "loaded": True,
+                "chunk_count": 22353,
+                "book_count": 33,
+                "books": ["聪明的投资者", "股票大作手回忆录"],
+                "built_at": "2026-07-01",
+            }
+            mock_get.return_value = mock_agent
+
+            resp = client.get("/api/qa/stats")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["loaded"] is True
+            assert data["chunk_count"] == 22353
+            assert data["book_count"] == 33
+
+
+class TestConcepts:
+    """/api/concepts 概念库测试。"""
+
+    def test_list_concepts_returns_all(self):
+        """GET /api/concepts 返回概念列表 + stats。"""
+        app = create_app()
+        client = TestClient(app)
+        resp = client.get("/api/concepts")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "concepts" in data
+        assert "stats" in data
+        assert len(data["concepts"]) > 0
+        assert data["stats"]["total_concepts"] > 0
+
+    def test_get_concept_by_id(self):
+        """GET /api/concepts/safety_margin 返回概念详情。"""
+        app = create_app()
+        client = TestClient(app)
+        resp = client.get("/api/concepts/safety_margin")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == "safety_margin"
+        assert "安全边际" in data["name"]
+
+    def test_get_concept_unknown_returns_404(self):
+        """未知 concept_id 返回 404。"""
+        app = create_app()
+        client = TestClient(app)
+        resp = client.get("/api/concepts/nonexistent_12345")
+        assert resp.status_code == 404
+
+
+class TestProfile:
+    """/api/profile 用户画像测试。"""
+
+    def test_get_profile_returns_dict(self, tmp_path, monkeypatch):
+        """GET /api/profile 返回画像 4 字段。"""
+        from gugu.models import user_profile
+
+        profile_file = tmp_path / "user_profile.json"
+        monkeypatch.setattr(user_profile, "_PROFILE_FILE", profile_file)
+
+        app = create_app()
+        client = TestClient(app)
+        resp = client.get("/api/profile")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "risk_tolerance" in data
+        assert "investment_style" in data
+        assert "experience" in data
+        assert "horizon" in data
+        assert "style_weights" in data
+
+    def test_post_profile_updates(self, tmp_path, monkeypatch):
+        """POST /api/profile 写入并返回更新后画像。"""
+        from gugu.models import user_profile
+
+        profile_file = tmp_path / "user_profile.json"
+        monkeypatch.setattr(user_profile, "_PROFILE_FILE", profile_file)
+
+        app = create_app()
+        client = TestClient(app)
+        resp = client.post(
+            "/api/profile",
+            json={
+                "risk_tolerance": "aggressive",
+                "investment_style": "trend",
+                "experience": "intermediate",
+                "horizon": "short",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["profile"]["risk_tolerance"] == "aggressive"
+        assert data["profile"]["investment_style"] == "trend"
+        # 验证文件已写入
+        assert profile_file.exists()
+        saved = json.loads(profile_file.read_text(encoding="utf-8"))
+        assert saved["risk_tolerance"] == "aggressive"

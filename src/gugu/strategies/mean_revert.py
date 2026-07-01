@@ -12,7 +12,7 @@ class BollingerStrategy(Strategy):
 
     name = "bollinger"
 
-    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         self._ensure_columns(df)
         df = df.copy()
 
@@ -45,7 +45,7 @@ class RSIStrategy(Strategy):
 
     name = "rsi_reversal"
 
-    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         self._ensure_columns(df)
         df = df.copy()
 
@@ -84,7 +84,7 @@ class KDJStrategy(Strategy):
 
     name = "kdj"
 
-    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         self._ensure_columns(df)
         df = df.copy()
 

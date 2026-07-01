@@ -16,10 +16,15 @@ from gugu.data.collectors.fallback import SinaCollector
 # ========== Fixture 数据 ==========
 
 def make_history_df(rows: int = 60) -> pd.DataFrame:
-    """构造模拟历史行情 DataFrame（带微小波动以通过 PlausiblePriceRule）。"""
+    """构造模拟历史行情 DataFrame（带微小波动以通过 PlausiblePriceRule）。
+    日期使用近 60 天，避免 FreshnessRule 拒绝失效数据。
+    """
+    import datetime
+    today = datetime.date.today()
+    start = today - datetime.timedelta(days=rows)
     prices = [100.0 + (i * 0.02) for i in range(rows)]
     return pd.DataFrame({
-        "日期": pd.date_range("2024-01-01", periods=rows, freq="D").strftime("%Y-%m-%d"),
+        "日期": pd.date_range(start, periods=rows, freq="D").strftime("%Y-%m-%d"),
         "开盘": [p - 0.1 for p in prices],
         "收盘": prices,
         "最高": [p + 0.2 for p in prices],

@@ -4,7 +4,7 @@
 - 必需列与空数据校验（抛 DataQualityError）
 - NaN 填充/剔除
 - 负值/零价/high<low 异常行剔除
-- 时效性检查（过期数据告警）
+- 时效性检查（过期数据拒绝）
 - 日期排序
 - 日志告警消息可操作性
 
@@ -13,8 +13,10 @@
 - 无重复日期去重（重复行保留，仅 validate_sector_flow 按 sector 去重）
 - 非单调日期会被排序修正
 """
+
 from __future__ import annotations
 
+import datetime
 from datetime import date, timedelta
 
 import numpy as np
@@ -207,6 +209,7 @@ def test_small_dataset_still_passes() -> None:
     """少量数据（< 30 行）仍通过校验。
 
     注意：实际实现无最小行数检查，少量数据不会被拒绝。
+    但 PlausiblePriceRule 需要至少 20 行（ma_window），不满足则跳过。
     """
     df = _make_ohlcv(5)
     out = validate_stock_history(df, "600519")
@@ -216,18 +219,13 @@ def test_small_dataset_still_passes() -> None:
 # ========== 6. 时效性检查 ==========
 
 
-def test_stale_data_logs_warning(captured_logs: list[str]) -> None:
-    """最新日期过旧（> 15 天）应记录告警日志。"""
-    # 构造 30 天前结束的数据（确保超过 15 天阈值，无视长假放宽）
+def test_stale_data_is_rejected() -> None:
+    """超过 15 天的数据应被硬拒绝（返回空 DataFrame）。"""
     end = date.today() - timedelta(days=30)
     dates = pd.date_range(end=end, periods=5, freq="D")
     df = _make_ohlcv(5, dates=dates)
-    validate_stock_history(df, "600519")
-    # 应有告警日志提及 symbol 与过期
-    warnings = [m for m in captured_logs if "WARNING" in m and "600519" in m]
-    assert any("过期" in m or "超过" in m for m in warnings), (
-        f"期望包含过期告警，实际告警: {warnings}"
-    )
+    out = validate_stock_history(df, "600519")
+    assert out.empty, "过期数据应被 FreshnessRule 硬拒绝"
 
 
 def test_recent_data_no_stale_warning(captured_logs: list[str]) -> None:
@@ -247,7 +245,7 @@ def test_duplicate_dates_are_preserved() -> None:
     注意：validate_stock_history 仅按日期排序，不去重；
     validate_sector_flow 会按 sector 去重。
     """
-    dates = pd.date_range("2024-01-01", periods=3, freq="D").tolist()
+    dates = pd.date_range(end=date.today(), periods=3, freq="D").tolist()
     df = pd.DataFrame(
         {
             "date": dates + dates,  # 6 行，3 个日期各重复一次
@@ -268,7 +266,7 @@ def test_duplicate_dates_are_preserved() -> None:
 
 def test_non_monotonic_dates_are_sorted() -> None:
     """非单调日期应被排序为升序。"""
-    dates = pd.date_range("2024-01-01", periods=5, freq="D")
+    dates = _recent_dates(5)  # 近 5 天，避免 FreshnessRule 拒绝
     df = _make_ohlcv(5, dates=dates)
     # 打乱顺序
     df = df.iloc[[3, 1, 4, 0, 2]].reset_index(drop=True)
@@ -403,9 +401,15 @@ def test_validate_sector_flow_empty_raises() -> None:
 
 def test_validate_stock_flow_sorts_by_date() -> None:
     """个股资金流应按日期升序排序。"""
+    from datetime import date as dt_date
+    today = dt_date.today()
     df = pd.DataFrame(
         {
-            "date": pd.to_datetime(["2024-01-03", "2024-01-01", "2024-01-02"]),
+            "date": pd.to_datetime([
+                str(today - timedelta(days=0)),
+                str(today - timedelta(days=2)),
+                str(today - timedelta(days=1)),
+            ]),
             "main_net": [1e6, 2e6, 3e6],
             "main_pct": [0.01, 0.02, 0.03],
         }

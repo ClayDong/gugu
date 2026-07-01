@@ -111,7 +111,7 @@ class TestSignalPipeline:
         pipeline._industry_constraint.check_buy = MagicMock(return_value={
             "allowed": True, "reason": "",
         })
-        pipeline._wisdom.advise = MagicMock(side_effect=lambda s: dict(s, **{
+        pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s, **{
             "wisdom": {}, "wisdom_decision": {"source": "mock"},
         }))
 
@@ -140,7 +140,7 @@ class TestSignalPipeline:
         pipeline._fundamental_filter.check = MagicMock(return_value={
             "pass": False, "reasons": ["PE 过高"], "industry": "",
         })
-        pipeline._wisdom.advise = MagicMock(side_effect=lambda s: dict(s))
+        pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
@@ -170,7 +170,7 @@ class TestSignalPipeline:
         pipeline._money_flow_filter.check = AsyncMock(return_value={
             "pass": False, "reasons": ["主力净流出"], "score": 0.0,
         })
-        pipeline._wisdom.advise = MagicMock(side_effect=lambda s: dict(s))
+        pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
@@ -203,7 +203,7 @@ class TestSignalPipeline:
         pipeline._industry_constraint.check_buy = MagicMock(return_value={
             "allowed": False, "reason": "同行业持仓已达上限",
         })
-        pipeline._wisdom.advise = MagicMock(side_effect=lambda s: dict(s))
+        pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
@@ -227,7 +227,7 @@ class TestSignalPipeline:
             "strategy": "turtle", "strategies": ["turtle"],
             "reason": "止损", "confidence": 0.9,
         })
-        pipeline._wisdom.advise = MagicMock(side_effect=lambda s: dict(s, **{
+        pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s, **{
             "wisdom": {}, "wisdom_decision": {"source": "mock"},
         }))
 
@@ -242,7 +242,7 @@ class TestSignalPipeline:
         # 基本面过滤不应被调用
         pipeline._fundamental_filter.check.assert_not_called()
         # wisdom 应被调用
-        pipeline._wisdom.advise.assert_called_once()
+        pipeline._wisdom.advise_async.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_skip_if_already_filtered(
@@ -258,7 +258,7 @@ class TestSignalPipeline:
         pipeline._fundamental_filter.check = MagicMock(return_value={
             "pass": False, "reasons": ["PE 过高"], "industry": "",
         })
-        pipeline._wisdom.advise = MagicMock(side_effect=lambda s: dict(s, wisdom_filtered=True))
+        pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s, wisdom_filtered=True))
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
@@ -326,7 +326,7 @@ class TestSignalPipeline:
         pipeline._industry_constraint.check_buy = MagicMock(return_value={
             "allowed": True, "reason": "",
         })
-        pipeline._wisdom.advise = MagicMock(side_effect=lambda s: dict(s))
+        pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
         rt_all = pd.DataFrame({
             "symbol": ["600519"],
@@ -417,7 +417,7 @@ class TestSectorRotationCheck:
         pipeline._industry_constraint.check_buy = MagicMock(return_value={
             "allowed": True, "reason": "",
         })
-        pipeline._wisdom.advise = MagicMock(side_effect=lambda s: dict(s))
+        pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
         # Mock sector rotation detect as async
         pipeline._sector_rotation.detect = AsyncMock(return_value={

@@ -211,10 +211,26 @@ class SignalTracker:
                 return {**sig, "error": "date_not_found"}
 
             idx = df[mask].index[0]
-            entry_price = float(df.loc[idx, "close"])
+
+            # 优先使用实际成交价，否则用信号日收盘价
+            order_result = sig.get("order_result")
+            if order_result and order_result.get("success"):
+                entry_price = float(order_result["price"])
+                price_source = "fill"
+                logger.info(
+                    f"使用实际成交价 {entry_price} 追踪 {symbol} 信号绩效 "
+                    f"（信号日: {signal_date.date()}）"
+                )
+            else:
+                entry_price = float(df.loc[idx, "close"])
+                price_source = "close"
 
             # 计算各周期收益
-            result = {**sig, "entry_price": round(entry_price, 3)}
+            result = {
+                **sig,
+                "entry_price": round(entry_price, 3),
+                "price_source": price_source,
+            }
             for n in TRACK_PERIODS:
                 target_idx = idx + n
                 if target_idx < len(df):

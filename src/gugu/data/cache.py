@@ -130,6 +130,21 @@ class ParquetPersistentCache:
                     path.unlink(missing_ok=True)
                     return None
 
+            # BUG-03 修复：缓存读取后重新做数据质量校验
+            # 防止缓存了坏数据（如数据源返回错误价格后写入缓存）
+            try:
+                from gugu.data.quality import validate_stock_history
+                validated = validate_stock_history(df, symbol)
+                if validated.empty:
+                    logger.warning(f"Parquet 缓存数据 {symbol} {days}d 校验失败，删除缓存")
+                    path.unlink(missing_ok=True)
+                    return None
+                df = validated
+            except Exception as ve:
+                logger.warning(f"Parquet 缓存 {symbol} {days}d 校验异常: {ve}，删除缓存")
+                path.unlink(missing_ok=True)
+                return None
+
             logger.debug(f"Parquet 缓存命中: {symbol} {days}d ({len(df)} 行)")
             return df
         except Exception as e:

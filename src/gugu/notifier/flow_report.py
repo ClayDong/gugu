@@ -51,6 +51,13 @@ def _date_str() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
+def _yuan_to_yi(val: float | None) -> float:
+    """元 → 亿转换（东方财富资金流 API 返回单位是元）。"""
+    if val is None:
+        return 0.0
+    return round(val / 100_000_000, 2)
+
+
 # ── 数据采集 ──────────────────────────────────────────────────
 
 
@@ -69,12 +76,12 @@ def collect_market_flow() -> dict[str, Any] | None:
                 "sh_change": _safe_float(latest.get("上证-涨跌幅")),
                 "sz_close": _safe_float(latest.get("深证-收盘价")),
                 "sz_change": _safe_float(latest.get("深证-涨跌幅")),
-                "main_net_inflow": _safe_float(latest.get("主力净流入-净额")),
+                "main_net_inflow": _yuan_to_yi(_safe_float(latest.get("主力净流入-净额"))),
                 "main_net_ratio": _safe_float(latest.get("主力净流入-净占比")),
-                "super_large_inflow": _safe_float(latest.get("超大单净流入-净额")),
-                "large_inflow": _safe_float(latest.get("大单净流入-净额")),
-                "medium_inflow": _safe_float(latest.get("中单净流入-净额")),
-                "small_inflow": _safe_float(latest.get("小单净流入-净额")),
+                "super_large_inflow": _yuan_to_yi(_safe_float(latest.get("超大单净流入-净额"))),
+                "large_inflow": _yuan_to_yi(_safe_float(latest.get("大单净流入-净额"))),
+                "medium_inflow": _yuan_to_yi(_safe_float(latest.get("中单净流入-净额"))),
+                "small_inflow": _yuan_to_yi(_safe_float(latest.get("小单净流入-净额"))),
             }
             logger.info(
                 f"大盘资金流: 日期={result['market']['date']}, "
@@ -83,21 +90,38 @@ def collect_market_flow() -> dict[str, Any] | None:
     except Exception as e:
         logger.warning(f"大盘资金流采集失败: {e}")
 
-    # 北向资金
+    # 北向资金（稳健 API，兜底大盘情绪）
     try:
         df_n = ak.stock_hsgt_fund_min_em(symbol="北向资金")
         if df_n is not None and not df_n.empty:
             latest_n = df_n.iloc[-1].to_dict()
-            result["north_bound"] = {
+            north_data = {
                 "date": str(latest_n.get("日期", "")),
                 "time": str(latest_n.get("时间", "")),
                 "total": _safe_float(latest_n.get("北向资金", 0)),
                 "sh_connect": _safe_float(latest_n.get("港股通(沪)", 0)),
                 "sz_connect": _safe_float(latest_n.get("港股通(深)", 0)),
             }
-            logger.info(f"北向资金: {result['north_bound']['total']:.2f}亿")
+            result["north_bound"] = north_data
+            logger.info(f"北向资金: {north_data['total']:.2f}亿")
     except Exception as e:
         logger.warning(f"北向资金采集失败: {e}")
+
+    # 大盘资金流不可用时，用北向资金作为市场情绪代理
+    if "market" not in result and "north_bound" in result:
+        nb = result["north_bound"]
+        result["market"] = {
+            "date": nb.get("date", _date_str()),
+            "sh_close": None, "sh_change": None,
+            "sz_close": None, "sz_change": None,
+            "main_net_inflow": nb.get("total", 0),
+            "main_net_ratio": None,
+            "super_large_inflow": None, "large_inflow": None,
+            "medium_inflow": None,
+            "small_inflow": -_safe_float(nb.get("total", 0)),
+            "north_only": True,
+        }
+        logger.info("大盘资金流不可用，使用北向资金作为市场情绪代理")
 
     return result if result else None
 
@@ -483,19 +507,31 @@ def build_morning_card(data: dict[str, Any]) -> dict[str, Any]:
     # ── 大盘概览 ──
     if market:
         m_date = market.get("date", "")
-        sh_pct = _fmt(market.get("sh_change"), "%")
-        sz_pct = _fmt(market.get("sz_change"), "%")
-        main_flow = _fmt_flow(market.get("main_net_inflow"))
-        lines = [
-            "**大盘资金流**",
-            f"📅 {m_date}",
-            f"上证 {sh_pct} | 深证 {sz_pct}",
-            f"主力净流入: {main_flow}",
-        ]
-        if north:
-            lines.append(f"北向资金: {_fmt_flow(north.get('total'))}")
-        if overview.get("main_vs_retail"):
-            lines.append(f"博弈: {overview['main_vs_retail']}")
+        north_only = market.get("north_only", False)
+        lines = ["**大盘资金流**"]
+        if north_only:
+            nb = north or {}
+            lines.append(f"📅 {m_date}")
+            lines.append("📊 **北向资金代理**（东方财富 API 暂不可用）")
+            n_total = _fmt_flow(nb.get("total"))
+            n_sh = _fmt_flow(nb.get("sh_connect"))
+            n_sz = _fmt_flow(nb.get("sz_connect"))
+            lines.append(f"  北向总额: {n_total}")
+            lines.append(f"  沪股通: {n_sh}")
+            lines.append(f"  深股通: {n_sz}")
+            if overview.get("main_vs_retail"):
+                lines.append(f"  博弈: {overview['main_vs_retail']}")
+        else:
+            sh_pct = _fmt(market.get("sh_change"), "%")
+            sz_pct = _fmt(market.get("sz_change"), "%")
+            main_flow = _fmt_flow(market.get("main_net_inflow"))
+            lines.append(f"📅 {m_date}")
+            lines.append(f"上证 {sh_pct} | 深证 {sz_pct}")
+            lines.append(f"主力净流入: {main_flow}")
+            if north:
+                lines.append(f"北向资金: {_fmt_flow(north.get('total'))}")
+            if overview.get("main_vs_retail"):
+                lines.append(f"博弈: {overview['main_vs_retail']}")
         sections.append("\n".join(lines))
     else:
         sections.append("**大盘资金流**\n数据暂不可用（非交易时段）")
@@ -587,19 +623,31 @@ def build_close_card(data: dict[str, Any]) -> dict[str, Any]:
     # ── 大盘概览 ──
     if market:
         m_date = market.get("date", "")
-        sh_pct = _fmt(market.get("sh_change"), "%")
-        sz_pct = _fmt(market.get("sz_change"), "%")
-        main_flow = _fmt_flow(market.get("main_net_inflow"))
-        lines = [
-            "**今日大盘**",
-            f"📅 {m_date}",
-            f"上证 {sh_pct} | 深证 {sz_pct}",
-            f"主力净流入: {main_flow}",
-        ]
-        if north:
-            lines.append(f"北向资金: {_fmt_flow(north.get('total'))}")
-        if overview.get("main_vs_retail"):
-            lines.append(f"博弈: {overview['main_vs_retail']}")
+        north_only = market.get("north_only", False)
+        lines = ["**今日大盘**"]
+        if north_only:
+            nb = north or {}
+            lines.append(f"📅 {m_date}")
+            lines.append("📊 **北向资金代理**（东方财富 API 暂不可用）")
+            n_total = _fmt_flow(nb.get("total"))
+            n_sh = _fmt_flow(nb.get("sh_connect"))
+            n_sz = _fmt_flow(nb.get("sz_connect"))
+            lines.append(f"  北向总额: {n_total}")
+            lines.append(f"  沪股通: {n_sh}")
+            lines.append(f"  深股通: {n_sz}")
+            if overview.get("main_vs_retail"):
+                lines.append(f"  博弈: {overview['main_vs_retail']}")
+        else:
+            sh_pct = _fmt(market.get("sh_change"), "%")
+            sz_pct = _fmt(market.get("sz_change"), "%")
+            main_flow = _fmt_flow(market.get("main_net_inflow"))
+            lines.append(f"📅 {m_date}")
+            lines.append(f"上证 {sh_pct} | 深证 {sz_pct}")
+            lines.append(f"主力净流入: {main_flow}")
+            if north:
+                lines.append(f"北向资金: {_fmt_flow(north.get('total'))}")
+            if overview.get("main_vs_retail"):
+                lines.append(f"博弈: {overview['main_vs_retail']}")
         sections.append("\n".join(lines))
     else:
         sections.append("**今日大盘**\n数据暂不可用（非交易时段）")
@@ -678,15 +726,53 @@ def build_close_card(data: dict[str, Any]) -> dict[str, Any]:
 # ── 公共入口 ──────────────────────────────────────────────────
 
 
+def build_unavailable_card(report_name: str) -> dict[str, Any]:
+    """当所有数据源不可用时发送状态卡片。"""
+    from gugu.notifier.formatter import _card
+
+    content = (
+        f"当前资金流数据源（东方财富）暂时不可用，已跳过本次推送。\n\n"
+        "可能原因：\n"
+        "- 东方财富 API 网络不通\n"
+        "- 盘中数据尚未到位\n\n"
+        "系统会在下一执行周期自动重试。"
+    )
+    return _card(
+        title=f"⚠️ {report_name}（数据暂不可用）",
+        template="yellow",
+        sections=[content],
+        note=_now_str(),
+    )
+
+
 async def run_morning_report() -> dict[str, Any]:
     """运行盘前资金流复盘（08:00）。"""
     data = await collect_all()
-    card = build_morning_card(data)
+    market = data.get("market")
+    # 北向资金代理也算有效数据（north_only=True）
+    has_valid_data = market is not None and (
+        market.get("north_only", False)
+        or market.get("sh_close") or market.get("sz_close") or market.get("main_net_inflow")
+    )
+    if not has_valid_data and not data.get("sectors") and not data.get("strong_stocks"):
+        logger.warning("资金流复盘: 全部数据源不可用，跳过推送")
+        card = build_unavailable_card("资金流复盘")
+    else:
+        card = build_morning_card(data)
     return {"card": card, "data": data}
 
 
 async def run_close_report() -> dict[str, Any]:
     """运行收盘资金流日报（15:10）。"""
     data = await collect_all()
-    card = build_close_card(data)
+    market = data.get("market")
+    has_valid_data = market is not None and (
+        market.get("north_only", False)
+        or market.get("sh_close") or market.get("sz_close") or market.get("main_net_inflow")
+    )
+    if not has_valid_data and not data.get("sectors") and not data.get("strong_stocks"):
+        logger.warning("资金流日报: 全部数据源不可用，跳过推送")
+        card = build_unavailable_card("资金流日报")
+    else:
+        card = build_close_card(data)
     return {"card": card, "data": data}

@@ -65,6 +65,19 @@ class PaperBroker(BaseBroker):
         if cur_price <= 0:
             return OrderResult(False, symbol, direction, 0, 0, 0, message="无可用价格")
 
+        # BUG-04 价格合理性防护：拒绝明显错误的价格
+        if cur_price < 0.5:
+            return OrderResult(False, symbol, direction, 0, 0, 0, message=f"价格异常低 ({cur_price:.2f})，拒绝下单")
+        if direction == "buy":
+            pos = self._positions.get(symbol)
+            if pos and pos.avg_cost > 0:
+                deviation = max(cur_price, pos.avg_cost) / min(cur_price, pos.avg_cost)
+                if deviation > 10.0:
+                    return OrderResult(
+                        False, symbol, direction, 0, 0, 0,
+                        message=f"价格偏离持仓成本 {deviation:.1f}x (现价{cur_price:.2f} vs 成本{pos.avg_cost:.2f})，拒绝下单",
+                    )
+
         if direction == "buy":
             fill_price = cur_price * (1 + self._slippage)
             commission = fill_price * quantity * self._commission_rate
@@ -164,6 +177,11 @@ class PaperBroker(BaseBroker):
         P1-h 修复：prev_close 仅在每日首次 update_price 时更新，
         避免同日多次调用（进程重启、调度器重入）导致 prev_close 被盘中价覆盖，
         进而使 L3 涨跌停检查基准错误。
+
+        注意：除权除息检测——调用方在每次更新价格时应检查价格是否因除权除息
+        发生了大幅跳空（如跳空幅度超过 -5% 且成交量异常），如是则应调用
+        adjust_for_corporate_action 调整持仓成本与数量，而非通过 update_price
+        简单更新现价。
         """
         symbol = symbol.strip().zfill(6)
         pos = self._positions.get(symbol)
@@ -181,6 +199,71 @@ class PaperBroker(BaseBroker):
         """批量更新现价。"""
         for sym, price in prices.items():
             self.update_price(sym, price)
+
+    def adjust_for_corporate_action(
+        self,
+        symbol: str,
+        adjustment_factor: float,
+        old_price: float,
+        new_price: float,
+        bonus_ratio: float = 0.0,
+    ) -> None:
+        """除权除息调整持仓成本与数量。
+
+        当股票发生分红、送股、配股等公司行为时，股价会发生跳空，
+        持仓的实际价值不变，但需要调整 avg_cost 和 quantity 以反映真实盈亏。
+
+        调用方应在发现股价跳空幅度超过 -5% 且成交量异常时主动调用此方法。
+
+        Args:
+            symbol: 股票代码。
+            adjustment_factor: 除权除息调整因子（复权因子），用于记录。
+            old_price: 除权除息前一日收盘价。
+            new_price: 除权除息后开盘价（理论除权价）。
+            bonus_ratio: 送转股比例，如 10 送 5 则传入 0.5。
+                         仅当发生送转股时 quantity 需要调整，纯现金分红时传 0。
+        """
+        symbol = symbol.strip().zfill(6)
+        pos = self._positions.get(symbol)
+        if not pos:
+            logger.warning(f"[模拟盘] 尝试调整不存在的持仓 {symbol}，忽略")
+            return
+
+        # 记录调整前状态
+        old_avg_cost = pos.avg_cost
+        old_qty = pos.quantity
+        old_available = pos.available
+        price_ratio = new_price / old_price if old_price > 0 else 1.0
+
+        # 调整 avg_cost：按价格比例缩放
+        new_avg_cost = old_avg_cost * price_ratio
+        pos.avg_cost = round(new_avg_cost, 4)
+
+        # 送转股调整 quantity
+        if bonus_ratio > 0:
+            new_qty = int(old_qty * (1 + bonus_ratio))
+            # 送转股同样增加可卖数量
+            new_available = int(old_available * (1 + bonus_ratio))
+            pos.quantity = new_qty
+            pos.available = new_available
+
+        # 同步更新当前价
+        pos.current_price = new_price
+        # 更新前收盘价为调整前价格，便于次日涨跌停检查
+        pos.prev_close = new_price
+
+        # 标记已调整
+        pos.dividend_adjusted = True
+
+        logger.info(
+            f"[模拟盘] 除权除息调整 {symbol}: "
+            f"调整因子={adjustment_factor:.4f}, "
+            f"价格 {old_price:.2f}→{new_price:.2f}, "
+            f"avg_cost {old_avg_cost:.4f}→{pos.avg_cost:.4f}, "
+            f"数量 {old_qty}→{pos.quantity}, "
+            f"送转比例={bonus_ratio:.2%}"
+        )
+        self._save_state()
 
     def settle_t_plus_1(self) -> None:
         """T+1 结算：每日开盘前调用，持仓全部变为可卖，并记录日初净值。"""
@@ -229,6 +312,7 @@ class PaperBroker(BaseBroker):
                         "is_st": p.is_st,
                         "is_suspended": p.is_suspended,
                         "lowest_price": p.lowest_price,
+                        "dividend_adjusted": p.dividend_adjusted,
                     }
                     for sym, p in self._positions.items()
                 },
@@ -275,6 +359,7 @@ class PaperBroker(BaseBroker):
                         is_st=p.get("is_st", False),
                         is_suspended=p.get("is_suspended", False),
                         lowest_price=p.get("lowest_price", 0.0),
+                        dividend_adjusted=p.get("dividend_adjusted", False),
                     )
                 except (KeyError, TypeError, ValueError) as pos_err:
                     logger.warning(f"恢复持仓 {sym} 失败，跳过该持仓: {pos_err}；原始数据: {p}")

@@ -225,10 +225,26 @@ class FeishuNotifier:
         for item in pending:
             retry_count = item.get("retry_count", 0)
             if retry_count >= MAX_RETRY_COUNT:
-                logger.warning(
-                    f"通知重试次数超限({retry_count}), 丢弃: "
+                logger.error(
+                    f"通知重试次数超限({retry_count}), 永久丢弃: "
                     f"{json.dumps(item.get('card', {}), ensure_ascii=False)[:200]}"
                 )
+                # 尝试通过飞书 webhook 发送一条告警（有 webhook 时）
+                if self._webhook:
+                    try:
+                        token = await self._get_tenant_token()
+                        alert_card = {
+                            "msg_type": "interactive",
+                            "card": {
+                                "header": {"title": {"tag": "plain_text", "content": "⚠️ 通知重试超限告警"}, "template": "red"},
+                                "elements": [
+                                    {"tag": "div", "text": {"tag": "lark_md", "content": f"通知已重试 {retry_count} 次仍未成功，已永久丢弃。\n卡片摘要: {json.dumps(item.get('card', {}), ensure_ascii=False)[:200]}"}},
+                                ],
+                            },
+                        }
+                        await self._post_card(token, alert_card)
+                    except Exception:
+                        pass
                 continue
 
             card = item.get("card", {})
@@ -299,6 +315,20 @@ class FeishuNotifier:
         """Format and send a trade signal notification."""
         if not self._signal_enabled:
             return False
+        # 对抗性防御：核心字段缺失时记录警告并修复 signal 完整性标记
+        required_fields = ["symbol", "strategy", "strategies", "reason", "price"]
+        missing = [f for f in required_fields if f not in signal or signal.get(f) is None]
+        if missing:
+            logger.warning(
+                f"信号数据不完整，缺失字段: {missing}。"
+                f" symbol={signal.get('symbol', 'N/A')} "
+                f"direction={signal.get('direction', 'N/A')}"
+            )
+            # 补充默认值防止 formatter 崩溃，但保留缺失标记供 formatter 检测使用
+            signal.setdefault("strategy", "")
+            signal.setdefault("strategies", [])
+            signal.setdefault("reason", "")
+            signal.setdefault("price", 0.0)
         return await self.send_card(format_signal(signal))
 
     async def notify_daily_report(self, period: str, data: dict[str, Any]) -> bool:
@@ -364,6 +394,22 @@ class FeishuNotifier:
     async def notify_holdings_sell_alert(self, stocks: list[dict]) -> bool:
         """Format and send a holdings sell signal alert."""
         return await self.send_card(format_holdings_sell_alert(stocks))
+
+    async def notify_conflict(self, symbol: str, name: str, resolution: dict[str, Any]) -> bool:
+        """发送多视角冲突研讨卡片。"""
+        from gugu.notifier.formatter import format_conflict_card
+
+        return await self.send_card(format_conflict_card(symbol, name, resolution))
+
+    async def notify_concept(
+        self, concept_name: str, definition: str, explanation: str, citations: list[dict[str, str]]
+    ) -> bool:
+        """发送每日概念卡（小白学堂）。"""
+        from gugu.notifier.formatter import format_concept_card
+
+        return await self.send_card(
+            format_concept_card(concept_name, definition, explanation, citations)
+        )
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""

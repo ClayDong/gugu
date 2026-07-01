@@ -81,14 +81,48 @@ python scripts/quickstart.py --stop
 | 引擎 | `engine/` | 主循环、信号流水线、事件驱动 |
 | 过滤 | `filters/` | 基本面、资金流、行业约束、市场状态 |
 | 分析 | `analysis/` | 移动止损、四阶段、危险信号、归因分析 |
-| 决策 | `wisdom/` | 28本书视角、LLM/fallback 决策 |
+| 决策 | `wisdom/` | 28本书视角、KB Agent、冲突裁决器、LLM/fallback 决策 |
 | 通知 | `notifier/` | 飞书卡片消息 |
 | 宏观 | `macro/` | 五维宏观数据采集与飞书简报 |
-| Web | `web/` | FastAPI 仪表盘 |
+| Web | `web/` | FastAPI 仪表盘 + 知识库问答 |
+
+## 知识库系统
+
+gugu 集成了 33 本经典股书的知识库，为小白用户提供专业指导。采用混合架构：
+
+- **28 个蒸馏视角（Skill）**：决策时快速注入专家观点（利弗莫尔、格雷厄姆、芒格等）
+- **KB Agent（BM25 + jieba 检索）**：教育问答与原文引用，33 本书 22353 个文本块
+- **冲突裁决器**：多视角矛盾时通过场景适配度 × 历史胜率 × 用户画像 × 时效性的加权融合算法给出可解释决策
+
+### 核心模块
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| KB Agent | `src/gugu/wisdom/kb_agent.py` | 知识库问答（BM25 检索 + LLM 组织答案） |
+| 冲突裁决器 | `src/gugu/wisdom/conflict_resolver.py` | 多维权重融合，冲突检测与研讨卡 |
+| 小白学堂 | `src/gugu/wisdom/tutor.py` | 50 个核心概念，每日 20:00 推送 |
+| 用户画像 | `src/gugu/models/user_profile.py` | 风险/风格/经验/期限四维画像 |
+| Web 问答 | `src/gugu/web/qa.py` | RESTful API + 单页问答界面 |
+
+### 构建知识库索引
+
+索引数据源：`/Users/dong/workspace/pdf2word/知识库_docx/`（33 本 docx）
+
+```bash
+python scripts/build_kb_index.py --force
+```
+
+索引产物：`data/kb_index/`（chunks.json + tokens.pkl + meta.json），构建约 98 秒。
+
+### 使用方式
+
+- **Web 问答**：访问 `http://127.0.0.1:8000/api/qa`，提问获取带引用的专业解答
+- **每日概念**：每日 20:00 飞书推送一个核心概念（安全边际、止损铁律等）
+- **信号增强**：买卖信号卡附"导师视角"栏，冲突时发"多视角研讨"黄色卡片
 
 ## 测试
 
-550+ 测试，67% 覆盖率。
+800+ 测试，70% 覆盖率。
 
 ```bash
 # 运行全部测试

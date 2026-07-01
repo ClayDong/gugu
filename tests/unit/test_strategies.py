@@ -20,7 +20,7 @@ def test_base_ensure_columns_missing(ohlcv_df: pd.DataFrame) -> None:
     class DummyStrategy(Strategy):
         name = "dummy"
 
-        def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
             self._ensure_columns(df)
             return df
 

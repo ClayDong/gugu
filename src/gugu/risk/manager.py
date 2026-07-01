@@ -472,7 +472,7 @@ class RiskManager:
     def check_portfolio_drawdown(self, total_value: float) -> RiskCheckResult:
         """检查组合从高点回撤是否触发熔断。
 
-        回撤 ≥ 15% 时禁止加仓（仅允许减仓/平仓）。
+        回撤 ≥ 15% 时触发熔断（设置 _halted），阻止所有交易。
         """
         if self._portfolio_peak <= 0:
             return RiskCheckResult(
@@ -482,6 +482,12 @@ class RiskManager:
             )
         dd = (self._portfolio_peak - total_value) / self._portfolio_peak
         if dd >= self._max_drawdown_halt:
+            self._halted = True
+            self._save_halt_state()
+            self._logger.warning(
+                f"L2 HALT: 组合回撤 {dd:.2%} >= {self._max_drawdown_halt:.0%}, "
+                f"trading halted until reset()"
+            )
             return RiskCheckResult(
                 level=RiskLevel.L2_DAILY_LOSS,
                 action=RiskAction.HALT,

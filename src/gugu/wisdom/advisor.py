@@ -140,6 +140,11 @@ class WisdomAdvisor:
     3. 调用 LLM 获取结构化决策
     4. 解析 LLM 输出并应用到信号
     5. LLM 失败时降级到硬编码规则
+
+    Async 支持：
+    - advise() 同步方法（向后兼容）
+    - advise_async() 异步方法（推荐，避免阻塞事件循环）
+    - _advise_llm_async() 使用 AsyncClient 调用 LLM
     """
 
     def __init__(self) -> None:
@@ -149,6 +154,9 @@ class WisdomAdvisor:
 
         # 加载仓颉蒸馏的多视角书籍认知
         self._book_router = BookPerspectiveRouter()
+
+        # async HTTP client 连接池（复用，避免每次创建新连接）
+        self._async_client: httpx.AsyncClient | None = None
 
         # 检测 LLM 可用性
         cfg = env()
@@ -162,6 +170,18 @@ class WisdomAdvisor:
                 "[wisdom] LLM 未配置（需 .env 中设置 LLM_API_KEY/LLM_BASE_URL/LLM_MODEL），"
                 "将使用硬编码规则 fallback"
             )
+
+    async def _get_async_client(self) -> httpx.AsyncClient:
+        """获取 async HTTP client（懒加载，复用连接池）。"""
+        if self._async_client is None:
+            self._async_client = httpx.AsyncClient(timeout=30.0)
+        return self._async_client
+
+    async def close(self) -> None:
+        """关闭 async HTTP client 连接池。"""
+        if self._async_client is not None:
+            await self._async_client.aclose()
+            self._async_client = None
 
     def _load_skills(self) -> None:
         """加载配置中指定的交易决策 skill（按配置目录顺序，后加载的不覆盖先加载的）。
@@ -225,10 +245,91 @@ class WisdomAdvisor:
 
         return self._advise_fallback(signal)
 
+    async def advise_async(self, signal: dict[str, Any] | Signal) -> dict[str, Any]:
+        """异步版本：为策略信号提供交易智慧决策。
+
+        与 advise() 行为完全一致，但 LLM 调用不阻塞事件循环。
+        推荐 SignalPipeline 等异步代码路径使用此方法。
+
+        优先使用冲突裁决器（多维权重融合），失败时降级到单LLM决策，
+        再失败降级到硬编码规则。
+        """
+        signal = self._as_dict(signal)
+
+        if self._llm_available:
+            # 优先尝试冲突裁决器
+            try:
+                result = await self._advise_with_conflict_resolution(signal)
+                if result is not None:
+                    return result
+            except Exception as e:
+                logger.warning(f"[wisdom] 冲突裁决失败，降级到单LLM决策: {e}")
+
+            # 降级到单 LLM 决策
+            try:
+                return await self._advise_llm_async(signal)
+            except Exception as e:
+                logger.warning(f"[wisdom] LLM 异步决策失败，降级到硬编码规则: {e}")
+
+        return self._advise_fallback(signal)
+
+    async def _advise_with_conflict_resolution(
+        self, signal: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """使用冲突裁决器进行多视角加权融合决策。
+
+        Returns:
+            增强后的信号 dict，或 None（裁决器不可用时）
+        """
+        from gugu.wisdom.conflict_resolver import get_conflict_resolver
+
+        direction = signal.get("direction", "")
+        scenario = (
+            "entry"
+            if direction == "buy"
+            else "profit_taking"
+            if direction == "sell"
+            else "psychology_check"
+        )
+
+        resolver = get_conflict_resolver()
+        if not resolver._llm_available:
+            return None
+
+        resolution = await resolver.resolve_conflict(scenario, signal, direction=direction)
+        if resolution is None:
+            return None
+
+        # 将裁决结果应用到信号（复用 _apply_llm_decision 的逻辑）
+        llm_decision = {
+            "action": resolution.final_action,
+            "position_ratio": resolution.final_position_ratio,
+            "stop_loss_price": resolution.final_stop_loss_price,
+            "reason": (
+                f"多视角加权裁决（{len(resolution.opinions)}视角，"
+                f"冲突={'是' if resolution.is_conflict else '否'}，"
+                f"分散度={resolution.dispersion:.2f}）"
+            ),
+        }
+
+        # 附加裁决详情到信号（供通知层展示"导师视角"栏）
+        signal["conflict_resolution"] = resolution.to_dict()
+        signal["mentor_perspectives"] = [
+            {
+                "perspective": o.perspective,
+                "action": o.action,
+                "reason": o.reason,
+                "weight": resolution.weights.get(o.perspective, 0),
+            }
+            for o in resolution.opinions[:2]  # 仅取 top-2 供通知展示
+        ]
+
+        return self._apply_llm_decision(signal, llm_decision)
+
     # ========== LLM 决策核心 ==========
 
     def _advise_llm(self, signal: dict[str, Any]) -> dict[str, Any]:
-        """LLM 决策：将信号上下文 + skill 知识发送给 LLM，获取结构化决策。"""
+        """LLM 决策（同步版，向后兼容）：将信号上下文 + skill 知识发送给 LLM。"""
         import httpx
 
         direction = signal.get("direction", "")
@@ -290,6 +391,70 @@ class WisdomAdvisor:
         llm_decision = self._parse_llm_response(content)
         if llm_decision is None:
             logger.warning(f"[wisdom] LLM 输出无法解析，降级到硬编码规则: {content[:200]}")
+            return self._advise_fallback(signal)
+
+        # 6. 应用 LLM 决策到信号
+        return self._apply_llm_decision(signal, llm_decision)
+
+    async def _advise_llm_async(self, signal: dict[str, Any]) -> dict[str, Any]:
+        """LLM 决策（异步版，推荐）：使用 AsyncClient 避免阻塞事件循环。"""
+        direction = signal.get("direction", "")
+        cfg = env()
+
+        # 1. 选择相关 skill 知识
+        skill_context = self._build_skill_context(direction)
+
+        # 2. 构建信号上下文
+        signal_context = self._build_signal_context(signal)
+
+        # 2.5 构建多视角书籍认知上下文
+        scenario = (
+            "entry"
+            if direction == "buy"
+            else "profit_taking"
+            if direction == "sell"
+            else "psychology_check"
+        )
+        atr = signal.get("atr", 0)
+        price = signal.get("price", 0)
+        market_vol = (atr / price) if (atr > 0 and price > 0) else None
+        book_context = self._book_router.build_context(scenario, direction, signal)
+        if market_vol is not None:
+            dyn_perspectives = self._book_router.select_perspectives_dynamic(
+                scenario, direction, market_volatility=market_vol, signal=signal
+            )
+            if dyn_perspectives:
+                book_context += (
+                    f"\n（波动率={market_vol:.2%}，动态选择视角: {dyn_perspectives[:2]}）"
+                )
+
+        # 3. 构建 prompt
+        system_prompt = self._build_system_prompt()
+        user_prompt = f"{signal_context}\n\n{skill_context}\n\n{book_context}"
+
+        # 4. 调用 LLM（异步，不阻塞事件循环）
+        client = await self._get_async_client()
+        resp = await client.post(
+            f"{cfg.llm_base_url}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {cfg.llm_api_key}"},
+            json={
+                "model": cfg.llm_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "max_tokens": 800,
+                "temperature": 0.2,
+                "response_format": {"type": "json_object"},
+            },
+        )
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"]["content"]
+
+        # 5. 解析 LLM 输出
+        llm_decision = self._parse_llm_response(content)
+        if llm_decision is None:
+            logger.warning(f"[wisdom] LLM 异步输出无法解析，降级到硬编码规则: {content[:200]}")
             return self._advise_fallback(signal)
 
         # 6. 应用 LLM 决策到信号

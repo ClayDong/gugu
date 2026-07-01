@@ -129,6 +129,10 @@ def _format_wisdom_decision(decision: Any) -> str:
     if not decision or not isinstance(decision, dict):
         return ""
     lines: list[str] = []
+    # LLM 决策后台进行中
+    if decision.get("source") == "pending_llm":
+        lines.append("- ⏳ **LLM 决策分析中**，稍后更新")
+        return "\n".join(lines)
     if decision.get("entry_filtered"):
         lines.append(f"- ⚠️ **入场过滤**：{decision.get('filter_reason', '低置信度')}")
     if decision.get("adjusted_position_ratio") is not None:
@@ -184,20 +188,35 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
         ",".join(str(s) for s in strategies) if strategies else "未提供"
     )
     reason = signal.get("reason", "") or ""
-    confidence = signal.get("confidence") or 0.0  # None → 0.0, keeps 0.0 as-is
+    raw_confidence = signal.get("confidence")
+    confidence = raw_confidence if isinstance(raw_confidence, (int, float)) and raw_confidence > 0 else None
     position = signal.get("suggested_position", "")
     position_ratio = float(signal.get("suggested_position_ratio", 0))
     if not position and position_ratio > 0:
         position = f"{position_ratio:.0%}"
-    price = signal.get("price") or 0.0
+    price_raw = signal.get("price")
+    price = float(price_raw) if price_raw is not None else 0.0
     wisdom = signal.get("wisdom", {})
     wisdom_decision = signal.get("wisdom_decision", {})
     stop_loss = signal.get("stop_loss_price", 0)
     take_profit = signal.get("take_profit", {})
 
+    # 检测信号完整性：核心字段缺失时标记为"数据异常"而非静默使用默认值
+    # 注意：此处检查原始信号 dict 中 key 是否存在，而非 fallback 后的值
+    missing_fields = []
+    if not symbol:
+        missing_fields.append("股票代码")
+    if "strategy" not in signal and not signal.get("strategies"):
+        missing_fields.append("策略")
+    if price <= 0:
+        missing_fields.append("价格")
+    data_incomplete = len(missing_fields) > 0
+
     # 信号强度标签
     strength = ""
-    if signal.get("wisdom_filtered"):
+    if data_incomplete:
+        strength = "⚠️ 数据异常"
+    elif signal.get("wisdom_filtered"):
         strength = "⚠️ 危险信号"
     elif wisdom_decision.get("entry_filtered"):
         strength = "⚠️ 已过滤"
@@ -208,7 +227,7 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     elif signal.get("weekly_misaligned") or signal.get("sector_check", {}).get("is_cold"):
         strength = "🟡 弱信号"
     else:
-        strength = "🔵 中信号" if confidence >= 0.6 else "🟡 弱信号"
+        strength = "🔵 中信号" if isinstance(confidence, (int, float)) and confidence >= 0.6 else "🟡 弱信号"
 
     # entry-filtered signals use yellow card
     if signal.get("wisdom_filtered"):
@@ -219,27 +238,43 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
         action = f"{action}（已过滤）"
 
     # ===== 30秒决策摘要行 =====
-    summary_parts = [f"{action}信号", f"置信度 {confidence:.0%}"]
-    if position_ratio > 0:
-        summary_parts.append(f"建议仓位 {position_ratio:.0%}")
-    if stop_loss and stop_loss > 0:
-        sl_pct = (price - stop_loss) / price * 100 if price > 0 else 0
-        summary_parts.append(f"止损 -{sl_pct:.1f}%")
-    if take_profit:
-        tp_pct = take_profit.get("target_1_pct", 0)
-        if tp_pct:
-            summary_parts.append(f"止盈目标 +{tp_pct:.0f}%")
-    summary_line = " | ".join(summary_parts)
+    if data_incomplete:
+        summary_line = f"⚠️ 数据异常: {', '.join(missing_fields)}"
+    else:
+        summary_parts = [f"{action}信号"]
+        conf_text = f"置信度 {confidence:.0%}" if isinstance(confidence, (int, float)) else "置信度 --"
+        summary_parts.append(conf_text)
+        if position_ratio > 0:
+            summary_parts.append(f"建议仓位 {position_ratio:.0%}")
+        if stop_loss and stop_loss > 0:
+            sl_pct = (price - stop_loss) / price * 100 if price > 0 else 0
+            summary_parts.append(f"止损 -{sl_pct:.1f}%")
+        if take_profit:
+            tp_pct = take_profit.get("target_1_pct", 0)
+            if tp_pct:
+                summary_parts.append(f"止盈目标 +{tp_pct:.0f}%")
+        summary_line = " | ".join(summary_parts)
 
     title = f"{action}信号 · {name}({symbol})"
-    subtitle = f"💰 ￥{price:.2f} | {summary_line}" if price else summary_line
-    if strength and not wisdom_decision.get("entry_filtered"):
+    show_price = isinstance(price, (int, float)) and price > 1.0
+    if data_incomplete:
         title = f"{strength} {title}"
+    elif strength and not wisdom_decision.get("entry_filtered"):
+        title = f"{strength} {title}"
+    subtitle = f"💰 ￥{price:.2f} | {summary_line}" if show_price else summary_line
 
-    sections = [
-        f"**股票**：{name}({symbol})\n**方向**：{action}\n**当前价**：{price}\n**信号强度**：{strength}",
-        f"**触发策略**：{strategy}\n**建议仓位**：{position or '未提供'}\n**触发理由**：{reason}",
-    ]
+    # 数据异常时 section 中显示具体缺失字段
+    if data_incomplete:
+        sections = [
+            f"**股票**：{name}({symbol})\n**方向**：{action}\n**当前价**：{price}\n**信号强度**：{strength}",
+            f"**⚠️ 数据异常**：以下字段缺失 — {', '.join(missing_fields)}\n"
+            f"**触发策略**：{strategy}\n**建议仓位**：{position or '未提供'}\n**触发理由**：{reason}",
+        ]
+    else:
+        sections = [
+            f"**股票**：{name}({symbol})\n**方向**：{action}\n**当前价**：{price}\n**信号强度**：{strength}",
+            f"**触发策略**：{strategy}\n**建议仓位**：{position or '未提供'}\n**触发理由**：{reason}",
+        ]
 
     # if the signal has an order result, display actual fill details (U-01 fix)
     order_result = signal.get("order_result")
@@ -303,7 +338,172 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
             tp_lines.append(f"💡 {take_profit['note']}")
         sections.append("\n".join(tp_lines))
 
+    # 导师视角栏（来自冲突裁决器的多视角建议）
+    mentor_text = _format_mentor_perspectives(signal.get("mentor_perspectives", []))
+    if mentor_text:
+        sections.append(mentor_text)
+
     return _card(title, template, sections, note="明策 · gugu · 信号通知", subtitle=subtitle)
+
+
+def _format_mentor_perspectives(perspectives: list[dict[str, Any]]) -> str:
+    """格式化导师视角栏（最多2个视角，避免信息过载）。
+
+    Args:
+        perspectives: [{perspective, action, reason, weight}, ...]
+
+    Returns:
+        格式化的 markdown 文本，或空字符串
+    """
+    if not perspectives:
+        return ""
+
+    # 视角名映射（中文化）
+    name_map = {
+        "jesse-livermore-perspective": "利弗莫尔",
+        "chen-jiang-ting-perspective": "陈江挺",
+        "benjamin-graham-perspective": "格雷厄姆",
+        "warren-buffett-perspective": "巴菲特",
+        "charles-munger-perspective": "芒格",
+        "peter-lynch-perspective": "林奇",
+        "william-oneil-perspective": "欧奈尔",
+        "turtle-trader-perspective": "海龟",
+        "van-tharp-perspective": "范·撒普",
+        "mark-douglas-perspective": "马克道格拉斯",
+        "george-soros-perspective": "索罗斯",
+        "nassim-taleb-perspective": "塔勒布",
+        "pat-dorsey-perspective": "多尔西",
+        "qiu-guo-lu-perspective": "邱国鹭",
+        "richard-schabacker-perspective": "沙巴克",
+        "steve-nison-perspective": "尼森",
+        "ghost-trader-perspective": "幽灵",
+        "bernard-baruch-perspective": "巴鲁克",
+        "burton-malkiel-perspective": "马尔基尔",
+        "zeng-shi-qiang-perspective": "曾仕强",
+        "investing-habits-perspective": "投资习惯",
+        "k-line-analysis-perspective": "K线分析",
+        "technical-analysis-perspective": "技术分析",
+        "adam-smith-perspective": "亚当斯密",
+        "macroeconomics-perspective": "宏观经济学",
+        "microeconomics-perspective": "微观经济学",
+        "dashi-xiong-perspective": "大师兄",
+        "common-prosperity-perspective": "共同富裕",
+    }
+
+    action_map = {"buy": "买入", "sell": "卖出", "hold": "持有", "filter": "过滤"}
+
+    lines = ["📚 **导师视角**"]
+    for p in perspectives[:2]:  # 最多2个
+        name = name_map.get(p.get("perspective", ""), p.get("perspective", ""))
+        action = action_map.get(p.get("action", ""), p.get("action", ""))
+        weight = p.get("weight", 0)
+        reason = p.get("reason", "")[:60]  # 限60字
+        lines.append(f"• **{name}**（权重{weight:.0%}）：{action} — {reason}")
+
+    return "\n".join(lines)
+
+
+def format_conflict_card(
+    symbol: str, name: str, resolution: dict[str, Any]
+) -> dict[str, Any]:
+    """格式化多视角冲突研讨卡片。
+
+    当冲突裁决器检测到分歧（is_conflict=True）时发送。
+
+    Args:
+        symbol: 股票代码
+        name: 股票名称
+        resolution: Resolution.to_dict() 输出
+
+    Returns:
+        Feishu 交互卡片
+    """
+    name_map = {
+        "jesse-livermore-perspective": "利弗莫尔",
+        "chen-jiang-ting-perspective": "陈江挺",
+        "benjamin-graham-perspective": "格雷厄姆",
+        "warren-buffett-perspective": "巴菲特",
+        "charles-munger-perspective": "芒格",
+        "peter-lynch-perspective": "林奇",
+        "turtle-trader-perspective": "海龟",
+        "van-tharp-perspective": "范·撒普",
+        "george-soros-perspective": "索罗斯",
+        "nassim-taleb-perspective": "塔勒布",
+    }
+    action_map = {"buy": "买入", "sell": "卖出", "hold": "持有", "filter": "过滤"}
+
+    title = f"⚠️ 多视角研讨 · {name}({symbol})"
+
+    # 裁决结果摘要
+    final_action = action_map.get(resolution.get("final_action", ""), "未知")
+    dispersion = resolution.get("dispersion", 0)
+    summary = f"🎯 **加权裁决**：{final_action} | 分散度 {dispersion:.0%} | {'⚠️ 存在分歧' if resolution.get('is_conflict') else '✅ 共识'}"
+
+    # 各视角建议（最多4个，避免过载）
+    opinion_lines = ["📋 **各视角建议**"]
+    for op in resolution.get("opinions", [])[:4]:
+        p_name = name_map.get(op.get("perspective", ""), op.get("perspective", ""))
+        op_action = action_map.get(op.get("action", ""), op.get("action", ""))
+        weight = resolution.get("weights", {}).get(op.get("perspective", ""), 0)
+        reason = op.get("reason", "")[:50]
+        opinion_lines.append(f"• **{p_name}**（权重{weight:.0%}）：{op_action} — {reason}")
+
+    # 分歧视角
+    dissenting = resolution.get("dissenting_views", [])
+    dissent_text = ""
+    if dissenting:
+        dissent_lines = ["⚖️ **分歧观点**"]
+        for d in dissenting[:3]:
+            dissent_lines.append(f"• {d}")
+        dissent_text = "\n".join(dissent_lines)
+
+    sections = [summary, "\n".join(opinion_lines)]
+    if dissent_text:
+        sections.append(dissent_text)
+
+    return _card(
+        title,
+        "yellow",  # 黄色：警告分歧
+        sections,
+        note="明策 · gugu · 冲突研讨",
+        subtitle=summary,
+    )
+
+
+def format_concept_card(
+    concept_name: str, definition: str, explanation: str, citations: list[dict[str, str]]
+) -> dict[str, Any]:
+    """格式化每日概念卡（小白学堂）。
+
+    Args:
+        concept_name: 概念名
+        definition: 一句话定义
+        explanation: 详细解释
+        citations: [{book, snippet}, ...]
+
+    Returns:
+        Feishu 交互卡片
+    """
+    title = f"📖 每日概念 · {concept_name}"
+
+    sections = [f"**{concept_name}**\n\n{definition}"]
+
+    if explanation:
+        sections.append(f"**详细解释**\n\n{explanation[:500]}")
+
+    if citations:
+        cite_lines = ["📚 **出处**"]
+        for c in citations[:3]:
+            cite_lines.append(f"• 《{c.get('book', '')}》：{c.get('snippet', '')[:60]}")
+        sections.append("\n".join(cite_lines))
+
+    return _card(
+        title,
+        "green",  # 绿色：教育信息
+        sections,
+        note="明策 · gugu · 小白学堂 | 回复'深入了解'查看更多",
+        subtitle=f"💡 今日概念：{concept_name}",
+    )
 
 
 def _format_market_summary(summary: dict[str, Any]) -> str:

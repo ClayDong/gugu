@@ -1,4 +1,8 @@
-"""基金监控模块 — 财通成长优选混合A(001480)等基金净值跟踪。
+"""基金监控模块 — 跟踪配置中所有基金净值（settings.yaml fund.funds）。
+
+当前配置：
+  - 001480  财通成长优选混合A
+  - 026211  平安科技精选混合发起式C
 
 移植自 MingCe bot/services/fund_monitor.py，适配 gugu 架构：
 - 配置统一从 settings.yaml 读取（非 SQLite）

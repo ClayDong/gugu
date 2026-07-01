@@ -869,7 +869,11 @@ class TestEndToEndFullCycle:
             money_flow_filter=engine._money_flow_filter,
             industry_constraint=engine._industry_constraint,
         )
-        engine._selector = None  # auto_select 关闭，不需要
+        engine._selector = None  # auto_select 在测试中通过 monkeypatch 关闭
+        # 确保测试中 auto_select 不触发（避免依赖外部数据源）
+        monkeypatch.setattr(
+            type(engine), "auto_select_enabled", property(lambda self: False)
+        )
         engine._watchlist = ["000858"]
         engine._lock = __import__('asyncio').Lock()
         engine._running = False

@@ -33,14 +33,15 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     """setup() 后应创建定时任务（scan+report+retry+macro）。"""
     scheduler.setup()
     jobs = scheduler._scheduler.get_jobs()
-    # 4 scan + 1 screener + 3 report + 1 retry + 4 macro + 1 fund + 2 flow = 16
-    assert len(jobs) == 16
+    # 4 scan + 1 screener + 1 screener_validate + 3 report + 1 retry + 4 macro + 1 fund + 1 concept + 2 flow = 18
+    assert len(jobs) == 18
     job_ids = {j.id for j in jobs}
     assert "scan_1" in job_ids
     assert "scan_2" in job_ids
     assert "scan_3" in job_ids
     assert "scan_4" in job_ids
     assert "screener_1430" in job_ids
+    assert "screener_validate_0935" in job_ids
     assert "report_morning" in job_ids
     assert "report_noon" in job_ids
     assert "report_close" in job_ids
@@ -49,6 +50,7 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     assert "macro_morning" in job_ids
     assert "macro_noon" in job_ids
     assert "macro_close" in job_ids
+    assert "concept_daily_2000" in job_ids
 
 
 @pytest.mark.asyncio

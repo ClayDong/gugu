@@ -356,6 +356,11 @@ def create_app() -> FastAPI:
             positions.append(pos_data)
         return {"positions": positions, "count": len(positions)}
 
+    # 注册知识库问答路由
+    from gugu.web.qa import router as qa_router
+
+    app.include_router(qa_router)
+
     return app
 
 

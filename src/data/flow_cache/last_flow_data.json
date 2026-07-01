@@ -1,0 +1,35 @@
+{
+  "market": {
+    "date": "2026-06-30",
+    "sh_close": null,
+    "sh_change": null,
+    "sz_close": null,
+    "sz_change": null,
+    "main_net_inflow": 0.0,
+    "main_net_ratio": null,
+    "super_large_inflow": null,
+    "large_inflow": null,
+    "medium_inflow": null,
+    "small_inflow": -0.0,
+    "north_only": true
+  },
+  "north_bound": {
+    "date": "2026-06-30",
+    "time": "15:00",
+    "total": 0.0,
+    "sh_connect": 0.0,
+    "sz_connect": 0.0
+  },
+  "market_overview": {
+    "main_vs_retail": "主力散户同步卖出",
+    "north_analysis": {
+      "total": 0,
+      "direction": "流出",
+      "significant": "一般"
+    }
+  },
+  "sectors": {},
+  "concepts": [],
+  "strong_stocks": [],
+  "timestamp": "2026-07-01 08:00"
+}

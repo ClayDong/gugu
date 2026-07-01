@@ -87,10 +87,12 @@ class StrategyPool:
             if name not in weights:
                 continue
             w = weights[name]
+            sig_conf = sig.get("confidence")
+            conf = float(sig_conf) if sig_conf is not None else 0.0
             if sig.get("direction") == "buy":
-                buy_score += sig.get("confidence", 0) * w
+                buy_score += conf * w
             elif sig.get("direction") == "sell":
-                sell_score += sig.get("confidence", 0) * w
+                sell_score += conf * w
             total_weight += w
             active_strategies.append(name)
 

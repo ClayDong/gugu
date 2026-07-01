@@ -9,18 +9,23 @@
 6. 成交量呈台阶式放大（近5日逐日递增或高位维持）
 7. 分时跑赢大盘（简化：今日涨幅 > 大盘涨幅）
 8. 尾盘创当天新高且回踩不破（简化：14:30后最高价 == 全天最高价）
+
+数据源策略：优先使用 akshare 全市场快照，失败时降级到 SinaCollector。
 """
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-import akshare as ak
 import numpy as np
 import pandas as pd
 
 from gugu.utils.log import get_logger
+
+if TYPE_CHECKING:
+    from gugu.data.manager import DataManager
 
 logger = get_logger()
 
@@ -58,20 +63,25 @@ class ScreeningResult:
 
 
 class TerminalScreener:
-    """尾盘选股器。"""
+    """尾盘选股器。
+
+    Args:
+        dm: DataManager 实例（可选，用于 akshare 失败时降级获取全市场快照）。
+    """
+
+    def __init__(self, dm: DataManager | None = None) -> None:
+        self._dm = dm
 
     async def scan(self) -> list[ScreeningResult]:
         """执行全市场扫描，返回通过 8 条件的排序结果。"""
         logger.info("=== 尾盘选股: 开始全市场扫描 ===")
-        try:
-            # 1. 获取全市场实时快照
-            spot = await asyncio.to_thread(ak.stock_zh_a_spot)
-        except Exception as e:
-            logger.error(f"尾盘选股: 全市场快照失败: {e}")
+
+        # 1. 获取全市场实时快照（优先 akshare，失败时降级到 SinaCollector）
+        spot = await self._fetch_market_snapshot()
+        if spot is None or spot.empty:
+            logger.error("尾盘选股: 全市场快照获取失败（akshare + sina 均不可用）")
             return []
 
-        if spot.empty:
-            return []
         logger.info(f"尾盘选股: 全市场 {len(spot)} 只股票")
 
         # 2. 条件2: 涨幅 3%-5%
@@ -124,16 +134,61 @@ class TerminalScreener:
         logger.info(f"尾盘选股: 完全通过 {len(passed)} 只，上报 {len(top)} 只")
         return top
 
+    async def _fetch_market_snapshot(self) -> pd.DataFrame | None:
+        """获取全市场实时快照。优先 akshare，失败时降级到 DataManager。"""
+        # 方式1: akshare 全市场快照
+        try:
+            import akshare as ak
+            spot = await asyncio.to_thread(ak.stock_zh_a_spot)
+            if spot is not None and not spot.empty:
+                logger.info("尾盘选股: 使用 akshare 全市场快照")
+                return spot
+        except Exception as e:
+            logger.warning(f"尾盘选股: akshare 全市场快照失败: {e}")
+
+        # 方式2: DataManager 降级（使用 SinaCollector 实时行情）
+        if self._dm is not None:
+            try:
+                spot = await self._dm.fetch_stock_realtime([])
+                if spot is not None and not spot.empty:
+                    logger.info(f"尾盘选股: 降级使用 DataManager 实时行情 ({len(spot)} 只)")
+                    # 标准化列名以兼容后续处理
+                    spot = spot.rename(columns={
+                        "symbol": "代码", "name": "名称",
+                        "price": "最新价", "change_pct": "涨跌幅",
+                        "volume": "成交量",
+                    })
+                    return spot
+            except Exception as e:
+                logger.warning(f"尾盘选股: DataManager 降级也失败: {e}")
+
+        return None
+
     async def _fetch_index_change(self) -> float:
         """获取上证指数今日涨幅（用于条件7简化版）。"""
+        # 优先 akshare
         try:
+            import akshare as ak
             df = await asyncio.to_thread(ak.stock_zh_index_daily, symbol="sh000001")
             if not df.empty and len(df) >= 2:
                 today = df.iloc[-1]
                 yesterday = df.iloc[-2]
                 return float((today["close"] - yesterday["close"]) / yesterday["close"] * 100)
         except Exception as e:
-            logger.debug(f"获取大盘涨幅失败: {e}")
+            logger.debug(f"akshare 获取大盘涨幅失败: {e}")
+
+        # 降级：DataManager 获取指数历史
+        if self._dm is not None:
+            try:
+                df = await self._dm.fetch_stock_history("000001", days=5)
+                if not df.empty and len(df) >= 2:
+                    today = df.iloc[-1]
+                    yesterday = df.iloc[-2]
+                    return float(
+                        (today["close"] - yesterday["close"]) / yesterday["close"] * 100
+                    )
+            except Exception as e:
+                logger.debug(f"DataManager 获取大盘涨幅失败: {e}")
         return 0.0
 
     async def _check_stock(
@@ -148,17 +203,22 @@ class TerminalScreener:
         """对单只候选股执行条件3-8检查。"""
         failed: list[str] = []
         try:
-            # 获取日K线历史（含换手率、流通股、成交量）
-            prefix = _symbol_prefix(code)
-            df = await asyncio.to_thread(ak.stock_zh_a_daily, symbol=prefix, adjust="qfq")
-            if df.empty or len(df) < 6:
+            # 获取日K线历史（优先 akshare，降级 DataManager）
+            df = await self._fetch_stock_kline(code)
+            if df is None or df.empty or len(df) < 6:
                 return None
 
             recent = df.tail(6).copy()
             latest = recent.iloc[-1]
 
-            turnover_pct = float(latest["turnover"]) * 100  # Sina返回的是小数
-            outstanding = float(latest["outstanding_share"])
+            # 换手率和流通股本（akshare 有这些字段，DataManager 可能没有）
+            turnover_pct = float(latest.get("turnover", 0)) * 100
+            outstanding = float(latest.get("outstanding_share", 0))
+            if outstanding == 0:
+                # 无法获取流通股本时，用成交额/价格估算
+                outstanding = float(latest.get("volume", 0)) / max(
+                    float(latest.get("turnover", 0.001)), 0.001
+                ) if float(latest.get("turnover", 0)) > 0 else 1e8
             mcap = price * outstanding
 
             # 条件5: 流通市值 50亿-200亿
@@ -228,6 +288,29 @@ class TerminalScreener:
         # 高位维持: 5日均量 > 20日均量
         avg_5 = vols.mean()
         return "✅ 高位" if avg_5 > vols[0] else "❌"
+
+    async def _fetch_stock_kline(self, code: str) -> pd.DataFrame | None:
+        """获取个股日K线历史。优先 akshare，降级 DataManager。"""
+        # 方式1: akshare 日K线（含换手率、流通股本）
+        try:
+            import akshare as ak
+            prefix = _symbol_prefix(code)
+            df = await asyncio.to_thread(ak.stock_zh_a_daily, symbol=prefix, adjust="qfq")
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            logger.debug(f"akshare 日K线 {code} 失败: {e}")
+
+        # 方式2: DataManager 降级
+        if self._dm is not None:
+            try:
+                df = await self._dm.fetch_stock_history(code, days=10)
+                if df is not None and not df.empty:
+                    return df
+            except Exception as e:
+                logger.debug(f"DataManager 日K线 {code} 失败: {e}")
+
+        return None
 
 
 def _symbol_prefix(symbol: str) -> str:
