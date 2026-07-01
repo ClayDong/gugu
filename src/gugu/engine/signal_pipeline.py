@@ -204,14 +204,25 @@ class SignalPipeline:
                 except Exception as e:
                     logger.debug(f"多周期趋势判断失败: {e}")
                     signal["multi_period"] = {"error": str(e)}
+            elif signal["direction"] == "sell":
+                # 卖出信号也计算周线趋势（用于通知卡片展示上下文，不做过滤）
+                try:
+                    weekly_trend = self._check_weekly_trend(df)
+                    signal["multi_period"] = weekly_trend
+                except Exception as e:
+                    logger.debug(f"卖出信号多周期趋势判断失败: {e}")
+                    signal["multi_period"] = {"error": str(e)}
 
             # signal_only 模式：跳过 Wisdom 决策层（降低 LLM cost 和阻塞时间）
             if self._exec_mode == "signal_only":
                 # signal_only 模式下，不对买入信号做硬过滤（让用户自行判断）
                 # 但保留危险信号标记，用于通知时提醒用户
-                if signal["direction"] == "buy":
+                # 买入和卖出信号都附加基本面数据，保证通知卡片数据完整
+                try:
                     fund_result = self._fundamental_filter.check(symbol)
                     signal["fundamental"] = fund_result
+                except Exception as e:
+                    logger.debug(f"signal_only 基本面数据获取失败 {symbol}: {e}")
                 logger.info(
                     f"信号(仅通知): {signal['symbol']} {signal['direction']} "
                     f"置信度 {signal['confidence']} 策略 {signal['strategies']}"

@@ -4,7 +4,9 @@
 - 08:00 盘前 → 昨日(T-1)资金流复盘
 - 15:10 收盘 → 今日资金流日报
 
-数据源：东方财富（akshare），约 1-3 分钟延迟。
+数据源（双通道冗余）：
+1. akshare 库（东方财富后端，约 1-3 分钟延迟）
+2. 东方财富 push API 直连 HTTP（akshare 失败时自动降级）
 """
 
 from __future__ import annotations
@@ -13,12 +15,37 @@ import math
 from datetime import datetime
 from typing import Any
 
-import akshare as ak
+import httpx
 import pandas as pd
 
 from gugu.utils.log import get_logger
 
 logger = get_logger()
+
+# 东方财富 push API 直连（akshare 备用通道）
+_EASTMONEY_CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
+_EASTMONEY_FFLOW_URL = "https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get"
+_EASTMONEY_HSGT_URL = "https://push2.eastmoney.com/api/qt/kamt.rtmin/get"
+
+_EASTMONEY_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Referer": "https://data.eastmoney.com/",
+    "Accept": "application/json, text/plain, */*",
+}
+
+
+def _http_get_json(url: str, params: dict[str, str]) -> dict | None:
+    """直连东方财富 push API，返回 JSON dict 或 None。"""
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.get(url, params=params, headers=_EASTMONEY_HEADERS)
+            resp.raise_for_status()
+            data = resp.json()
+            if data and data.get("data"):
+                return data
+    except Exception as e:
+        logger.warning(f"东方财富 HTTP API 失败: {e}")
+    return None
 
 # ── 工具函数 ──────────────────────────────────────────────────
 
@@ -61,8 +88,14 @@ def _yuan_to_yi(val: float | None) -> float:
 # ── 数据采集 ──────────────────────────────────────────────────
 
 
-def collect_market_flow() -> dict[str, Any] | None:
-    """采集大盘资金流 + 北向资金。"""
+def _collect_market_flow_akshare() -> dict[str, Any] | None:
+    """通过 akshare 采集大盘资金流 + 北向资金。"""
+    try:
+        import akshare as ak
+    except ImportError:
+        logger.warning("akshare 未安装，跳过 akshare 大盘资金流采集")
+        return None
+
     result: dict[str, Any] = {}
 
     # 大盘资金流历史（最新一日）
@@ -84,28 +117,113 @@ def collect_market_flow() -> dict[str, Any] | None:
                 "small_inflow": _yuan_to_yi(_safe_float(latest.get("小单净流入-净额"))),
             }
             logger.info(
-                f"大盘资金流: 日期={result['market']['date']}, "
+                f"大盘资金流(akshare): 日期={result['market']['date']}, "
                 f"主力净流入={result['market']['main_net_inflow']:.2f}亿"
             )
     except Exception as e:
-        logger.warning(f"大盘资金流采集失败: {e}")
+        logger.warning(f"akshare 大盘资金流采集失败: {e}")
 
-    # 北向资金（稳健 API，兜底大盘情绪）
+    # 北向资金
     try:
         df_n = ak.stock_hsgt_fund_min_em(symbol="北向资金")
         if df_n is not None and not df_n.empty:
             latest_n = df_n.iloc[-1].to_dict()
-            north_data = {
+            result["north_bound"] = {
                 "date": str(latest_n.get("日期", "")),
                 "time": str(latest_n.get("时间", "")),
                 "total": _safe_float(latest_n.get("北向资金", 0)),
                 "sh_connect": _safe_float(latest_n.get("港股通(沪)", 0)),
                 "sz_connect": _safe_float(latest_n.get("港股通(深)", 0)),
             }
-            result["north_bound"] = north_data
-            logger.info(f"北向资金: {north_data['total']:.2f}亿")
+            logger.info(f"北向资金(akshare): {result['north_bound']['total']:.2f}亿")
     except Exception as e:
-        logger.warning(f"北向资金采集失败: {e}")
+        logger.warning(f"akshare 北向资金采集失败: {e}")
+
+    return result if result else None
+
+
+def _collect_market_flow_http() -> dict[str, Any] | None:
+    """通过东方财富 push API 直连采集大盘资金流 + 北向资金（akshare 备用通道）。"""
+    result: dict[str, Any] = {}
+
+    # 大盘资金流（沪深京合并）
+    try:
+        data = _http_get_json(_EASTMONEY_FFLOW_URL, {
+            "secid": "1.000001",
+            "fields1": "f1,f2,f3,f7",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
+            "klt": "101",
+            "lmt": "1",
+        })
+        if data and data.get("data") and data["data"].get("klines"):
+            kline = data["data"]["klines"][-1].split(",")
+            # 字段顺序: 日期,主力净流入,小单,中单,大单,超大单,...
+            if len(kline) >= 6:
+                result["market"] = {
+                    "date": kline[0],
+                    "sh_close": None, "sh_change": None,
+                    "sz_close": None, "sz_change": None,
+                    "main_net_inflow": _yuan_to_yi(_safe_float(kline[1])),
+                    "main_net_ratio": None,
+                    "small_inflow": _yuan_to_yi(_safe_float(kline[2])),
+                    "medium_inflow": _yuan_to_yi(_safe_float(kline[3])),
+                    "large_inflow": _yuan_to_yi(_safe_float(kline[4])),
+                    "super_large_inflow": _yuan_to_yi(_safe_float(kline[5])),
+                }
+                logger.info(
+                    f"大盘资金流(HTTP): 日期={result['market']['date']}, "
+                    f"主力净流入={result['market']['main_net_inflow']:.2f}亿"
+                )
+    except Exception as e:
+        logger.warning(f"HTTP 大盘资金流采集失败: {e}")
+
+    # 北向资金
+    try:
+        data = _http_get_json(_EASTMONEY_HSGT_URL, {"fields1": "f1,f2,f3,f4", "fields2": "f51,f52,f53,f54,f55,f56"})
+        if data and data.get("data") and data["data"].get("s2n"):
+            # s2n 是无分割的字符串，尝试解析
+            s2n = data["data"].get("s2n", "")
+            if s2n:
+                # 取最后一段数据
+                parts = s2n.split(";")
+                if parts:
+                    latest_parts = parts[-1].split(",")
+                    if len(latest_parts) >= 4:
+                        result["north_bound"] = {
+                            "date": latest_parts[0] if len(latest_parts) > 0 else "",
+                            "time": latest_parts[1] if len(latest_parts) > 1 else "",
+                            "total": _safe_float(latest_parts[2]) / 10000 if len(latest_parts) > 2 else 0,
+                            "sh_connect": 0,
+                            "sz_connect": 0,
+                        }
+                        logger.info(f"北向资金(HTTP): {result['north_bound']['total']:.2f}亿")
+    except Exception as e:
+        logger.warning(f"HTTP 北向资金采集失败: {e}")
+
+    return result if result else None
+
+
+def collect_market_flow() -> dict[str, Any] | None:
+    """采集大盘资金流 + 北向资金（akshare → HTTP 双通道冗余）。"""
+    # 通道1: akshare
+    result = _collect_market_flow_akshare()
+
+    # 通道2: HTTP 直连（akshare 失败时）
+    if not result or ("market" not in result and "north_bound" not in result):
+        logger.info("akshare 大盘资金流不可用，降级到 HTTP 直连...")
+        http_result = _collect_market_flow_http()
+        if http_result:
+            # 合并：HTTP 结果补充 akshare 缺失的字段
+            if not result:
+                result = http_result
+            else:
+                if "market" not in result and "market" in http_result:
+                    result["market"] = http_result["market"]
+                if "north_bound" not in result and "north_bound" in http_result:
+                    result["north_bound"] = http_result["north_bound"]
+
+    if not result:
+        return None
 
     # 大盘资金流不可用时，用北向资金作为市场情绪代理
     if "market" not in result and "north_bound" in result:
@@ -126,10 +244,15 @@ def collect_market_flow() -> dict[str, Any] | None:
     return result if result else None
 
 
-def collect_sector_flow() -> list[dict[str, Any]] | None:
-    """采集行业资金流排名（今日）。"""
+def _collect_sector_flow_akshare(sector_type: str = "行业资金流") -> list[dict[str, Any]] | None:
+    """通过 akshare 采集行业/概念资金流排名。"""
     try:
-        df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流")
+        import akshare as ak
+    except ImportError:
+        logger.warning("akshare 未安装，跳过 akshare 资金流排名采集")
+        return None
+    try:
+        df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type=sector_type)
         if df is not None and not df.empty:
             records: list[dict[str, Any]] = []
             for _, row in df.iterrows():
@@ -140,40 +263,78 @@ def collect_sector_flow() -> list[dict[str, Any]] | None:
                         val = str(val)
                     rec[str(col)] = val
                 records.append(rec)
-            logger.info(f"行业资金流: {len(records)} 个行业")
+            logger.info(f"akshare {sector_type}: {len(records)} 条")
             return records
     except Exception as e:
-        logger.warning(f"行业资金流采集失败: {e}")
+        logger.warning(f"akshare {sector_type} 采集失败: {e}")
     return None
+
+
+def _collect_clist_http(fs: str, label: str) -> list[dict[str, Any]] | None:
+    """通过东方财富 clist API 直连采集行业/概念/个股资金流排名。"""
+    params = {
+        "fid": "f62",
+        "po": "1",
+        "pz": "100",
+        "pn": "1",
+        "np": "1",
+        "fltt": "2",
+        "invt": "2",
+        "fs": fs,
+        "fields": "f12,f14,f2,f3,f62,f184,f66,f72,f78,f84,f164,f174",
+    }
+    data = _http_get_json(_EASTMONEY_CLIST_URL, params)
+    if not data or not data.get("data") or not data["data"].get("diff"):
+        return None
+    diff = data["data"]["diff"]
+    records = []
+    for item in diff:
+        records.append({
+            "代码": item.get("f12", ""),
+            "名称": item.get("f14", ""),
+            "最新价": item.get("f2", 0),
+            "涨跌幅": item.get("f3", 0),
+            "主力净流入-净额": item.get("f62", 0),
+            "主力净流入-净占比": item.get("f184", 0),
+            "超大单净流入-净额": item.get("f66", 0),
+            "大单净流入-净额": item.get("f72", 0),
+            "中单净流入-净额": item.get("f78", 0),
+            "小单净流入-净额": item.get("f84", 0),
+        })
+    logger.info(f"HTTP {label}: {len(records)} 条")
+    return records if records else None
+
+
+def collect_sector_flow() -> list[dict[str, Any]] | None:
+    """采集行业资金流排名（今日）—— akshare → HTTP 双通道。"""
+    # 通道1: akshare
+    records = _collect_sector_flow_akshare("行业资金流")
+    if records:
+        return records
+    # 通道2: HTTP 直连
+    logger.info("akshare 行业资金流不可用，降级到 HTTP 直连...")
+    return _collect_clist_http("m:90+t:2", "行业资金流")
 
 
 def collect_concept_flow() -> list[dict[str, Any]] | None:
-    """采集概念资金流排名（今日）。"""
-    try:
-        df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="概念资金流")
-        if df is not None and not df.empty:
-            records = []
-            for _, row in df.iterrows():
-                rec: dict[str, Any] = {}
-                for col in df.columns:
-                    val = row[col]
-                    if isinstance(val, (pd.Timestamp, pd.Period)):
-                        val = str(val)
-                    rec[str(col)] = val
-                records.append(rec)
-            logger.info(f"概念资金流: {len(records)} 个概念")
-            return records
-    except Exception as e:
-        logger.warning(f"概念资金流采集失败: {e}")
-    return None
+    """采集概念资金流排名（今日）—— akshare → HTTP 双通道。"""
+    # 通道1: akshare
+    records = _collect_sector_flow_akshare("概念资金流")
+    if records:
+        return records
+    # 通道2: HTTP 直连
+    logger.info("akshare 概念资金流不可用，降级到 HTTP 直连...")
+    return _collect_clist_http("m:90+t:3", "概念资金流")
 
 
 def collect_stock_flow() -> list[dict[str, Any]] | None:
-    """采集个股资金流排行（今日），用于提取强流入个股。"""
+    """采集个股资金流排行（今日）—— akshare → HTTP 双通道。"""
+    # 通道1: akshare
     try:
+        import akshare as ak
         df = ak.stock_individual_fund_flow_rank(indicator="今日")
         if df is not None and not df.empty:
-            records = []
+            records: list[dict[str, Any]] = []
             for _, row in df.iterrows():
                 rec: dict[str, Any] = {}
                 for col in df.columns:
@@ -182,11 +343,14 @@ def collect_stock_flow() -> list[dict[str, Any]] | None:
                         val = str(val)
                     rec[str(col)] = val
                 records.append(rec)
-            logger.info(f"个股资金流排行: {len(records)} 只")
+            logger.info(f"akshare 个股资金流排行: {len(records)} 只")
             return records
     except Exception as e:
-        logger.warning(f"个股资金流排行采集失败: {e}")
-    return None
+        logger.warning(f"akshare 个股资金流排行采集失败: {e}")
+
+    # 通道2: HTTP 直连
+    logger.info("akshare 个股资金流不可用，降级到 HTTP 直连...")
+    return _collect_clist_http("m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048", "个股资金流")
 
 
 # ── 分析引擎 ──────────────────────────────────────────────────
@@ -395,7 +559,7 @@ async def collect_all() -> dict[str, Any]:
 
     logger.info("资金流数据采集开始...")
 
-    # 并行采集（通过线程池包装同步 akshare 调用）
+    # 并行采集（通过线程池包装同步双通道调用：akshare → HTTP 直连）
     market_task = loop.run_in_executor(None, collect_market_flow)
     sector_task = loop.run_in_executor(None, collect_sector_flow)
     concept_task = loop.run_in_executor(None, collect_concept_flow)

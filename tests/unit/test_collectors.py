@@ -232,14 +232,14 @@ class TestSinaCollectorRealtime:
 
 
 class TestSinaCollectorUnsupported:
-    """SinaCollector 不支持的接口应返回空。"""
+    """SinaCollector 不支持的接口应抛 NotImplementedError 触发 DataManager 降级。"""
 
-    def test_fetch_sector_flow_returns_empty(self):
+    def test_fetch_sector_flow_raises(self):
         collector = SinaCollector()
-        df = collector.fetch_sector_flow()
-        assert df.empty
+        with pytest.raises(NotImplementedError):
+            collector.fetch_sector_flow()
 
-    def test_fetch_stock_flow_returns_empty(self):
+    def test_fetch_stock_flow_raises(self):
         collector = SinaCollector()
-        df = collector.fetch_stock_flow("600519")
-        assert df.empty
+        with pytest.raises(NotImplementedError):
+            collector.fetch_stock_flow("600519")

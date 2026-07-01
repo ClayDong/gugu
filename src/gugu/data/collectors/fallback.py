@@ -251,9 +251,9 @@ class SinaCollector(BaseCollector):
         return pd.DataFrame(rows) if rows else pd.DataFrame()
 
     def fetch_sector_flow(self) -> pd.DataFrame:
-        logger.warning("新浪源不支持行业资金流，返回空")
-        return pd.DataFrame()
+        """新浪源不支持行业资金流，抛异常触发 DataManager 降级到 akshare。"""
+        raise NotImplementedError("新浪源不支持行业资金流，请降级到 akshare")
 
     def fetch_stock_flow(self, symbol: str) -> pd.DataFrame:
-        logger.warning("新浪源不支持个股资金流明细，返回空")
-        return pd.DataFrame()
+        """新浪源不支持个股资金流明细，抛异常触发 DataManager 降级到 akshare。"""
+        raise NotImplementedError("新浪源不支持个股资金流明细，请降级到 akshare")
