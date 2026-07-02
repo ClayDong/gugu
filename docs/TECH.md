@@ -56,7 +56,8 @@ gugu/
 │   │   ├── mean_revert.py       # 均值回归（RSI/KDJ/Bollinger）
 │   │   ├── breakout.py          # 突破（Box/DualThrust）
 │   │   ├── generator.py         # LLM 策略生成器
-│   │   └── registry.py          # 策略注册表
+│   │   ├── registry.py          # 策略注册表
+│   │   └── manifest.py         # 策略注册中心（统一清单加载器）
 │   ├── backtest/                # 回测引擎
 │   │   ├── engine.py            # 回测引擎（含 L3 涨跌停 + wisdom 可选）
 │   │   ├── metrics.py           # 收益/夏普/回撤/胜率
@@ -95,7 +96,8 @@ gugu/
 │   │   ├── stage_detector.py   # P0 四阶段判断器（牛皮/升势/疯狂/最后）
 │   │   ├── trailing_stop.py    # P0 浪谷递进移动止损引擎
 │   │   ├── danger_signal.py    # P0 五大危险信号检测器
-│   │   └── no_average_down.py  # P0 向下摊平检查器
+│   │   ├── no_average_down.py  # P0 向下摊平检查器
+│   │   └── dynamic_take_profit.py # 财叔动态止盈减仓引擎
 │   ├── wisdom/                  # 决策层
 │   │   ├── advisor.py           # WisdomAdvisor（LLM 决策 + 多视角路由 + fallback）
 │   │   ├── book_router.py       # P0 BookPerspectiveRouter（28 本书多视角路由）

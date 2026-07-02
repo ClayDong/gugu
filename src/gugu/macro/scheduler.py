@@ -8,6 +8,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from typing import Any
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -110,9 +113,11 @@ async def _push_macro_report(
     version: str,
     notifier: FeishuNotifier | None = None,
 ) -> None:
-    """采集宏观数据并推送飞书卡片（含 A 股大盘 + 大师兄解读 + 资金流）。"""
-    from gugu.wisdom.advisor import WisdomAdvisor
+    """采集宏观数据并推送飞书卡片（含 A 股大盘 + 资金流）。
 
+    大师兄解读采用异步补发策略：先推送宏观+资金流卡片（保证数据及时性），
+    后台异步生成大师兄解读，完成后单独补发，避免 LLM 超时阻塞主流程。
+    """
     collector = MacroCollector()
     snapshot = await collector.collect()
     builder = MacroReportBuilder()
@@ -137,36 +142,61 @@ async def _push_macro_report(
             elements.append({"tag": "hr"})
             elements.append({"tag": "div", "text": {"tag": "lark_md", "content": section}})
 
-    # ── 添加大师兄解读（使用 WisdomAdvisor 的宏观视角）──
-    try:
-        wisdom = WisdomAdvisor()
-        # 构建宏观数据摘要作为 LLM 上下文（含 A 股大盘 + 资金流）
-        summary = builder.build_text_summary(snapshot)
-        interpretation = await wisdom.advise_macro_async(summary)
-        if interpretation:
-            interpretation_md = f"\n\n**📖 大师兄解读**\n{interpretation}"
-            if elements:
-                last_element = elements[-1]
-                if "content" in last_element:
-                    last_element["content"] += interpretation_md
-                else:
-                    elements.append({"tag": "hr"})
-                    elements.append({"tag": "markdown", "content": interpretation_md})
-            else:
-                elements.append({"tag": "markdown", "content": interpretation_md})
-            logger.info(f"[macro] {version} 添加大师兄解读成功")
-        else:
-            logger.warning(f"[macro] {version} 大师兄解读为空，跳过")
-    except Exception as e:
-        logger.warning(f"[macro] {version} 添加大师兄解读失败: {e}")
-
     card["elements"] = elements
 
+    # ── 先推送宏观+资金流卡片（数据优先，不等待 LLM）──
     ok = await notifier.send_card(card)
     if ok:
-        logger.info(f"[macro] {version} 日报推送成功（含资金流+大师兄解读）")
+        logger.info(f"[macro] {version} 日报推送成功（含资金流）")
     else:
         logger.warning(f"[macro] {version} 日报推送失败（已入重试队列）")
+
+    # ── 后台异步补发大师兄解读（不阻塞主流程）──
+    # LLM 超时或失败不影响宏观数据推送，解读为锦上添花
+    asyncio.create_task(_push_wisdom_interpretation(version, snapshot, builder, notifier))
+
+
+async def _push_wisdom_interpretation(
+    version: str,
+    snapshot: Any,
+    builder: MacroReportBuilder,
+    notifier: FeishuNotifier,
+) -> None:
+    """后台异步生成并补发大师兄解读卡片。
+
+    与主流程解耦：LLM 超时或失败不影响宏观日报已推送的数据。
+    """
+    try:
+        from gugu.wisdom.advisor import WisdomAdvisor
+
+        wisdom = WisdomAdvisor()
+        summary = builder.build_text_summary(snapshot)
+        interpretation = await asyncio.wait_for(
+            wisdom.advise_macro_async(summary), timeout=30.0
+        )
+        if not interpretation:
+            logger.warning(f"[macro] {version} 大师兄解读为空，跳过补发")
+            return
+
+        # 单独构建大师兄解读卡片补发
+        card = {
+            "header": {
+                "title": {"tag": "plain_text", "content": f"📖 大师兄解读 · {version}"},
+                "template": "blue",
+            },
+            "elements": [
+                {"tag": "markdown", "content": interpretation},
+            ],
+        }
+        ok = await notifier.send_card(card)
+        if ok:
+            logger.info(f"[macro] {version} 大师兄解读补发成功")
+        else:
+            logger.warning(f"[macro] {version} 大师兄解读补发失败（已入重试队列）")
+    except asyncio.TimeoutError:
+        logger.warning(f"[macro] {version} 大师兄解读 LLM 超时(30s)，跳过补发")
+    except Exception as e:
+        logger.warning(f"[macro] {version} 大师兄解读补发失败: {e}")
 
 
 async def scheduled_macro_report(version: str) -> None:
@@ -181,12 +211,17 @@ async def scheduled_macro_report(version: str) -> None:
 
 
 def register_macro_jobs(scheduler: AsyncIOScheduler) -> None:
-    """在 APScheduler 中注册宏观日报定时任务。"""
+    """在 APScheduler 中注册宏观日报定时任务。
+
+    时间安排与信号汇总（engine/scheduler.py 的 report_* 任务）错开 5 分钟，
+    避免同一时刻两个重型异步任务并发竞争资源（数据拉取 + LLM 调用）。
+    信号汇总先发（个股层面更紧急），宏观简报随后提供大市背景。
+    """
     jobs = [
         ("macro_early", "早间全球简报", 8, 0),
-        ("macro_morning", "A股盘前简报", 9, 10),
-        ("macro_noon", "午间盘面简报", 11, 35),
-        ("macro_close", "收盘全球概览", 15, 10),
+        ("macro_morning", "A股盘前简报", 9, 15),  # signal report 09:10 → macro 09:15
+        ("macro_noon", "午间盘面简报", 11, 40),    # signal report 11:35 → macro 11:40
+        ("macro_close", "收盘全球概览", 15, 15),   # signal report 15:10 → macro 15:15
     ]
     for job_id, name, hour, minute in jobs:
         scheduler.add_job(

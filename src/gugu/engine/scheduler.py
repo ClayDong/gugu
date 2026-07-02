@@ -2,17 +2,22 @@
 
 调度时间表（A 股交易日）：
 - 08:00  早间全球简报（宏观六维 + A股指数 + 资金流复盘 + 大师兄解读）
-- 09:10  盘前信号汇总 + A股盘前宏观简报（含 A 股指数）
+- 09:10  盘前信号汇总（个股层面，先发）
+- 09:15  A股盘前宏观简报（含 A 股指数，错开 5 分钟避免资源竞争）
 - 09:30  开盘扫描（信号 + 下单 + 飞书通知）
 - 10:30  盘中扫描（捕捉盘中信号变化）
-- 11:35  午间宏观简报（含 A 股指数）+ 午盘信号汇总
+- 11:35  午盘信号汇总（个股层面）
+- 11:40  午间宏观简报（含 A 股指数，错开 5 分钟）
 - 13:05  午盘扫描（下午开盘后信号更新）
 - 14:30  尾盘扫描（尾盘信号 + 止损检查）+ 尾盘选股
-- 15:10  收盘信号汇总 + 宏观全球概览（含 A 股指数 + 资金流日报 + 大师兄解读）
+- 15:10  收盘信号汇总（个股层面）
+- 15:15  收盘宏观全球概览（含 A 股指数 + 资金流日报 + 大师兄解读，错开 5 分钟）
 - 15:35  基金监控推送
+- 07:00  Parquet 缓存定期清理（删除 >7天 过期文件）
 - 每 10 分钟重试失败的通知队列
 
-注：资金流数据已合并到宏观卡片中（08:00/15:10），不再单独推送。
+注：资金流数据已合并到宏观卡片中（08:00/15:15），不再单独推送。
+宏观简报与信号汇总错开 5 分钟，避免同时并发竞争资源。
 """
 
 from __future__ import annotations
@@ -131,8 +136,16 @@ class TradingScheduler:
             name="每日概念-20:00",
         )
 
-        # 资金流数据已合并到宏观卡片中（08:00/15:10），不再单独注册 flow 任务
-        # 宏观调度器 register_macro_jobs 已处理 early(08:00) 和 close(15:10) 的资金流合并
+        # Parquet 缓存定期清理：07:00（交易日，盘前清理过期缓存文件）
+        self._scheduler.add_job(
+            self._safe_cleanup_cache,
+            CronTrigger(hour=7, minute=0, day_of_week="mon-fri"),
+            id="cache_cleanup_0700",
+            name="缓存清理-07:00",
+        )
+
+        # 资金流数据已合并到宏观卡片中（08:00/15:15），不再单独注册 flow 任务
+        # 宏观调度器 register_macro_jobs 已处理 early(08:00) 和 close(15:15) 的资金流合并
 
         logger.info(f"调度器配置完成: {len(self._scheduler.get_jobs())} 个任务")
         for job in self._scheduler.get_jobs():
@@ -271,6 +284,17 @@ class TradingScheduler:
             logger.info(f"每日概念推送完成: {concept['name']}")
         except Exception as e:
             logger.exception(f"每日概念推送异常: {e}")
+
+    async def _safe_cleanup_cache(self) -> None:
+        """安全执行 Parquet 缓存清理（非交易日也执行，长假后清理积压）。"""
+        try:
+            from gugu.data.cache import persistent_cache
+
+            count = persistent_cache().cleanup_stale(max_age_days=7)
+            if count > 0:
+                logger.info(f"Parquet 缓存清理: 删除 {count} 个过期文件")
+        except Exception as e:
+            logger.debug(f"缓存清理异常: {e}")
 
     async def start(self) -> None:
         """启动调度器。启动后立即执行一次盘中扫描（如果是交易日）。"""

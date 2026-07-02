@@ -108,7 +108,8 @@ gugu/
 │       │   ├── mean_revert.py   # 均值回归（RSI/KDJ/布林带）
 │       │   ├── breakout.py      # 突破（箱体/Dual Thrust/支撑阻力）
 │       │   ├── generator.py     # LLM 自然语言策略生成器
-│       │   └── registry.py      # 策略注册表
+│       │   ├── registry.py      # 策略注册表
+│       │   └── manifest.py      # 策略注册中心（统一清单加载器）
 │       ├── backtest/            # 回测引擎
 │       │   ├── engine.py
 │       │   ├── metrics.py       # 收益/夏普/回撤/胜率
@@ -133,6 +134,7 @@ gugu/
 │       │   ├── danger_signal.py   # P0 危险信号检测器
 │       │   ├── no_average_down.py # P0 向下摊平检查器
 │       │   ├── regime_detector.py # 多周期择时
+│       │   ├── dynamic_take_profit.py # 财叔动态止盈减仓引擎
 │       │   └── ...               # 其他分析模块
 │       ├── wisdom/              # 决策层（28 本书认知 + P0 规则引擎）
 │       │   ├── advisor.py       # WisdomAdvisor（LLM 决策 + 多视角路由 + fallback）
@@ -160,6 +162,7 @@ gugu/
 │   ├── run_paper.py             # 模拟盘入口
 │   ├── run_web.py               # Web 仪表盘入口
 │   ├── show_portfolio.py        # 持仓查看入口
+│   ├── verify_strategies.py     # 策略注册中心验证 CLI
 │   └── run_live.py              # 实盘入口（阶段四）
 ├── docs/                        # 文档
 │   ├── PRODUCT.md               # 产品文档
@@ -244,6 +247,8 @@ gugu/
 | 资金流复盘 | 08:00（交易日） | 大盘资金流/行业TOP5/轮动强度/背离预警/概念热点/强流入个股 | `flow_report.py` |
 | 资金流日报 | 15:10（交易日） | 当日大盘/行业TOP/轮动/背离/强流入个股/热门概念 | `flow_report.py` |
 | 持仓卖出告警 | 收盘后（15:10 日报附送） | 检查持仓股卖出信号，主动推送告警 | `main.py` |
+| 动态止盈减仓 | 触发减仓条件（+30%/+15%/大跌） | 股票/减仓比例/原因/策略逻辑（标注财叔出处） | `formatter.py` |
+| 策略全景看板 | 手动触发（`verify_strategies.py dashboard`） | 全量策略清单（按类别分组） | `strategies/manifest.py` |
 | 宏观简报 | 08:00/09:10/11:35/15:10 | 金/油/汇/债/G 五维全球宏观数据 + 大师兄解读 | `macro/report.py` |
 
 ### 消息格式
@@ -294,10 +299,10 @@ gugu/
 ## 元数据
 
 - 创建日期：2026-06-22
-- 版本：v0.3.4
-- 阶段：阶段三（信号监控）+ P0 认知引擎落地 + 数据源三级冗余 + 信号去重与数据质量校验
+- 版本：v0.3.5
+- 阶段：阶段三（信号监控）+ P0 认知引擎落地 + 数据源三级冗余 + 信号去重与数据质量校验 + 文档代码一致性修复 + 财叔动态止盈 + 策略注册中心
 - 测试：818 passed, 70% coverage
-- 最近评审：2026-07-02（数据源三级冗余、大市数据三通道、单位转换修复）
+- 最近评审：2026-07-02（12 项文档代码一致性修复、财叔动态止盈减仓策略、策略注册中心全量清单）
 
 
 ## 十、质量门禁

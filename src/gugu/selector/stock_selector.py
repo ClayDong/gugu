@@ -3,11 +3,12 @@
 基于资金流 + 策略信号 + 综合评分，从全市场筛选候选股票。
 流程：
 1. 获取全市场快照
-2. 过滤：ST、停牌、涨跌停、新股
+2. 基础过滤：价格 > 0、成交额 > 1000万、非 ST（停牌/涨跌停/新股
+   需要前收盘价，延后到步骤4的 _process_stock 中通过 is_tradable 检查）
 3. 按主力净占比排序取前 N
-4. 对候选股跑策略信号
+4. 对候选股跑策略信号（并发，Semaphore(10)），内含涨跌停过滤
 5. StockRanker 综合评分排名（因子30%+基本面25%+资金流25%+板块20%）
-6. 返回买入信号股票
+6. 返回候选信号列表（含买入和卖出信号，供上层决策）
 """
 
 from __future__ import annotations
@@ -51,7 +52,9 @@ class StockSelector:
         """执行选股。
 
         Returns:
-            候选信号列表，每个元素含 symbol, name, direction, confidence, price, strategies
+            候选信号列表（含买入和卖出信号），每个元素含
+            symbol, name, direction("buy"/"sell"), confidence, price, strategies。
+            上层根据 direction 决定是买入候选还是卖出预警。
         """
         logger.info("开始自动选股...")
 

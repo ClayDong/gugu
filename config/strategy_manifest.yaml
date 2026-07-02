@@ -1,0 +1,289 @@
+# 策略注册中心 — 全量策略清单
+#
+# 统一管理项目中所有策略资产（信号生成型、风控择时型、止盈止损型、Skill 型）。
+# 每个策略包含元数据：出处、模块路径、启用状态、参数入口、验证状态。
+#
+# 用途：
+# 1. 策略盘点：一条命令查看所有策略状态
+# 2. 参数集中管理：风控参数从类属性迁移到此
+# 3. 验证追踪：记录每个策略的回测/生产验证状态
+# 4. 飞书看板：一键推送策略全景到飞书
+
+# ============================================================
+# 一、信号生成型策略（strategies/，走 _REGISTRY + SignalRouter）
+# ============================================================
+signal_strategies:
+  box_breakout:
+    name: 达尔文箱体突破
+    module: gugu.strategies.breakout
+    class: BoxBreakoutStrategy
+    source: 达尔文《箱体理论》
+    enabled: true
+    summary: 识别箱体上下沿，突破上沿买入、跌破下沿卖出，配合成交量确认
+    params_entry: strategy_defaults.yaml
+    validation: 生产运行
+    notes: confirm_days=1 防假突破
+
+  turtle:
+    name: 海龟交易法则
+    module: gugu.strategies.trend
+    class: TurtleStrategy
+    source: 《海龟交易法则》唐奇安通道
+    enabled: true
+    summary: 通道突破买入，跌破 exit_low 卖出，ATR 动态止损 + 量比确认
+    params_entry: strategy_defaults.yaml
+    validation: 生产运行
+
+  dual_ma:
+    name: 双均线交叉
+    module: gugu.strategies.trend
+    class: DualMAStrategy
+    source: 经典技术分析
+    enabled: true
+    summary: 短均线上穿长均线买入、下穿卖出
+    params_entry: strategy_defaults.yaml
+    validation: 生产运行
+
+  bollinger:
+    name: 布林带均值回归
+    module: gugu.strategies.mean_revert
+    class: BollingerStrategy
+    source: 约翰·布林格《布林带》
+    enabled: true
+    summary: 触及下轨买入、触及上轨卖出
+    params_entry: strategy_defaults.yaml
+    validation: 生产运行
+
+  rsi_reversal:
+    name: RSI 均值回归
+    module: gugu.strategies.mean_revert
+    class: RSIStrategy
+    source: 威尔斯·威尔德 RSI 指标
+    enabled: true
+    summary: RSI 离开超卖区买入、离开超买区卖出
+    params_entry: strategy_defaults.yaml
+    validation: 生产运行
+
+  macd:
+    name: MACD 金叉死叉
+    module: gugu.strategies.trend
+    class: MACDStrategy
+    source: 利弗莫尔"安坐不动"+ MACD 指标
+    enabled: false
+    summary: 金叉买、死叉卖，附加顶/底背离检测
+    params_entry: strategy_defaults.yaml
+    validation: 回测不佳（低相关互补备选）
+    notes: 与趋势策略相关性低，可互补
+
+  kdj:
+    name: KDJ 指标
+    module: gugu.strategies.mean_revert
+    class: KDJStrategy
+    source: 乔治·莱恩 KDJ 指标
+    enabled: false
+    summary: K 在超卖区金叉 D 买入、超买区死叉卖出
+    params_entry: strategy_defaults.yaml
+    validation: 回测不佳
+
+  dual_thrust:
+    name: Dual Thrust 突破
+    module: gugu.strategies.breakout
+    class: DualThrustStrategy
+    source: 《Dual Thrust》期货经典策略
+    enabled: false
+    summary: N 日 HH-LC/HC-LL 计算上下轨，开盘价 ± k 系数触发
+    params_entry: strategy_defaults.yaml
+    validation: 待验证
+    notes: 跳过 confirm_days（信号当天即成立）
+
+# ============================================================
+# 二、风控/择时型策略（analysis/，SignalPipeline 直接实例化）
+# ============================================================
+risk_strategies:
+  trailing_stop:
+    name: 浪谷递进移动止损
+    module: gugu.analysis.trailing_stop
+    class: TrailingStopEngine
+    source: 《炒股的智慧》陈江挺
+    enabled: true
+    summary: 止损随浪谷上移（只能上不能下），跌破浪谷 1/2/3 次递进警报
+    params_entry: manifest（见下方 params）
+    validation: 生产运行
+    params:
+      initial_stop_pct: 0.08       # 初始止损 8%
+      atr_multiplier: 3.0          # ATR 倍数
+      wave_window: 5                # 浪谷窗口
+      max_drawdown_stop_pct: 0.15   # 最大回撤止损 15%
+      tighten_factor: 0.5           # 危险信号收紧因子
+
+  danger_signal:
+    name: 三大危险信号检测
+    module: gugu.analysis.danger_signal
+    class: DangerSignalDetector
+    source: 《炒股的智慧》陈江挺
+    enabled: true
+    summary: 量增价不涨、两天转头、坏消息（跳空低开/大跌）
+    params_entry: 类属性（待迁移）
+    validation: 生产运行
+
+  no_average_down:
+    name: 绝不向下摊平
+    module: gugu.analysis.no_average_down
+    class: NoAverageDownChecker
+    source: 陈江挺/利弗莫尔/海龟共识
+    enabled: true
+    summary: 持仓亏损 > 2% 拒绝加仓，累计最大浮亏 > 5% 强制拒绝
+    params_entry: manifest（见下方 params）
+    validation: 生产运行
+    params:
+      loss_threshold: 0.02          # 持仓亏损阈值
+      max_drawdown_threshold: 0.05  # 累计最大浮亏阈值
+
+  stage_detector:
+    name: 四阶段检测器
+    module: gugu.analysis.stage_detector
+    class: StageDetector
+    source: 《炒股的智慧》四阶段理论
+    enabled: true
+    summary: 牛皮/正常升势/疯狂/最后四阶段分类
+    params_entry: 类属性（待迁移）
+    validation: 生产运行
+
+  regime_detector:
+    name: 多周期择时
+    module: gugu.analysis.regime_detector
+    class: MultiPeriodRegimeDetector
+    source: 专业交易员多周期框架
+    enabled: true
+    summary: 周线 40% + 日线 40% + 短期 20% 加权评分
+    params_entry: 类属性（待迁移）
+    validation: 生产运行
+
+  divergence_detector:
+    name: 量价背离检测
+    module: gugu.detectors.divergence_detector
+    class: DivergenceDetector
+    source: 《炒股的智慧》量价背离/天量滞涨
+    enabled: true
+    summary: 价格创新高但成交量萎缩 → 卖出预警
+    params_entry: 类属性（待迁移）
+    validation: 生产运行
+
+  strategy_pool:
+    name: 策略池动态加权
+    module: gugu.analysis.strategy_pool
+    class: StrategyPool
+    source: qlib TopkDropoutStrategy
+    enabled: true
+    summary: 胜率 > 60% 加权 +20%，< 30% 降权 -30%，连亏 5 次禁用
+    params_entry: 类属性（待迁移）
+    validation: 生产运行
+
+# ============================================================
+# 三、止盈止损型策略（engine 直接持有实例）
+# ============================================================
+take_profit_strategies:
+  dynamic_take_profit:
+    name: 财叔动态止盈减仓
+    module: gugu.analysis.dynamic_take_profit
+    class: DynamicTakeProfitEngine
+    source: 财叔实战经验
+    enabled: true
+    summary: +30% 减 1/3 → 每 +15% 减 10% → 大跌减半
+    params_entry: manifest（见下方 params）
+    validation: 单元测试通过，待生产验证
+    params:
+      first_take_profit_threshold: 0.30   # 首次止盈触发点
+      first_reduce_ratio: 0.333            # 首次减仓比例（1/3）
+      step_threshold: 0.15                 # 阶梯步长
+      step_reduce_ratio: 0.10              # 阶梯减仓比例
+      big_drop_threshold: -0.05            # 大跌阈值
+      big_drop_reduce_ratio: 0.50          # 大跌减仓比例
+
+# ============================================================
+# 四、Skill 策略（wisdom/skills/，LLM 决策增强）
+# ============================================================
+skill_strategies:
+  # --- 核心Skill（炒股的智慧蒸馏，已启用）---
+  stock-entry-decision:
+    name: 入场决策
+    source: 《炒股的智慧》三层过滤
+    enabled: true
+    summary: 基础分析 + 阶段判断 + 临界点，仅在正常升势买入
+
+  stock-stop-loss-decision:
+    name: 止损决策
+    source: 《炒股的智慧》入场前预设
+    enabled: true
+    summary: 入场前预设止损 + 到点必执行，反向测试替代情绪
+
+  stock-position-sizing:
+    name: 仓位管理
+    source: 《炒股的智慧》分层下注
+    enabled: true
+    summary: 分层下注 20%→60%→100%，先定可承受亏损再算仓位
+
+  stock-profit-taking-decision:
+    name: 止盈决策
+    source: 《炒股的智慧》移动止损代替固定止盈
+    enabled: true
+    summary: 移动止损代替固定止盈，三大危险信号任一即清仓
+
+  stock-trailing-stop:
+    name: 移动止损技术
+    source: 《炒股的智慧》浪谷递进
+    enabled: true
+    summary: 浪谷递进，跌破 1/2/3 次递进警报
+
+  stock-psychology-check:
+    name: 交易心理自检
+    source: 《炒股的智慧》六大陷阱
+    enabled: true
+    summary: 贪小便宜/吃不得小亏/发财心急/跟风/自以为是/报复
+
+  # --- 未启用Skill ---
+  stock-bubble-participation:
+    name: 泡沫参与策略
+    source: 《炒股的智慧》
+    enabled: false
+    summary: 泡沫期参与策略（未启用）
+
+  stock-learning-stage:
+    name: 学习阶段策略
+    source: 《炒股的智慧》
+    enabled: false
+    summary: 新手学习阶段策略（未启用）
+
+  # --- 多视角书籍Skill（28本，动态选3本）---
+  multi_perspective:
+    name: 多视角书籍研判
+    source: 28 本经典投资书籍
+    enabled: true
+    summary: 按场景动态选 3 本书视角，冲突裁决后输出建议
+    config:
+      max_perspectives: 3
+      enable_multi_perspective: true
+    books:
+      - benjamin-graham          # 价值投资
+      - warren-buffett           # 价值投资
+      - charles-munger           # 价值投资
+      - peter-lynch              # 成长选股
+      - william-oneil            # 成长选股
+      - jesse-livermore          # 交易系统
+      - turtle-trader            # 交易系统
+      - chen-jiang-ting          # 交易系统
+      - george-soros            # 投资哲学
+      # ... 完整28本见 wisdom/book_router.py
+
+# ============================================================
+# 五、LLM 动态策略生成器
+# ============================================================
+dynamic_strategies:
+  generator:
+    name: LLM 自然语言策略生成
+    module: gugu.strategies.generator
+    functions: generate_and_save, save_strategy, validate_strategy_code
+    source: gugu 自研
+    enabled: false
+    summary: 用户自然语言描述 → LLM 生成代码 → AST 校验 → 注册到 _REGISTRY
+    validation: 开发完成，未暴露 CLI 入口

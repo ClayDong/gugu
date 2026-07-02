@@ -196,6 +196,38 @@ class ParquetPersistentCache:
         logger.info(f"Parquet 缓存清理: {count} 个文件")
         return count
 
+    def cleanup_stale(self, max_age_days: int = 7) -> int:
+        """清理过期的 Parquet 缓存文件。
+
+        基于文件修改时间清理超过 ``max_age_days`` 天未更新的缓存文件，
+        防止缓存目录无限膨胀（如 watchlist 调整后遗留的旧股票缓存）。
+
+        与 ``get()`` 的惰性清理互补：``get()`` 清理单个过期文件，
+        本方法批量清理整个目录的过期文件，建议每日定时调用。
+
+        Args:
+            max_age_days: 文件最大存活天数，默认 7 天（覆盖长假场景）。
+
+        Returns:
+            清理的文件数
+        """
+        import time as _time
+
+        count = 0
+        now = _time.time()
+        cutoff = now - max_age_days * 86400  # 86400 秒/天
+        for f in self._cache_dir.glob("*.parquet"):
+            try:
+                mtime = f.stat().st_mtime
+                if mtime < cutoff:
+                    f.unlink()
+                    count += 1
+            except OSError:
+                continue
+        if count > 0:
+            logger.info(f"Parquet 缓存定期清理: 删除 {count} 个过期文件(>{max_age_days}天)")
+        return count
+
 
 # 全局单例
 _cache = DataCache()

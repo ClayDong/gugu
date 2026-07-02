@@ -367,14 +367,41 @@ class SignalPipeline:
                 )
 
             # 4. 市场状态仓位修正（已在 budget.single_limit 中体现）
-            # 5. Wisdom 决策层（异步不阻塞，后台运行，主路径不等待 LLM）
-            asyncio.create_task(self._wisdom.advise_async(signal))
-            signal["llm_pending"] = True
-            # LLM 完成前，使用基本的 fallback 决策
-            if "wisdom_decision" not in signal:
-                signal["wisdom_decision"] = {"source": "pending_llm"}
-            if "wisdom" not in signal:
-                signal["wisdom"] = {}
+            # 5. Wisdom 决策层（await + 超时保护，确保通知前决策就绪）
+            # advise_async 内部已实现 LLM→冲突裁决→硬编码规则三级降级，
+            # 此处仅加超时保护防止 LLM 长时间阻塞；超时则降级到硬编码 fallback。
+            # advise_async 返回浅拷贝，需把 Wisdom 决策字段合并回原 signal。
+            _wisdom_keys = (
+                "wisdom_decision", "wisdom", "wisdom_filtered", "filter_reason",
+                "suggested_position_ratio", "stop_loss_price", "take_profit",
+                "conflict_resolution", "mentor_perspectives",
+            )
+            try:
+                wisdom_signal = await asyncio.wait_for(
+                    self._wisdom.advise_async(signal), timeout=15.0
+                )
+                for _k in _wisdom_keys:
+                    if _k in wisdom_signal:
+                        signal[_k] = wisdom_signal[_k]
+                signal["llm_pending"] = False
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[wisdom] {symbol} LLM 决策超时(15s)，降级到硬编码 fallback"
+                )
+                fallback = self._wisdom._advise_fallback(signal)
+                for _k in _wisdom_keys:
+                    if _k in fallback:
+                        signal[_k] = fallback[_k]
+                signal["llm_pending"] = False
+            except Exception as e:
+                logger.warning(
+                    f"[wisdom] {symbol} Wisdom 决策异常: {e}，降级到硬编码 fallback"
+                )
+                fallback = self._wisdom._advise_fallback(signal)
+                for _k in _wisdom_keys:
+                    if _k in fallback:
+                        signal[_k] = fallback[_k]
+                signal["llm_pending"] = False
 
             logger.info(
                 f"信号: {signal['symbol']} {signal['direction']} "

@@ -46,6 +46,9 @@ MESSAGE_URL = f"{FEISHU_BASE}/im/v1/messages"
 TOKEN_TTL_SECONDS = 2 * 60 * 60
 # 重试队列最大重试次数
 MAX_RETRY_COUNT = 5
+# 重试队列条目最大存活时长（小时）：超过则视为过期信号自动丢弃。
+# 6 小时覆盖单个交易日主要时段，避免昨日信号在今天重发（误导用户）。
+MAX_QUEUE_AGE_HOURS = 6
 
 
 class FeishuNotifier:
@@ -232,6 +235,15 @@ class FeishuNotifier:
 
         for item in pending:
             retry_count = item.get("retry_count", 0)
+            # 过期清理：超过 MAX_QUEUE_AGE_HOURS 的条目直接丢弃
+            # （昨日信号今日已无意义，重发只会误导用户）
+            item_ts = item.get("timestamp", "")
+            if self._is_expired(item_ts):
+                logger.warning(
+                    f"通知队列条目过期(>{MAX_QUEUE_AGE_HOURS}h)，自动清理: "
+                    f"timestamp={item_ts}"
+                )
+                continue
             if retry_count >= MAX_RETRY_COUNT:
                 logger.error(
                     f"通知重试次数超限({retry_count}), 永久丢弃: "
@@ -296,6 +308,26 @@ class FeishuNotifier:
         if success_count > 0:
             logger.info(f"重试队列: {success_count} 成功, {len(still_failed)} 仍失败")
         return success_count
+
+    @staticmethod
+    def _is_expired(timestamp_str: str) -> bool:
+        """判断队列条目是否已过期（超过 MAX_QUEUE_AGE_HOURS）。
+
+        Args:
+            timestamp_str: ISO 格式时间戳 ``%Y-%m-%dT%H:%M:%S``。
+
+        Returns:
+            True 表示已过期应清理；时间戳为空或解析失败时返回 False（保守不清理）。
+        """
+        if not timestamp_str:
+            return False
+        try:
+            from datetime import datetime, timedelta
+
+            ts = datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M:%S")
+            return datetime.now() - ts > timedelta(hours=MAX_QUEUE_AGE_HOURS)
+        except (ValueError, TypeError):
+            return False
 
     @staticmethod
     def _is_stale_test_card(card: dict[str, Any]) -> bool:
@@ -495,6 +527,58 @@ class FeishuNotifier:
     async def notify_holdings_sell_alert(self, stocks: list[dict]) -> bool:
         """Format and send a holdings sell signal alert."""
         return await self.send_card(format_holdings_sell_alert(stocks))
+
+    async def notify_take_profit_alert(
+        self,
+        symbol: str,
+        name: str,
+        signal: dict[str, Any],
+        state: dict[str, Any] | None = None,
+    ) -> bool:
+        """发送财叔动态止盈减仓告警卡片。
+
+        Args:
+            symbol: 股票代码。
+            name: 股票名称。
+            signal: TakeProfitSignal 的 dict 形式。
+            state: 可选的 TakeProfitState dict，用于展示减仓历史。
+        """
+        from gugu.notifier.formatter import format_take_profit_alert
+
+        return await self.send_card(
+            format_take_profit_alert(symbol, name, signal, state)
+        )
+
+    async def notify_strategy_dashboard(self) -> bool:
+        """发送策略注册中心全景看板卡片。"""
+        from gugu.strategies.manifest import get_manifest
+
+        manifest = get_manifest()
+        dashboard = manifest.format_dashboard()
+
+        card = {
+            "header": {
+                "title": {
+                    "tag": "plain_text",
+                    "content": "📋 策略注册中心 · 全景看板",
+                },
+                "template": "blue",
+            },
+            "elements": [
+                {"tag": "div", "text": {"tag": "lark_md", "content": dashboard}},
+                {
+                    "tag": "note",
+                    "elements": [
+                        {
+                            "tag": "plain_text",
+                            "content": "策略注册中心 · gugu · 策略治理",
+                        }
+                    ],
+                },
+            ],
+        }
+        return await self.send_card(card)
+
 
     async def notify_conflict(self, symbol: str, name: str, resolution: dict[str, Any]) -> bool:
         """发送多视角冲突研讨卡片。"""

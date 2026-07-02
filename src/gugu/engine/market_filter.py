@@ -179,8 +179,11 @@ class MarketFilter:
             "reason": str, "index_close": float, "ma200": float}``
 
             其中 ``bullish`` 表示是否满足顺势条件（True 才允许选股/进场）。
-            数据获取失败时返回 ``{"bullish": True, "regime": "unknown",
-            "reason": "大市数据获取失败，默认放行"}``，不阻塞交易。
+
+            **fail-safe 策略**（《炒股的智慧》铁律——只在牛市操作）：
+            数据获取失败时返回 ``{"bullish": False, "regime": "unknown",
+            "reason": "大市数据获取失败，fail-safe 拒绝"}``，
+            保守不进场，不缓存以便后续重试。
         """
         # 当日缓存：同一天内直接返回
         today = date.today()

@@ -54,6 +54,15 @@
 
 **LLM 自然语言策略生成**：描述策略逻辑 → LLM 生成 Python 代码 → AST 校验 → 自动注册。
 
+**策略注册中心**（v0.3.5+）：所有策略（信号生成/风控择时/止盈止损/Skill）统一登记到 `config/strategy_manifest.yaml`，支持：
+- `python scripts/verify_strategies.py list` — 列出全量策略
+- `python scripts/verify_strategies.py check` — 代码与清单一致性校验
+- `python scripts/verify_strategies.py dashboard` — 推送策略看板到飞书
+- `python scripts/verify_strategies.py source "炒股的智慧"` — 按出处查询
+- `python scripts/verify_strategies.py params trailing_stop` — 查看策略参数
+
+**财叔动态止盈减仓策略**（v0.3.5+）：+30% 减 1/3 → 每 +15% 减 10% → 大跌减半，与移动止损互补。
+
 ### 4.2 决策层（Wisdom）
 
 融合 28 本股书智慧 + 4 个规则引擎的双层决策架构：
@@ -279,6 +288,9 @@ uv run python scripts/run_live.py
 | 24 | 2026-06-30 | **产品完善 v2**：修复 SinaCollector 测试 mock 不兼容 Python 3.14 httpx 接口、修复 DataManager 测试 `_fresh_dm()` 实例化方式（`object.__new__` 规避配置读取）、统一数据源角色描述（sina 为主源、akshare 为降级源，含代码注释 + 配置默认值）、daemon 添加 watchdog 自动重启（崩溃自动拉起最多 10 次）、FeishuNotifier 接入配置开关（`enabled/notify_signal/daily_report/risk_alert/backtest/system_error` 全类型检查）、macro 通知支持外部 notifier 实例、PRODUCT.md 补充通知配置开关和重试队列说明、README.md 补充守护模式示例 |
 | 25 | 2026-07-02 | **数据质量与通知优化（v0.3.3）**：修复飞书重复通知问题（信号去重机制持久化到 `data/notified_signals.json`，引擎重启后自动恢复）、新增大师兄解读功能（宏观日报添加 LLM 驱动的板块轮动分析视角）、强化价格数据校验（`price_is_realtime` 标记，实时行情获取失败时拒绝发送信号，防止历史收盘价污染通知）、测试 806 passed, 70% coverage |
 | 26 | 2026-07-02 | **数据源健壮性增强（v0.3.4）**：新增东方财富直连采集器 `EastmoneyCollector`（第三备用源，不依赖 akshare 库，httpx 直连 push2 API）、大市数据三通道冗余（akshare→新浪K线→东方财富 push2，解决 akshare 被限流时选股阻塞）、资金流单位转换修复（元→亿）、A 股指数 /100 修正、北向资金不可用时显示"获取不到"、字段名统一（akshare "今日"前缀映射）、测试 818 passed |
+| 27 | 2026-07-02 | **文档代码一致性修复 + Wisdom 异步（v0.3.5）**：12 项文档与实现歧义全部修复（market_filter fail-safe 注释、stock_selector 过滤范围、返回值语义、macro 大师兄异步补发、signal_pipeline Wisdom await+超时降级、batch 串行改并发、重试队列过期清理、定时任务错峰、DualThrust confirm 跳过说明、置信度归一化、PlausiblePrice 分级阈值、Parquet 缓存定期清理）、测试 818 passed |
+| 28 | 2026-07-02 | **财叔动态止盈减仓策略（v0.3.5）**：新增 `DynamicTakeProfitEngine`（+30%减1/3→每+15%减10%→大跌减半），状态持久化到 `data/take_profit_state.json`，飞书卡片标注出处和策略逻辑，与移动止损互补（止损保本金、止盈锁利润）、测试 818 passed |
+| 29 | 2026-07-02 | **策略注册中心（v0.3.5）**：新建 `config/strategy_manifest.yaml` 全量策略清单（26 个策略统一登记：8 信号生成+7 风控择时+1 止盈止损+9 Skill+1 动态生成器）、`strategies/manifest.py` 加载器（查询/统计/看板生成）、`scripts/verify_strategies.py` 验证脚本（list/check/dashboard/source/params 五个子命令）、飞书策略全景看板推送、测试 818 passed |
 
 ## 九、项目关系与合并计划
 

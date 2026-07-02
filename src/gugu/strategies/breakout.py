@@ -63,6 +63,18 @@ class DualThrustStrategy(Strategy):
     """Dual Thrust 突破策略。
 
     基于 N 日内的最高价-最低价、最高价-收盘价、收盘价-最低价计算上下轨。
+
+    设计说明——跳过 confirm_days 确认机制：
+    本策略直接重写 ``generate_signals()`` 而非实现 ``_generate_signals_impl()``，
+    因此不走基类的 ``_require_confirmation()`` 模板方法。
+    原因：Dual Thrust 的突破信号本身就是触发条件（收盘价穿越上下轨），
+    信号当天即成立，无需后续 K 线二次确认；加入 confirm_days 反而会延迟入场、
+    错过突破行情。这与均线突破策略（BreakoutStrategy）不同——后者依赖趋势延续，
+    需要 confirm_days=1 确认非假突破。
+
+    置信度归一化：
+    confidence = 突破幅度 / range_val，经 ``.clip(0, 1)`` 归一化到 [0, 1]。
+    无信号时 confidence=0。
     """
 
     name = "dual_thrust"

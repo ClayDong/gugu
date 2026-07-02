@@ -623,8 +623,12 @@ class TestEndToEndIntegrationNoBusinessMock:
         # P0 新增属性
         from gugu.analysis.trailing_stop import TrailingStopEngine
         from gugu.analysis.danger_signal import DangerSignalDetector
+        from gugu.analysis.dynamic_take_profit import DynamicTakeProfitEngine
         engine._trailing_stop_engine = TrailingStopEngine()
         engine._danger_detector = DangerSignalDetector()
+        engine._take_profit_engine = DynamicTakeProfitEngine(
+            state_path=tmp_path / "tp_state.json"
+        )
 
         # 构造异常信号：price=0
         signal = {
@@ -766,8 +770,12 @@ class TestEndToEndIntegrationNoBusinessMock:
         # P0 新增属性
         from gugu.analysis.trailing_stop import TrailingStopEngine
         from gugu.analysis.danger_signal import DangerSignalDetector
+        from gugu.analysis.dynamic_take_profit import DynamicTakeProfitEngine
         engine._trailing_stop_engine = TrailingStopEngine()
         engine._danger_detector = DangerSignalDetector()
+        engine._take_profit_engine = DynamicTakeProfitEngine(
+            state_path=tmp_path / "tp_state.json"
+        )
 
         # 构造正常信号
         signal = {
@@ -895,8 +903,12 @@ class TestEndToEndFullCycle:
         # P0 新增属性
         from gugu.analysis.trailing_stop import TrailingStopEngine
         from gugu.analysis.danger_signal import DangerSignalDetector
+        from gugu.analysis.dynamic_take_profit import DynamicTakeProfitEngine
         engine._trailing_stop_engine = TrailingStopEngine()
         engine._danger_detector = DangerSignalDetector()
+        engine._take_profit_engine = DynamicTakeProfitEngine(
+            state_path=tmp_path / "tp_state.json"
+        )
 
         import asyncio
 

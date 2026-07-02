@@ -11,6 +11,8 @@
 ## 核心特性
 
 - **多策略信号融合** — 8 个内置策略（趋势/均值回归/突破），支持 weighted/majority/any 融合模式
+- **策略注册中心** — 26 个策略（信号生成/风控择时/止盈止损/Skill/动态生成器）统一登记到 `strategy_manifest.yaml`，支持清单/校验/看板/出处/参数查询
+- **财叔动态止盈减仓** — +30% 减 1/3 → 每 +15% 减 10% → 大跌减半，与移动止损互补（止损保本金、止盈锁利润），飞书卡片标注出处
 - **信号去重机制** — 持久化已通知信号记录，引擎重启后自动恢复，避免重复推送
 - **三级风控体系** — L1 单股仓位上限、L2 日亏熔断（持久化）、L3 涨跌停+停牌+T+1
 - **移动止损引擎** — 基于《炒股的智慧》浪谷递进算法，ATR 自适应初始止损
@@ -18,8 +20,9 @@
 - **认知引擎** — 四阶段判断、五大危险信号检测、向下摊平检查、多周期趋势确认
 - **Walk-Forward 参数优化** — 滚动窗口网格搜索，自动写回最优参数
 - **三级缓存** — Parquet 持久化缓存 + 内存 LRU 缓存 + API 实时请求
-- **数据源降级** — 主源（sina）连续失败自动降级到备选源（akshare），冷却后自动切回
-- **飞书通知** — 信号卡片、日报、风控告警、回测报告、基金监控、宏观简报（含大师兄解读）
+- **数据源三级冗余** — sina（主）+ akshare（降级）+ eastmoney（兜底，httpx 直连 push2），主源失败自动并发降级
+- **大市数据三通道** — akshare → 新浪K线 JSON → 东方财富 push2，逐级降级确保选股可用
+- **飞书通知** — 信号卡片、日报、风控告警、回测报告、基金监控、宏观简报（含大师兄解读）、动态止盈减仓、策略全景看板
 - **Web 仪表盘** — FastAPI + 持仓/信号/风险/净值历史可视化
 - **盈亏归因分析** — 消费 signals_history.jsonl，生成按过滤步骤/策略/Wisdom 决策的归因报告
 
@@ -59,6 +62,13 @@ python scripts/quickstart.py --status
 
 # 停止守护进程
 python scripts/quickstart.py --stop
+
+# 策略注册中心
+python scripts/verify_strategies.py list        # 列出全量策略
+python scripts/verify_strategies.py check       # 代码与清单一致性校验
+python scripts/verify_strategies.py dashboard   # 推送策略看板到飞书
+python scripts/verify_strategies.py source "炒股的智慧"  # 按出处查询
+python scripts/verify_strategies.py params trailing_stop  # 查看策略参数
 ```
 
 ## 系统架构
@@ -75,13 +85,13 @@ python scripts/quickstart.py --stop
 |------|------|------|
 | 配置 | `config/` | 强类型 Pydantic 配置 + YAML |
 | 数据 | `data/` | 多源采集、三层缓存、数据质量校验 |
-| 策略 | `strategies/` | 8 个内置策略 + LLM 生成器 |
+| 策略 | `strategies/` | 8 个内置策略 + LLM 生成器 + 策略注册中心 |
 | 回测 | `backtest/` | 含认知引擎/Walk-Forward 优化的回测引擎 |
 | 风控 | `risk/` | 三级风控、组合相关性监控、回撤熔断 |
 | 执行 | `execution/` | 模拟盘 + QMT 实盘骨架 |
 | 引擎 | `engine/` | 主循环、信号流水线、事件驱动 |
 | 过滤 | `filters/` | 基本面、资金流、行业约束、市场状态 |
-| 分析 | `analysis/` | 移动止损、四阶段、危险信号、归因分析 |
+| 分析 | `analysis/` | 移动止损、动态止盈、四阶段、危险信号、归因分析 |
 | 决策 | `wisdom/` | 28本书视角、KB Agent、冲突裁决器、LLM/fallback 决策 |
 | 通知 | `notifier/` | 飞书卡片消息 |
 | 宏观 | `macro/` | 五维宏观数据采集与飞书简报 |

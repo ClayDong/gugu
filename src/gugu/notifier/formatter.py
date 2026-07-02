@@ -815,3 +815,102 @@ def format_holdings_sell_alert(stocks: list[dict]) -> dict[str, Any]:
         sections=["\n".join(lines)],
         note="明策 · gugu · 持仓告警",
     )
+
+
+def format_take_profit_alert(
+    symbol: str,
+    name: str,
+    signal: dict[str, Any],
+    state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Format a take-profit reduce alert into a Feishu card.
+
+    财叔动态止盈减仓策略通知卡片，标注出处和策略逻辑。
+
+    Args:
+        symbol: 股票代码。
+        name: 股票名称。
+        signal: TakeProfitSignal 的 dict 形式，含 action/reason/reduce_ratio/
+            trigger_step/current_profit_pct。
+        state: 可选的 TakeProfitState dict，用于展示减仓历史。
+
+    Returns:
+        Feishu interactive card message dict.
+    """
+    trigger_step = signal.get("trigger_step", 0)
+    profit_pct = signal.get("current_profit_pct", 0)
+    reduce_ratio = signal.get("reduce_ratio", 0)
+    reason = signal.get("reason", "")
+    current_price = signal.get("current_price", 0)
+    entry_price = signal.get("entry_price", 0)
+
+    # 步骤映射
+    step_names = {
+        1: "第1步 · 首次止盈（+30% 减 1/3）",
+        3: "第3步 · 阶梯递减（+15% 减 10%）",
+        4: "第4步 · 大跌减半保命",
+    }
+    step_name = step_names.get(trigger_step, f"第{trigger_step}步")
+    profit_icon = "🔴" if profit_pct >= 0 else "🟢"
+
+    # 主信息段
+    main_lines = [
+        f"**{name}** ({symbol})" if name else f"**{symbol}**",
+        "",
+        f"📈 入场价：￥{entry_price:.2f}",
+        f"💰 当前价：￥{current_price:.2f}",
+        f"{profit_icon} 累计盈亏：{profit_pct:+.1%}",
+        f"📉 建议减仓：{reduce_ratio:.0%}",
+        "",
+        f"**触发步骤**：{step_name}",
+        f"**触发原因**：{reason}",
+    ]
+
+    # 策略逻辑段（标注出处）
+    strategy_lines = [
+        "**📋 财叔动态止盈减仓策略**",
+        "",
+        "出处：财叔实战经验——「立于不败之地，再让利润奔跑」",
+        "",
+        "**四步逻辑**：",
+        "1️⃣ **+30% 首减 1/3**：锁定利润，立于不败之地",
+        "   — 平庸之辈要调整了，减是对的；妖股减了心态更稳拿更久，减也是对的",
+        "2️⃣ **判断去留**：无论平庸还是妖股，减仓总是对的",
+        "3️⃣ **每 +15% 减 10%**：阶梯递减，持续锁利直到趋势结束",
+        "4️⃣ **大跌减半**：单日大跌直接减半，风控保命",
+        "",
+        "与移动止损互补：止损保本金，止盈锁利润",
+    ]
+
+    # 减仓历史段（若有）
+    history_lines: list[str] = []
+    if state and state.get("history"):
+        history_lines.append("**减仓历史**：")
+        for h in state["history"][-5:]:  # 最近5次
+            step_h = h.get("step", 0)
+            date_h = h.get("date", "")
+            price_h = h.get("price", 0)
+            qty_h = h.get("qty", 0)
+            pct_h = h.get("profit_pct", 0)
+            history_lines.append(
+                f"  {date_h} 第{step_h}步：{qty_h}股@￥{price_h:.2f}（盈亏 {pct_h:+.1%}）"
+            )
+        total_reduced = state.get("total_reduced", 0)
+        history_lines.append(f"  **累计减仓**：{total_reduced} 股")
+
+    sections = ["\n".join(main_lines), "\n".join(strategy_lines)]
+    if history_lines:
+        sections.append("\n".join(history_lines))
+
+    # 大跌用红色，止盈用黄色
+    template = "red" if trigger_step == 4 else "yellow"
+    title_prefix = "大跌减半" if trigger_step == 4 else "止盈减仓"
+
+    return _card(
+        title=f"💰 {title_prefix} · {name or symbol}",
+        template=template,
+        sections=sections,
+        note="出处：财叔实战经验 · 策略逻辑：动态止盈减仓 · gugu · 止盈告警",
+        subtitle=f"当前价 ￥{current_price:.2f} | 盈亏 {profit_pct:+.1%} | 减仓 {reduce_ratio:.0%}",
+    )
+

@@ -303,14 +303,20 @@ class DataManager:
         Returns:
             {symbol: DataFrame} 字典，失败的 symbol 对应空 DataFrame。
         """
-        results: dict[str, pd.DataFrame] = {}
-        for symbol in symbols:
-            try:
-                results[symbol] = await self.fetch_stock_history(symbol, days=days)
-            except Exception as e:
-                logger.warning(f"批量拉取 {symbol} 历史数据失败: {e}")
-                results[symbol] = pd.DataFrame()
-        return results
+        # 并发拉取（Semaphore(10) 并发控制，与选股模块约定一致）
+        sem = asyncio.Semaphore(10)
+
+        async def _fetch_one(sym: str) -> tuple[str, pd.DataFrame]:
+            async with sem:
+                try:
+                    df = await self.fetch_stock_history(sym, days=days)
+                    return sym, df
+                except Exception as e:
+                    logger.warning(f"批量拉取 {sym} 历史数据失败: {e}")
+                    return sym, pd.DataFrame()
+
+        pairs = await asyncio.gather(*[_fetch_one(s) for s in symbols])
+        return dict(pairs)
 
     async def fetch_stock_meta(self, symbol: str) -> dict[str, Any]:
         """获取股票元数据（用于风控 L3）。

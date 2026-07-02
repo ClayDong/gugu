@@ -129,6 +129,24 @@ class PlausiblePriceRule(ValidationRule):
         self._ma_window = ma_window
         self._max_deviation = max_deviation
 
+    def _tiered_max_deviation(self, ma: float) -> float:
+        """按 MA 价格区间返回分级偏离阈值。
+
+        低价股（<¥20）相对波动大，用宽松阈值；高价股（>¥200）波动小，用严格阈值。
+        ``max_deviation`` 参数作为全局上限，分级阈值取 min(分级, max_deviation)。
+
+        分级依据（A股经验值）：
+        - MA < ¥20：8.0x（低价投机股极端拉升常见）
+        - ¥20 ≤ MA < ¥200：5.0x（主流个股）
+        - MA ≥ ¥200：3.0x（高价股，3x 偏离几乎必然是数据错误）
+        """
+        if ma < 20:
+            return min(8.0, self._max_deviation)
+        elif ma < 200:
+            return min(5.0, self._max_deviation)
+        else:
+            return min(3.0, self._max_deviation)
+
     def check(self, df: pd.DataFrame, symbol: str = "") -> tuple:
         if self._price_column not in df.columns or len(df) < self._ma_window:
             return True, "insufficient data, skip plausibility check"
@@ -141,11 +159,15 @@ class PlausiblePriceRule(ValidationRule):
             return True, "zero or negative price/MA, skip plausibility check"
 
         # Check 1: 最新价偏离历史 MA 过大 → 数据源可能返回错误
+        # 分级阈值：低价股波动大（宽松），高价股波动小（严格）
+        # 如 ¥5 低价股 8x 偏离可能是投机拉升，但 ¥1500 高价股 3x 偏离几乎必然是数据错误
+        tiered_max_dev = self._tiered_max_deviation(ma)
         deviation = max(latest, ma) / min(latest, ma)
-        if deviation > self._max_deviation:
+        if deviation > tiered_max_dev:
             msg = (
                 f"{symbol} 最新价 {latest:.2f} 偏离 {self._ma_window}日MA {ma:.2f} "
-                f"({deviation:.1f}x)，怀疑数据源返回错误数据，丢弃"
+                f"({deviation:.1f}x > 阈值 {tiered_max_dev:.1f}x)，"
+                f"怀疑数据源返回错误数据，丢弃"
             )
             logger.warning(msg)
             return False, pd.DataFrame(), msg

@@ -17,6 +17,7 @@ from gugu.analysis.position_controller import PositionController
 from gugu.analysis.regime_detector import MultiPeriodRegimeDetector
 from gugu.analysis.signal_tracker import SignalTracker
 from gugu.analysis.trailing_stop import TrailingStopEngine, TrailingStopSignal
+from gugu.analysis.dynamic_take_profit import DynamicTakeProfitEngine
 from gugu.config import PROJECT_ROOT, get_config
 from gugu.config.models import AppConfig
 from gugu.data import data_manager
@@ -74,6 +75,7 @@ class TradingEngine:
         regime_detector: Any = None,
         position_controller: Any = None,
         trailing_stop_engine: Any = None,
+        take_profit_engine: Any = None,
         fundamental_filter: Any = None,
         money_flow_filter: Any = None,
         industry_constraint: Any = None,
@@ -113,6 +115,10 @@ class TradingEngine:
         )
         self._trailing_stop_engine = (
             trailing_stop_engine if trailing_stop_engine is not None else TrailingStopEngine()
+        )
+        # 财叔动态止盈减仓引擎（与移动止损互补：止损保本金，止盈锁利润）
+        self._take_profit_engine = (
+            take_profit_engine if take_profit_engine is not None else DynamicTakeProfitEngine()
         )
         self._fundamental_filter = (
             fundamental_filter if fundamental_filter is not None else FundamentalFilter()
@@ -695,6 +701,9 @@ class TradingEngine:
                     pos.stop_loss_price = trailing_state.initial_stop_price
                 pos.trailing_stop = self._trailing_stop_engine.state_to_dict(trailing_state)
 
+                # 注册财叔动态止盈监控（买入时记录入场价）
+                self._take_profit_engine.register(symbol, result.price)
+
                 # 注入危险信号信息
                 danger_info = signal.get("danger_signals", {})
                 if danger_info.get("signals"):
@@ -867,6 +876,122 @@ class TradingEngine:
                         )
             else:
                 logger.warning(f"止损卖出 {symbol} 被风控拦截: {risk_result.message}")
+
+        # ===== 财叔动态止盈减仓检查 =====
+        # 与移动止损互补：止损保本金（下跌时），止盈锁利润（上涨时）
+        await self._check_take_profit(portfolio)
+
+    async def _check_take_profit(self, portfolio: dict) -> None:
+        """财叔动态止盈减仓检查（四步策略）。
+
+        在 _check_stop_loss 之后执行，遍历持仓检查是否触发止盈减仓：
+        - 第1步：+30% 减 1/3
+        - 第3步：每 +15% 减 10%
+        - 第4步：大跌减半
+
+        触发时执行减仓 + 飞书通知（标注出处和策略逻辑）。
+        """
+        from datetime import date as _date
+        from gugu.data.stock_names import lookup_stock_name
+
+        today_str = _date.today().isoformat()
+
+        for symbol, pos in portfolio.items():
+            if pos.available <= 0:
+                continue
+
+            # 获取止盈状态，未注册的跳过
+            tp_state = self._take_profit_engine.get_state(symbol)
+            if tp_state is None:
+                continue
+
+            prev_close = getattr(pos, "prev_close", 0) or pos.current_price
+            tp_signal = self._take_profit_engine.check(
+                symbol=symbol,
+                current_price=pos.current_price,
+                prev_close=prev_close,
+                today_str=today_str,
+            )
+
+            if tp_signal.action != "reduce":
+                continue
+
+            # 计算减仓数量（向下取整，至少 100 股）
+            reduce_qty = int(pos.available * tp_signal.reduce_ratio)
+            reduce_qty = (reduce_qty // 100) * 100  # A股最小交易单位 100 股
+            if reduce_qty < 100:
+                logger.info(
+                    f"[take_profit] {symbol} 减仓数量不足 100 股"
+                    f"（available={pos.available}, ratio={tp_signal.reduce_ratio:.0%}），跳过"
+                )
+                continue
+
+            logger.warning(
+                f"[take_profit] {symbol} 触发第{tp_signal.trigger_step}步止盈减仓: "
+                f"{tp_signal.reason}，减仓 {reduce_qty} 股"
+            )
+
+            # 风控检查
+            risk_result = self._risk.check_order(
+                symbol=symbol,
+                direction="sell",
+                quantity=reduce_qty,
+                price=pos.current_price,
+                portfolio=self._broker.get_portfolio(),
+                cash=self._broker.get_account().cash,
+                prev_close=getattr(pos, "prev_close", None),
+                is_st=bool(getattr(pos, "is_st", False)),
+                is_suspended=bool(getattr(pos, "is_suspended", False)),
+            )
+
+            if not risk_result.allowed:
+                logger.warning(
+                    f"[take_profit] {symbol} 止盈减仓被风控拦截: {risk_result.message}"
+                )
+                continue
+
+            # 执行减仓
+            result = self._broker.order(symbol, "sell", reduce_qty, pos.current_price)
+            if not result.success:
+                logger.warning(f"[take_profit] {symbol} 止盈减仓下单失败")
+                continue
+
+            # 更新止盈状态
+            self._take_profit_engine.mark_reduced(
+                symbol=symbol,
+                executed_qty=result.quantity,
+                price=result.price,
+                signal=tp_signal,
+                today_str=today_str,
+            )
+
+            # 飞书通知（标注出处和策略逻辑）
+            stock_name = lookup_stock_name(symbol) or ""
+            signal_dict = {
+                "trigger_step": tp_signal.trigger_step,
+                "reason": tp_signal.reason,
+                "reduce_ratio": tp_signal.reduce_ratio,
+                "current_profit_pct": tp_signal.current_profit_pct,
+                "current_price": result.price,
+                "entry_price": tp_state.entry_price,
+            }
+            from dataclasses import asdict as _asdict
+
+            state_dict = _asdict(tp_state) if tp_state else None
+            notify_ok = await self._notifier.notify_take_profit_alert(
+                symbol, stock_name, signal_dict, state_dict
+            )
+            if not notify_ok:
+                logger.error(
+                    f"[take_profit] {symbol} 止盈减仓已执行"
+                    f"（{result.quantity}股@{result.price}）"
+                    f"但飞书通知失败，请检查飞书配置"
+                )
+
+            # 清仓时移除止盈监控
+            remaining = pos.available - result.quantity
+            if remaining <= 0:
+                self._take_profit_engine.unregister(symbol)
 
     async def _check_daily_loss(self) -> None:
         """检查当日亏损（以日初净值为基准）。"""
