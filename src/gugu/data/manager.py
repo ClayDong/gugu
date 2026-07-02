@@ -152,9 +152,20 @@ class DataManager:
 
         锁粒度：仅对失败计数/降级状态切换加锁，数据请求本身并发执行（A-02 修复）。
         缓存键：基于稳定的 method + args 序列化构建（DA-03 修复 + 列表顺序稳定）。
+
+        特殊处理：fetch_stock_realtime([]) 空列表请求是全市场快照，
+        sina 源不支持（返回空），需跳过主源直接用降级源。
         """
         # 稳定缓存键（列表参数排序处理）
         cache_key = _stable_cache_key(method, *args)
+
+        # 全市场快照请求：sina 不支持空列表，直接跳到降级源
+        is_market_snapshot = (
+            method == "fetch_stock_realtime"
+            and len(args) >= 1
+            and isinstance(args[0], list)
+            and len(args[0]) == 0
+        )
 
         # 1. 持久化缓存：仅对历史数据请求
         if method == "fetch_stock_history" and len(args) >= 1:
@@ -175,7 +186,8 @@ class DataManager:
         async with self._lock:
             is_degraded = await self._is_degraded_locked()
 
-        if not is_degraded:
+        if not is_degraded and not is_market_snapshot:
+            # 非全市场快照请求，正常走主源
             try:
                 _fn = partial(getattr(self._primary, method), *args, **kwargs)
                 df = await asyncio.to_thread(_fn)

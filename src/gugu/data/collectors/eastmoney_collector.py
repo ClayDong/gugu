@@ -135,9 +135,14 @@ class EastmoneyCollector(BaseCollector):
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
     def fetch_stock_realtime(self, symbols: list[str]) -> pd.DataFrame:
-        """获取个股实时行情（单股查询，避免全市场快照限流）。"""
+        """获取个股实时行情。
+
+        空列表时返回全市场快照（用于自动选股扫描）。
+        非空时单股查询，避免全市场快照限流。
+        """
         if not symbols:
-            return pd.DataFrame(columns=["symbol", "name", "price", "change_pct", "volume", "amount"])
+            # 空列表 → 返回全市场快照（用于自动选股）
+            return self._fetch_market_snapshot()
 
         rows: list[dict[str, Any]] = []
         client = self._get_client()
@@ -293,4 +298,61 @@ class EastmoneyCollector(BaseCollector):
             return df.tail(5).reset_index(drop=True) if not df.empty else df
         except Exception as e:
             logger.error(f"东方财富个股资金流 {code} 失败: {e}")
+            return pd.DataFrame()
+
+    def _fetch_market_snapshot(self) -> pd.DataFrame:
+        """获取全市场实时快照（用于自动选股扫描）。
+
+        使用东方财富 clist API，fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23
+        覆盖深沪A股全市场（不含北交所）。
+        """
+        params = {
+            "pn": "1",
+            "pz": "6000",  # 单页6000条，覆盖全A股
+            "po": "1",
+            "np": "1",
+            "fltt": "2",
+            "invt": "2",
+            # m:0+t:6 深圳主板, m:0+t:80 创业板, m:1+t:2 沪市主板, m:1+t:23 科创板
+            "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23",
+            # f2=最新价, f3=涨跌幅, f4=涨跌额, f5=成交量, f6=成交额, f7=振幅
+            # f8=换手率, f12=代码, f14=名称, f15=最高, f16=最低, f17=今开
+            "fields": "f2,f3,f4,f5,f6,f7,f8,f12,f14,f15,f16,f17",
+        }
+        try:
+            client = self._get_client()
+            resp = client.get(_EM_CLIST_URL, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            if not data or not data.get("data") or not data["data"].get("diff"):
+                logger.warning("东方财富全市场快照返回空数据")
+                return pd.DataFrame()
+
+            diff = data["data"]["diff"]
+            rows: list[dict[str, Any]] = []
+            for item in diff:
+                try:
+                    price = float(item.get("f2", 0))
+                    # 跳过停牌（价格为0或-）
+                    if price <= 0:
+                        continue
+                    rows.append({
+                        "symbol": str(item.get("f12", "")).zfill(6),
+                        "name": str(item.get("f14", "")),
+                        "price": price,
+                        "change_pct": float(item.get("f3", 0)),
+                        "volume": float(item.get("f5", 0)),
+                        "amount": float(item.get("f6", 0)),
+                        "open": float(item.get("f17", 0)),
+                        "high": float(item.get("f15", 0)),
+                        "low": float(item.get("f16", 0)),
+                    })
+                except (ValueError, TypeError):
+                    continue
+
+            df = pd.DataFrame(rows)
+            logger.info(f"东方财富全市场快照: {len(df)} 只股票")
+            return df
+        except Exception as e:
+            logger.error(f"东方财富全市场快照失败: {e}")
             return pd.DataFrame()
