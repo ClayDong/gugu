@@ -163,6 +163,22 @@ class FundamentalConfig(BaseModel):
     revenue_growth_min: float = Field(default=-20, description="营收增长率下限（%）")
 
 
+class FundItemConfig(BaseModel):
+    """单只基金配置."""
+
+    code: str = Field(default="", description="基金代码")
+    name: str = Field(default="", description="基金名称")
+    cost_price: float | None = Field(default=None, description="持仓成本价")
+    base_investment: float = Field(default=1000, description="定投基准金额")
+
+
+class FundConfig(BaseModel):
+    """基金监控配置."""
+
+    enabled: bool = Field(default=True, description="是否启用基金监控")
+    funds: list[FundItemConfig] = Field(default_factory=list, description="基金列表")
+
+
 class LogConfig(BaseModel):
     """日志配置."""
 
@@ -193,6 +209,7 @@ class AppConfig(BaseModel):
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     wisdom: WisdomConfig = Field(default_factory=WisdomConfig)
     fundamental: FundamentalConfig = Field(default_factory=FundamentalConfig)
+    fund: FundConfig = Field(default_factory=FundConfig)
     log: LogConfig = Field(default_factory=LogConfig)
 
     # ── classmethod factory ──────────────────────────────────────────
@@ -310,6 +327,18 @@ def flatten_config(app_config: AppConfig) -> dict[str, Any]:
             "pb_max": app_config.fundamental.pb_max,
             "roe_min": app_config.fundamental.roe_min,
             "revenue_growth_min": app_config.fundamental.revenue_growth_min,
+        },
+        "fund": {
+            "enabled": app_config.fund.enabled,
+            "funds": [
+                {
+                    "code": f.code,
+                    "name": f.name,
+                    "cost_price": f.cost_price,
+                    "base_investment": f.base_investment,
+                }
+                for f in app_config.fund.funds
+            ],
         },
         "log": {
             "level": app_config.log.level,

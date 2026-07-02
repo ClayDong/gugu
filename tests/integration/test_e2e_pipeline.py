@@ -943,10 +943,36 @@ class TestMarketFilterIntegration:
         engine._watchlist = ["000858"]
         engine._event_engine = EventEngine()
         engine._lock = asyncio.Lock()
+        # 大市不佳时仍需扫描 watchlist，后续依赖 _regime_detector 等
+        # 用 mock 跳过实际检测，验证大市过滤逻辑即可
+        engine._regime_detector = mock.MagicMock()
+        engine._regime_detector.detect = mock.AsyncMock(
+            return_value={"regime": "range", "reason": "mock"}
+        )
+        engine._position_controller = mock.MagicMock()
+        engine._position_controller.calculate = mock.MagicMock(
+            return_value=mock.MagicMock(
+                total_limit=0.5, single_limit=0.3, reason="mock"
+            )
+        )
+        engine._broker = mock.MagicMock()
+        engine._broker.get_account.return_value = mock.MagicMock(total_value=100000)
+        engine._broker.get_portfolio.return_value = []
+        engine._dm = mock.MagicMock()
+        engine._dm.fetch_stock_realtime = mock.AsyncMock(return_value=None)
+        # 返回非空 DataFrame，避免 df.empty 跳过 pipeline
+        engine._dm.fetch_stock_history = mock.AsyncMock(
+            return_value=pd.DataFrame({"close": [10.0, 11.0]})
+        )
+        engine._dm.fetch_stock_meta = mock.AsyncMock(return_value={"symbol": "000858"})
+        engine._pipeline = mock.MagicMock()
+        engine._pipeline.process = mock.AsyncMock(return_value=None)
+        engine._risk = mock.MagicMock()
+        engine._risk.is_halted = False
         return engine
 
-    def test_bear_market_skips_selection(self):
-        """熊市时 _scan_signals 应跳过选股，返回空列表。"""
+    def test_bear_market_skips_auto_select_only(self):
+        """熊市时 _scan_signals 应跳过自动选股候选，但仍扫描 watchlist。"""
         import asyncio
 
         engine = self._make_minimal_engine()
@@ -956,11 +982,16 @@ class TestMarketFilterIntegration:
         )
         engine._market_filter = mock_mf
 
-        result = asyncio.run(engine._scan_signals())
-        assert result == [], "熊市应跳过选股返回空列表"
+        # 传入 extra_symbols 模拟自动选股候选
+        result = asyncio.run(engine._scan_signals(extra_symbols=["600519"]))
+        # 熊市时应扫描 watchlist（000858），但 extra_symbols 被清空
+        # 由于 mock pipeline 返回 None，signals 为空列表
+        assert result == [], "熊市 watchlist 扫描后无信号（pipeline mock 返回 None）"
+        # 验证 pipeline 被调用（说明 watchlist 被扫描了）
+        assert engine._pipeline.process.called, "熊市应仍扫描 watchlist"
 
-    def test_market_data_failure_blocks_selection(self):
-        """大市数据失败（fail-safe）时 _scan_signals 应跳过选股。"""
+    def test_market_data_failure_scans_watchlist_only(self):
+        """大市数据失败（fail-safe）时仍扫描 watchlist，跳过自动选股候选。"""
         import asyncio
 
         engine = self._make_minimal_engine()
@@ -971,8 +1002,10 @@ class TestMarketFilterIntegration:
         )
         engine._market_filter = mock_mf
 
-        result = asyncio.run(engine._scan_signals())
-        assert result == [], "数据失败 fail-safe 应跳过选股返回空列表"
+        result = asyncio.run(engine._scan_signals(extra_symbols=["600519"]))
+        assert result == [], "fail-safe 时 watchlist 扫描后无信号"
+        # 验证 pipeline 被调用（说明 watchlist 被扫描了，不是直接 return []）
+        assert engine._pipeline.process.called, "fail-safe 应仍扫描 watchlist"
 
 
 class TestAtomicStateWrite:

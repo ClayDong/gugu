@@ -142,17 +142,9 @@ async def _push_macro_report(
         wisdom = WisdomAdvisor()
         # 构建宏观数据摘要作为 LLM 上下文（含 A 股大盘 + 资金流）
         summary = builder.build_text_summary(snapshot)
-        interpretation = await wisdom._advise_llm_async(
-            signal={
-                "symbol": "MACRO",
-                "direction": "hold",
-                "price": 0,
-                "confidence": 0,
-                "reason": f"宏观数据解读：{summary}",
-            },
-        )
-        if interpretation and interpretation.get("reason"):
-            interpretation_md = f"\n\n**📖 大师兄解读**\n{interpretation['reason']}"
+        interpretation = await wisdom.advise_macro_async(summary)
+        if interpretation:
+            interpretation_md = f"\n\n**📖 大师兄解读**\n{interpretation}"
             if elements:
                 last_element = elements[-1]
                 if "content" in last_element:
@@ -163,6 +155,8 @@ async def _push_macro_report(
             else:
                 elements.append({"tag": "markdown", "content": interpretation_md})
             logger.info(f"[macro] {version} 添加大师兄解读成功")
+        else:
+            logger.warning(f"[macro] {version} 大师兄解读为空，跳过")
     except Exception as e:
         logger.warning(f"[macro] {version} 添加大师兄解读失败: {e}")
 

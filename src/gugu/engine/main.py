@@ -382,13 +382,16 @@ class TradingEngine:
                 scan_list.append(s)
 
         # 大市过滤：《炒股的智慧》铁律——大市不满足顺势条件时仅观察不选股
+        # 但 watchlist 自选股仍需扫描（用户手动关注的股票不应被大市过滤阻塞）
         market_status = await self._market_filter.check_market()
         if not market_status["bullish"]:
             logger.warning(
                 f"大市过滤: {market_status['regime']} — {market_status['reason']}，"
-                f"跳过本轮选股扫描"
+                f"跳过自动选股候选，仅扫描 watchlist（{len(self._watchlist)} 只自选股）"
             )
-            return []
+            # 大市不佳时，仅扫描 watchlist，不扫描 extra_symbols（自动选股候选）
+            scan_list = list(self._watchlist)
+            extra_symbols = []  # 清空自动选股候选
 
         # 市场状态判断（每日一次，影响所有信号的仓位修正）
         regime = await self._regime_detector.detect()

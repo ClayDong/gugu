@@ -462,6 +462,56 @@ class WisdomAdvisor:
         # 6. 应用 LLM 决策到信号
         return self._apply_llm_decision(signal, llm_decision)
 
+    async def advise_macro_async(self, macro_summary: str) -> str:
+        """生成大师兄视角的宏观市场解读（异步）。
+
+        与个股决策不同，宏观解读不输出 action/position_ratio，
+        而是直接返回一段市场分析文本。
+
+        Args:
+            macro_summary: 宏观数据摘要文本（金油汇债G + A股指数 + 资金流）
+
+        Returns:
+            大师兄解读文本（纯文本，非 JSON）
+        """
+        cfg = env()
+        system_prompt = (
+            "你是「大师兄」——一位融合28本股书智慧的资深市场分析师。\n"
+            "你的认知来自陈江挺《炒股的智慧》、利弗莫尔《股票大作手回忆录》、\n"
+            "海龟交易法则、邱国鹭《投资中最简单的事》、达利欧《原则》等经典。\n\n"
+            "你的职责是根据当日宏观数据（金/油/汇/债/G + A股指数 + 资金流向），\n"
+            "给出一段简明的大师兄视角市场解读。\n\n"
+            "要求：\n"
+            "1. 150-300字，直接输出分析文本，不要 JSON 格式\n"
+            "2. 聚焦今日数据的关键变化（涨跌方向、资金流向、板块轮动）\n"
+            "3. 给出对散户的操作建议（加仓/减仓/观望/关注板块）\n"
+            "4. 语气专业但通俗，像老股民的经验分享\n"
+        )
+        user_prompt = f"## 今日宏观数据\n\n{macro_summary}"
+
+        try:
+            client = await self._get_async_client()
+            resp = await client.post(
+                f"{cfg.llm_base_url}/v1/chat/completions",
+                headers={"Authorization": f"Bearer {cfg.llm_api_key}"},
+                json={
+                    "model": cfg.llm_model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "max_tokens": 600,
+                    "temperature": 0.3,
+                },
+            )
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"]
+            logger.info(f"[wisdom-LLM] 大师兄宏观解读生成成功: {len(content)} 字")
+            return content.strip()
+        except Exception as e:
+            logger.warning(f"[wisdom-LLM] 大师兄宏观解读失败: {e}")
+            return ""
+
     def _build_system_prompt(self) -> str:
         """构建 LLM 系统提示词。"""
         return (
