@@ -30,6 +30,7 @@ from gugu.macro.models import (
     GoldData,
     MacroSnapshot,
     OilData,
+    StockIndexData,
 )
 from gugu.utils.log import get_logger
 
@@ -285,21 +286,124 @@ async def _collect_derivatives() -> DerivativeData:
     except Exception as e:
         logger.warning(f"[macro] BDI 采集异常: {e}")
 
-    # 北向资金
+    # 北向资金（获取不到时保持 None，不写 0）
     try:
         df = await _try_fetch("北向资金", ak.stock_hsgt_fund_flow_summary_em)
         if df is not None and not df.empty:
+            # 仅匹配明确的北向资金/沪深股通字段，避免误用其他行数据
             for _, row in df.iterrows():
                 val = _safe_float(row.get("当日成交净买额", row.get("value", 0)))
                 name = str(row.get("资金方向", row.get("name", "")))
                 if "北向" in name or "沪深" in name:
                     dd.north_flow = round(val / 1e8, 2)  # 元→亿元
-                elif dd.north_flow == 0:
-                    dd.north_flow += round(val / 1e8, 2)
+                    break
+            if dd.north_flow is not None:
+                logger.info(f"[macro] 北向资金: {dd.north_flow:.2f} 亿")
+            else:
+                logger.warning("[macro] 北向资金: 未匹配到北向/沪深字段，标记为获取不到")
+        else:
+            logger.warning("[macro] 北向资金: 返回空数据，标记为获取不到")
     except Exception as e:
         logger.warning(f"[macro] 北向资金采集异常: {e}")
 
     return dd
+
+
+async def _collect_stock_index() -> StockIndexData:
+    """采集 A 股大盘指数：上证指数、深证成指、创业板指。
+
+    使用东方财富 push API 直连获取实时行情，可靠性高于 akshare。
+    """
+    si = StockIndexData()
+    import httpx
+
+    # 三大指数 secid: 上证=1.000001, 深证=0.399001, 创业板=0.399006
+    indices = [
+        ("1.000001", "sh"),
+        ("0.399001", "sz"),
+        ("0.399006", "cyb"),
+    ]
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Referer": "https://quote.eastmoney.com/",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+            for secid, prefix in indices:
+                # 重试机制（最多 3 次，避免东方财富 API 限流导致间歇性失败）
+                for attempt in range(3):
+                    try:
+                        url = "https://push2.eastmoney.com/api/qt/stock/get"
+                        params = {
+                            "secid": secid,
+                            "fields": "f43,f44,f45,f46,f47,f48,f57,f58,f169,f170",
+                        }
+                        resp = await client.get(url, params=params)
+                        resp.raise_for_status()
+                        data = resp.json()
+                        if not data or not data.get("data"):
+                            if attempt < 2:
+                                await asyncio.sleep(0.5 * (attempt + 1))
+                                continue
+                            logger.warning(f"[macro] 指数 {secid} 返回空数据 (attempt {attempt+1})")
+                            break
+
+                        d = data["data"]
+                        # f43=最新价(需/100转点), f44=最高, f45=最低, f46=开盘, f47=成交量, f48=成交额(元)
+                        # f57=代码, f58=名称, f169=涨跌额, f170=涨跌幅(需/100转%)
+                        price = _safe_float(d.get("f43", 0)) / 100.0
+                        change_pct = _safe_float(d.get("f170", 0)) / 100.0
+                        prev_close = _safe_float(d.get("f46", 0)) / 100.0  # 开盘作为参考
+                        turnover = _safe_float(d.get("f48", 0))  # 成交额（元）
+
+                        if price > 0:
+                            if prefix == "sh":
+                                si.sh_index = price
+                                si.sh_change_pct = change_pct
+                                si.sh_close = prev_close
+                            elif prefix == "sz":
+                                si.sz_index = price
+                                si.sz_change_pct = change_pct
+                                si.sz_close = prev_close
+                            elif prefix == "cyb":
+                                si.cyb_index = price
+                                si.cyb_change_pct = change_pct
+                                si.cyb_close = prev_close
+                            # 累加成交额（元 → 亿元）
+                            si.total_volume += round(turnover / 1e8, 2)
+                            si.valid = True
+                            si.source = "eastmoney_push_api"
+                            break  # 成功则跳出重试循环
+                        elif attempt < 2:
+                            await asyncio.sleep(0.5 * (attempt + 1))
+                            continue
+                        else:
+                            logger.warning(f"[macro] 指数 {secid} price=0 (attempt {attempt+1})")
+                    except Exception as e:
+                        logger.warning(f"[macro] 指数 {secid} 采集异常 (attempt {attempt+1}): {e}")
+                        if attempt < 2:
+                            await asyncio.sleep(0.5 * (attempt + 1))
+                            continue
+    except Exception as e:
+        logger.warning(f"[macro] A 股指数采集异常: {e}")
+
+    # 尝试通过 akshare 获取涨跌停家数（东方财富涨停板统计）
+    try:
+        df = await _try_fetch("涨跌停统计", ak.stock_zt_pool_em, date="", timeout=15.0)
+        if df is not None and not df.empty:
+            si.limit_up_count = len(df)
+    except Exception:
+        pass
+
+    if si.valid:
+        logger.info(
+            f"[macro] A 股指数: 上证={si.sh_index:.2f}({si.sh_change_pct:+.2f}%) "
+            f"深证={si.sz_index:.2f}({si.sz_change_pct:+.2f}%) "
+            f"创业板={si.cyb_index:.2f}({si.cyb_change_pct:+.2f}%)"
+        )
+    return si
 
 
 # ═══════════════════════════════════════════════════════════
@@ -317,13 +421,14 @@ class MacroCollector:
     """
 
     async def collect(self) -> MacroSnapshot:
-        """采集所有五维数据。各维度并行执行。"""
+        """采集所有六维数据。各维度并行执行。"""
         tasks = {
             "gold": _collect_gold(),
             "oil": _collect_oil(),
             "fx": _collect_fx(),
             "bond": _collect_bond(),
             "derivative": _collect_derivatives(),
+            "stock_index": _collect_stock_index(),
         }
         results = await asyncio.gather(*tasks.values(), return_exceptions=True)
 
@@ -343,10 +448,11 @@ class MacroCollector:
                 snapshot.fx.valid,
                 snapshot.bond.valid,
                 snapshot.derivative.valid,
+                snapshot.stock_index.valid,
             ]
         )
-        snapshot.all_valid = valid_count >= 3  # 至少 3/5 维度有效
-        logger.info(f"[macro] 五维数据采集完成: {valid_count}/5 维度有效")
+        snapshot.all_valid = valid_count >= 3  # 至少 3/6 维度有效
+        logger.info(f"[macro] 六维数据采集完成: {valid_count}/6 维度有效")
         return snapshot
 
 

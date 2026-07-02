@@ -1,16 +1,18 @@
 """APScheduler 调度器：定时执行交易任务。
 
 调度时间表（A 股交易日）：
-- 08:00  早间全球简报（宏观五维）+ 资金流复盘（昨日T-1）
-- 09:10  盘前信号汇总 + A股盘前宏观简报
+- 08:00  早间全球简报（宏观六维 + A股指数 + 资金流复盘 + 大师兄解读）
+- 09:10  盘前信号汇总 + A股盘前宏观简报（含 A 股指数）
 - 09:30  开盘扫描（信号 + 下单 + 飞书通知）
 - 10:30  盘中扫描（捕捉盘中信号变化）
-- 11:35  午间宏观简报 + 午盘信号汇总
+- 11:35  午间宏观简报（含 A 股指数）+ 午盘信号汇总
 - 13:05  午盘扫描（下午开盘后信号更新）
 - 14:30  尾盘扫描（尾盘信号 + 止损检查）+ 尾盘选股
-- 15:10  收盘信号汇总 + 宏观全球概览 + 资金流日报（当日）
+- 15:10  收盘信号汇总 + 宏观全球概览（含 A 股指数 + 资金流日报 + 大师兄解读）
 - 15:35  基金监控推送
 - 每 10 分钟重试失败的通知队列
+
+注：资金流数据已合并到宏观卡片中（08:00/15:10），不再单独推送。
 """
 
 from __future__ import annotations
@@ -129,25 +131,8 @@ class TradingScheduler:
             name="每日概念-20:00",
         )
 
-        # 资金流日报
-        flow_cfg = get_config().flatten().get("flow_report", {})
-        if flow_cfg.get("enabled", True):
-            morning_t = flow_cfg.get("morning_time", "08:00")
-            close_t = flow_cfg.get("close_time", "15:10")
-            mh, mm = morning_t.split(":")
-            ch, cm = close_t.split(":")
-            self._scheduler.add_job(
-                self._safe_flow_morning,
-                CronTrigger(hour=int(mh), minute=int(mm), day_of_week="mon-fri"),
-                id="flow_morning",
-                name="资金流复盘-盘前",
-            )
-            self._scheduler.add_job(
-                self._safe_flow_close,
-                CronTrigger(hour=int(ch), minute=int(cm), day_of_week="mon-fri"),
-                id="flow_close",
-                name="资金流日报-收盘",
-            )
+        # 资金流数据已合并到宏观卡片中（08:00/15:10），不再单独注册 flow 任务
+        # 宏观调度器 register_macro_jobs 已处理 early(08:00) 和 close(15:10) 的资金流合并
 
         logger.info(f"调度器配置完成: {len(self._scheduler.get_jobs())} 个任务")
         for job in self._scheduler.get_jobs():
@@ -252,31 +237,8 @@ class TradingScheduler:
         except Exception as e:
             logger.exception(f"基金监控异常: {e}")
 
-    async def _safe_flow_morning(self) -> None:
-        """安全执行盘前资金流复盘（08:00，非交易日跳过）。"""
-        if not is_trading_day():
-            return
-        try:
-            from gugu.notifier.flow_report import run_morning_report
-
-            data = await run_morning_report()
-            await self._engine._notifier.notify_flow_report("morning", data)
-            logger.info("资金流复盘(盘前)推送完成")
-        except Exception as e:
-            logger.exception(f"资金流复盘(盘前)异常: {e}")
-
-    async def _safe_flow_close(self) -> None:
-        """安全执行收盘资金流日报（15:10，非交易日跳过）。"""
-        if not is_trading_day():
-            return
-        try:
-            from gugu.notifier.flow_report import run_close_report
-
-            data = await run_close_report()
-            await self._engine._notifier.notify_flow_report("close", data)
-            logger.info("资金流日报(收盘)推送完成")
-        except Exception as e:
-            logger.exception(f"资金流日报(收盘)异常: {e}")
+    # 资金流推送已合并到宏观卡片中（macro/scheduler.py 的 _push_macro_report）
+    # 不再单独推送 flow_morning / flow_close
 
     async def _safe_concept_daily(self) -> None:
         """安全执行每日概念推送（20:00，非交易日跳过）。"""

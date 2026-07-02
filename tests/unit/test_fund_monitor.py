@@ -167,19 +167,19 @@ class TestBuildFundMonitorCard:
         with mock.patch("gugu.notifier.formatter._card") as mock_card:
             mock_card.return_value = {
                 "msg_type": "interactive",
-                "card": {"header": {"template": "blue"}, "elements": []},
+                "card": {"header": {"template": "red"}, "elements": []},
             }
             card = build_fund_monitor_card(result)
             assert card["msg_type"] == "interactive"
-            assert card["card"]["header"]["template"] == "blue"
-            # 验证 _card 被正确调用
+            assert card["card"]["header"]["template"] == "red"
+            # 验证 _card 被正确调用（A 股惯例：涨红跌绿）
             mock_card.assert_called_once()
             call_kwargs = mock_card.call_args[1]
             assert "测试基金" in call_kwargs.get("title", "")
-            assert call_kwargs.get("template") == "blue"
+            assert call_kwargs.get("template") == "red"
 
-    def test_negative_daily_change_red_template(self):
-        """日涨跌为负时 template 应为 red。"""
+    def test_negative_daily_change_green_template(self):
+        """日涨跌为负时 template 应为 green（A 股惯例：跌绿）。"""
         result = {
             "fund_name": "测试基金",
             "fund_code": "001480",
@@ -200,10 +200,13 @@ class TestBuildFundMonitorCard:
         with mock.patch("gugu.notifier.formatter._card") as mock_card:
             mock_card.return_value = {
                 "msg_type": "interactive",
-                "card": {"header": {"template": "red"}, "elements": []},
+                "card": {"header": {"template": "green"}, "elements": []},
             }
             card = build_fund_monitor_card(result)
-            assert card["card"]["header"]["template"] == "red"
+            assert card["card"]["header"]["template"] == "green"
+            # 验证 _card 调用参数（A 股惯例：跌绿）
+            call_kwargs = mock_card.call_args[1]
+            assert call_kwargs.get("template") == "green"
 
     def test_alert_summary_included(self):
         """有告警时应包含告警摘要和操作建议 sections。"""

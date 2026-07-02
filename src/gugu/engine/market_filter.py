@@ -2,14 +2,21 @@
 
 根据《炒股的智慧》策略体系，"只在牛市/上升大市操作"是最高优先级铁律。
 大市不满足顺势条件时，应关闭选股通道，仅保留现金观察。
+
+数据源（三级冗余，保证健壮性）：
+1. akshare 的 stock_zh_index_daily_em（东方财富后端，主源）
+2. 新浪 K 线 JSON 接口（备用1，akshare 失败时自动降级）
+3. 东方财富 push2 API 直连 HTTP（备用2，前两级均失败时兜底）
 """
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from typing import Any
 
 import akshare as ak
+import httpx
 import pandas as pd
 
 from gugu.utils.log import get_logger
@@ -18,6 +25,13 @@ logger = get_logger()
 
 # 沪深300指数代码（akshare 格式：sh + 6 位代码）
 _HS300_SYMBOL = "sh000300"
+# 东方财富 secid 格式：1.000300（沪市指数）
+_HS300_SECID = "1.000300"
+# 新浪 K 线接口（指数日K，scale=240 表示日K）
+_SINA_KLINE_URL = (
+    "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketData.getKLineData"
+    "?symbol={symbol}&scale=240&datalen={datalen}"
+)
 
 # 200 日均线周期
 _MA200 = 200
@@ -47,6 +61,115 @@ class MarketFilter:
         # 当日缓存：同一天内只查询一次
         self._cache: dict[str, Any] | None = None
         self._cache_date: date | None = None
+
+    def _fetch_index_sina(self, days: int = 250) -> pd.DataFrame | None:
+        """新浪 K 线 JSON 接口获取沪深300日K线（备用通道1）。
+
+        通过 ``CN_MarketData.getKLineData`` 接口获取指数日K，scale=240 表示日K。
+        接口最大返回 datalen 条数据，为满足 MA200 需要至少 250 条。
+        """
+        datalen = max(days + 20, 300)  # 多取一些确保足够
+        url = _SINA_KLINE_URL.format(symbol=_HS300_SYMBOL, datalen=datalen)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Referer": "https://finance.sina.com.cn/",
+        }
+        try:
+            with httpx.Client(timeout=15.0, headers=headers) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                text = resp.text.strip()
+            if not text:
+                logger.warning("新浪大市 K 线 API 返回空")
+                return None
+
+            data = json.loads(text)
+            if not data:
+                logger.warning("新浪大市 K 线 API 返回空列表")
+                return None
+
+            rows: list[dict[str, Any]] = []
+            for item in data:
+                try:
+                    rows.append({
+                        "date": item["day"],
+                        "open": float(item["open"]),
+                        "high": float(item["high"]),
+                        "low": float(item["low"]),
+                        "close": float(item["close"]),
+                        "volume": float(item.get("volume", 0)),
+                    })
+                except (KeyError, ValueError, TypeError):
+                    continue
+
+            if not rows:
+                return None
+            df = pd.DataFrame(rows)
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df = df.dropna(subset=["date"])
+            df = df.sort_values("date").reset_index(drop=True)
+            return df
+        except Exception as e:
+            logger.warning(f"新浪大市 K 线 API 失败: {e}")
+            return None
+
+    def _fetch_index_eastmoney(self, days: int = 250) -> pd.DataFrame | None:
+        """东方财富 push2 API 直连获取沪深300日K线（备用通道2，最后兜底）。
+
+        通过 kline 接口获取历史日K数据。当 akshare 和新浪均失败时使用。
+        """
+        url = "https://push2.eastmoney.com/api/qt/stock/kline/get"
+        params = {
+            "secid": _HS300_SECID,
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "klt": "101",  # 101=日K
+            "fqt": "0",   # 0=不复权（指数无需复权）
+            "end": "20500101",
+            "lmt": str(max(days * 2, 500)),
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Referer": "https://quote.eastmoney.com/",
+        }
+        try:
+            with httpx.Client(timeout=15.0, headers=headers) as client:
+                resp = client.get(url, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+            if not data or not data.get("data") or not data["data"].get("klines"):
+                logger.warning("东方财富大市 HTTP API 返回空数据")
+                return None
+
+            klines = data["data"]["klines"]
+            rows: list[dict[str, Any]] = []
+            for line in klines:
+                # 格式: 日期,开盘,收盘,最高,最低,成交量,成交额,振幅,涨跌幅,涨跌额,换手率
+                parts = line.split(",")
+                if len(parts) < 7:
+                    continue
+                try:
+                    rows.append({
+                        "date": parts[0],
+                        "open": float(parts[1]),
+                        "close": float(parts[2]),
+                        "high": float(parts[3]),
+                        "low": float(parts[4]),
+                        "volume": float(parts[5]),
+                    })
+                except (ValueError, IndexError):
+                    continue
+
+            if not rows:
+                return None
+            df = pd.DataFrame(rows)
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df = df.dropna(subset=["date"])
+            df = df.sort_values("date")
+            return df
+        except Exception as e:
+            logger.warning(f"东方财富大市 HTTP API 失败: {e}")
+            return None
 
     async def check_market(self) -> dict[str, Any]:
         """检查大市状态。
@@ -82,10 +205,11 @@ class MarketFilter:
         return result
 
     async def fetch_index_data(self, days: int = 250) -> pd.DataFrame:
-        """获取沪深300指数日 K 数据。
+        """获取沪深300指数日 K 数据（三级冗余，保证健壮性）。
 
-        使用 akshare 的 ``stock_zh_index_daily_em`` 接口获取沪深300日 K 线，
-        列名统一为 date, open, high, low, close, volume，按日期升序排列。
+        通道1：akshare 的 ``stock_zh_index_daily_em``（东方财富后端，主源）
+        通道2：新浪 K 线 JSON 接口（备用1，akshare 失败时降级）
+        通道3：东方财富 push2 API 直连 HTTP（备用2，前两级均失败时兜底）
 
         Args:
             days: 获取的交易日天数，默认 250（约一年）。
@@ -94,10 +218,31 @@ class MarketFilter:
             包含 date, open, high, low, close, volume 列的 DataFrame，
             按日期升序排列。列名映射兼容中英文原始列名。
         """
-        # akshare 的 stock_zh_index_daily_em 返回全量历史日 K
-        raw = ak.stock_zh_index_daily_em(symbol=_HS300_SYMBOL)
+        # 通道1：akshare
+        raw: pd.DataFrame | None = None
+        try:
+            raw = ak.stock_zh_index_daily_em(symbol=_HS300_SYMBOL)
+            if raw is not None and not raw.empty:
+                logger.info(f"大市数据(akshare): {len(raw)} 条K线")
+        except Exception as e:
+            logger.warning(f"akshare 大市数据获取失败: {e}")
+
+        # 通道2：新浪 K 线 JSON 接口（akshare 失败时降级）
+        if raw is None or raw.empty:
+            logger.info("akshare 大市数据不可用，降级到新浪 K 线接口...")
+            raw = self._fetch_index_sina(days)
+            if raw is not None and not raw.empty:
+                logger.info(f"大市数据(新浪): {len(raw)} 条K线")
+
+        # 通道3：东方财富 push2 API 直连（前两级均失败时最后兜底）
+        if raw is None or raw.empty:
+            logger.info("新浪大市数据不可用，最后兜底到东方财富 HTTP 直连...")
+            raw = self._fetch_index_eastmoney(days)
+            if raw is not None and not raw.empty:
+                logger.info(f"大市数据(东方财富): {len(raw)} 条K线")
 
         if raw is None or raw.empty:
+            logger.error("大市数据获取失败（akshare + 新浪 + 东方财富 三通道均不可用）")
             return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
 
         # 列名映射：兼容中英文列名，统一为目标列名

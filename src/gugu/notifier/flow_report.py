@@ -128,16 +128,36 @@ def _collect_market_flow_akshare() -> dict[str, Any] | None:
         df_n = ak.stock_hsgt_fund_min_em(symbol="北向资金")
         if df_n is not None and not df_n.empty:
             latest_n = df_n.iloc[-1].to_dict()
-            result["north_bound"] = {
-                "date": str(latest_n.get("日期", "")),
-                "time": str(latest_n.get("时间", "")),
-                "total": _safe_float(latest_n.get("北向资金", 0)),
-                "sh_connect": _safe_float(latest_n.get("港股通(沪)", 0)),
-                "sz_connect": _safe_float(latest_n.get("港股通(深)", 0)),
-            }
-            logger.info(f"北向资金(akshare): {result['north_bound']['total']:.2f}亿")
+            # 北向资金可能因数据源限制获取不到，用 None 表示未获取到
+            north_total_raw = latest_n.get("北向资金")
+            sh_raw = latest_n.get("港股通(沪)")
+            sz_raw = latest_n.get("港股通(深)")
+            if north_total_raw is not None:
+                result["north_bound"] = {
+                    "date": str(latest_n.get("日期", "")),
+                    "time": str(latest_n.get("时间", "")),
+                    "total": _safe_float(north_total_raw),
+                    "sh_connect": _safe_float(sh_raw) if sh_raw is not None else None,
+                    "sz_connect": _safe_float(sz_raw) if sz_raw is not None else None,
+                }
+                logger.info(f"北向资金(akshare): {result['north_bound']['total']:.2f}亿")
+            else:
+                logger.warning("akshare 北向资金: 数据字段为空，标记为获取不到")
+                result["north_bound"] = {
+                    "date": str(latest_n.get("日期", "")),
+                    "time": str(latest_n.get("时间", "")),
+                    "total": None,
+                    "sh_connect": None,
+                    "sz_connect": None,
+                }
+        else:
+            logger.warning("akshare 北向资金: 返回空数据，标记为获取不到")
+            result["north_bound"] = {"date": "", "time": "", "total": None,
+                                      "sh_connect": None, "sz_connect": None}
     except Exception as e:
         logger.warning(f"akshare 北向资金采集失败: {e}")
+        result["north_bound"] = {"date": "", "time": "", "total": None,
+                                  "sh_connect": None, "sz_connect": None}
 
     return result if result else None
 
@@ -192,11 +212,14 @@ def _collect_market_flow_http() -> dict[str, Any] | None:
                         result["north_bound"] = {
                             "date": latest_parts[0] if len(latest_parts) > 0 else "",
                             "time": latest_parts[1] if len(latest_parts) > 1 else "",
-                            "total": _safe_float(latest_parts[2]) / 10000 if len(latest_parts) > 2 else 0,
-                            "sh_connect": 0,
-                            "sz_connect": 0,
+                            "total": _safe_float(latest_parts[2]) / 10000 if len(latest_parts) > 2 else None,
+                            "sh_connect": None,
+                            "sz_connect": None,
                         }
-                        logger.info(f"北向资金(HTTP): {result['north_bound']['total']:.2f}亿")
+                        if result["north_bound"]["total"] is not None:
+                            logger.info(f"北向资金(HTTP): {result['north_bound']['total']:.2f}亿")
+                        else:
+                            logger.warning("HTTP 北向资金: 数据字段为空，标记为获取不到")
     except Exception as e:
         logger.warning(f"HTTP 北向资金采集失败: {e}")
 
@@ -228,24 +251,31 @@ def collect_market_flow() -> dict[str, Any] | None:
     # 大盘资金流不可用时，用北向资金作为市场情绪代理
     if "market" not in result and "north_bound" in result:
         nb = result["north_bound"]
+        nb_total = nb.get("total")
         result["market"] = {
             "date": nb.get("date", _date_str()),
             "sh_close": None, "sh_change": None,
             "sz_close": None, "sz_change": None,
-            "main_net_inflow": nb.get("total", 0),
+            "main_net_inflow": nb_total if nb_total is not None else None,
             "main_net_ratio": None,
             "super_large_inflow": None, "large_inflow": None,
             "medium_inflow": None,
-            "small_inflow": -_safe_float(nb.get("total", 0)),
+            "small_inflow": -nb_total if nb_total is not None else None,
             "north_only": True,
         }
-        logger.info("大盘资金流不可用，使用北向资金作为市场情绪代理")
+        if nb_total is not None:
+            logger.info("大盘资金流不可用，使用北向资金作为市场情绪代理")
+        else:
+            logger.warning("大盘资金流和北向资金均不可用")
 
     return result if result else None
 
 
 def _collect_sector_flow_akshare(sector_type: str = "行业资金流") -> list[dict[str, Any]] | None:
-    """通过 akshare 采集行业/概念资金流排名。"""
+    """通过 akshare 采集行业/概念资金流排名。
+
+    统一字段名为 HTTP API 格式（主力净流入-净额 等），便于 analyze 函数统一处理。
+    """
     try:
         import akshare as ak
     except ImportError:
@@ -254,6 +284,16 @@ def _collect_sector_flow_akshare(sector_type: str = "行业资金流") -> list[d
     try:
         df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type=sector_type)
         if df is not None and not df.empty:
+            # akshare 字段名前缀 "今日" → 统一为 HTTP 格式
+            field_map = {
+                "今日主力净流入-净额": "主力净流入-净额",
+                "今日主力净流入-净占比": "主力净流入-净占比",
+                "今日涨跌幅": "涨跌幅",
+                "今日超大单净流入-净额": "超大单净流入-净额",
+                "今日大单净流入-净额": "大单净流入-净额",
+                "今日中单净流入-净额": "中单净流入-净额",
+                "今日小单净流入-净额": "小单净流入-净额",
+            }
             records: list[dict[str, Any]] = []
             for _, row in df.iterrows():
                 rec: dict[str, Any] = {}
@@ -261,7 +301,9 @@ def _collect_sector_flow_akshare(sector_type: str = "行业资金流") -> list[d
                     val = row[col]
                     if isinstance(val, (pd.Timestamp, pd.Period)):
                         val = str(val)
-                    rec[str(col)] = val
+                    col_str = str(col)
+                    # 字段名统一
+                    rec[field_map.get(col_str, col_str)] = val
                 records.append(rec)
             logger.info(f"akshare {sector_type}: {len(records)} 条")
             return records
@@ -334,6 +376,16 @@ def collect_stock_flow() -> list[dict[str, Any]] | None:
         import akshare as ak
         df = ak.stock_individual_fund_flow_rank(indicator="今日")
         if df is not None and not df.empty:
+            # akshare 个股字段名前缀 "今日" → 统一为 HTTP 格式
+            field_map = {
+                "今日主力净流入-净额": "主力净流入-净额",
+                "今日主力净流入-净占比": "主力净流入-净占比",
+                "今日涨跌幅": "涨跌幅",
+                "今日超大单净流入-净额": "超大单净流入-净额",
+                "今日大单净流入-净额": "大单净流入-净额",
+                "今日中单净流入-净额": "中单净流入-净额",
+                "今日小单净流入-净额": "小单净流入-净额",
+            }
             records: list[dict[str, Any]] = []
             for _, row in df.iterrows():
                 rec: dict[str, Any] = {}
@@ -341,7 +393,8 @@ def collect_stock_flow() -> list[dict[str, Any]] | None:
                     val = row[col]
                     if isinstance(val, (pd.Timestamp, pd.Period, pd.Timedelta)):
                         val = str(val)
-                    rec[str(col)] = val
+                    col_str = str(col)
+                    rec[field_map.get(col_str, col_str)] = val
                 records.append(rec)
             logger.info(f"akshare 个股资金流排行: {len(records)} 只")
             return records
@@ -367,59 +420,54 @@ def analyze_sectors(sector_data: list[dict[str, Any]], top_n: int = 5) -> dict[s
     if not sector_data:
         return result
 
-    # 按主力净流入排序
-    sorted_data = sorted(
-        sector_data,
-        key=lambda x: _safe_float(x.get("主力净流入-净额", x.get("f62", 0))),
-        reverse=True,
-    )
+    # 按主力净流入排序（原始数据单位为元，统一转换为亿元）
+    def _get_main_inflow(x: dict[str, Any]) -> float:
+        return _yuan_to_yi(_safe_float(x.get("主力净流入-净额", x.get("f62", 0))))
+
+    def _get_sector_name(x: dict[str, Any]) -> str:
+        return str(x.get("行业名称", x.get("板块名称", x.get("名称", ""))))
+
+    sorted_data = sorted(sector_data, key=_get_main_inflow, reverse=True)
 
     # 流入 TOP
     result["inflow_top"] = [
         {
-            "name": str(x.get("行业名称", x.get("板块名称", ""))),
-            "main_inflow": _safe_float(x.get("主力净流入-净额", x.get("f62", 0))),
+            "name": _get_sector_name(x),
+            "main_inflow": _get_main_inflow(x),
             "main_ratio": _safe_float(x.get("主力净流入-净占比", x.get("f184", 0))),
             "price_change": _safe_float(x.get("涨跌幅", x.get("f3", 0))),
         }
-        for i, x in enumerate(sorted_data[:top_n])
-        if _safe_float(x.get("主力净流入-净额", x.get("f62", 0))) > 0
+        for x in sorted_data[:top_n]
+        if _get_main_inflow(x) > 0
     ][:top_n]
 
     # 流出 TOP（反向排序）
-    sorted_desc = sorted(
-        sector_data,
-        key=lambda x: _safe_float(x.get("主力净流入-净额", x.get("f62", 0))),
-    )
+    sorted_desc = sorted(sector_data, key=_get_main_inflow)
     result["outflow_top"] = [
         {
-            "name": str(x.get("行业名称", x.get("板块名称", ""))),
-            "main_inflow": _safe_float(x.get("主力净流入-净额", x.get("f62", 0))),
+            "name": _get_sector_name(x),
+            "main_inflow": _get_main_inflow(x),
             "main_ratio": _safe_float(x.get("主力净流入-净占比", x.get("f184", 0))),
             "price_change": _safe_float(x.get("涨跌幅", x.get("f3", 0))),
         }
-        for i, x in enumerate(sorted_desc[:top_n])
-        if _safe_float(x.get("主力净流入-净额", x.get("f62", 0))) < 0
+        for x in sorted_desc[:top_n]
+        if _get_main_inflow(x) < 0
     ][:top_n]
 
     # 轮动强度
-    top5_inflow = sum(
-        _safe_float(x.get("主力净流入-净额", x.get("f62", 0))) for x in sorted_data[:5]
-    )
-    bottom5_outflow = abs(
-        sum(_safe_float(x.get("主力净流入-净额", x.get("f62", 0))) for x in sorted_desc[:5])
-    )
+    top5_inflow = sum(_get_main_inflow(x) for x in sorted_data[:5])
+    bottom5_outflow = abs(sum(_get_main_inflow(x) for x in sorted_desc[:5]))
     if bottom5_outflow > 0.01:
         result["rotation_score"] = round(top5_inflow / bottom5_outflow, 2)
     elif top5_inflow > 0:
         result["rotation_score"] = 0.0
         result["rotation_note"] = "市场普涨，无明显轮动"
 
-    # 背离检测
+    # 背离检测（单位：亿元）
     for x in sector_data:
-        main_in = _safe_float(x.get("主力净流入-净额", x.get("f62", 0)))
+        main_in = _get_main_inflow(x)
         pct = _safe_float(x.get("涨跌幅", x.get("f3", 0)))
-        name = str(x.get("行业名称", x.get("板块名称", "")))
+        name = _get_sector_name(x)
         if main_in > 1 and pct < -1:
             result["divergence"].append(
                 {
@@ -442,19 +490,84 @@ def analyze_sectors(sector_data: list[dict[str, Any]], top_n: int = 5) -> dict[s
     return result
 
 
+# 重点行业关键词映射（用于从全量行业资金流中提取用户关注的行业）
+_KEY_INDUSTRY_KEYWORDS: list[tuple[str, list[str]]] = [
+    ("医疗/医药", ["医疗", "医药", "生物", "医疗器械", "医疗服务", "医药生物"]),
+    ("半导体/芯片", ["半导体", "芯片", "集成电路", "消费电子", "电子元件", "光刻"]),
+    ("金融", ["银行", "证券", "保险", "金融"]),
+    ("新能源", ["光伏", "锂电", "新能源", "风电", "储能", "电池", "新能源车"]),
+    ("消费", ["食品饮料", "白酒", "家电", "商贸零售", "纺织服装", "消费"]),
+    ("科技/软件", ["软件", "互联网", "计算机", "通信", "信息技术", "AI", "人工智能"]),
+    ("军工", ["军工", "国防", "航天", "航空"]),
+    ("房地产", ["房地产", "地产", "建材", "建筑"]),
+]
+
+
+def analyze_key_industries(sector_data: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """从全量行业资金流中提取重点行业（医疗/半导体/金融等）的资金流数据。
+
+    Returns:
+        [{"category": "医疗/医药", "name": "医药生物", "main_inflow": 12.5,
+          "main_ratio": 5.2, "price_change": 2.1}, ...]
+    """
+    if not sector_data:
+        return []
+
+    result: list[dict[str, Any]] = []
+    matched_names: set[str] = set()
+
+    for category, keywords in _KEY_INDUSTRY_KEYWORDS:
+        best_match: dict[str, Any] | None = None
+        best_abs_inflow = -1.0
+
+        for item in sector_data:
+            name = str(item.get("行业名称", item.get("板块名称", item.get("名称", ""))))
+            if not name or name in matched_names:
+                continue
+            # 检查是否匹配任一关键词
+            if any(kw in name for kw in keywords):
+                # 原始数据单位为元，转换为亿元
+                main_in = _yuan_to_yi(_safe_float(item.get("主力净流入-净额", item.get("f62", 0))))
+                # 取资金流绝对值最大的匹配项
+                if abs(main_in) > best_abs_inflow:
+                    best_abs_inflow = abs(main_in)
+                    best_match = {
+                        "category": category,
+                        "name": name,
+                        "main_inflow": main_in,
+                        "main_ratio": _safe_float(item.get("主力净流入-净占比", item.get("f184", 0))),
+                        "price_change": _safe_float(item.get("涨跌幅", item.get("f3", 0))),
+                    }
+
+        if best_match:
+            result.append(best_match)
+            matched_names.add(best_match["name"])
+        else:
+            # 未匹配到也记录，让用户知道该行业暂无数据
+            result.append({
+                "category": category,
+                "name": "暂无数据",
+                "main_inflow": None,
+                "main_ratio": None,
+                "price_change": None,
+            })
+
+    return result
+
+
 def analyze_concepts(concept_data: list[dict[str, Any]], top_n: int = 3) -> list[dict[str, Any]]:
     """概念热点分析。"""
     if not concept_data:
         return []
     sorted_c = sorted(
         concept_data,
-        key=lambda x: _safe_float(x.get("主力净流入-净额", x.get("f62", 0))),
+        key=lambda x: _yuan_to_yi(_safe_float(x.get("主力净流入-净额", x.get("f62", 0)))),
         reverse=True,
     )
     return [
         {
-            "name": str(x.get("概念名称", x.get("板块名称", ""))),
-            "main_inflow": _safe_float(x.get("主力净流入-净额", x.get("f62", 0))),
+            "name": str(x.get("概念名称", x.get("板块名称", x.get("名称", "")))),
+            "main_inflow": _yuan_to_yi(_safe_float(x.get("主力净流入-净额", x.get("f62", 0)))),
             "main_ratio": _safe_float(x.get("主力净流入-净占比", x.get("f184", 0))),
         }
         for x in sorted_c[:top_n]
@@ -468,7 +581,8 @@ def analyze_strong_stocks(stock_data: list[dict[str, Any]], top_n: int = 5) -> l
     strong = []
     for x in stock_data:
         main_ratio = _safe_float(x.get("主力净流入-净占比", x.get("f184", 0)))
-        main_in = _safe_float(x.get("主力净流入-净额", x.get("f62", 0)))
+        # 原始数据单位为元，转换为亿元
+        main_in = _yuan_to_yi(_safe_float(x.get("主力净流入-净额", x.get("f62", 0))))
         if main_ratio > 5.0:
             strong.append(
                 {
@@ -493,8 +607,12 @@ def analyze_market_overview(
         "north_analysis": {},
     }
     if market_data:
-        main_in = market_data.get("main_net_inflow", 0) or 0
-        small_in = market_data.get("small_inflow", 0) or 0
+        main_in = market_data.get("main_net_inflow") or 0
+        small_in = market_data.get("small_inflow") or 0
+        if main_in is None:
+            main_in = 0
+        if small_in is None:
+            small_in = 0
         if main_in > 0 and small_in < 0:
             result["main_vs_retail"] = "主力买入，散户卖出（健康）"
         elif main_in < 0 and small_in > 0:
@@ -504,12 +622,19 @@ def analyze_market_overview(
         else:
             result["main_vs_retail"] = "主力散户同步卖出"
     if north_data:
-        total = north_data.get("total", 0) or 0
-        result["north_analysis"] = {
-            "total": total,
-            "direction": "流入" if total > 0 else "流出",
-            "significant": "显著" if abs(total) > 30 else "一般",
-        }
+        total = north_data.get("total")
+        if total is not None:
+            result["north_analysis"] = {
+                "total": total,
+                "direction": "流入" if total > 0 else "流出",
+                "significant": "显著" if abs(total) > 30 else "一般",
+            }
+        else:
+            result["north_analysis"] = {
+                "total": None,
+                "direction": "获取不到",
+                "significant": "未知",
+            }
     return result
 
 
@@ -580,6 +705,7 @@ async def collect_all() -> dict[str, Any]:
     )
 
     sector_analysis = analyze_sectors(sector_data or []) if sector_data else {}
+    key_industries = analyze_key_industries(sector_data) if sector_data else []
     concept_top = analyze_concepts(concept_data or []) if concept_data else []
     strong_stocks = analyze_strong_stocks(stock_data or []) if stock_data else []
 
@@ -588,6 +714,7 @@ async def collect_all() -> dict[str, Any]:
         "north_bound": market_info.get("north_bound"),
         "market_overview": market_overview,
         "sectors": sector_analysis,
+        "key_industries": key_industries,
         "concepts": concept_top,
         "strong_stocks": strong_stocks,
         "timestamp": _now_str(),
@@ -595,6 +722,7 @@ async def collect_all() -> dict[str, Any]:
 
     logger.info(
         f"资金流分析完成: 行业{len(sector_data or [])}个, "
+        f"重点行业{len(key_industries)}个, "
         f"背离{len(sector_analysis.get('divergence', []))}个, "
         f"强流入{len(strong_stocks)}只"
     )
@@ -628,15 +756,15 @@ def _fmt(val: Any, suffix: str = "") -> str:
 
 
 def _fmt_flow(val: Any) -> str:
-    """格式化资金流金额（亿），带颜色箭头。"""
+    """格式化资金流金额（亿），带颜色（A 股惯例：流入红，流出绿）。"""
     if val is None:
-        return "--"
+        return "获取不到"
     try:
         f = float(val)
         if f > 0:
-            return f"🟢 +{f:.1f}亿"
+            return f"🔴 +{f:.1f}亿"
         elif f < 0:
-            return f"🔴 {f:.1f}亿"
+            return f"🟢 {f:.1f}亿"
         return "⚪ 0.0亿"
     except (ValueError, TypeError):
         return str(val)
@@ -655,6 +783,25 @@ def _rotation_label(score: float) -> str:
     return "⚪ 市场普涨"
 
 
+def _format_key_industries_section(key_industries: list[dict[str, Any]]) -> str | None:
+    """格式化重点行业资金流段落。"""
+    if not key_industries:
+        return None
+    lines = ["**🏥 重点行业资金流**"]
+    for ind in key_industries:
+        category = ind.get("category", "")
+        name = ind.get("name", "")
+        inflow = ind.get("main_inflow")
+        pct = ind.get("price_change")
+        if name == "暂无数据" or inflow is None:
+            lines.append(f"• {category}: 暂无数据")
+        else:
+            f_main = _fmt_flow(inflow)
+            pct_str = _fmt(pct, "%") if pct is not None else "--"
+            lines.append(f"• {category}({name}) {f_main} ({pct_str})")
+    return "\n".join(lines)
+
+
 def build_morning_card(data: dict[str, Any]) -> dict[str, Any]:
     """构建 08:00 盘前 — 昨日(T-1)资金流复盘卡片。"""
     from gugu.notifier.formatter import _card
@@ -663,6 +810,7 @@ def build_morning_card(data: dict[str, Any]) -> dict[str, Any]:
     north = data.get("north_bound", {})
     overview = data.get("market_overview", {})
     sectors = data.get("sectors", {})
+    key_industries = data.get("key_industries", [])
     concepts = data.get("concepts", [])
     strong_stocks = data.get("strong_stocks", [])
 
@@ -722,6 +870,11 @@ def build_morning_card(data: dict[str, Any]) -> dict[str, Any]:
             lines.append(f"{i}. {name} {f_main} ({pct})")
         sections.append("\n".join(lines))
 
+    # ── 重点行业资金流 ──
+    key_section = _format_key_industries_section(key_industries)
+    if key_section:
+        sections.append(key_section)
+
     # ── 轮动强度 ──
     rot_score = sectors.get("rotation_score", 0)
     rot_note = sectors.get("rotation_note", "")
@@ -779,6 +932,7 @@ def build_close_card(data: dict[str, Any]) -> dict[str, Any]:
     north = data.get("north_bound", {})
     overview = data.get("market_overview", {})
     sectors = data.get("sectors", {})
+    key_industries = data.get("key_industries", [])
     concepts = data.get("concepts", [])
     strong_stocks = data.get("strong_stocks", [])
 
@@ -837,6 +991,11 @@ def build_close_card(data: dict[str, Any]) -> dict[str, Any]:
             pct = _fmt(s.get("price_change"), "%")
             lines.append(f"{i}. {name} {f_main} ({pct})")
         sections.append("\n".join(lines))
+
+    # ── 重点行业资金流 ──
+    key_section = _format_key_industries_section(key_industries)
+    if key_section:
+        sections.append(key_section)
 
     # ── 轮动强度 ──
     rot_score = sectors.get("rotation_score", 0)

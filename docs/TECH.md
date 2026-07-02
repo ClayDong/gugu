@@ -44,8 +44,9 @@ gugu/
 │   │   ├── cache.py             # 内存缓存（2 分钟 TTL）
 │   │   └── collectors/
 │   │       ├── base.py          # BaseCollector 抽象
-│   │       ├── akshare_collector.py  # 降级源（东方财富 API）
-│   │       └── fallback.py      # 主源（新浪 API）
+│   │       ├── akshare_collector.py  # 降级源（东方财富 akshare 库）
+│   │       ├── eastmoney_collector.py # 兜底源（东方财富 push2 直连 HTTP）
+│   │       └── fallback.py      # 主源（新浪/网易 直连 HTTP）
 │   ├── models/
 │   │   ├── position.py          # Position 统一模型
 │   │   └── signal.py            # Signal 强类型数据类 + OrderResult
@@ -141,7 +142,7 @@ gugu/
 ### 3.1 分层架构
 
 ```
-数据层(data/)        采集器(sina主+akshare降级) → 链式质量校验 → 内存缓存(2min TTL)
+数据层(data/)        采集器(sina主+akshare降级+eastmoney兜底) → 链式质量校验 → 内存缓存(2min TTL)
        ↓
 策略层(strategies/)  8个内置策略 + LLM自然语言生成器
        ↓
@@ -175,9 +176,14 @@ gugu/
    - 市场择时 → 仓位预算计算
    - 每个 symbol：策略路由 → SignalPipeline.process()（5 层过滤链）
    - Wisdom 决策增强（LLM 或 fallback）
-7. `_process_signal()`：逐信号 → wisdom 过滤 → 风控检查 → 下单 → 通知 → 信号历史持久化
+7. `_process_signal()`：逐信号 → **去重检查** → wisdom 过滤 → 风控检查 → 下单 → 通知 → 信号历史持久化 → **标记已通知**
 8. `_check_daily_loss()`：L2 预警/熔断（含事件推送）
 9. `_write_heartbeat()`：心跳文件 + 历史记录追加
+
+**信号去重机制**：
+- 通过 `_notified_signals` 字典记录当日已通知信号（key: `symbol_direction_strategy`）
+- 持久化到 `data/notified_signals.json`，引擎重启后自动恢复
+- 同一交易日、同方向、同策略的信号只通知一次，避免重复推送
 
 **事件驱动**：循环中 7 个关键节点通过 EventEngine.put() 产生事件（cycle_start/end、market_regime、signal、order_filled、risk_alert、stop_loss、daily_loss_warn/halt）。
 
@@ -577,4 +583,5 @@ tests/
 | `data/paper_broker_state.json` | JSON | 每次下单后 | 持仓与交易持久化 |
 | `data/paper_broker_state.json.bak` | JSON | 每次保存前备份 | 原子写入保护，崩溃回滚 |
 | `data/risk_state.json` | JSON | L2 熔断触发/解除时 | 熔断状态持久化，防重启绕过 |
+| `data/notified_signals.json` | JSON | 每次信号通知后 | 信号去重记录（symbol_direction_strategy → date），防重复推送 |
 | `logs/gugu_*.log` | 文本 | 实时 | 详细运行日志（10MB 轮转，30 天保留） |

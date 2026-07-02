@@ -795,11 +795,11 @@ def format_holdings_sell_alert(stocks: list[dict]) -> dict[str, Any]:
         profit = s.get("profit_pct", 0)
         sell_n = s.get("sell_count", 0)
         buy_n = s.get("buy_count", 0)
-        profit_icon = "🟢" if profit >= 0 else "🔴"
+        profit_icon = "🔴" if profit >= 0 else "🟢"
         lines.append(
             f"**{name}** ({symbol})\n"
             f"{profit_icon} 现价 {price:.2f} | 盈亏 {profit:+.1f}%\n"
-            f"🔴 卖出 {sell_n} vs 🟢 买入 {buy_n}\n"
+            f"🟢 卖出 {sell_n} vs 🔴 买入 {buy_n}\n"
         )
         for sig in s.get("sell_signals", [])[:3]:
             strategy = sig.get("strategy_name", sig.get("strategy", ""))

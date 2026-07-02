@@ -18,6 +18,8 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
+
 from gugu.config import PROJECT_ROOT, env, get_config
 from gugu.models.signal import Signal
 from gugu.utils.log import get_logger

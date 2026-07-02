@@ -23,7 +23,7 @@
 | 缺统一风控 | 三级风控（L1 仓位 / L2 日亏 / L3 系统规则），铁律不可绕过，熔断持久化防重启绕过 |
 | 信号/持仓/盈亏信息分散 | 飞书卡片消息统一推送（信号 / 日报 / 告警 / 回测 / 异常） |
 | 策略验证成本高 | 自研回测引擎（含涨跌停检查 + wisdom 可选项）+ 模拟盘，零资金风险验证策略 |
-| 数据源单点故障 | 主源（sina）+ 降级源（akshare），不同底层 API 确保冗余，并发降级 |
+| 数据源单点故障 | 三级冗余：主源 sina → 降级 akshare → 兜底 eastmoney；大市数据三通道（akshare→新浪K线→东方财富） |
 
 ## 三、五阶段架构（渐进式）
 
@@ -112,7 +112,7 @@
 | 资金流复盘 | 08:00（交易日） | 大盘资金流/行业TOP5/轮动强度/背离预警/概念热点/强流入个股 | `flow_report.py` |
 | 资金流日报 | 15:10（交易日） | 当日大盘/行业TOP/轮动/背离/强流入个股/热门概念 | `flow_report.py` |
 | 持仓卖出告警 | 收盘后（15:10 日报附送） | 检查持仓股卖出信号，主动推送告警 | `main.py:_check_holdings_sell_signals()` |
-| 宏观简报 | 08:00/09:10/11:35/15:10 | 金/油/汇/债/G 五维全球宏观数据 | `macro/report.py` |
+| 宏观简报 | 08:00/09:10/11:35/15:10 | 金/油/汇/债/G 五维全球宏观数据 + 大师兄解读 | `macro/report.py` |
 
 **配置开关**：通过 `config/settings.yaml` 中 `feishu` 段的开关控制：
 
@@ -148,18 +148,42 @@ feishu:
 - 持仓盈亏实时更新
 - CLI 持仓查看：`uv run python scripts/show_portfolio.py --all`
 
-### 4.8 数据源降级机制
+### 4.8 数据源三级冗余机制
 
-| 源 | API 接口 | 能力 |
-|----|----------|------|
-| SinaCollector（主） | 新浪 `hq.sinajs.cn` + 网易 `quotes.money.163.com`（直连 HTTP） | 仅行情，无资金流 |
-| AkshareCollector（降级） | 东方财富 `ak.stock_zh_a_hist()` + `ak.stock_zh_a_spot_em()` | 历史行情 + 实时行情 + 资金流 |
+| 层级 | 源 | API 接口 | 能力 |
+|------|----|----------|------|
+| 主源 | SinaCollector | 新浪 `hq.sinajs.cn` + 网易 `quotes.money.163.com`（直连 HTTP） | 仅行情，无资金流 |
+| 降级 1 | AkshareCollector | 东方财富 `ak.stock_zh_a_hist()` + `ak.stock_zh_a_spot_em()` | 历史行情 + 实时行情 + 资金流 |
+| 降级 2 | EastmoneyCollector | 东方财富 `push2.eastmoney.com` 直连（不依赖 akshare 库） | 历史行情 + 实时行情 + 行业/个股资金流 |
 
 - `fallback.py`（SinaCollector）不依赖 `akshare`，通过 `httpx` 直连新浪/网易原生 HTTP 接口
-- 主源连续失败 3 次 → 降级到 AkshareCollector（东方财富）
+- `eastmoney_collector.py` 不依赖 `akshare`，通过 `httpx` 直连东方财富 push2 API
+- 主源连续失败 3 次 → 并发降级到所有备用源（FIRST_COMPLETED 模式取最快响应）
 - 冷却 5 分钟后尝试切回主源
 - 降级源也做数据质量校验
-- **并发降级**：主源失败后并发尝试所有降级源，最快响应
+
+#### 大市数据三通道冗余（market_filter.py）
+
+| 通道 | 源 | 接口 | 适用场景 |
+|------|------|------|----------|
+| 1 | akshare | `stock_zh_index_daily_em`（东方财富后端） | 主通道 |
+| 2 | 新浪 K 线 JSON | `quotes.sina.cn/...getKLineData`（scale=240 日K） | akshare 被限流时降级 |
+| 3 | 东方财富 push2 | `push2.eastmoney.com/api/qt/stock/kline/get` | 前两级均失败时兜底 |
+
+- 大市数据用于 MA200 趋势判断（沪深300指数），决定是否允许选股
+- 三通道逐级降级，前一级失败自动尝试下一级
+- 三通道全失败时返回空 DataFrame，fail-safe 拒绝选股（保守不进场）
+
+#### 数据质量保障
+
+| 保障项 | 机制 |
+|--------|------|
+| 实时价格校验 | `price_is_realtime` 标记，实时行情失败时拒绝发送信号（不回退历史价） |
+| 信号去重 | `notified_signals.json` 持久化，引擎重启后恢复去重状态 |
+| 单位转换 | 东方财富 API 返回的价格 ×100、涨跌幅 ×100、资金流单位元（自动转亿） |
+| 北向资金 | 数据不可用时显示"获取不到"（非 0），避免误导 |
+| A 股指数 | 东方财富 f43/f170 字段自动 /100 转换为点位/百分比 |
+| 字段名统一 | akshare "今日"前缀字段与 HTTP API 字段自动映射统一 |
 
 ## 五、使用方式
 
@@ -253,6 +277,8 @@ uv run python scripts/run_live.py
 | 22 | 2026-06-30 | **产品化 v1**：信号卡片 30 秒决策摘要行（置信度/仓位/止损/止盈一目了然）、ATR 波动率动态调整仓位（高波减 30%/低波加 30%）、止盈双目标方案（+10%/+20% + ATR 自适应校准）、信号融合切换为 weighted 模式、Bollinger+RSI 策略启用形成趋势/均值回归互补、`RiskManager` 新增组合相关性监控（>85%告警）和最大回撤熔断（15%）、`walk_forward_optimize()` 滚动前向验证+参数网格扫描、仓位分层递进（试仓 20%→盈利确认加码 60%→上限 30%）、Web 看板 `/api/signals/performance` 和 `/api/portfolio/correlation` 端点、文档同步更新 |
 | 23 | 2026-06-30 | **Bug 修复 + 信号可信度闭环（v0.3.1）**：修复 `RiskManager.check_correlation` 在 FastAPI 中 `asyncio.run()` 死循环（改为 async）、修复 Feishu 卡片 subtitle 被静默丢弃（移至 card element 渲染）、修复 Web `/api/halt/reset` 操作错误的 RiskManager 实例（改用 `_web_risk` 单例）、修复 `_portfolio_peak` 跨实例类变量共享（移至实例属性）、移除 `signal_tracker.py` 死代码、修复 `walk_forward_optimize` 空参数网格时 `best_sharpe=-999`、新增 `_inject_performance_summary()` 将同类信号历史胜率注入飞书卡片（反馈闭环）、测试 541→550、覆盖率 70%→67%（新增 800 行） |
 | 24 | 2026-06-30 | **产品完善 v2**：修复 SinaCollector 测试 mock 不兼容 Python 3.14 httpx 接口、修复 DataManager 测试 `_fresh_dm()` 实例化方式（`object.__new__` 规避配置读取）、统一数据源角色描述（sina 为主源、akshare 为降级源，含代码注释 + 配置默认值）、daemon 添加 watchdog 自动重启（崩溃自动拉起最多 10 次）、FeishuNotifier 接入配置开关（`enabled/notify_signal/daily_report/risk_alert/backtest/system_error` 全类型检查）、macro 通知支持外部 notifier 实例、PRODUCT.md 补充通知配置开关和重试队列说明、README.md 补充守护模式示例 |
+| 25 | 2026-07-02 | **数据质量与通知优化（v0.3.3）**：修复飞书重复通知问题（信号去重机制持久化到 `data/notified_signals.json`，引擎重启后自动恢复）、新增大师兄解读功能（宏观日报添加 LLM 驱动的板块轮动分析视角）、强化价格数据校验（`price_is_realtime` 标记，实时行情获取失败时拒绝发送信号，防止历史收盘价污染通知）、测试 806 passed, 70% coverage |
+| 26 | 2026-07-02 | **数据源健壮性增强（v0.3.4）**：新增东方财富直连采集器 `EastmoneyCollector`（第三备用源，不依赖 akshare 库，httpx 直连 push2 API）、大市数据三通道冗余（akshare→新浪K线→东方财富 push2，解决 akshare 被限流时选股阻塞）、资金流单位转换修复（元→亿）、A 股指数 /100 修正、北向资金不可用时显示"获取不到"、字段名统一（akshare "今日"前缀映射）、测试 818 passed |
 
 ## 九、项目关系与合并计划
 
@@ -279,4 +305,4 @@ uv run python scripts/run_live.py
 
 详见 `docs/PROJECT_LANDSCAPE_ANALYSIS.md`（第一性原理 + 对抗性审查报告）
 
-**当前状态**：550 tests passed with 67% coverage v0.3.2
+**当前状态**：818 tests passed with 70% coverage v0.3.4

@@ -126,6 +126,11 @@ class TradingEngine:
         self._event_engine = event_engine if event_engine is not None else EventEngine()
         self._market_filter = MarketFilter()
 
+        # 信号去重：{symbol_direction_strategy: date} 当日已通知的信号不重复发送
+        # 持久化到文件，防止引擎重启后丢失
+        self._notified_signals_file = PROJECT_ROOT / "data" / "notified_signals.json"
+        self._notified_signals: dict[str, str] = self._load_notified_signals()
+
         # 自选股列表
         if watchlist is not None:
             self._watchlist = watchlist
@@ -462,11 +467,56 @@ class TradingEngine:
                 logger.error(f"扫描 {symbol} 失败: {e}")
         return signals
 
+    def _load_notified_signals(self) -> dict[str, str]:
+        """从文件加载已通知信号记录（持久化去重）。"""
+        try:
+            if self._notified_signals_file.exists():
+                with open(self._notified_signals_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # 清理过期记录（只保留今日的）
+                today_str = date.today().isoformat()
+                return {k: v for k, v in data.items() if v == today_str}
+        except Exception as e:
+            logger.warning(f"加载已通知信号记录失败: {e}")
+        return {}
+
+    def _save_notified_signals(self) -> None:
+        """保存已通知信号记录到文件。"""
+        try:
+            with open(self._notified_signals_file, "w", encoding="utf-8") as f:
+                json.dump(self._notified_signals, f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"保存已通知信号记录失败: {e}")
+
+    def _mark_notified(self, signal: dict[str, Any]) -> None:
+        """记录信号已通知，防止多轮扫描重复发送。"""
+        symbol = signal["symbol"]
+        direction = signal["direction"]
+        strategies = signal.get("strategies", [])
+        strategy_key = ",".join(sorted(strategies)) if strategies else signal.get("strategy", "")
+        dedup_key = f"{symbol}_{direction}_{strategy_key}"
+        self._notified_signals[dedup_key] = date.today().isoformat()
+        # 持久化到文件
+        self._save_notified_signals()
+
     async def _process_signal(self, signal: dict[str, Any]) -> None:
         """处理单个信号：signal_only 模式只通知不下单，paper/live 模式走风控+下单+通知。"""
         symbol = signal["symbol"]
         direction = signal["direction"]
         price = signal.get("price", 0)
+
+        # 信号去重：同方向同策略当日已通知的信号不重复发送（防止多轮扫描重复推送）
+        if not hasattr(self, "_notified_signals"):
+            self._notified_signals = {}
+        strategies = signal.get("strategies", [])
+        strategy_key = ",".join(sorted(strategies)) if strategies else signal.get("strategy", "")
+        dedup_key = f"{symbol}_{direction}_{strategy_key}"
+        today_str = date.today().isoformat()
+        if self._notified_signals.get(dedup_key) == today_str:
+            logger.info(
+                f"{symbol} {direction} 信号已通知过（{strategy_key}），跳过重复发送"
+            )
+            return
 
         # signal_only 模式：只发信号通知，不下单（监控验证用）
         if self._exec_mode == "signal_only":
@@ -495,7 +545,9 @@ class TradingEngine:
                 logger.warning(f"记录信号历史失败: {e}")
             self._inject_performance_summary(signal)
             notify_ok = await self._notifier.notify_signal(signal)
-            if not notify_ok:
+            if notify_ok:
+                self._mark_notified(signal)
+            else:
                 logger.error(f"{symbol} 信号通知失败，请检查飞书配置")
             return
 
@@ -503,8 +555,10 @@ class TradingEngine:
         if signal.get("wisdom_filtered"):
             logger.info(f"{symbol} 信号被 wisdom 入场过滤，仅通知不下单")
             notify_ok = await self._notifier.notify_signal(signal)
+            if notify_ok:
+                self._mark_notified(signal)
             # P1-o 修复：统一通知失败处理，与下单后通知逻辑一致
-            if not notify_ok:
+            else:
                 logger.error(f"{symbol} wisdom 过滤信号通知失败，请检查飞书配置与网络")
             return
 
@@ -680,8 +734,10 @@ class TradingEngine:
         }
         self._inject_performance_summary(signal)
         notify_ok = await self._notifier.notify_signal(signal)
+        if notify_ok:
+            self._mark_notified(signal)
         # 通知失败时记录告警，确保用户可通过本地日志感知交易
-        if not notify_ok:
+        else:
             logger.error(
                 f"{symbol} 下单已执行（success={result.success}, qty={result.quantity}@{result.price}）"
                 f"但飞书通知失败，请检查飞书配置与网络"

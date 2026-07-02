@@ -155,19 +155,19 @@ class TestYuanToYi:
 
 
 class TestFmtFlow:
-    """_fmt_flow 格式化资金流金额（亿），带颜色箭头。"""
+    """_fmt_flow 格式化资金流金额（亿），带颜色（A 股惯例：流入红，流出绿）。"""
 
     def test_fmt_flow_positive(self):
-        assert _fmt_flow(1.5) == "🟢 +1.5亿"
+        assert _fmt_flow(1.5) == "🔴 +1.5亿"
 
     def test_fmt_flow_positive_large(self):
-        assert _fmt_flow(100.0) == "🟢 +100.0亿"
+        assert _fmt_flow(100.0) == "🔴 +100.0亿"
 
     def test_fmt_flow_negative(self):
-        assert _fmt_flow(-2.3) == "🔴 -2.3亿"
+        assert _fmt_flow(-2.3) == "🟢 -2.3亿"
 
     def test_fmt_flow_negative_large(self):
-        assert _fmt_flow(-99.9) == "🔴 -99.9亿"
+        assert _fmt_flow(-99.9) == "🟢 -99.9亿"
 
     def test_fmt_flow_zero(self):
         assert _fmt_flow(0) == "⚪ 0.0亿"
@@ -176,20 +176,21 @@ class TestFmtFlow:
         assert _fmt_flow(0.0) == "⚪ 0.0亿"
 
     def test_fmt_flow_none(self):
-        assert _fmt_flow(None) == "--"
+        """None 表示数据获取不到。"""
+        assert _fmt_flow(None) == "获取不到"
 
     def test_fmt_flow_str_number(self):
-        assert _fmt_flow("5.5") == "🟢 +5.5亿"
+        assert _fmt_flow("5.5") == "🔴 +5.5亿"
 
     def test_fmt_flow_negative_str(self):
-        assert _fmt_flow("-3.0") == "🔴 -3.0亿"
+        assert _fmt_flow("-3.0") == "🟢 -3.0亿"
 
     def test_fmt_flow_value_error(self):
         """不可转换的类型返回其 str 表示。"""
         assert _fmt_flow([1, 2]) == "[1, 2]"
 
     def test_fmt_flow_small_positive(self):
-        assert _fmt_flow(0.01) == "🟢 +0.0亿"
+        assert _fmt_flow(0.01) == "🔴 +0.0亿"
 
 
 # ── _rotation_label ──────────────────────────────────────────

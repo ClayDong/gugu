@@ -13,10 +13,15 @@ watchlist:
   # 选出的候选股仅参与当次扫描，不会自动写入 watchlist
 
 # ========== 数据源 ==========
+# 三级冗余：sina 主源 → akshare 降级 → eastmoney 兜底
+# sina: 新浪财经直连（稳定、不限流），适合实时行情和历史K线
+# akshare: 东方财富封装（功能全，但部分网络环境被限流）
+# eastmoney: 东方财富直连 HTTP（兜底，单股查询，避免全市场快照限流）
 data:
   primary_source: sina           # 主源：新浪（东方财富在部分网络被封）
-  fallback_sources:              # 降级源
+  fallback_sources:              # 降级源（按顺序尝试）
     - akshare
+    - eastmoney                  # 第三备用源：东方财富直连 HTTP
   fetch_interval_seconds: 120    # 实时采集间隔（秒）
   fail_threshold: 3              # 连续失败 N 次降级
   fail_cooldown_seconds: 300     # 降级冷却时间

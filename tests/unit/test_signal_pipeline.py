@@ -53,6 +53,19 @@ def mock_account() -> MagicMock:
 
 
 @pytest.fixture
+def rt_all() -> pd.DataFrame:
+    """Mock realtime data with price for 600519."""
+    return pd.DataFrame({
+        "symbol": ["600519"],
+        "name": ["贵州茅台"],
+        "price": [100.0],
+        "change_pct": [0.0],
+        "volume": [1000000],
+        "amount": [100000000],
+    })
+
+
+@pytest.fixture
 def pipeline() -> SignalPipeline:
     """创建一个完全 mock 的 SignalPipeline。"""
     dm = MagicMock()
@@ -92,6 +105,7 @@ class TestSignalPipeline:
     async def test_basic_signal_passes_through(
         self, pipeline: SignalPipeline, sample_df: pd.DataFrame,
         budget: PositionBudget, mock_portfolio: dict, mock_account: MagicMock,
+        rt_all: pd.DataFrame,
     ) -> None:
         """正常买入信号应通过所有过滤层。"""
         pipeline._router.route = MagicMock(return_value={
@@ -118,7 +132,7 @@ class TestSignalPipeline:
         meta = {"name": "贵州茅台", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
             symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=None, watchlist=["600519"],
+            rt_all=rt_all, watchlist=["600519"],
             portfolio=mock_portfolio, account=mock_account,
         )
 
@@ -130,6 +144,7 @@ class TestSignalPipeline:
     async def test_fundamental_filter_blocks_buy(
         self, pipeline: SignalPipeline, sample_df: pd.DataFrame,
         budget: PositionBudget, mock_portfolio: dict, mock_account: MagicMock,
+        rt_all: pd.DataFrame,
     ) -> None:
         """基本面过滤失败应阻止买入信号。"""
         pipeline._router.route = MagicMock(return_value={
@@ -145,7 +160,7 @@ class TestSignalPipeline:
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
             symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=None, watchlist=[],
+            rt_all=rt_all, watchlist=[],
             portfolio=mock_portfolio, account=mock_account,
         )
 
@@ -157,6 +172,7 @@ class TestSignalPipeline:
     async def test_money_flow_blocks_after_fundamental_pass(
         self, pipeline: SignalPipeline, sample_df: pd.DataFrame,
         budget: PositionBudget, mock_portfolio: dict, mock_account: MagicMock,
+        rt_all: pd.DataFrame,
     ) -> None:
         """资金流过滤失败应阻止买入信号。"""
         pipeline._router.route = MagicMock(return_value={
@@ -175,7 +191,7 @@ class TestSignalPipeline:
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
             symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=None, watchlist=[],
+            rt_all=rt_all, watchlist=[],
             portfolio=mock_portfolio, account=mock_account,
         )
 
@@ -187,6 +203,7 @@ class TestSignalPipeline:
     async def test_industry_constraint_blocks_buy(
         self, pipeline: SignalPipeline, sample_df: pd.DataFrame,
         budget: PositionBudget, mock_account: MagicMock,
+        rt_all: pd.DataFrame,
     ) -> None:
         """行业约束应在新建仓位时阻止。"""
         pipeline._router.route = MagicMock(return_value={
@@ -208,7 +225,7 @@ class TestSignalPipeline:
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
             symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=None, watchlist=[],
+            rt_all=rt_all, watchlist=[],
             portfolio={},  # 空持仓
             account=mock_account,
         )
@@ -220,6 +237,7 @@ class TestSignalPipeline:
     async def test_sell_signals_skip_filters(
         self, pipeline: SignalPipeline, sample_df: pd.DataFrame,
         budget: PositionBudget, mock_portfolio: dict, mock_account: MagicMock,
+        rt_all: pd.DataFrame,
     ) -> None:
         """卖出信号应跳过基本面/资金流/行业过滤。"""
         pipeline._router.route = MagicMock(return_value={
@@ -234,7 +252,7 @@ class TestSignalPipeline:
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
             symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=None, watchlist=[],
+            rt_all=rt_all, watchlist=[],
             portfolio=mock_portfolio, account=mock_account,
         )
 
@@ -248,6 +266,7 @@ class TestSignalPipeline:
     async def test_skip_if_already_filtered(
         self, pipeline: SignalPipeline, sample_df: pd.DataFrame,
         budget: PositionBudget, mock_portfolio: dict, mock_account: MagicMock,
+        rt_all: pd.DataFrame,
     ) -> None:
         """已过滤的信号应跳过后续过滤层。"""
         pipeline._router.route = MagicMock(return_value={
@@ -263,7 +282,7 @@ class TestSignalPipeline:
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
             symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=None, watchlist=[],
+            rt_all=rt_all, watchlist=[],
             portfolio=mock_portfolio, account=mock_account,
         )
 
@@ -429,9 +448,17 @@ class TestSectorRotationCheck:
         pipeline._hot_sectors_cache = None
 
         meta = {"name": "Test", "is_st": False, "is_suspended": False}
+        rt_all = pd.DataFrame({
+            "symbol": [symbol],
+            "name": ["Test"],
+            "price": [100.0],
+            "change_pct": [0.0],
+            "volume": [1000000],
+            "amount": [100000000],
+        })
         return await pipeline.process(
             symbol=symbol, df=sample_df, meta=meta, budget=budget,
-            rt_all=None, watchlist=[],
+            rt_all=rt_all, watchlist=[],
             portfolio={}, account=mock_account,
         )
 

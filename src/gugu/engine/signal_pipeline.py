@@ -117,6 +117,7 @@ class SignalPipeline:
                 signal["name"] = ""
 
             signal["price"] = float(df.iloc[-1]["close"])
+            signal["price_is_realtime"] = False
             if rt_all is not None and not rt_all.empty:
                 try:
                     row = rt_all[rt_all["symbol"] == symbol]
@@ -124,6 +125,7 @@ class SignalPipeline:
                         rt_price = float(row.iloc[0]["price"])
                         if rt_price > 0:
                             signal["price"] = rt_price
+                            signal["price_is_realtime"] = True
                 except Exception:
                     pass
 
@@ -133,11 +135,20 @@ class SignalPipeline:
             # P0 修复：信号数据合理性校验（防止错误数据发送飞书）
             price = signal.get("price", 0)
             confidence = signal.get("confidence")
+            price_is_realtime = signal.get("price_is_realtime", False)
             if price <= 1.0:
                 logger.warning(
                     f"{symbol} 信号价格异常 price={price}，丢弃该信号。"
                     f" name={meta.get('name', '')} df_close={float(df.iloc[-1]['close']) if len(df) > 0 else 'N/A'}"
                     f" rt_available={rt_all is not None and not rt_all.empty}"
+                )
+                return None
+            # 实时行情获取失败时，价格来自历史K线收盘价，不是真实市场价
+            # 严格拒绝发送，避免飞书通知显示过期/错误价格
+            if not price_is_realtime:
+                logger.warning(
+                    f"{symbol} 实时行情获取失败，价格={price}来自历史K线（非实时），丢弃该信号。"
+                    f" name={meta.get('name', '')} df_close={float(df.iloc[-1]['close']) if len(df) > 0 else 'N/A'}"
                 )
                 return None
             if confidence is None or confidence <= 0.0:

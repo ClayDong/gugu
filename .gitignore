@@ -32,6 +32,7 @@ htmlcov/
 
 # 数据与日志（本地）
 /data/
+src/data/flow_cache/
 logs/
 *.db
 *.sqlite

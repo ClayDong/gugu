@@ -84,15 +84,138 @@ class FundMonitor:
 
     # ── 数据采集 ──────────────────────────────────────────────────
 
-    def fetch_fund_data(self) -> FundData | None:
-        """获取基金净值数据（同步，akshare 阻塞调用）。"""
-        logger.info(f"获取基金数据: {self.config.fund_code} ({self.config.fund_name})")
+    def _fetch_via_akshare(self) -> pd.DataFrame | None:
+        """数据源1: akshare (东方财富后端)"""
         try:
+            logger.info(f"[数据源1] akshare 获取基金 {self.config.fund_code}")
             df = ak.fund_open_fund_info_em(symbol=self.config.fund_code, indicator="单位净值走势")
-            if df is None or df.empty:
-                logger.warning(f"无数据: {self.config.fund_code}")
+            if df is not None and not df.empty:
+                logger.info(f"[数据源1] akshare 成功: {len(df)} 条记录")
+                return df
+        except Exception as e:
+            logger.warning(f"[数据源1] akshare 失败: {e}")
+        return None
+
+    def _fetch_via_tiantianjijin(self) -> pd.DataFrame | None:
+        """数据源2: 天天基金 API（东方财富旗下，但接口独立）"""
+        try:
+            logger.info(f"[数据源2] 天天基金 API 获取基金 {self.config.fund_code}")
+            import httpx
+
+            # 天天基金历史净值 API
+            url = f"https://api.fund.eastmoney.com/f10/lsjz"
+            params = {
+                "callback": "jQuery",
+                "fundCode": self.config.fund_code,
+                "pageIndex": 1,
+                "pageSize": 50,
+            }
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                "Referer": "https://fundf10.eastmoney.com/",
+            }
+
+            with httpx.Client(timeout=15.0) as client:
+                resp = client.get(url, params=params, headers=headers)
+                resp.raise_for_status()
+                text = resp.text
+
+            # 解析 JSONP 响应
+            import re
+            import json
+            json_match = re.search(r'jQuery\((.*)\)', text)
+            if not json_match:
+                logger.warning(f"[数据源2] 天天基金: JSONP 解析失败")
                 return None
 
+            data = json.loads(json_match.group(1))
+            items = data.get("Data", {}).get("LSJZList", [])
+
+            if not items:
+                logger.warning(f"[数据源2] 天天基金: 未获取到数据")
+                return None
+
+            # 构建 DataFrame
+            records = []
+            for item in items:
+                date = item.get("FSRQ", "")
+                nav = item.get("DWJZ", "")
+                if date and nav:
+                    records.append({"净值日期": date, "单位净值": float(nav)})
+
+            df = pd.DataFrame(records)
+            logger.info(f"[数据源2] 天天基金成功: {len(df)} 条记录")
+            return df
+
+        except Exception as e:
+            logger.warning(f"[数据源2] 天天基金失败: {e}")
+        return None
+
+    def _fetch_via_howbuy(self) -> pd.DataFrame | None:
+        """数据源3: 好买基金（独立第三方基金销售平台）"""
+        try:
+            logger.info(f"[数据源3] 好买基金获取基金 {self.config.fund_code}")
+            import httpx
+            import re
+
+            url = f"https://www.howbuy.com/fund/{self.config.fund_code}/"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            }
+
+            with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+                resp = client.get(url, headers=headers)
+                resp.raise_for_status()
+                html = resp.text
+
+            # 解析HTML中的净值数据
+            # 好买基金的净值表格格式：<tr><td>日期</td><td>净值</td>...</tr>
+            pattern = r'<tr[^>]*>.*?<td[^>]*>(\d{4}-\d{2}-\d{2})</td>.*?<td[^>]*>([\d.]+)</td>'
+            matches = re.findall(pattern, html, re.DOTALL)
+
+            if not matches:
+                logger.warning(f"[数据源3] 好买基金: 未解析到数据")
+                return None
+
+            # 构建DataFrame
+            data = [{"净值日期": date, "单位净值": float(nav)} for date, nav in matches[:50]]
+            df = pd.DataFrame(data)
+            logger.info(f"[数据源3] 好买基金成功: {len(df)} 条记录")
+            return df
+
+        except Exception as e:
+            logger.warning(f"[数据源3] 好买基金失败: {e}")
+        return None
+
+    def fetch_fund_data(self) -> FundData | None:
+        """获取基金净值数据（多数据源降级）。"""
+        logger.info(f"获取基金数据: {self.config.fund_code} ({self.config.fund_name})")
+
+        # 尝试多个独立数据源，按优先级降级
+        df = None
+        data_sources = [
+            ("akshare(东方财富)", self._fetch_via_akshare),
+            ("天天基金(东方财富)", self._fetch_via_tiantianjijin),
+            ("好买基金(独立)", self._fetch_via_howbuy),
+        ]
+
+        for source_name, fetch_func in data_sources:
+            try:
+                df = fetch_func()
+                if df is not None and not df.empty:
+                    logger.info(f"使用数据源: {source_name}")
+                    break
+            except Exception as e:
+                logger.warning(f"数据源 {source_name} 异常: {e}")
+                continue
+
+        if df is None or df.empty:
+            logger.error(f"所有数据源均失败: {self.config.fund_code}")
+            return None
+
+        # 处理数据
+        try:
             df = df.sort_values("净值日期", ascending=False)
             latest = df.iloc[0]
             date = str(latest.get("净值日期", ""))
@@ -124,7 +247,7 @@ class FundMonitor:
             return self.fund_data
 
         except Exception as e:
-            logger.error(f"获取基金数据失败 {self.config.fund_code}: {e}")
+            logger.error(f"处理基金数据失败 {self.config.fund_code}: {e}")
             return None
 
     @staticmethod
@@ -564,9 +687,9 @@ def build_fund_monitor_card(monitor_result: dict[str, Any]) -> dict[str, Any]:
     timestamp = monitor_result.get("timestamp", "")
     monitor_result.get("warnings", [])
 
-    icon = "🟢" if daily_change >= 0 else "🔴"
+    icon = "🔴" if daily_change >= 0 else "🟢"
     market_status = "上涨" if daily_change >= 0 else "下跌"
-    template = "blue" if daily_change >= 0 else "red"
+    template = "red" if daily_change >= 0 else "green"
 
     sections: list[str] = []
 

@@ -77,7 +77,29 @@ class DerivativeData:
     btc_change_pct: float = 0.0
     eth_price: float = 0.0  # 以太坊
     eth_change_pct: float = 0.0
-    north_flow: float = 0.0  # 北向资金当日净流入（亿元）
+    north_flow: float | None = None  # 北向资金当日净流入（亿元），None 表示获取不到
+    source: str = ""
+    valid: bool = False
+
+
+@dataclass
+class StockIndexData:
+    """A 股大盘指数：上证指数、深证成指、创业板指"""
+
+    sh_index: float = 0.0  # 上证指数
+    sh_change_pct: float = 0.0
+    sh_close: float = 0.0  # 昨收
+    sz_index: float = 0.0  # 深证成指
+    sz_change_pct: float = 0.0
+    sz_close: float = 0.0
+    cyb_index: float = 0.0  # 创业板指
+    cyb_change_pct: float = 0.0
+    cyb_close: float = 0.0
+    # 市场情绪指标
+    total_volume: float = 0.0  # 沪深两市总成交额（亿元）
+    total_turnover: float = 0.0  # 换手率
+    limit_up_count: int = 0  # 涨停家数
+    limit_down_count: int = 0  # 跌停家数
     source: str = ""
     valid: bool = False
 
@@ -91,6 +113,7 @@ class MacroSnapshot:
     fx: FxData = field(default_factory=FxData)
     bond: BondData = field(default_factory=BondData)
     derivative: DerivativeData = field(default_factory=DerivativeData)
+    stock_index: StockIndexData = field(default_factory=StockIndexData)
     timestamp: str = ""
     all_valid: bool = False
 
@@ -141,6 +164,21 @@ class MacroSnapshot:
                 "eth_price": self.derivative.eth_price,
                 "north_flow": self.derivative.north_flow,
                 "valid": self.derivative.valid,
+            },
+            "stock_index": {
+                "sh_index": self.stock_index.sh_index,
+                "sh_change_pct": self.stock_index.sh_change_pct,
+                "sh_close": self.stock_index.sh_close,
+                "sz_index": self.stock_index.sz_index,
+                "sz_change_pct": self.stock_index.sz_change_pct,
+                "sz_close": self.stock_index.sz_close,
+                "cyb_index": self.stock_index.cyb_index,
+                "cyb_change_pct": self.stock_index.cyb_change_pct,
+                "cyb_close": self.stock_index.cyb_close,
+                "total_volume": self.stock_index.total_volume,
+                "limit_up_count": self.stock_index.limit_up_count,
+                "limit_down_count": self.stock_index.limit_down_count,
+                "valid": self.stock_index.valid,
             },
             "timestamp": self.timestamp,
         }
