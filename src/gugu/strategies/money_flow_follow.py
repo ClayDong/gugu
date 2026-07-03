@@ -27,12 +27,17 @@ from gugu.strategies.base import Strategy
 class MoneyFlowFollowStrategy(Strategy):
     """资金流跟随策略。
 
-    买入条件（全部满足）：
-    1. 近期强势：recent_gain_window 内涨幅 ≥ recent_gain_threshold（热点近似）
-    2. 均线多头排列：MA5 > MA10 > MA20 > MA60
-    3. 非历史天量：当日成交量 < 60 日均量的 abnormal_volume_ratio 倍
-    4. 创新高回踩：近 new_high_window 日内创 N 日新高，当前回踩不破 MA20
-    5. 放量确认：缩量回踩后当日放量（量比 ≥ volume_expand_ratio）
+    P0 修复（基于全市场评估）：原 5 条件 AND 过严导致 250 天零信号。
+    改为 3 核心条件 + 2 增强条件（boost 置信度而非硬阻断）：
+
+    核心条件（必须全部满足，AND）：
+    1. 均线多头排列：MA5 > MA10 > MA20 > MA60（趋势确认）
+    2. 创新高回踩不破 MA20：近 N 日创新高后回踩 0-5%，且收盘 > MA20
+    3. 放量确认：当日量比 ≥ 1.2（放宽原 1.5）
+
+    增强条件（满足提升置信度，不满足不阻断）：
+    4. 近期强势：10 日涨幅 ≥ 3%（热点近似）
+    5. 缩量回踩：前 2 日量能递减（健康回踩）
 
     卖出条件（任一满足）：
     - 均线多头排列破坏：MA5 < MA10
@@ -52,10 +57,10 @@ class MoneyFlowFollowStrategy(Strategy):
 
         ma_periods: list[int] = [int(x) for x in self.params.get("ma_periods", [5, 10, 20, 60])]
         new_high_window = int(self.params.get("new_high_window", 20))
-        new_high_lookback = int(self.params.get("new_high_lookback", 120))
-        pullback_max_pct = float(self.params.get("pullback_max_pct", 0.05))
+        new_high_lookback = int(self.params.get("new_high_lookback", 60))  # P0: 120→60 放宽
+        pullback_max_pct = float(self.params.get("pullback_max_pct", 0.08))  # P0: 0.05→0.08 放宽
         volume_shrink_days = int(self.params.get("volume_shrink_days", 2))
-        volume_expand_ratio = float(self.params.get("volume_expand_ratio", 1.5))
+        volume_expand_ratio = float(self.params.get("volume_expand_ratio", 1.2))
         abnormal_volume_ratio = float(self.params.get("abnormal_volume_ratio", 3.0))
         recent_gain_window = int(self.params.get("recent_gain_window", 10))
         recent_gain_threshold = float(self.params.get("recent_gain_threshold", 0.03))
@@ -108,14 +113,12 @@ class MoneyFlowFollowStrategy(Strategy):
         vol_ratio_today = df["volume"] / df["volume"].shift(1)
         cond_volume_confirm = vol_shrinking & (vol_ratio_today >= volume_expand_ratio)
 
-        # ── 买入信号：5 条件全部满足 ──
+        # ── 买入信号：3 核心条件 AND（P0 修复：原 5 AND 过严零信号）──
         buy_cond = (
-            cond_hot
-            & cond_ma_aligned
-            & cond_not_abnormal
-            & cond_pullback_hold
+            cond_ma_aligned          # 核心1: 均线多头排列
+            & cond_pullback_hold    # 核心2: 创新高回踩不破 MA20
             & cond_above_ma20
-            & cond_volume_confirm
+            & cond_volume_confirm    # 核心3: 放量确认
         )
 
         # ── 卖出信号：均线多头排列破坏 或 跌破 MA20 ──
@@ -128,22 +131,24 @@ class MoneyFlowFollowStrategy(Strategy):
         # 风控优先：卖出信号覆盖买入信号（趋势破坏时不入场）
         df.loc[sell_cond, "signal"] = -1
 
-        # ── 置信度计算 ──
-        # 买入置信度：5 个条件的归一化加权
-        # 1. 量比强度（放量越充分，主力资金实力越强）
-        vol_strength = (vol_ratio_today / volume_expand_ratio).clip(0, 2.0) / 2.0
-        # 2. 均线排列强度（MA 间距越大，趋势越强）
-        ma_spread = ((ma5 - ma20) / ma20).clip(0, 0.1) / 0.1
-        # 3. 近期涨幅强度
-        gain_strength = (recent_gain / (recent_gain_threshold * 3)).clip(0, 1.0)
-        # 4. 回踩深度（回踩越浅越好，0 回踩 = 1.0）
-        pullback_strength = (1.0 + (pullback_from_high / pullback_max_pct).clip(0, 1.0)) / 2.0
-
+        # ── 置信度计算（P0 修复：3 核心保底 + 2 增强 + 1 反向惩罚）──
+        # 基础置信度 0.6（3 核心条件已满足）
+        base_confidence = pd.Series(0.6, index=df.index)
+        # 增强条件1：近期强势 → +0.2
+        hot_boost = pd.Series(0.0, index=df.index)
+        hot_boost[cond_hot] = 0.2
+        # 增强条件2：缩量回踩 → +0.1（健康回踩形态）
+        shrink_boost = pd.Series(0.0, index=df.index)
+        shrink_boost[vol_shrinking] = 0.1
+        # 量比强度系数：放量越充分置信度越高（0.0-0.1）
+        vol_strength_bonus = (vol_ratio_today / volume_expand_ratio).clip(0, 2.0) / 20.0
+        # 反向惩罚：历史天量 → -0.3（天量常见于主力出货，从核心条件降级为反向增强）
+        # 仍允许买入（不阻断），但显著降低置信度，使其易被 min_confidence 阈值过滤
+        abnormal_penalty = pd.Series(0.0, index=df.index)
+        abnormal_penalty[~cond_not_abnormal] = 0.3
+        # 组合
         confidence = (
-            0.30 * vol_strength
-            + 0.25 * ma_spread
-            + 0.25 * gain_strength
-            + 0.20 * pullback_strength
+            base_confidence + hot_boost + shrink_boost + vol_strength_bonus - abnormal_penalty
         ).clip(0, 1.0).fillna(0.0)
 
         df["confidence"] = confidence

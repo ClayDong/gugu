@@ -119,7 +119,7 @@ class SignalRouter:
         # 这些策略的 sell 信号覆盖任何 buy 信号
         _TREND_BREAKDOWN_STRATEGIES = {
             "turtle", "dual_ma", "chen_jiangting", "money_flow_follow",
-            "box_breakout", "breakout",
+            "box_breakout", "breakout", "leopard_three_factors",
         }
         sell_strategy_names = {n for n, _ in sell_votes}
         trend_breakdown = sell_strategy_names & _TREND_BREAKDOWN_STRATEGIES

@@ -50,6 +50,7 @@ strategy:
     - rsi_reversal
     - money_flow_follow
     - chen_jiangting            # 陈江挺《炒股的智慧》阻力突破 + 量能确认
+    - leopard_three_factors     # 豹哥三要素：高换手+大成交额+大流通市值+放量突破
   # 信号融合规则：unanimous（全票通过）/ majority（多数）/ any（任一）/ weighted（策略池加权）
   # v0.4.1：恢复 weighted（多策略共识），any 模式在 A 股高噪声下产生大量假信号
   signal_fusion: weighted

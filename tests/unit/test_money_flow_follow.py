@@ -85,7 +85,10 @@ class TestMoneyFlowFollowRegistration:
         s = get_strategy("money_flow_follow")
         assert s.params["ma_periods"] == [5, 10, 20, 60]
         assert s.params["new_high_window"] == 20
-        assert s.params["volume_expand_ratio"] == 1.5
+        # P0 修复后放宽参数（5 AND → 3 核心 + 2 增强）
+        assert s.params["volume_expand_ratio"] == 1.2  # 原 1.5 → 1.2
+        assert s.params["new_high_lookback"] == 60       # 原 120 → 60
+        assert s.params["pullback_max_pct"] == 0.08      # 原 0.05 → 0.08
         assert s.params["abnormal_volume_ratio"] == 3.0
         assert s.params["recent_gain_threshold"] == 0.03
 
@@ -192,15 +195,33 @@ class TestMoneyFlowFollowConditions:
     """5步过滤条件单元测试。"""
 
     def test_abnormal_volume_excluded(self) -> None:
-        """历史天量应被剔除（不产生买入信号）。"""
+        """历史天量不再硬性阻断买入，但应降低该日置信度（反向增强惩罚）。
+
+        P0 修复后：天量从核心条件降级为"反向增强条件"
+        - 不阻断买入信号（避免零信号）
+        - 但扣 0.3 置信度，使其易被 min_confidence 阈值过滤
+        - 对抗性审查：天量常见于主力出货，应保留惩罚机制
+        """
         df = _make_bullish_pullback_df()
         # 在放量确认日制造一个天量（>3倍60日均量）
         vol_ma = df["volume"].rolling(60).mean()
         df.loc[144, "volume"] = vol_ma.iloc[144] * 5.0
         s = MoneyFlowFollowStrategy()
         result = s.generate_signals(df)
-        # day 144 不应有买入信号（天量被剔除）
-        assert result.loc[144, "signal"] != 1
+
+        # 天量日仍允许产生买入信号（不再硬性剔除）
+        if result.loc[144, "signal"] == 1:
+            # 但置信度应显著降低（天量惩罚 -0.3）
+            abnormal_conf = float(result.loc[144, "confidence"])
+            # 找一个非天量的买入日作为对照
+            non_abnormal_buy = result[(result["signal"] == 1) & (result.index != 144)]
+            if not non_abnormal_buy.empty:
+                normal_conf = float(non_abnormal_buy["confidence"].iloc[0])
+                assert abnormal_conf < normal_conf, (
+                    f"天量日置信度应低于正常买入日: abnormal={abnormal_conf}, normal={normal_conf}"
+                )
+            # 天量日置信度应被显著惩罚（扣 0.3 后通常 ≤ 0.75）
+            assert abnormal_conf <= 0.75, f"天量日置信度应被惩罚 ≤0.75, got {abnormal_conf}"
 
     def test_volume_expansion_required(self) -> None:
         """无放量确认时不应产生买入信号。"""

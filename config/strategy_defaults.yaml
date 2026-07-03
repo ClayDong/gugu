@@ -49,13 +49,13 @@ dual_thrust:
   k_down: 0.5
 
 money_flow_follow:
-  # 资金流跟随策略：5步复盘流程
+  # 资金流跟随策略：3 核心 + 2 增强（P0 修复：原 5 AND 过严零信号）
   ma_periods: [5, 10, 20, 60]        # 多头排列均线周期
   new_high_window: 20                # 创新高回看窗口
-  new_high_lookback: 120             # 历史新高回看长度
-  pullback_max_pct: 0.05             # 回踩最大幅度 5%
+  new_high_lookback: 60              # 历史新高回看长度（P0: 120→60 放宽）
+  pullback_max_pct: 0.08             # 回踩最大幅度 8%（P0: 5%→8% 放宽）
   volume_shrink_days: 2              # 缩量回踩天数
-  volume_expand_ratio: 1.5           # 放量确认量比阈值
+  volume_expand_ratio: 1.2           # 放量确认量比阈值（P0: 1.5→1.2 放宽）
   abnormal_volume_ratio: 3.0         # 天量剔除阈值（3倍60日均量）
   recent_gain_window: 10             # 近期涨幅窗口
   recent_gain_threshold: 0.03        # 近期最低涨幅 3%（热点近似）
@@ -70,3 +70,16 @@ chen_jiangting:
   ma_long: 60                         # 长期均线（中期趋势过滤）
   max_daily_gain_pct: 0.07            # 阶段过滤：当日涨幅 >7% 视为疯狂阶段，不追
   divergence_vol_window: 5            # 量价背离判断窗口
+
+leopard_three_factors:
+  # 豹哥三要素策略：高流动性 + 大资金承载 + 放量突破
+  # 来源：豹哥战法（换手率≥15% + 成交额≥10亿 + 流通市值≥70亿）
+  breakout_window: 20                # 突破回看窗口（近N日最高价）
+  volume_ratio: 1.5                  # 量比阈值（放量确认）
+  vol_ma_window: 20                  # 成交量均线窗口
+  ma_short: 20                       # 短期均线（趋势判断 + 跌破卖出）
+  ma_long: 60                        # 长期均线（中期趋势过滤）
+  max_daily_gain_pct: 0.07           # 非涨停过滤：当日涨幅 >7% 不追（避免追涨停买不到）
+  amount_threshold: 1000000000       # 成交额阈值 10亿（豹哥三要素之一）
+  turnover_threshold: 0.15           # 换手率阈值 15%（豹哥三要素之二）
+  market_cap_threshold: 7000000000   # 流通市值阈值 70亿（豹哥三要素之三）

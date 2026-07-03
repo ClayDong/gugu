@@ -54,3 +54,6 @@ desktop.ini
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+
+# Trae skills（用户安装，不提交）
+.trae/skills/

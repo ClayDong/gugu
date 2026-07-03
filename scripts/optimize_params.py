@@ -76,6 +76,24 @@ STRATEGY_PARAM_GRIDS: dict[str, dict[str, list]] = {
         "k_up": [0.3, 0.5, 0.7, 0.9],
         "k_down": [0.3, 0.5, 0.7, 0.9],
     },
+    # P0 补全：两个新策略的参数网格（上轮未注册，参数永远无法被历史数据验证）
+    "money_flow_follow": {
+        "new_high_window": [10, 15, 20, 30],
+        "new_high_lookback": [60, 90, 120, 180],
+        "pullback_max_pct": [0.03, 0.05, 0.08, 0.10],
+        "volume_expand_ratio": [1.2, 1.5, 1.8, 2.0],
+        "volume_shrink_days": [1, 2, 3],
+        "recent_gain_threshold": [0.02, 0.03, 0.05],
+        "abnormal_volume_ratio": [2.0, 2.5, 3.0, 4.0],
+    },
+    "chen_jiangting": {
+        "resistance_window": [10, 15, 20, 30],
+        "volume_ratio": [1.2, 1.5, 1.8, 2.0],
+        "vol_ma_window": [10, 20, 30],
+        "ma_short": [10, 15, 20, 25],
+        "ma_long": [40, 50, 60, 90],
+        "max_daily_gain_pct": [0.05, 0.07, 0.09],
+    },
 }
 
 # 策略 → 其策略类需要哪些参数（pyproject.toml 中定义的策略类）
@@ -89,6 +107,16 @@ STRATEGY_CONFIG_KEYS: dict[str, list[str]] = {
     "macd": ["short_window", "long_window", "signal_window"],
     "kdj": ["window", "oversold", "overbought"],
     "dual_thrust": ["lookback", "k_up", "k_down"],
+    # P0 补全：与新策略网格同步
+    "money_flow_follow": [
+        "new_high_window", "new_high_lookback", "pullback_max_pct",
+        "volume_expand_ratio", "volume_shrink_days", "recent_gain_threshold",
+        "abnormal_volume_ratio",
+    ],
+    "chen_jiangting": [
+        "resistance_window", "volume_ratio", "vol_ma_window",
+        "ma_short", "ma_long", "max_daily_gain_pct",
+    ],
 }
 
 

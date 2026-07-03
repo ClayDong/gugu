@@ -8,6 +8,7 @@ from typing import Any
 from gugu.strategies.base import Strategy
 from gugu.strategies.breakout import BoxBreakoutStrategy, DualThrustStrategy
 from gugu.strategies.chen_jiangting import ChenJiangtingStrategy
+from gugu.strategies.leopard_three_factors import LeopardThreeFactorsStrategy
 from gugu.strategies.mean_revert import BollingerStrategy, KDJStrategy, RSIStrategy
 from gugu.strategies.money_flow_follow import MoneyFlowFollowStrategy
 from gugu.strategies.trend import DualMAStrategy, MACDStrategy, TurtleStrategy
@@ -24,6 +25,7 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "dual_thrust": DualThrustStrategy,
     "money_flow_follow": MoneyFlowFollowStrategy,
     "chen_jiangting": ChenJiangtingStrategy,
+    "leopard_three_factors": LeopardThreeFactorsStrategy,
 }
 
 
