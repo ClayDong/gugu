@@ -167,13 +167,14 @@ class TestFundamentalFilter:
         f = FundamentalFilter()
         result = f.check("000001")
 
-        # 所有指标获取失败，均跳过过滤 → 视为通过
-        assert result["pass"] is True
+        # P0 修复后：全部基本面指标获取失败时拒绝放行（数据源不可用，避免"无数据即放行"的逆向选择）
+        assert result["pass"] is False
         assert result["pe"] is None
         assert result["pb"] is None
         assert result["roe"] is None
         assert result["revenue_growth"] is None
         assert result["industry"] == ""
+        assert any("全部基本面指标获取失败" in r for r in result["reasons"])
 
 
 # ============================================================

@@ -130,14 +130,15 @@ class PaperBroker(BaseBroker):
         self._market_value_cache[symbol] = old_val * 0.7 + market_value * 0.3
 
     def _check_limit_tradable(
-        self, direction: str, price: float, prev_close: float | None
+        self, direction: str, price: float, prev_close: float | None, symbol: str = ""
     ) -> bool:
-        """检查涨跌停附近是否可成交。
+        """检查涨跌停附近是否可成交（P0 修复：按板块区分涨跌停幅度）。
 
         Args:
             direction: 买卖方向
             price: 当前价格
             prev_close: 前收盘价
+            symbol: 股票代码（用于判断板块）
 
         Returns:
             是否可成交
@@ -147,15 +148,53 @@ class PaperBroker(BaseBroker):
 
         change_pct = (price - prev_close) / prev_close
 
-        # 涨停附近（>= 9.5%）— 买入概率降低
-        if direction == "buy" and change_pct >= 0.095:
+        # P0 修复：按板块区分涨跌停幅度
+        # 原逻辑硬编码 9.5%，创业板/科创板 ±20%、北交所 ±30% 的股票在涨 9.5% 时被误判涨停
+        limit_pct = self._get_limit_pct(symbol)
+
+        # 涨停附近（>= limit_pct * 0.95）— 买入概率降低
+        if direction == "buy" and change_pct >= limit_pct * 0.95:
             return random.random() < self.__class__.LIMIT_UP_FILL_PROB
 
-        # 跌停附近（<= -9.5%）— 卖出概率降低
-        if direction == "sell" and change_pct <= -0.095:
+        # 跌停附近（<= -limit_pct * 0.95）— 卖出概率降低
+        if direction == "sell" and change_pct <= -limit_pct * 0.95:
             return random.random() < self.__class__.LIMIT_DOWN_FILL_PROB
 
         return True
+
+    @staticmethod
+    def _get_limit_pct(symbol: str) -> float:
+        """根据股票代码前缀返回涨跌停幅度（P0 修复新增）。
+
+        - 主板（60/00/30 开头）：±10%
+        - 创业板（300/301）：±20%
+        - 科创板（688/689）：±20%
+        - 北交所（43/83/87/88/920）：±30%
+        - ST/*ST：±5%（需外部标记 is_st，此处保守按 10%）
+        """
+        if not symbol:
+            return 0.10  # 默认主板
+        code = symbol.strip().zfill(6)
+        if code.startswith(("300", "301", "688", "689")):
+            return 0.20  # 创业板/科创板
+        if code.startswith(("43", "83", "87", "88", "920")):
+            return 0.30  # 北交所
+        return 0.10  # 主板
+
+    @staticmethod
+    def _calc_transfer_fee(symbol: str, trade_value: float) -> float:
+        """P0 修复：计算过户费（沪市双向 0.001%，2022年4月起减半）。
+
+        沪市股票（600/601/603/605/688/689 开头）双向收取过户费 0.001%。
+        深市不收取。
+        """
+        if not symbol or trade_value <= 0:
+            return 0.0
+        code = symbol.strip().zfill(6)
+        # 沪市前缀
+        if code.startswith(("600", "601", "603", "605", "688", "689", "9")):
+            return round(trade_value * 0.00001, 2)  # 0.001%
+        return 0.0  # 深市无过户费
 
     def order(
         self,
@@ -205,7 +244,7 @@ class PaperBroker(BaseBroker):
 
         if direction == "buy":
             # 涨跌停成交检查
-            if not self._check_limit_tradable("buy", cur_price, prev_close):
+            if not self._check_limit_tradable("buy", cur_price, prev_close, symbol):
                 logger.info(f"[模拟盘] 涨停附近{cur_price:.2f}，买入{quantity}股未成交(概率)")
                 return OrderResult(False, symbol, direction, 0, 0, 0, message="涨停附近买入未成交")
 
@@ -220,8 +259,12 @@ class PaperBroker(BaseBroker):
             # 估算市值
             self._estimate_market_value(symbol, fill_price, actual_quantity)
 
+            # P0 修复：过户费（沪市双向 0.001%，2022年4月起减半）
+            transfer_fee = self._calc_transfer_fee(symbol, fill_price * actual_quantity)
             commission = fill_price * actual_quantity * self._commission_rate
-            total_cost = fill_price * actual_quantity + commission
+            # P1 修复：最低佣金 5 元/笔
+            commission = max(commission, 5.0)
+            total_cost = fill_price * actual_quantity + commission + transfer_fee
             if total_cost > self._cash:
                 # 如果是部分成交导致的资金不足，尝试进一步缩小数量
                 if actual_quantity < quantity:
@@ -268,7 +311,7 @@ class PaperBroker(BaseBroker):
                 return OrderResult(False, symbol, direction, 0, 0, 0, message="可卖数量不足（T+1）")
 
             # 跌停成交检查
-            if not self._check_limit_tradable("sell", cur_price, prev_close):
+            if not self._check_limit_tradable("sell", cur_price, prev_close, symbol):
                 logger.info(f"[模拟盘] 跌停附近{cur_price:.2f}，卖出{quantity}股未成交(概率)")
                 return OrderResult(False, symbol, direction, 0, 0, 0, message="跌停附近卖出未成交")
 
@@ -282,9 +325,12 @@ class PaperBroker(BaseBroker):
             if actual_quantity <= 0:
                 return OrderResult(False, symbol, direction, 0, 0, 0, message="流动性不足，未成交")
 
+            # P0 修复：过户费（沪市双向 0.001%）+ P1 最低佣金5元
+            transfer_fee = self._calc_transfer_fee(symbol, fill_price * actual_quantity)
             commission = fill_price * actual_quantity * self._commission_rate
+            commission = max(commission, 5.0)
             stamp_tax = fill_price * actual_quantity * self._stamp_tax
-            proceeds = fill_price * actual_quantity - commission - stamp_tax
+            proceeds = fill_price * actual_quantity - commission - stamp_tax - transfer_fee
 
             self._cash += proceeds
             pos.quantity -= actual_quantity
@@ -502,40 +548,71 @@ class PaperBroker(BaseBroker):
             logger.warning(f"保存模拟盘状态失败: {e}")
 
     def _load_state(self) -> None:
-        """从 JSON 文件恢复状态。
+        """从 JSON 文件恢复状态（P0 修复：fail-fast + .bak 回退）。
 
-        P1-f 修复：per-symbol try/except，单条持仓解析失败不丢失其余持仓。
+        原逻辑：解析失败时静默用默认值（100万空仓），用户真实持仓凭空消失。
+        修复：
+        1. 主文件解析失败 → 尝试 .bak 备份
+        2. .bak 也失败 → 抛 RuntimeError（fail-fast），拒绝用空状态继续
         """
         if not STATE_FILE.exists():
+            # 尝试 .bak（可能主文件被误删但 .bak 还在）
+            bak = STATE_FILE.with_suffix(STATE_FILE.suffix + ".bak")
+            if bak.exists():
+                logger.warning(f"主状态文件 {STATE_FILE} 不存在，尝试 .bak 备份")
+                self._load_from_path(bak)
+                return
             return
+
         try:
-            data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-            self._cash = data.get("cash", self._cash)
-            # P1-f 修复：显式循环 + per-symbol try/except，避免单条失败丢全部持仓
-            positions_data = data.get("positions", {})
-            for sym, p in positions_data.items():
-                try:
-                    self._positions[sym] = Position(
-                        symbol=p["symbol"],
-                        quantity=p["quantity"],
-                        available=p["available"],
-                        avg_cost=p["avg_cost"],
-                        current_price=p["current_price"],
-                        stop_loss_price=p.get("stop_loss_price", 0.0),
-                        prev_close=p.get("prev_close", 0.0),
-                        is_st=p.get("is_st", False),
-                        is_suspended=p.get("is_suspended", False),
-                        lowest_price=p.get("lowest_price", 0.0),
-                        dividend_adjusted=p.get("dividend_adjusted", False),
-                    )
-                except (KeyError, TypeError, ValueError) as pos_err:
-                    logger.warning(f"恢复持仓 {sym} 失败，跳过该持仓: {pos_err}；原始数据: {p}")
-            self._trades = data.get("trades", [])
-            self._daily_start_value = data.get("daily_start_value")
-            if self._positions:
-                logger.info(
-                    f"恢复模拟盘状态: 现金 ¥{self._cash:,.2f}, "
-                    f"持仓 {len(self._positions)} 只, 交易 {len(self._trades)} 笔"
-                )
+            self._load_from_path(STATE_FILE)
         except Exception as e:
-            logger.warning(f"加载模拟盘状态失败: {e}")
+            # 主文件损坏 → 尝试 .bak 回退
+            bak = STATE_FILE.with_suffix(STATE_FILE.suffix + ".bak")
+            if bak.exists():
+                logger.error(
+                    f"主状态文件损坏({e})，尝试从 .bak 备份恢复: {bak}"
+                )
+                try:
+                    self._load_from_path(bak)
+                    logger.warning("已从 .bak 恢复，建议人工核查持仓准确性")
+                    return
+                except Exception as bak_err:
+                    logger.error(f".bak 备份也损坏: {bak_err}")
+            # P0 修复：fail-fast，拒绝用默认 100万空仓继续
+            raise RuntimeError(
+                f"模拟盘状态文件损坏且无可用备份。主文件: {STATE_FILE}，错误: {e}。"
+                f"拒绝用空状态继续（防止用户真实持仓凭空消失）。"
+                f"请人工修复 {STATE_FILE} 或从 {bak} 恢复后重启。"
+            ) from e
+
+    def _load_from_path(self, path) -> None:
+        """从指定路径加载状态（内部方法）。"""
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self._cash = data.get("cash", self._cash)
+        # P1-f 修复：显式循环 + per-symbol try/except，避免单条失败丢全部持仓
+        positions_data = data.get("positions", {})
+        for sym, p in positions_data.items():
+            try:
+                self._positions[sym] = Position(
+                    symbol=p["symbol"],
+                    quantity=p["quantity"],
+                    available=p["available"],
+                    avg_cost=p["avg_cost"],
+                    current_price=p["current_price"],
+                    stop_loss_price=p.get("stop_loss_price", 0.0),
+                    prev_close=p.get("prev_close", 0.0),
+                    is_st=p.get("is_st", False),
+                    is_suspended=p.get("is_suspended", False),
+                    lowest_price=p.get("lowest_price", 0.0),
+                    dividend_adjusted=p.get("dividend_adjusted", False),
+                )
+            except (KeyError, TypeError, ValueError) as pos_err:
+                logger.warning(f"恢复持仓 {sym} 失败，跳过该持仓: {pos_err}；原始数据: {p}")
+        self._trades = data.get("trades", [])
+        self._daily_start_value = data.get("daily_start_value")
+        if self._positions:
+            logger.info(
+                f"恢复模拟盘状态: 现金 ¥{self._cash:,.2f}, "
+                f"持仓 {len(self._positions)} 只, 交易 {len(self._trades)} 笔"
+            )

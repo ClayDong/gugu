@@ -26,11 +26,20 @@ from gugu.wisdom import WisdomAdvisor
 # ========== Fixture 数据 ==========
 
 def make_bollinger_buy_df(days: int = 60, base_price: float = 100.0) -> pd.DataFrame:
-    """生成触发布林带买入信号的数据：平盘后急跌——确保触及下轨且价格恒为正。"""
+    """生成触发布林带买入信号的数据：上升趋势中回踩下轨（合法均值回归买点）。
+
+    P0 修复后，布林带策略在 MA20 < MA60 下跌趋势中不发买入信号（不接飞刀）。
+    原 fixture「平盘后急跌」会形成下跌趋势被新过滤拦截。
+    改为：前 50 天缓涨 → 5 天平台 → 5 天回踩（仍维持 MA20 > MA60 上升趋势）。
+    回踩幅度足够触及下轨（close < MA20 - 2*std），同时不破坏长期上升趋势。
+    """
     np.random.seed(42)
     dates = pd.bdate_range("2024-01-01", periods=days)
-    # 前 55 天平盘，后 5 天急跌（-3%/天复合）——确保收盘价跌破下轨
-    prices = [base_price] * 55 + [base_price * (0.97 ** i) for i in range(1, 6)]
+    # 前 50 天缓涨（+0.68%/天，100→~140），5 天平台，5 天回踩（-2.5%/天）
+    up = [base_price * (1.0068 ** i) for i in range(50)]
+    flat = [up[-1]] * 5
+    pullback = [flat[-1] * (0.975 ** i) for i in range(1, 6)]
+    prices = up + flat + pullback
     close = pd.Series(prices[:days], dtype=float)
     high = close * 1.015
     low = close * 0.985
@@ -660,6 +669,8 @@ class TestEndToEndIntegrationNoBusinessMock:
 
         # Mock is_trading_day 返回 True（外部日历 IO）
         monkeypatch.setattr("gugu.engine.main.is_trading_day", lambda: True)
+        # P0-13 修复后需同时 mock is_trading_time 才能进入完整循环
+        monkeypatch.setattr("gugu.engine.main.is_trading_time", lambda: True)
 
         # Mock 数据管理器（外部 IO），标记为降级状态
         class MockDataManager:
@@ -810,6 +821,8 @@ class TestEndToEndFullCycle:
 
         # Mock 外部 IO 路径
         monkeypatch.setattr("gugu.engine.main.is_trading_day", lambda: True)
+        # P0-13 修复后需同时 mock is_trading_time 才能进入完整循环
+        monkeypatch.setattr("gugu.engine.main.is_trading_time", lambda: True)
         monkeypatch.setattr("gugu.execution.paper.STATE_FILE", tmp_path / "state.json")
         monkeypatch.setattr("gugu.engine.main.PROJECT_ROOT", tmp_path)
         monkeypatch.setattr("gugu.risk.manager.RISK_STATE_FILE", tmp_path / "risk_state.json")

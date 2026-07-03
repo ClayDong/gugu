@@ -146,7 +146,12 @@ async def test_run_daily_cycle_trading_day(
     engine: TradingEngine, mock_broker: mock.MagicMock
 ) -> None:
     """交易日应执行完整循环。"""
-    with mock.patch("gugu.engine.main.is_trading_day", return_value=True):
+    # P0-13 修复后：run_daily_cycle 同时校验 is_trading_day + is_trading_time
+    # 测试在非交易时段运行时需同时 mock 两者为 True 才能进入完整循环
+    with (
+        mock.patch("gugu.engine.main.is_trading_day", return_value=True),
+        mock.patch("gugu.engine.main.is_trading_time", return_value=True),
+    ):
         await engine.run_daily_cycle()
     mock_broker.settle_t_plus_1.assert_called_once()
     engine._risk.reset.assert_called_once()

@@ -314,10 +314,12 @@ class TestValleyBreakCount:
         assert signal == TrailingStopSignal.EXIT
 
     def test_valley_break_count_resets_on_significant_recovery(self) -> None:
-        """价格显著恢复（超过浪谷2%）时跌破计数应完全重置为0。
+        """价格显著恢复（超过浪谷2%）时跌破计数应递减1次（非重置为0）。
 
+        P0 修复：原逻辑"完全重置为0"导致震荡市中3次清仓永远触发不了。
+        修复后改为递减1次，仅当价格创新高时才完全重置。
         场景：止损价 < 最近浪谷（止损未更新到浪谷），价格在两者之间时跌破计数增加，
-        价格回升超过浪谷 2% 时计数完全重置。
+        价格回升超过浪谷 2% 时计数递减1（非重置）。
         """
         engine = TrailingStopEngine()
         # 手动构造状态：止损价 9.0，浪谷 10.5（止损 < 浪谷，模拟止损未追上浪谷的场景）
@@ -343,9 +345,9 @@ class TestValleyBreakCount:
         })
 
         state, _ = engine.update(state, df)
-        # 价格 10.8 > 浪谷 10.5 * 1.02 = 10.71，跌破计数应完全重置为0
-        assert state.valley_break_count == 0, (
-            f"价格显著恢复后跌破计数应重置为0，got {state.valley_break_count}"
+        # P0 修复后：跌破计数从 2 递减为 1（而非重置为0）
+        assert state.valley_break_count == 1, (
+            f"价格显著恢复后跌破计数应从 2 递减为 1（非重置为0），got {state.valley_break_count}"
         )
 
     def test_consecutive_breaks_accumulate_to_exit(self) -> None:

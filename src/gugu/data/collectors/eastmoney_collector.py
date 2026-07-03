@@ -74,7 +74,7 @@ class EastmoneyCollector(BaseCollector):
         return self._client
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
-    def fetch_stock_history(self, symbol: str, days: int = 60) -> pd.DataFrame:
+    def fetch_stock_history(self, symbol: str, days: int = 90) -> pd.DataFrame:
         """获取个股历史K线（东方财富日K接口）。"""
         code = self.normalize_symbol(symbol)
         secid = _to_secid(code)

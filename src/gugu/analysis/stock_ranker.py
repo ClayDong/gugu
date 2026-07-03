@@ -73,7 +73,7 @@ class StockRanker:
     async def _score_one(self, symbol: str, hot_sectors: list[str]) -> dict[str, Any] | None:
         """对单只股票评分"""
         # 获取K线数据
-        df = await self._dm.fetch_stock_history(symbol, days=60)
+        df = await self._dm.fetch_stock_history(symbol, days=90)
         if df.empty:
             return None
 

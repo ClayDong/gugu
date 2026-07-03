@@ -451,9 +451,9 @@ class ConflictResolver:
             final_position += op.position_ratio * w
         final_position = min(final_position, 0.3)  # 单股上限
 
-        # stop_loss：取最严格（最低价）
+        # stop_loss：取最严格（最高价，最接近现价，触发最早、亏损最小）
         stop_losses = [op.stop_loss_price for op in opinions if op.stop_loss_price and op.stop_loss_price > 0]
-        final_stop = min(stop_losses) if stop_losses else None
+        final_stop = max(stop_losses) if stop_losses else None
 
         # 冲突检测：action 分散度 = 1 - max(score)/total
         max_score = max(action_scores.values())

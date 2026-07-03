@@ -446,12 +446,15 @@ class TrailingStopEngine:
                 else:
                     return TrailingStopSignal.ALERT
             elif current_price > latest_valley * 1.02 and state.valley_break_count > 0:
-                # 显著恢复（超过浪谷2%），完全重置计数
+                # P0 修复：原逻辑"显著恢复完全重置为0"导致震荡市中3次清仓永远触发不了
+                # 改为递减1次（而非重置为0），保持"事件计数"本质
+                # 仅当价格创新高时才完全重置（见下方创新高分支）
+                old_count = state.valley_break_count
+                state.valley_break_count = max(0, state.valley_break_count - 1)
                 logger.info(
                     f"[trailing-stop] 价格显著恢复 {current_price:.2f} > 浪谷 {latest_valley:.2f} × 1.02，"
-                    f"跌破计数 {state.valley_break_count} → 0"
+                    f"跌破计数 {old_count} → {state.valley_break_count}（递减1次，非重置）"
                 )
-                state.valley_break_count = 0
 
         # 危险信号
         if danger_signals:

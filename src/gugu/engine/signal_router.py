@@ -114,6 +114,16 @@ class SignalRouter:
         sell_votes = [(n, c) for n, s, c in votes if s == -1]
         total_votes = len(buy_votes) + len(sell_votes)
 
+        # P0 修复：卖出硬否决（趋势破坏时不入场 — 《炒股的智慧》铁律）
+        # 趋势类/突破类策略若发出 sell，说明趋势已破坏，禁止买入
+        # 这些策略的 sell 信号覆盖任何 buy 信号
+        _TREND_BREAKDOWN_STRATEGIES = {
+            "turtle", "dual_ma", "chen_jiangting", "money_flow_follow",
+            "box_breakout", "breakout",
+        }
+        sell_strategy_names = {n for n, _ in sell_votes}
+        trend_breakdown = sell_strategy_names & _TREND_BREAKDOWN_STRATEGIES
+
         direction = "hold"
         triggered = []
 
@@ -187,13 +197,35 @@ class SignalRouter:
         if direction == "hold":
             return None
 
-        # 置信度：获胜方向策略的平均置信度
-        # 注意：不同策略的置信度计算方式不同（基于ATR/斜率/偏离程度等），
-        # 直接取平均在策略置信度含义不统一时可能不够精确。
-        # 后续可考虑 min-max 归一化后平均。当前 version 0.1.0 阶段，
-        # 所有策略置信度均在 [0, 1] 区间，取平均是合理近似。
-        chosen_votes = buy_votes if direction == "buy" else sell_votes
-        avg_conf = sum(c for _, c in chosen_votes) / len(chosen_votes) if chosen_votes else 0
+        # P0 修复：卖出硬否决 — 趋势破坏时强制 sell，覆盖任何 buy
+        # 即使加权融合结果是 buy，只要趋势类策略发出 sell，就强制改为 sell
+        if direction == "buy" and trend_breakdown:
+            logger.warning(
+                f"{symbol} 趋势类策略 {trend_breakdown} 发出卖出信号，"
+                f"强制覆盖 buy → sell（趋势破坏时不入场）"
+            )
+            direction = "sell"
+            triggered = list(trend_breakdown) + [t for t in triggered if t not in trend_breakdown]
+            # 卖出置信度取趋势策略的卖出置信度（如有）否则用原置信度
+            trend_sell_conf = [c for n, c in sell_votes if n in trend_breakdown]
+            if trend_sell_conf:
+                avg_conf = sum(trend_sell_conf) / len(trend_sell_conf)
+
+        # P0 修复：多策略共识折扣
+        # 原逻辑：单策略触发时 avg_conf = 该策略 confidence（常为 1.0），无共识惩罚
+        # 修复：单策略信号置信度打折，多策略共识才给高置信度
+        # A股高噪声环境，单策略信号可靠性远低于多策略共识
+        # 非加权模式：计算获胜方向的平均置信度
+        if self._fusion_rule != "weighted":
+            chosen_votes = buy_votes if direction == "buy" else sell_votes
+            avg_conf = sum(c for _, c in chosen_votes) / len(chosen_votes) if chosen_votes else 0
+        total_strategies = max(len(self._strategies), 1)
+        agreeing_count = len(triggered)
+        if total_strategies > 1:
+            consensus_ratio = agreeing_count / total_strategies
+            # 单策略: ratio=1/N → 折扣 0.7; 全策略共识: ratio=1.0 → 折扣 1.0
+            consensus_factor = 0.7 + 0.3 * consensus_ratio
+            avg_conf *= consensus_factor
 
         if avg_conf < self._min_confidence:
             logger.info(

@@ -123,6 +123,12 @@ class DangerSignalDetector:
                 signals.append("long_upper_shadow")
                 descriptions.append("长上影线：高位出现长上影，上方抛压沉重")
 
+            # P0 修复：6. 跌破均线（趋势破坏的核心信号）
+            ma_breakdown = self._check_ma_breakdown(df)
+            if ma_breakdown:
+                signals.append("ma_breakdown")
+                descriptions.append("跌破均线：趋势支撑破坏，应减仓或止损")
+
         except Exception as e:
             logger.warning(f"[danger-signal] 检测异常: {e}")
             return DangerSignalResult(
@@ -329,14 +335,50 @@ class DangerSignalDetector:
 
         return False
 
+    def _check_ma_breakdown(self, df: pd.DataFrame) -> bool:
+        """P0 修复：检测跌破均线（趋势破坏的核心信号）。
+
+        《炒股的智慧》铁律：跌破趋势支撑立即减仓/止损。
+        检测规则：
+        - 跌破 MA20（短期趋势支撑）
+        - 跌破 MA10（更短期，更敏感）
+
+        当且仅当前一日还在 MA 之上，今日跌破，才算"跌破"（避免持续在 MA 下方时持续触发）。
+        """
+        close = df["close"].astype(float)
+        if len(close) < 25:
+            return False
+
+        ma20 = close.rolling(20).mean()
+        ma10 = close.rolling(10).mean()
+
+        # 今日跌破 MA20 且昨日在 MA20 之上（新跌破，非持续下方）
+        if (
+            ma20.iloc[-2] is not None and not pd.isna(ma20.iloc[-2])
+            and close.iloc[-1] < ma20.iloc[-1]
+            and close.iloc[-2] >= ma20.iloc[-2]
+        ):
+            return True
+
+        # 今日跌破 MA10 且昨日在 MA10 之上（更短期跌破）
+        if (
+            ma10.iloc[-2] is not None and not pd.isna(ma10.iloc[-2])
+            and close.iloc[-1] < ma10.iloc[-1]
+            and close.iloc[-2] >= ma10.iloc[-2]
+            and ma10.iloc[-1] < ma20.iloc[-1]  # MA10 在 MA20 下方（非盘整）
+        ):
+            return True
+
+        return False
+
     @staticmethod
     def _assess_severity(signals: list[str]) -> str:
         """评估危险信号严重程度。"""
         if not signals:
             return "none"
 
-        # 高严重度信号
-        high_severity = {"bad_news", "two_day_reversal"}
+        # 高严重度信号（P0 修复：加入 ma_breakdown）
+        high_severity = {"bad_news", "two_day_reversal", "ma_breakdown"}
         if any(s in high_severity for s in signals):
             return "high"
 

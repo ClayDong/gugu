@@ -347,18 +347,19 @@ class MarketFilter:
         satisfied = [cond_above_ma, cond_trend_up, cond_liquidity]
         satisfied_count = sum(satisfied)
 
-        # v0.4.0：放宽选股门槛 —— 只要指数在 MA200 之上（长期趋势向上）就允许选股
-        # 原逻辑要求 3 条件全满足才 bull，导致震荡市（range）也禁止选股，选不出股票
-        # 陈江挺原意："大市不好时不选股"指的是熊市（指数 < MA200），而非震荡市
-        if cond_above_ma:
-            regime = "bull" if satisfied_count == 3 else "range"
-            bullish = True  # 在 MA200 之上即允许选股
+        # 三重验证：全部满足才判定为 bull（恢复硬约束，P0-2 修复）
+        # v0.4.0 曾放宽为"指数在 MA200 之上即允许选股"，导致震荡市也放行，
+        # 违反陈江挺"大市不好不选股"原意（震荡市假突破率高）。
+        # 震荡市选不出股票是策略纪律的正确表现，不应通过降门槛硬出信号。
+        if satisfied_count == 3:
+            regime = "bull"
+            bullish = True
         elif satisfied_count == 0:
             regime = "bear"
             bullish = False
         else:
             regime = "range"
-            bullish = False  # 在 MA200 之下但部分条件满足，仍保守不选股
+            bullish = False
 
         # 构建可读的判断理由
         reason_parts = [

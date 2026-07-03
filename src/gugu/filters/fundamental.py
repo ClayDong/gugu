@@ -17,12 +17,27 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import akshare as ak
+import httpx
 import pandas as pd
 
 from gugu.config import get_config
 from gugu.utils.log import get_logger
 
 logger = get_logger()
+
+# 东方财富 push2 stock/get 直连（akshare 失败时的兜底源）
+_EM_STOCK_GET_URL = "https://push2.eastmoney.com/api/qt/stock/get"
+_EM_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Referer": "https://quote.eastmoney.com/",
+    "Accept": "application/json, text/plain, */*",
+}
+
+
+def _em_secid(code: str) -> str:
+    """股票代码 → 东方财富 secid 格式（如 1.600519）。"""
+    prefix = "1" if code[0] in ("6", "9") else "0"
+    return f"{prefix}.{code}"
 
 # 默认过滤阈值
 _DEFAULT_THRESHOLDS: dict[str, Any] = {
@@ -209,6 +224,17 @@ class FundamentalFilter:
         else:
             reasons.append("营收增长率获取失败，跳过过滤")
 
+        # P0 修复：全失败硬约束——PE/PB/ROE 三项指标全部获取失败时，
+        # 基本面过滤器不可"放行通过"（原逻辑 passed=True 默认放行，等于跳过过滤）
+        # 全部失败说明数据源不可用，应拒绝以防止"无基本面数据即放行"的逆向选择
+        if pe is None and pb is None and roe is None and revenue_growth is None:
+            passed = False
+            reasons.append("全部基本面指标获取失败，拒绝放行（数据源不可用）")
+            logger.warning(
+                f"基本面过滤：{code} 全部指标获取失败（PE/PB/ROE/营收均 None），"
+                f"拒绝放行。akshare 与东方财富兜底均不可用。"
+            )
+
         result: dict[str, Any] = {
             "pass": passed,
             "pe": pe,
@@ -228,7 +254,19 @@ class FundamentalFilter:
         return result
 
     def _fetch_pe_pb(self, code: str) -> tuple[float | None, float | None]:
-        """从实时行情快照获取 PE/PB（带全量快照缓存，P1 修复）。"""
+        """从实时行情快照获取 PE/PB（akshare 主源 + 东方财富兜底，P0 修复）。"""
+        pe, pb = self._fetch_pe_pb_akshare(code)
+        if pe is None and pb is None:
+            # akshare 全失败 → 东方财富兜底
+            pe_em, pb_em = self._fetch_pe_pb_eastmoney(code)
+            if pe_em is not None:
+                pe = pe_em
+            if pb_em is not None:
+                pb = pb_em
+        return pe, pb
+
+    def _fetch_pe_pb_akshare(self, code: str) -> tuple[float | None, float | None]:
+        """akshare 主源获取 PE/PB（带全量快照缓存）。"""
         try:
             df = self._snapshot_cache.get()
             if df is None:
@@ -236,13 +274,41 @@ class FundamentalFilter:
                 self._snapshot_cache.set(df)
             row = df[df["代码"] == code]
             if row.empty:
-                logger.warning(f"基本面过滤：{code} 未在实时行情中找到")
+                logger.warning(f"基本面过滤：{code} akshare 未在实时行情中找到")
                 return None, None
             pe = _safe_float(row.iloc[0].get("市盈率-动态"))
             pb = _safe_float(row.iloc[0].get("市净率"))
             return pe, pb
         except Exception as e:
-            logger.warning(f"基本面过滤：{code} 获取 PE/PB 失败: {e}")
+            logger.warning(f"基本面过滤：{code} akshare 获取 PE/PB 失败: {e}")
+            return None, None
+
+    def _fetch_pe_pb_eastmoney(self, code: str) -> tuple[float | None, float | None]:
+        """东方财富 push2 stock/get 兜底获取 PE/PB（P0 修复新增）。
+
+        使用单股查询，避免触发全市场快照限流。
+        字段：f162=市盈率(TTM)，f167=市净率。
+        """
+        try:
+            params = {
+                "secid": _em_secid(code),
+                "fields": "f162,f167",
+            }
+            with httpx.Client(timeout=8.0, headers=_EM_HEADERS) as client:
+                resp = client.get(_EM_STOCK_GET_URL, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+            if not data or not data.get("data"):
+                logger.warning(f"基本面过滤：{code} 东方财富 push2 返回空数据")
+                return None, None
+            d = data["data"]
+            pe = _safe_float(d.get("f162"))
+            pb = _safe_float(d.get("f167"))
+            if pe is not None or pb is not None:
+                logger.info(f"基本面过滤：{code} 东方财富兜底成功 PE={pe} PB={pb}")
+            return pe, pb
+        except Exception as e:
+            logger.warning(f"基本面过滤：{code} 东方财富兜底 PE/PB 失败: {e}")
             return None, None
 
     def _fetch_industry(self, code: str) -> str:

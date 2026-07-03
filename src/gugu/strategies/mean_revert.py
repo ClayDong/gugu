@@ -24,9 +24,15 @@ class BollingerStrategy(Strategy):
         df["upper"] = df["ma"] + n * df["std"]
         df["lower"] = df["ma"] - n * df["std"]
 
+        # P0 修复：下跌趋势过滤 — MA20 < MA60 时不发买入信号（不接飞刀）
+        ma_short = df["close"].rolling(20).mean()
+        ma_long = df["close"].rolling(60).mean()
+        downtrend_mask = (ma_short < ma_long) & ma_long.notna()
+
         df["signal"] = 0
-        # 收盘价跌破下轨买入
-        df.loc[df["close"] < df["lower"], "signal"] = 1
+        # 收盘价跌破下轨买入（但下跌趋势中不接飞刀）
+        buy_cond = (df["close"] < df["lower"]) & ~downtrend_mask
+        df.loc[buy_cond, "signal"] = 1
         # 收盘价突破上轨卖出
         df.loc[df["close"] > df["upper"], "signal"] = -1
 
@@ -65,7 +71,12 @@ class RSIStrategy(Strategy):
         df["signal"] = 0
         # RSI 回升确认策略：从超卖区回升到超卖线上方时买入，从超买区回落到超买线下方时卖出
         # 回升确认流派：RSI 离开超卖区时触发（价格已反弹），更安全
-        df.loc[(df["rsi"] >= oversold) & (df["rsi"].shift(1) < oversold), "signal"] = 1
+        # P0 修复：下跌趋势过滤 — MA20 < MA60 时不接飞刀
+        ma_short = df["close"].rolling(20).mean()
+        ma_long = df["close"].rolling(60).mean()
+        downtrend_mask = (ma_short < ma_long) & ma_long.notna()
+        rsi_buy = (df["rsi"] >= oversold) & (df["rsi"].shift(1) < oversold)
+        df.loc[rsi_buy & ~downtrend_mask, "signal"] = 1
         # RSI 从超买区回落
         df.loc[(df["rsi"] <= overbought) & (df["rsi"].shift(1) > overbought), "signal"] = -1
 

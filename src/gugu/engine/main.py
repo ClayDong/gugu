@@ -48,7 +48,7 @@ from gugu.risk import RiskManager
 from gugu.risk.rules import RiskAction
 from gugu.selector import StockSelector
 from gugu.strategies.registry import get_enabled_strategies
-from gugu.utils.calendar import is_trading_day
+from gugu.utils.calendar import is_trading_day, is_trading_time
 from gugu.utils.log import get_logger
 from gugu.wisdom import WisdomAdvisor
 
@@ -216,6 +216,25 @@ class TradingEngine:
 
         if not is_trading_day():
             logger.info("非交易日，跳过")
+            return
+
+        # P0 修复：交易时段校验（原逻辑仅校验交易日，盘前盘后/午休也会"成交"）
+        # 止损检查豁免（卖出随时可执行），仅买入流程需在交易时段内
+        if not is_trading_time():
+            logger.info("非交易时段（盘前/午休/盘后），跳过买入流程，仅执行止损检查")
+            async with self._lock:
+                if self._running:
+                    return
+                self._running = True
+                # 确保事件引擎存在（兼容测试中跳过 __init__ 的场景）
+                if not hasattr(self, "_event_engine"):
+                    self._event_engine = EventEngine()
+                try:
+                    await self._update_prices()
+                    await self._check_stop_loss()
+                finally:
+                    self._running = False
+                    self._event_engine.put(EVENT_CYCLE_END, {"off_hours": True})
             return
 
         # P1 修复：使用 asyncio.Lock 确保整个循环的并发安全
@@ -459,7 +478,7 @@ class TradingEngine:
             batch_history = {}
             for sym in scan_list:
                 try:
-                    df = await self._dm.fetch_stock_history(sym, days=60)
+                    df = await self._dm.fetch_stock_history(sym, days=90)
                     if not df.empty:
                         batch_history[sym] = df
                 except Exception:
@@ -475,7 +494,7 @@ class TradingEngine:
                     # 优先使用预取数据
                     df = batch_history.get(symbol)
                     if df is None:
-                        df = await self._dm.fetch_stock_history(symbol, days=60)
+                        df = await self._dm.fetch_stock_history(symbol, days=90)
                     if df is None or df.empty:
                         return None
 
@@ -551,9 +570,9 @@ class TradingEngine:
         """记录信号已通知，防止多轮扫描重复发送。"""
         symbol = signal["symbol"]
         direction = signal["direction"]
-        strategies = signal.get("strategies", [])
-        strategy_key = ",".join(sorted(strategies)) if strategies else signal.get("strategy", "")
-        dedup_key = f"{symbol}_{direction}_{strategy_key}"
+        # P0 修复：去重键去掉 strategy_key — 同股同方向当日只推一次
+        # 原逻辑含 strategy_key，导致同股同方向但不同策略的信号不被去重
+        dedup_key = f"{symbol}_{direction}"
         self._notified_signals[dedup_key] = date.today().isoformat()
         # 持久化到文件
         self._save_notified_signals()
@@ -564,16 +583,15 @@ class TradingEngine:
         direction = signal["direction"]
         price = signal.get("price", 0)
 
-        # 信号去重：同方向同策略当日已通知的信号不重复发送（防止多轮扫描重复推送）
+        # 信号去重：同股同方向当日已通知的信号不重复发送（防止多轮扫描重复推送）
         if not hasattr(self, "_notified_signals"):
             self._notified_signals = {}
-        strategies = signal.get("strategies", [])
-        strategy_key = ",".join(sorted(strategies)) if strategies else signal.get("strategy", "")
-        dedup_key = f"{symbol}_{direction}_{strategy_key}"
+        # P0 修复：去重键去掉 strategy_key — 同股同方向当日只推一次
+        dedup_key = f"{symbol}_{direction}"
         today_str = date.today().isoformat()
         if self._notified_signals.get(dedup_key) == today_str:
             logger.info(
-                f"{symbol} {direction} 信号已通知过（{strategy_key}），跳过重复发送"
+                f"{symbol} {direction} 信号已通知过，跳过重复发送"
             )
             return
 
@@ -836,7 +854,7 @@ class TradingEngine:
 
         # P2 优化：批量拉取所有持仓的历史数据，避免 N 次串行 HTTP 请求
         try:
-            batch_dfs = await self._dm.fetch_stock_history_batch(symbols, days=60)
+            batch_dfs = await self._dm.fetch_stock_history_batch(symbols, days=90)
         except Exception as e:
             logger.warning(f"批量拉取持仓历史数据失败，回退到逐股获取: {e}")
             batch_dfs = {}
@@ -847,7 +865,7 @@ class TradingEngine:
             df = batch_dfs.get(symbol, pd.DataFrame())
             if df.empty:
                 with contextlib.suppress(Exception):
-                    df = await self._dm.fetch_stock_history(symbol, days=60)
+                    df = await self._dm.fetch_stock_history(symbol, days=90)
 
             # 移动止损更新：如果有 trailing_stop 状态，先更新
             if pos.trailing_stop and not df.empty:

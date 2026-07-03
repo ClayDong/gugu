@@ -22,7 +22,7 @@ class BaseCollector(ABC):
     source: Source = "akshare"
 
     @abstractmethod
-    def fetch_stock_history(self, symbol: str, days: int = 60) -> pd.DataFrame:
+    def fetch_stock_history(self, symbol: str, days: int = 90) -> pd.DataFrame:
         """获取个股历史行情。
 
         Args:

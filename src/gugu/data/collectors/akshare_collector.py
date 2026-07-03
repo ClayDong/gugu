@@ -30,7 +30,7 @@ class AkshareCollector(BaseCollector):
     source = "akshare"
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
-    def fetch_stock_history(self, symbol: str, days: int = 60) -> pd.DataFrame:
+    def fetch_stock_history(self, symbol: str, days: int = 90) -> pd.DataFrame:
         code = self.normalize_symbol(symbol)
         end = datetime.now().strftime("%Y%m%d")
         start = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")

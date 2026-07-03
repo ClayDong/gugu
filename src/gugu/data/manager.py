@@ -276,9 +276,9 @@ class DataManager:
 
     # ===== 对外接口 =====
 
-    async def fetch_stock_history(self, symbol: str, days: int = 60) -> pd.DataFrame:
+    async def fetch_stock_history(self, symbol: str, days: int = 90) -> pd.DataFrame:
         # days 作为位置参数传递，确保 fetch_stock_history("600519") 与
-        # fetch_stock_history("600519", days=60) 生成相同缓存键
+        # fetch_stock_history("600519", days=90) 生成相同缓存键
         return await self._call_with_fallback("fetch_stock_history", symbol, days)
 
     async def fetch_stock_realtime(self, symbols: list[str]) -> pd.DataFrame:

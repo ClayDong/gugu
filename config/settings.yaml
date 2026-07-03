@@ -51,11 +51,11 @@ strategy:
     - money_flow_follow
     - chen_jiangting            # 陈江挺《炒股的智慧》阻力突破 + 量能确认
   # 信号融合规则：unanimous（全票通过）/ majority（多数）/ any（任一）/ weighted（策略池加权）
-  # v0.4.0：weighted → any，任一策略触发即可输出信号（避免震荡市多策略相互否决导致选不出股）
-  signal_fusion: any
-  min_confidence: 0.5            # 0.6 → 0.5，放宽弱信号过滤（陈江挺阻力突破的置信度天然偏低）
+  # v0.4.1：恢复 weighted（多策略共识），any 模式在 A 股高噪声下产生大量假信号
+  signal_fusion: weighted
+  min_confidence: 0.6            # 恢复 0.6，0.5 放宽后弱信号泛滥
   auto_select: true              # 启用自动选股（全市场扫描+策略信号+综合评分）
-  select_top_n: 100               # 50 → 100，扩大预选池（震荡市前50可能都是资金流出股）
+  select_top_n: 50               # 恢复 50，100 过大增加噪声
   select_max_candidates: 10      # 最大选股数量
 
 # ========== 风控 ==========
@@ -125,7 +125,7 @@ wisdom:
     - stock-psychology-check
   # 仓颉蒸馏的28本书籍视角（多视角认知参考）
   books_dir: "src/gugu/wisdom/skills/books"
-  enable_multi_perspective: true      # 启用多视角书籍认知
+  enable_multi_perspective: false     # P0 修复：默认关闭，新手不需要利弗莫尔/格雷厄姆的权重裁决（专家审查发现这是"产品自我感动"）
   max_perspectives: 3                 # 每次决策最多参考的视角数
 
 # ========== 基金监控 ==========

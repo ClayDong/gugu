@@ -87,14 +87,15 @@ class MoneyFlowFollowStrategy(Strategy):
         cond_not_abnormal = cond_not_abnormal | vol_ma.isna()
 
         # ── 条件4：创新高回踩不破 MA20 ──
-        # 近 new_high_window 日内是否创 new_high_lookback 日新高
-        rolling_high = df["high"].rolling(new_high_window).max()
-        historical_high = df["high"].rolling(new_high_lookback).max()
-        # 创新高：当前 rolling_high >= historical_high（近窗口最高 = 历史最高）
-        made_new_high = rolling_high >= historical_high
-        # 回踩：当前收盘距近 window 日最高点的回撤 ≤ pullback_max_pct
-        pullback_from_high = (df["close"] - rolling_high) / rolling_high
-        cond_pullback_hold = made_new_high & (pullback_from_high >= -pullback_max_pct)
+        # P0 修复：原逻辑 rolling_high 含当日，创新高当日即满足回踩条件（无回踩）
+        # 修复：用 shift(1) 排除当日，要求"前 N 日已创新高"+"当日回踩（收盘低于前高）"
+        rolling_high_prev = df["high"].rolling(new_high_window).max().shift(1)
+        historical_high = df["high"].rolling(new_high_lookback).max().shift(1)
+        # 创新高：前 N 日最高 = 历史最高（已创新高，非当日创新高）
+        made_new_high = rolling_high_prev >= historical_high
+        # 回踩：当日收盘低于前 N 日最高（真正回踩，非继续创新高）
+        pullback_from_high = (df["close"] - rolling_high_prev) / rolling_high_prev
+        cond_pullback_hold = made_new_high & (pullback_from_high < 0) & (pullback_from_high >= -pullback_max_pct)
         # 回踩不破 MA20
         cond_above_ma20 = df["close"] > ma20
 

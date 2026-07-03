@@ -62,7 +62,7 @@ class SinaCollector(BaseCollector):
         return self._client
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=4))
-    def fetch_stock_history(self, symbol: str, days: int = 60) -> pd.DataFrame:
+    def fetch_stock_history(self, symbol: str, days: int = 90) -> pd.DataFrame:
         code = self.normalize_symbol(symbol)
         sina_code = _to_sina_csv_code(code)
         exch_code = _to_sina_code(code)

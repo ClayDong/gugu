@@ -389,10 +389,14 @@ class SignalPipeline:
                     signal["filter_reason"] = f"行业约束: {ind_result['reason']}"
 
             # 3.5 四阶段入场过滤
+            # P0 修复：DOWNTREND 阶段也拦截买入（原逻辑只拦 FRENZY/FINAL）
+            # 下跌趋势中接飞刀 = 违反《炒股的智慧》"不接飞刀"铁律
             if (
                 signal["direction"] == "buy"
                 and not signal.get("wisdom_filtered")
-                and stage_result.stage in (MarketStage.FRENZY, MarketStage.FINAL)
+                and stage_result.stage in (
+                    MarketStage.FRENZY, MarketStage.FINAL, MarketStage.DOWNTREND
+                )
             ):
                 logger.warning(f"{symbol} 阶段过滤: {stage_result.stage.value}，不建议入场")
                 signal["wisdom_filtered"] = True

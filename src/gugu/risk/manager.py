@@ -114,6 +114,9 @@ class RiskManager:
         """P0-2 修复：从磁盘加载熔断状态，防止进程重启绕过熔断。
 
         同时加载 last_reset_date，用于确定是否为新交易日（与 _last_cycle_date 同步）。
+
+        P0 修复：fail-safe — 文件损坏时保守保持 halted=False 但记录 ERROR。
+        （熔断状态丢失比误熔断影响小，可由人工核查；若误熔断会阻断所有交易）
         """
         try:
             if RISK_STATE_FILE.exists():
@@ -132,7 +135,11 @@ class RiskManager:
                     )
                 self._last_reset_date = data.get("last_reset_date", "")
         except Exception as e:
-            self._logger.warning(f"加载熔断状态失败: {e}")
+            # P0 修复：fail-safe 但记录 ERROR，便于人工介入
+            self._logger.error(
+                f"加载熔断状态失败({e})，文件可能损坏。"
+                f"保守恢复为非熔断状态，请人工核查 {RISK_STATE_FILE}"
+            )
 
     @property
     def last_reset_date(self) -> str:
@@ -142,6 +149,7 @@ class RiskManager:
     def _save_halt_state(self) -> None:
         """P0-2 修复：将熔断状态持久化到磁盘，含 last_reset_date 用于跨日同步。
         P0 修复：同时保存 _portfolio_peak，防止重启后组合回撤熔断失效。
+        P0 修复：原子写入（tmp + os.replace），防止崩溃导致文件截断。
         """
         try:
             RISK_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -154,9 +162,9 @@ class RiskManager:
                 "portfolio_peak": self._portfolio_peak,  # P0: 持久化组合峰值
                 "updated_at": __import__("pandas").Timestamp.now().isoformat(),
             }
-            RISK_STATE_FILE.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            # P0 修复：原子写入
+            from gugu.utils.atomic import atomic_write_json
+            atomic_write_json(RISK_STATE_FILE, data, ensure_ascii=False, indent=2)
         except Exception as e:
             self._logger.warning(f"保存熔断状态失败: {e}")
 
@@ -534,7 +542,7 @@ class RiskManager:
         returns: dict[str, pd.Series] = {}
         for sym in symbols:
             try:
-                df = await data_mgr.fetch_stock_history(sym, days=60)
+                df = await data_mgr.fetch_stock_history(sym, days=90)
                 if not df.empty and len(df) >= 30:
                     ret = df["close"].pct_change().dropna()
                     if len(ret) >= 30:

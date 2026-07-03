@@ -163,8 +163,9 @@ class TestFuse:
         ]
         weights = {"p1": 0.4, "p2": 0.35, "p3": 0.25}
         resolution = resolver._fuse(opinions, weights)
-        # 最严格 = 最低价 = 9.8
-        assert resolution.final_stop_loss_price == 9.8
+        # P0 修复：多头止损取最严格 = 最高价（最接近现价，触发最早、亏损最小）= 10.5
+        # 原逻辑 min() 取最低价会导致止损过松、亏损扩大
+        assert resolution.final_stop_loss_price == 10.5
 
     def test_position_weighted_average(self):
         resolver = ConflictResolver()
