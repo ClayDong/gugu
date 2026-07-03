@@ -22,8 +22,9 @@ from gugu.utils.log import get_logger
 logger = get_logger()
 
 # 策略分类映射
+# P0 修复：移除不存在的 sar 策略（文档声称但代码从未实现），添加 chen_jiangting
 STRATEGY_CATEGORIES: dict[str, list[str]] = {
-    "trend": ["turtle", "dual_ma", "macd", "sar"],
+    "trend": ["turtle", "dual_ma", "macd", "chen_jiangting"],
     "mean_revert": ["rsi_reversal", "bollinger", "kdj"],
     "breakout": ["box_breakout", "dual_thrust", "money_flow_follow"],
 }

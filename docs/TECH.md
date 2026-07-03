@@ -52,7 +52,7 @@ gugu/
 │   │   └── signal.py            # Signal 强类型数据类 + OrderResult
 │   ├── strategies/              # 策略层
 │   │   ├── base.py              # Strategy 抽象基类
-│   │   ├── trend.py             # 趋势（Turtle/DualMA/MACD/SAR）
+│   │   ├── trend.py             # 趋势（Turtle/DualMA/MACD）
 │   │   ├── mean_revert.py       # 均值回归（RSI/KDJ/Bollinger）
 │   │   ├── breakout.py          # 突破（Box/DualThrust）
 │   │   ├── generator.py         # LLM 策略生成器

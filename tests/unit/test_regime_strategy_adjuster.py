@@ -20,7 +20,8 @@ class TestGetStrategyCategory:
         assert get_strategy_category("turtle") == "trend"
         assert get_strategy_category("dual_ma") == "trend"
         assert get_strategy_category("macd") == "trend"
-        assert get_strategy_category("sar") == "trend"
+        # P0 修复：sar 策略从未实现，替换为真实存在的 chen_jiangting
+        assert get_strategy_category("chen_jiangting") == "trend"
 
     def test_mean_revert_strategies(self):
         """均值回归策略应正确分类。"""

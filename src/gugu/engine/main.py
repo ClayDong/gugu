@@ -553,16 +553,31 @@ class TradingEngine:
                     data = json.load(f)
                 # 清理过期记录（只保留今日的）
                 today_str = date.today().isoformat()
-                return {k: v for k, v in data.items() if v == today_str}
+                # P0 修复：清理旧格式 key（含 strategy_key 后缀的 3 段下划线格式）
+                # 旧格式如 "600519_sell_money_flow_follow" 会导致新代码用
+                # "{symbol}_{direction}" 查不到记录，去重失效
+                cleaned = {
+                    k: v for k, v in data.items()
+                    if v == today_str and k.count("_") <= 1
+                }
+                if len(cleaned) != len(data):
+                    logger.info(
+                        f"清理旧格式去重 key: {len(data)} → {len(cleaned)} 条"
+                    )
+                return cleaned
         except Exception as e:
             logger.warning(f"加载已通知信号记录失败: {e}")
         return {}
 
     def _save_notified_signals(self) -> None:
-        """保存已通知信号记录到文件。"""
+        """保存已通知信号记录到文件（P0 修复：原子写入）。"""
         try:
-            with open(self._notified_signals_file, "w", encoding="utf-8") as f:
-                json.dump(self._notified_signals, f, ensure_ascii=False)
+            from gugu.utils.atomic import atomic_write_json
+            atomic_write_json(
+                self._notified_signals_file,
+                self._notified_signals,
+                ensure_ascii=False,
+            )
         except Exception as e:
             logger.warning(f"保存已通知信号记录失败: {e}")
 
@@ -868,6 +883,26 @@ class TradingEngine:
                     df = await self._dm.fetch_stock_history(symbol, days=90)
 
             # 移动止损更新：如果有 trailing_stop 状态，先更新
+            # P0 修复：注入持仓无 trailing_stop 状态时自动补建（避免移动止损完全失效）
+            if not pos.trailing_stop and pos.avg_cost > 0 and not df.empty:
+                try:
+                    state = self._trailing_stop_engine.init_stop(
+                        entry_price=pos.avg_cost, df=df
+                    )
+                    pos.trailing_stop = self._trailing_stop_engine.state_to_dict(state)
+                    if state.current_stop_price > 0 and (
+                        pos.stop_loss_price is None
+                        or pos.stop_loss_price <= 0
+                        or pos.stop_loss_price < state.current_stop_price
+                    ):
+                        pos.stop_loss_price = state.current_stop_price
+                    logger.info(
+                        f"持仓 {symbol} 补建 trailing_stop 状态："
+                        f"入场价={pos.avg_cost:.3f} 止损价={pos.stop_loss_price:.3f}"
+                    )
+                except Exception as e:
+                    logger.warning(f"{symbol} 补建 trailing_stop 失败: {e}")
+
             if pos.trailing_stop and not df.empty:
                 try:
                     state = TrailingStopEngine.dict_to_state(pos.trailing_stop)

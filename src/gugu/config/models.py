@@ -151,6 +151,15 @@ class WisdomConfig(BaseModel):
         ],
         description="启用的 skill 列表",
     )
+    # P0 修复：enable_multi_perspective 配置开关此前在 pydantic 中被静默丢弃
+    # 导致 settings.yaml 中 enable_multi_perspective: false 完全不生效，
+    # 每次决策仍无条件注入 28 本书的多视角上下文
+    books_dir: str = Field(default="src/gugu/wisdom/skills/books", description="书籍视角目录")
+    enable_multi_perspective: bool = Field(
+        default=False,
+        description="是否启用多视角裁决（默认关闭，新手不需要利弗莫尔/格雷厄姆的权重裁决）",
+    )
+    max_perspectives: int = Field(default=3, description="每次决策最多参考的视角数")
 
 
 class FundamentalConfig(BaseModel):

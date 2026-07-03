@@ -104,7 +104,7 @@ gugu/
 │       │   └── report.py
 │       ├── strategies/          # 策略层
 │       │   ├── base.py          # 策略抽象基类
-│       │   ├── trend.py         # 趋势跟踪（海龟/双均线/MACD/SAR）
+│       │   ├── trend.py         # 趋势跟踪（海龟/双均线/MACD）
 │       │   ├── mean_revert.py   # 均值回归（RSI/KDJ/布林带）
 │       │   ├── breakout.py      # 突破（箱体/Dual Thrust/支撑阻力）
 │       │   ├── generator.py     # LLM 自然语言策略生成器

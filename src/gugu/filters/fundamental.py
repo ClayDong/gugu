@@ -153,6 +153,24 @@ class FundamentalFilter:
             return cached
 
         code = symbol.strip().zfill(6)
+
+        # P0 修复：ETF/LOF 跳过基本面过滤
+        # ETF 没有 PE/PB/ROE 等个股基本面数据，原逻辑会触发"全部指标获取失败"
+        # 导致 ETF 买入信号被永久拦截（逆向选择：只许卖不许买）
+        # ETF 代码前缀：51/52/56/58 开头（沪市基金）、15/16/18 开头（深市基金）
+        if code.startswith(("51", "52", "56", "58", "15", "16", "18")):
+            result: dict[str, Any] = {
+                "pass": True,
+                "pe": None,
+                "pb": None,
+                "roe": None,
+                "revenue_growth": None,
+                "industry": "ETF/LOF",
+                "reasons": ["ETF/LOF 不适用个股基本面过滤，直接放行"],
+            }
+            self._cache.set(symbol, result)
+            logger.info(f"基本面过滤：{code} 是 ETF/LOF，跳过基本面过滤")
+            return result
         pe: float | None = None
         pb: float | None = None
         roe: float | None = None

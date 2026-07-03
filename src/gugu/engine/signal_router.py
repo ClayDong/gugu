@@ -219,6 +219,9 @@ class SignalRouter:
         if self._fusion_rule != "weighted":
             chosen_votes = buy_votes if direction == "buy" else sell_votes
             avg_conf = sum(c for _, c in chosen_votes) / len(chosen_votes) if chosen_votes else 0
+        # P0 修复：weighted 模式也应用共识折扣
+        # 原逻辑 weighted 模式直接用 pool 返回的 confidence，单策略时归一化后恒为 1.0
+        # 导致 min_confidence=0.6 阈值形同虚设，所有单策略信号都通过
         total_strategies = max(len(self._strategies), 1)
         agreeing_count = len(triggered)
         if total_strategies > 1:

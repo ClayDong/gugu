@@ -162,7 +162,11 @@ class WisdomAdvisor:
         self._load_skills()
 
         # 加载仓颉蒸馏的多视角书籍认知
-        self._book_router = BookPerspectiveRouter()
+        # P0 修复：根据 enable_multi_perspective 开关决定是否启用多视角注入
+        # 原逻辑无条件创建 BookPerspectiveRouter，导致 settings.yaml 的
+        # enable_multi_perspective: false 配置完全不生效
+        self._enable_multi_perspective = get_config().wisdom.enable_multi_perspective
+        self._book_router = BookPerspectiveRouter() if self._enable_multi_perspective else None
 
         # async HTTP client 连接池（复用，避免每次创建新连接）
         self._async_client: httpx.AsyncClient | None = None
@@ -359,18 +363,21 @@ class WisdomAdvisor:
             else "psychology_check"
         )
         # P2 修复：使用波动率感知的动态路由
+        # P0 修复：enable_multi_perspective=false 时跳过多视角注入
         atr = signal.get("atr", 0)
         price = signal.get("price", 0)
         market_vol = (atr / price) if (atr > 0 and price > 0) else None
-        book_context = self._book_router.build_context(scenario, direction, signal)
-        # 若 market_vol 可用，额外附上动态视角选择说明
-        if market_vol is not None:
-            dyn_perspectives = self._book_router.select_perspectives_dynamic(
-                scenario, direction, market_volatility=market_vol, signal=signal
-            )
-            if dyn_perspectives:
-                book_context += (
-                    f"\n（波动率={market_vol:.2%}，动态选择视角: {dyn_perspectives[:2]}）"
+        book_context = ""
+        if self._book_router is not None:
+            book_context = self._book_router.build_context(scenario, direction, signal)
+            # 若 market_vol 可用，额外附上动态视角选择说明
+            if market_vol is not None:
+                dyn_perspectives = self._book_router.select_perspectives_dynamic(
+                    scenario, direction, market_volatility=market_vol, signal=signal
+                )
+                if dyn_perspectives:
+                    book_context += (
+                        f"\n（波动率={market_vol:.2%}，动态选择视角: {dyn_perspectives[:2]}）"
                 )
 
         # 3. 构建 prompt
