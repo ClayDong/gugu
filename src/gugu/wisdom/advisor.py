@@ -1010,7 +1010,17 @@ class WisdomAdvisor:
                 logger.info(f"[wisdom-fallback] {signal.get('symbol', '')} 卖出过滤: 无持仓")
             elif price > 0:
                 decision["sell_reason"] = "策略信号触发卖出"
-                logger.info(f"[wisdom-fallback] {signal.get('symbol', '')} 卖出决策: 策略信号触发")
+                # P0-6 修复：sell 信号补充 stop_loss_price（语义为"立即在当前价退出"）
+                # 原遗漏导致所有 sell 信号 stop_loss_price=null，下游 NULL 检查可能失败
+                # 对抗性审查结论：sell 信号触发后持仓应已清空，止损价无实际意义
+                # 但保持字段一致性可避免下游分支异常
+                exit_price = round(price, 2)
+                decision["stop_loss_price"] = exit_price
+                signal["stop_loss_price"] = exit_price
+                logger.info(
+                    f"[wisdom-fallback] {signal.get('symbol', '')} 卖出决策: 策略信号触发, "
+                    f"退出价: {exit_price:.2f}"
+                )
 
         signal["wisdom"] = advice
         signal["wisdom_decision"] = decision

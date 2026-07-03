@@ -495,7 +495,13 @@ class PaperBroker(BaseBroker):
     def daily_start_value(self) -> float:
         """当日开盘时账户净值（用于日亏计算）。"""
         if self._daily_start_value is None or self._daily_start_value <= 0:
-            return self.get_account().total_value
+            # P0-7 修复：fallback 应返回 initial_capital 而非当前 total_value
+            # 原逻辑返回 total_value 会导致"日初净值"语义被污染为"当前净值"，
+            # 使日亏率计算永远≈0（start_value≈total_value），熔断形同虚设
+            # 改为返回 initial_capital（与 main.py 日亏 fallback 一致），
+            # 跨日 reset_daily_start_value() 触发后会更新为真实日初总资产
+            cfg = get_config().execution.paper
+            return float(cfg.initial_capital)
         return self._daily_start_value
 
     def reset_daily_start_value(self) -> None:
