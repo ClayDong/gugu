@@ -201,7 +201,7 @@ class StrategyManifest:
             "",
         ]
 
-        # 类别统计
+        # 类别统计（与 strategy_manifest.yaml 的顶层 key 对齐）
         category_names = {
             "signal_strategies": "信号生成策略",
             "risk_strategies": "风控/择时/止盈策略",
@@ -248,8 +248,7 @@ class StrategyManifest:
                 continue
             cat_name = {
                 "signal_strategies": "信号",
-                "risk_strategies": "风控",
-                "take_profit_strategies": "止盈",
+                "risk_strategies": "风控/择时/止盈",
                 "skill_strategies": "Skill",
                 "dynamic_strategies": "动态",
             }.get(category, category)

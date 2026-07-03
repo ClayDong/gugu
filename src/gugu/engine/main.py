@@ -613,6 +613,11 @@ class TradingEngine:
         # 入场过滤：wisdom 判定低置信度，仅通知不下单
         if signal.get("wisdom_filtered"):
             logger.info(f"{symbol} 信号被 wisdom 入场过滤，仅通知不下单")
+            # P1-1 修复：被 wisdom 过滤的信号也记录历史，确保绩效分析无盲区
+            try:
+                record_signal_history(signal, None, None)
+            except Exception as e:
+                logger.warning(f"记录 wisdom 过滤信号历史失败: {e}")
             notify_ok = await self._notifier.notify_signal(signal)
             if notify_ok:
                 self._mark_notified(signal)
@@ -907,9 +912,12 @@ class TradingEngine:
             if risk_result.allowed:
                 result = self._broker.order(symbol, "sell", int(available), price)
                 if result.success:
-                    # 清除移动止损状态
-                    pos.trailing_stop = None
-                    pos.danger_signals = None
+                    # P0-1 修复：通过 broker 重新获取 position 引用，
+                    # 避免 stop_list 中的 pos 在清仓后变成孤儿对象
+                    fresh_pos = self._broker.get_position(symbol)
+                    if fresh_pos:
+                        fresh_pos.trailing_stop = None
+                        fresh_pos.danger_signals = None
 
                     notify_ok = await self._notifier.notify_risk_alert(
                         {
@@ -946,6 +954,11 @@ class TradingEngine:
 
         today_str = _date.today().isoformat()
 
+        # P2-2 优化：缓存 portfolio 和 cash 快照，避免循环内重复查询
+        # 止盈减仓是卖出操作，风控检查使用快照即可（与止损一致）
+        cached_portfolio = portfolio
+        cached_cash = self._broker.get_account().cash
+
         for symbol, pos in portfolio.items():
             if pos.available <= 0:
                 continue
@@ -981,14 +994,14 @@ class TradingEngine:
                 f"{tp_signal.reason}，减仓 {reduce_qty} 股"
             )
 
-            # 风控检查
+            # 风控检查（P2-2: 使用缓存的快照，避免重复查询）
             risk_result = self._risk.check_order(
                 symbol=symbol,
                 direction="sell",
                 quantity=reduce_qty,
                 price=pos.current_price,
-                portfolio=self._broker.get_portfolio(),
-                cash=self._broker.get_account().cash,
+                portfolio=cached_portfolio,
+                cash=cached_cash,
                 prev_close=getattr(pos, "prev_close", None),
                 is_st=bool(getattr(pos, "is_st", False)),
                 is_suspended=bool(getattr(pos, "is_suspended", False)),
@@ -1188,13 +1201,22 @@ class TradingEngine:
         await self._notifier.notify_daily_report(period, data)
 
         # 收盘后检查持仓股卖出信号（迁移自 MingCe _check_holdings_sell_signals）
+        # P1-2 修复：使用 _lock 保护，避免与交易循环并发操作 broker
         if period == "close":
             try:
-                portfolio = self._broker.get_portfolio()
-                if portfolio:
-                    sell_alerts = await self._check_holdings_sell_signals(portfolio)
-                    if sell_alerts:
-                        await self._notifier.notify_holdings_sell_alert(sell_alerts)
+                async with self._lock:
+                    if self._running:
+                        logger.warning("交易循环仍在运行，跳过收盘持仓卖出检查")
+                        return
+                    self._running = True
+                    try:
+                        portfolio = self._broker.get_portfolio()
+                        if portfolio:
+                            sell_alerts = await self._check_holdings_sell_signals(portfolio)
+                            if sell_alerts:
+                                await self._notifier.notify_holdings_sell_alert(sell_alerts)
+                    finally:
+                        self._running = False
             except Exception as e:
                 logger.warning(f"持仓卖出检查失败（不影响日报）: {e}")
 

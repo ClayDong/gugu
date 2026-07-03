@@ -2,12 +2,18 @@
 
 提取自 TradingEngine._scan_signals，形成独立可测试的 SignalPipeline 类。
 
-过滤链顺序：
-1. 基本面过滤（FundamentalFilter）
-2. 资金流过滤（MoneyFlowFilter）
-3. 行业约束（IndustryConstraint）
-4. 市场状态仓位修正（RegimeDetector 已体现在 budget 中）
-5. Wisdom 决策层（WisdomAdvisor）
+过滤链顺序（实际执行顺序）：
+  [步骤0]   四阶段判断（StageDetector，牛皮/升势/疯狂/最后）
+  [步骤0.5] 危险信号检测（DangerSignalDetector，仅买入，medium+ 过滤）
+  [步骤0.7] 量价背离检测（DivergenceDetector，仅买入，严重背离过滤）
+  [步骤1]   基本面过滤（FundamentalFilter，仅买入）
+  [步骤2]   资金流过滤（MoneyFlowFilter，仅买入）
+  [步骤2.5] 板块轮动检查（SectorRotation，仅买入，热点/冷门板块调整）
+  [步骤3]   向下摊平检查（NoAverageDownChecker，仅买入）
+  [步骤3.5] 行业约束（IndustryConstraint，仅买入 + 新建仓位）
+  [步骤4]   四阶段入场过滤（StageDetector，疯狂/最后阶段不入场）
+  [步骤5]   市场状态仓位修正（RegimeDetector，已体现在 budget 中）
+  [步骤6]   Wisdom 决策层（WisdomAdvisor，LLM + 15s 超时 fallback）
 
 P0 优化：signal_only 模式下跳过 Wisdom 决策和日内不变过滤。
 P0 优化：资金流数据缺失时默认放行。

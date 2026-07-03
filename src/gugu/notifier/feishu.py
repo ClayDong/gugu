@@ -9,6 +9,7 @@ Never raises to caller to avoid blocking the main trading flow.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import re
@@ -70,6 +71,8 @@ class FeishuNotifier:
         self._token: str = ""
         self._token_expires_at: float = 0.0
         self._client: httpx.AsyncClient = httpx.AsyncClient(timeout=10.0)
+        # P1-4 修复：重试队列并发安全锁，保护 _enqueue 和 retry_queued 的文件操作
+        self._queue_lock: asyncio.Lock = asyncio.Lock()
 
         # 测试环境保护：通过显式环境变量将重试队列重定向到临时目录
         # 防止测试中的失败通知污染生产数据文件 data/notify_queue.jsonl
@@ -181,8 +184,8 @@ class FeishuNotifier:
             return True
         except Exception as e:
             logger.error(f"Feishu send_card failed: {e}")
-            # 入队等待重试
-            self._enqueue(card)
+            # 入队等待重试（P1-4: 使用异步加锁版本，避免与 retry_queued 并发写文件）
+            await self._enqueue_async(card)
             return False
 
     def _enqueue(self, card: dict[str, Any]) -> None:
@@ -200,37 +203,50 @@ class FeishuNotifier:
         except Exception as e:
             logger.error(f"通知入队失败: {e}")
 
+    async def _enqueue_async(self, card: dict[str, Any]) -> None:
+        """异步入队（线程安全，与 retry_queued 互斥）。"""
+        async with self._queue_lock:
+            self._enqueue(card)
+
     async def retry_queued(self) -> int:
         """重试队列中的失败通知（per-item 追加模式，防丢失）。
 
         每次只读一条，重试成功则从队列删除（重写剩余队列），
         避免一次性读全部后进程崩溃导致丢失。
 
+        P1-4 修复：分两段加锁——读取和写回分别在 _queue_lock 内，
+        发送在锁外（避免长时间持锁阻塞 _enqueue_async）。
+        写回时合并发送期间新入队的条目，防止覆盖丢失。
+
         Returns:
             成功重试的通知数
         """
-        if not self._queue_path.exists():
-            return 0
+        # P1-4: 第一段锁——读取 pending 列表
+        async with self._queue_lock:
+            if not self._queue_path.exists():
+                return 0
 
-        # 读取所有待重试记录
-        pending: list[dict[str, Any]] = []
-        try:
-            with self._queue_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        pending.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
-        except Exception as e:
-            logger.error(f"读取重试队列失败: {e}")
-            return 0
+            pending: list[dict[str, Any]] = []
+            try:
+                with self._queue_path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            pending.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+            except Exception as e:
+                logger.error(f"读取重试队列失败: {e}")
+                return 0
 
-        if not pending:
-            return 0
+            if not pending:
+                return 0
+            # 清空队列文件，让发送期间的 _enqueue_async 从空文件追加
+            self._queue_path.write_text("", encoding="utf-8")
 
+        # 第二段：锁外逐个重试发送（不阻塞新通知入队）
         success_count = 0
         still_failed: list[dict[str, Any]] = []
 
@@ -289,23 +305,45 @@ class FeishuNotifier:
                 item["retry_count"] = retry_count + 1
                 still_failed.append(item)
 
-        # 原子写入剩余失败项（先写临时文件再 rename，崩溃不丢数据）
+        # P1-4: 第三段锁——合并写回 still_failed（保留发送期间新入队的条目）
         if still_failed:
-            tmp_path = self._queue_path.with_suffix(".jsonl.tmp")
-            try:
-                with tmp_path.open("w", encoding="utf-8") as f:
-                    for item in still_failed:
-                        f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
-                tmp_path.rename(self._queue_path)
-            except Exception as e:
-                logger.error(f"写入重试队列失败: {e}")
-                # 回退：直接写回原路径
-                with self._queue_path.open("w", encoding="utf-8") as f:
-                    for item in still_failed:
-                        f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
+            async with self._queue_lock:
+                # 读取发送期间 _enqueue_async 新追加的条目
+                newly_queued: list[dict[str, Any]] = []
+                if self._queue_path.exists():
+                    try:
+                        with self._queue_path.open("r", encoding="utf-8") as f:
+                            for line in f:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                try:
+                                    newly_queued.append(json.loads(line))
+                                except json.JSONDecodeError:
+                                    continue
+                    except Exception:
+                        pass
+                # 合并：新入队的在前，仍失败的在后
+                all_items = newly_queued + still_failed
+                tmp_path = self._queue_path.with_suffix(".jsonl.tmp")
+                try:
+                    with tmp_path.open("w", encoding="utf-8") as f:
+                        for item in all_items:
+                            f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
+                    tmp_path.rename(self._queue_path)
+                except Exception as e:
+                    logger.error(f"写入重试队列失败: {e}")
+                    with self._queue_path.open("w", encoding="utf-8") as f:
+                        for item in all_items:
+                            f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
         else:
-            # 全部成功，清空队列
-            self._queue_path.write_text("", encoding="utf-8")
+            # 全部成功，清空队列（但保留发送期间新入队的条目）
+            async with self._queue_lock:
+                # 检查是否有新条目入队
+                has_new = self._queue_path.exists() and self._queue_path.stat().st_size > 0
+                if not has_new:
+                    self._queue_path.write_text("", encoding="utf-8")
+
         if success_count > 0:
             logger.info(f"重试队列: {success_count} 成功, {len(still_failed)} 仍失败")
         return success_count
