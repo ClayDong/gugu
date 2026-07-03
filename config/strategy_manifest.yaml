@@ -110,6 +110,21 @@ signal_strategies:
       买点选择创历史新高（主力消化套牢盘），缩量回踩后放量确认入场。
       卖出：MA5 下穿 MA10 或跌破 MA20。confirm_days=0（放量确认本身即触发条件）。
 
+  chen_jiangting:
+    name: 陈江挺阻力突破
+    module: gugu.strategies.chen_jiangting
+    class: ChenJiangtingStrategy
+    source: 《炒股的智慧》陈江挺
+    enabled: true
+    summary: 阻力突破 + 量能确认 + 阶段过滤（不追疯狂段），与 money_flow_follow 互补
+    params_entry: strategy_defaults.yaml
+    validation: 单元测试通过，2026-07-03
+    notes: |
+      核心观点：股价突破前期阻力 + 成交量放大 = 主力愿意消化套牢盘。
+      不要求回踩（与 money_flow_follow 区别），直接突破即进场。
+      阶段过滤：排除当日涨幅 >7% 的"疯狂"阶段。
+      卖出：跌破 MA20 或量价背离（价格创新高但量萎缩）。
+
 # ============================================================
 # 二、风控/择时型策略（analysis/ + engine/，SignalPipeline 直接实例化）
 # ============================================================

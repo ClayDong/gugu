@@ -24,10 +24,10 @@ watchlist:
 # akshare: 东方财富封装（功能全，但部分网络环境被限流）
 # eastmoney: 东方财富直连 HTTP（兜底，单股查询，避免全市场快照限流）
 data:
-  primary_source: sina           # 主源：新浪（东方财富在部分网络被封）
+  primary_source: sina           # 主源：新浪（直连 HTTP，稳定性最好）
   fallback_sources:              # 降级源（按顺序尝试）
-    - akshare
-    - eastmoney                  # 第三备用源：东方财富直连 HTTP
+    - eastmoney                  # 第一备用：东方财富直连 HTTP（全市场快照稳定）
+    - akshare                    # 第二备用：akshare（东方财富后端，全市场快照可能被限流）
   fetch_interval_seconds: 120    # 实时采集间隔（秒）
   fail_threshold: 3              # 连续失败 N 次降级
   fail_cooldown_seconds: 300     # 降级冷却时间
@@ -49,11 +49,13 @@ strategy:
     - bollinger
     - rsi_reversal
     - money_flow_follow
+    - chen_jiangting            # 陈江挺《炒股的智慧》阻力突破 + 量能确认
   # 信号融合规则：unanimous（全票通过）/ majority（多数）/ any（任一）/ weighted（策略池加权）
-  signal_fusion: weighted
-  min_confidence: 0.6            # 最低置信度阈值
+  # v0.4.0：weighted → any，任一策略触发即可输出信号（避免震荡市多策略相互否决导致选不出股）
+  signal_fusion: any
+  min_confidence: 0.5            # 0.6 → 0.5，放宽弱信号过滤（陈江挺阻力突破的置信度天然偏低）
   auto_select: true              # 启用自动选股（全市场扫描+策略信号+综合评分）
-  select_top_n: 50               # 全市场按资金流排序取前 N
+  select_top_n: 100               # 50 → 100，扩大预选池（震荡市前50可能都是资金流出股）
   select_max_candidates: 10      # 最大选股数量
 
 # ========== 风控 ==========

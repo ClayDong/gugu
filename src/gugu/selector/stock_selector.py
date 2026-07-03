@@ -88,7 +88,7 @@ class StockSelector:
             async with sem:
                 try:
                     df = await asyncio.wait_for(
-                        self._dm.fetch_stock_history(symbol, days=60), timeout=10
+                        self._dm.fetch_stock_history(symbol, days=60), timeout=15
                     )
                     if df.empty or len(df) < 30:
                         return None

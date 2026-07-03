@@ -60,3 +60,13 @@ money_flow_follow:
   recent_gain_window: 10             # 近期涨幅窗口
   recent_gain_threshold: 0.03        # 近期最低涨幅 3%（热点近似）
   vol_ma_window: 60                  # 成交量均线窗口
+
+chen_jiangting:
+  # 陈江挺《炒股的智慧》阻力突破策略
+  resistance_window: 20              # 阻力位回看窗口（近20日最高价）
+  volume_ratio: 1.5                  # 量比阈值（当日量 >= N日均量的1.5倍）
+  vol_ma_window: 20                   # 成交量均线窗口
+  ma_short: 20                        # 短期均线（趋势判断 + 跌破卖出）
+  ma_long: 60                         # 长期均线（中期趋势过滤）
+  max_daily_gain_pct: 0.07            # 阶段过滤：当日涨幅 >7% 视为疯狂阶段，不追
+  divergence_vol_window: 5            # 量价背离判断窗口
