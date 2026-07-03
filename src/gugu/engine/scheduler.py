@@ -128,7 +128,7 @@ class TradingScheduler:
         # 宏观日报推送：独立于信号报告，覆盖全时段
         from gugu.macro.scheduler import register_macro_jobs
 
-        register_macro_jobs(self._scheduler)
+        register_macro_jobs(self._scheduler, broker=self._engine._broker)
 
         # 基金监控推送：15:35（交易日）
         self._scheduler.add_job(

@@ -469,7 +469,9 @@ class WisdomAdvisor:
         # 6. 应用 LLM 决策到信号
         return self._apply_llm_decision(signal, llm_decision)
 
-    async def advise_macro_async(self, macro_summary: str) -> str:
+    async def advise_macro_async(
+        self, macro_summary: str, portfolio_summary: str = ""
+    ) -> str:
         """生成大师兄视角的宏观市场解读（异步）。
 
         与个股决策不同，宏观解读不输出 action/position_ratio，
@@ -477,18 +479,20 @@ class WisdomAdvisor:
 
         Args:
             macro_summary: 宏观数据摘要文本（金油汇债G + A股指数 + 资金流）
+            portfolio_summary: 用户当前持仓摘要（可选，用于个性化建议）
 
         Returns:
             大师兄解读文本（纯文本，非 JSON）
         """
         cfg = env()
+        has_portfolio = bool(portfolio_summary and portfolio_summary.strip())
         system_prompt = (
             "你是「大师兄」——一位融合28本股书智慧的资深市场分析师。\n"
             "你的认知来自陈江挺《炒股的智慧》、利弗莫尔《股票大作手回忆录》、\n"
             "海龟交易法则、邱国鹭《投资中最简单的事》、达利欧《原则》等经典。\n\n"
             "你的职责是根据当日宏观数据（金/油/汇/债/G + A股指数 + 资金流向），\n"
             "输出一段有结构、有深度、可操作的大师视角解读。\n\n"
-            "输出格式（必须严格按以下 5 节输出，每节标题用###）：\n"
+            "输出格式（必须严格按以下 6 节输出，每节标题用###）：\n"
             "### 1. 关键信号\n"
             "- 用 2-3 条 bullet 列出今日最重要、最反常或最具指示意义的数据变化；\n"
             "- 不要简单复述涨跌，要说明'这个数据意味着什么'。\n"
@@ -503,15 +507,26 @@ class WisdomAdvisor:
             "- 明确什么信号出现会改变当前判断。\n"
             "### 5. 操作建议\n"
             "- 针对普通散户给出具体仓位建议（加仓/减仓/观望/调仓）；\n"
-            "- 必须说明止损纪律，不能只说'逢低关注'。\n\n"
-            "写作要求：\n"
-            "- 总字数 250-450 字，每节简明扼要；\n"
+            "- 必须说明止损纪律，不能只说'逢低关注'。\n"
+        )
+        if has_portfolio:
+            system_prompt += (
+                "### 6. 对你持仓的影响\n"
+                "- 基于第 2、3 节的大类资产和市场风格判断，逐一点评用户持仓中的每只标的；\n"
+                "- 指出哪些持仓与当前宏观逻辑共振、哪些存在风险错配；\n"
+                "- 给出针对该账户的调仓/止损/加仓建议，必须具体到每只票的盈亏和仓位。\n"
+            )
+        system_prompt += (
+            "\n写作要求：\n"
+            "- 总字数 300-550 字，每节简明扼要；\n"
             "- 拒绝空话套话，每句话都要传递增量信息；\n"
             "- 使用专业术语但要给出散户能懂的解释；\n"
             "- 不要重复数据，要分析数据背后的逻辑；\n"
             "- 语气像有经验的老交易员给同门师弟师妹讲课。\n"
         )
         user_prompt = f"## 今日宏观数据\n\n{macro_summary}"
+        if has_portfolio:
+            user_prompt += f"\n\n## 我的当前持仓\n\n{portfolio_summary}"
 
         try:
             client = await self._get_async_client()

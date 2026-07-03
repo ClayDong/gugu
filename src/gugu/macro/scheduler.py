@@ -109,9 +109,39 @@ async def _collect_flow_sections(version: str) -> list[str]:
         return []
 
 
+def _build_portfolio_summary(broker: Any) -> str:
+    """从 broker 构建用户持仓摘要文本（供大师兄解读个性化使用）。"""
+    if broker is None:
+        return ""
+    try:
+        account = broker.get_account()
+        total_value = float(account.total_value)
+        portfolio = broker.get_portfolio()
+        if not portfolio:
+            return ""
+        lines = [f"总资产 ¥{total_value:,.2f}，当前持仓 {len(portfolio)} 只："]
+        for sym, pos in portfolio.items():
+            name = getattr(pos, "name", "") or sym
+            qty = int(getattr(pos, "quantity", 0))
+            avg = float(getattr(pos, "avg_cost", 0))
+            price = float(getattr(pos, "current_price", 0))
+            market_value = qty * price
+            ratio = market_value / total_value if total_value > 0 else 0
+            profit_pct = (price - avg) / avg if avg > 0 else 0
+            lines.append(
+                f"- {name}({sym}) {qty}股 | 成本 ¥{avg:.3f} | "
+                f"现价 ¥{price:.3f} | 盈亏 {profit_pct:+.2%} | 仓位 {ratio:.1%}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        logger.debug(f"[macro] 构建持仓摘要失败: {e}")
+        return ""
+
+
 async def _push_macro_report(
     version: str,
     notifier: FeishuNotifier | None = None,
+    broker: Any = None,
 ) -> None:
     """采集宏观数据并推送飞书卡片（含 A 股大盘 + 资金流）。
 
@@ -153,7 +183,10 @@ async def _push_macro_report(
 
     # ── 后台异步补发大师兄解读（不阻塞主流程）──
     # LLM 超时或失败不影响宏观数据推送，解读为锦上添花
-    asyncio.create_task(_push_wisdom_interpretation(version, snapshot, builder, notifier))
+    portfolio_summary = _build_portfolio_summary(broker)
+    asyncio.create_task(
+        _push_wisdom_interpretation(version, snapshot, builder, notifier, portfolio_summary)
+    )
 
 
 async def _push_wisdom_interpretation(
@@ -161,6 +194,7 @@ async def _push_wisdom_interpretation(
     snapshot: Any,
     builder: MacroReportBuilder,
     notifier: FeishuNotifier,
+    portfolio_summary: str = "",
 ) -> None:
     """后台异步生成并补发大师兄解读卡片。
 
@@ -172,7 +206,8 @@ async def _push_wisdom_interpretation(
         wisdom = WisdomAdvisor()
         summary = builder.build_text_summary(snapshot)
         interpretation = await asyncio.wait_for(
-            wisdom.advise_macro_async(summary), timeout=30.0
+            wisdom.advise_macro_async(summary, portfolio_summary=portfolio_summary),
+            timeout=30.0,
         )
         if not interpretation:
             logger.warning(f"[macro] {version} 大师兄解读为空，跳过补发")
@@ -199,18 +234,18 @@ async def _push_wisdom_interpretation(
         logger.warning(f"[macro] {version} 大师兄解读补发失败: {e}")
 
 
-async def scheduled_macro_report(version: str) -> None:
+async def scheduled_macro_report(version: str, broker: Any = None) -> None:
     """调度入口：非交易日跳过。"""
     if not is_trading_day():
         logger.info(f"[macro] 非交易日，跳过 {version} 日报")
         return
     try:
-        await _push_macro_report(version)
+        await _push_macro_report(version, broker=broker)
     except Exception as e:
         logger.exception(f"[macro] {version} 日报异常: {e}")
 
 
-def register_macro_jobs(scheduler: AsyncIOScheduler) -> None:
+def register_macro_jobs(scheduler: AsyncIOScheduler, broker: Any = None) -> None:
     """在 APScheduler 中注册宏观日报定时任务。
 
     时间安排与信号汇总（engine/scheduler.py 的 report_* 任务）错开 5 分钟，
@@ -227,7 +262,7 @@ def register_macro_jobs(scheduler: AsyncIOScheduler) -> None:
         scheduler.add_job(
             scheduled_macro_report,
             CronTrigger(hour=hour, minute=minute, day_of_week="mon-fri"),
-            args=[job_id.split("_")[1]],
+            args=[job_id.split("_")[1], broker],
             id=job_id,
             name=name,
             misfire_grace_time=600,
