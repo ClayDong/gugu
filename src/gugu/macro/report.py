@@ -133,7 +133,7 @@ class MacroReportBuilder:
                 "template": "blue",
             },
             "elements": [
-                {"tag": "markdown", "content": "\n".join(lines)},
+                {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
             ],
         }
 

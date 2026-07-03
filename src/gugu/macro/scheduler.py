@@ -185,7 +185,7 @@ async def _push_wisdom_interpretation(
                 "template": "blue",
             },
             "elements": [
-                {"tag": "markdown", "content": interpretation},
+                {"tag": "div", "text": {"tag": "lark_md", "content": interpretation}},
             ],
         }
         ok = await notifier.send_card(card)
