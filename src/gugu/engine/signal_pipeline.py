@@ -99,9 +99,10 @@ class SignalPipeline:
         watchlist: list[str],
         portfolio: dict[str, Any],
         account: Any,
+        regime: str | None = None,
     ) -> dict | None:
         try:
-            signal = self._router.route(df, symbol, name=meta.get("name", ""))
+            signal = self._router.route(df, symbol, name=meta.get("name", ""), regime=regime)
             if not signal:
                 return None
 
@@ -255,7 +256,8 @@ class SignalPipeline:
                     logger.debug(f"卖出信号多周期趋势判断失败: {e}")
                     signal["multi_period"] = {"error": str(e)}
 
-            # signal_only 模式：跳过 Wisdom 决策层（降低 LLM cost 和阻塞时间）
+            # signal_only 模式：跳过 LLM 异步调用（降低 cost 和阻塞），但仍执行 Wisdom 硬编码 fallback
+            # P0 修复：必须获取止损价/止盈价/仓位建议，否则新手买入信号无止损违反"强制止损"铁律
             if self._exec_mode == "signal_only":
                 # signal_only 模式下，不对买入信号做硬过滤（让用户自行判断）
                 # 但保留危险信号标记，用于通知时提醒用户
@@ -265,9 +267,26 @@ class SignalPipeline:
                     signal["fundamental"] = fund_result
                 except Exception as e:
                     logger.debug(f"signal_only 基本面数据获取失败 {symbol}: {e}")
+                # P0 修复：调用 Wisdom 硬编码 fallback 获取止损价/止盈价/仓位建议
+                # 不调用 LLM 异步接口，避免 cost 和阻塞，但保留风控关键字段
+                try:
+                    fallback = self._wisdom._advise_fallback(signal)
+                    _wisdom_keys = (
+                        "wisdom_decision", "wisdom", "wisdom_filtered", "filter_reason",
+                        "suggested_position_ratio", "stop_loss_price", "take_profit",
+                        "conflict_resolution", "mentor_perspectives",
+                    )
+                    for _k in _wisdom_keys:
+                        if _k in fallback:
+                            signal[_k] = fallback[_k]
+                    signal["llm_pending"] = False
+                except Exception as e:
+                    logger.warning(f"signal_only Wisdom fallback 失败 {symbol}: {e}")
+                    signal["llm_pending"] = False
                 logger.info(
                     f"信号(仅通知): {signal['symbol']} {signal['direction']} "
-                    f"置信度 {signal['confidence']} 策略 {signal['strategies']}"
+                    f"置信度 {signal['confidence']} 策略 {signal['strategies']} "
+                    f"止损={signal.get('stop_loss_price', 0)}"
                 )
                 return signal
 

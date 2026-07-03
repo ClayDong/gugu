@@ -204,8 +204,7 @@ class StrategyManifest:
         # 类别统计
         category_names = {
             "signal_strategies": "信号生成策略",
-            "risk_strategies": "风控择时策略",
-            "take_profit_strategies": "止盈止损策略",
+            "risk_strategies": "风控/择时/止盈策略",
             "skill_strategies": "Skill 策略",
             "dynamic_strategies": "动态策略生成",
         }

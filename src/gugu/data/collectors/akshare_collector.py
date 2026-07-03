@@ -114,7 +114,10 @@ class AkshareCollector(BaseCollector):
                 "涨跌幅": "change_pct",
             }
         )
-        # 单位统一为元（akshare 返回的是元）
+        # 单位转换：akshare 返回元，统一转为亿元（与 eastmoney_collector 对齐）
+        for col in ("main_net", "super_large_net", "large_net"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce") / 1e8
         return validate_sector_flow(df)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
@@ -141,6 +144,10 @@ class AkshareCollector(BaseCollector):
                 "小单净流入-净额": "small_net",
             }
         )
+        # 单位转换：akshare 返回元，统一转为亿元（与 eastmoney_collector 对齐）
+        for col in ("main_net", "super_large_net", "large_net", "medium_net", "small_net"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce") / 1e8
         if "date" in df.columns:
             df["date"] = pd.to_datetime(df["date"]).dt.date
         return validate_stock_flow(df, code)

@@ -33,15 +33,16 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     """setup() 后应创建定时任务（scan+report+retry+macro）。"""
     scheduler.setup()
     jobs = scheduler._scheduler.get_jobs()
-    # 4 scan + 1 screener + 1 screener_validate + 3 report + 1 retry + 4 macro + 1 fund + 1 concept + 1 cache_cleanup = 17
+    # 4 scan + 1 screener + 1 afternoon_flow + 1 screener_validate + 3 report + 1 retry + 4 macro + 1 fund + 1 concept + 1 cache_cleanup = 18
     # flow_morning/flow_close 已合并到宏观卡片，不再单独注册
-    assert len(jobs) == 17
+    assert len(jobs) == 18
     job_ids = {j.id for j in jobs}
     assert "scan_1" in job_ids
     assert "scan_2" in job_ids
     assert "scan_3" in job_ids
     assert "scan_4" in job_ids
     assert "screener_1430" in job_ids
+    assert "afternoon_flow_1430" in job_ids
     assert "screener_validate_0935" in job_ids
     assert "report_morning" in job_ids
     assert "report_noon" in job_ids

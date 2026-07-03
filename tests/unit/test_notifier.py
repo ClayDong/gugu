@@ -31,7 +31,7 @@ def test_format_signal_buy():
 
 
 def test_format_signal_sell():
-    """测试卖出信号卡片颜色为红色。"""
+    """测试卖出信号卡片颜色为绿色（A 股惯例：绿跌）。"""
     signal = {
         "symbol": "600519",
         "direction": "sell",
@@ -40,7 +40,7 @@ def test_format_signal_sell():
         "price": 1600.0,
     }
     card = format_signal(signal)
-    assert card["card"]["header"]["template"] == "red"
+    assert card["card"]["header"]["template"] == "green"
 
 
 def test_format_risk_alert_halt():
@@ -77,7 +77,7 @@ def test_format_backtest_report():
 
 
 def test_format_backtest_report_negative_return():
-    """负收益回测报告为红色。"""
+    """负收益回测报告为绿色（A 股惯例：绿跌）。"""
     report = {
         "strategy": "turtle",
         "total_return": -0.05,
@@ -87,7 +87,7 @@ def test_format_backtest_report_negative_return():
         "trades_count": 5,
     }
     card = format_backtest_report(report)
-    assert card["card"]["header"]["template"] == "red"
+    assert card["card"]["header"]["template"] == "green"
 
 
 def test_format_backtest_report_invalid_return():

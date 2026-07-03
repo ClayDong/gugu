@@ -3,6 +3,7 @@
 from gugu.analysis.alpha_factory import AlphaFactor, AlphaFactory
 from gugu.analysis.danger_signal import DangerSignalDetector, DangerSignalResult
 from gugu.analysis.execution_optimizer import ExecutionOptimizer, ExecutionPlan, ExecutionReport
+from gugu.analysis.money_management import KellyCalculator, KellyResult, PyramidingLevel
 from gugu.analysis.no_average_down import AverageDownCheckResult, NoAverageDownChecker
 from gugu.analysis.param_optimizer import OptimizationResult, ParamOptimizer, ParamRange
 from gugu.analysis.performance import PerformanceAnalyzer, PerformanceReport
@@ -26,6 +27,8 @@ __all__ = [
     "ExecutionOptimizer",
     "ExecutionPlan",
     "ExecutionReport",
+    "KellyCalculator",
+    "KellyResult",
     "MarketStage",
     "MultiPeriodRegimeDetector",
     "NoAverageDownChecker",
@@ -38,6 +41,7 @@ __all__ = [
     "PositionBudget",
     "PositionController",
     "PositionManager",
+    "PyramidingLevel",
     "RegimeEvidence",
     "SectorRotation",
     "SignalTracker",

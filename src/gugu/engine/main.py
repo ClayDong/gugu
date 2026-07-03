@@ -193,9 +193,25 @@ class TradingEngine:
 
     async def run_daily_cycle(self) -> None:
         """每日交易循环：采集 → 策略 → 风控 → 执行 → 通知。"""
-        # 铁律：L2 熔断状态下，即使同日再次调用也必须保持熔断
+        # P0 修复：L2 熔断状态下仍需执行止损检查（卖出豁免），仅跳过买入相关流程
+        # 防止熔断后无法止损导致亏损从15%扩大到30%+
         if self._risk.is_halted:
-            logger.warning("L2 熔断状态激活中，跳过本次交易循环（需人工 reset_halt 后恢复）")
+            logger.warning("L2 熔断状态激活中，跳过买入流程但仍执行止损检查（需人工 reset_halt 后恢复买入）")
+            if not is_trading_day():
+                logger.info("非交易日，跳过")
+                return
+            async with self._lock:
+                if self._running:
+                    logger.warning("交易循环正在运行中，跳过本次重入调用")
+                    return
+                self._running = True
+                try:
+                    await self._update_prices()
+                    await self._check_stop_loss()
+                    logger.info("熔断状态下止损检查完成，跳过信号扫描与买入")
+                finally:
+                    self._running = False
+                    self._event_engine.put(EVENT_CYCLE_END, {"halted": True})
             return
 
         if not is_trading_day():
@@ -430,50 +446,84 @@ class TradingEngine:
         except Exception:
             rt_all = None
 
-        for symbol in scan_list:
-            try:
-                df = await self._dm.fetch_stock_history(symbol, days=60)
-                if df.empty:
+        # P3 优化：异步并发扫描，限制并发数避免过载
+        from gugu.config import get_config as _get_config
+
+        max_concurrency = getattr(_get_config().execution, "scan_concurrency", 10)
+        semaphore = asyncio.Semaphore(max_concurrency)
+
+        # P3 优化（2026-07）：批量预取所有股票的历史数据，减少竞争
+        # 先批量获取所有待扫描股票的历史数据，再并发处理
+        if scan_list and len(scan_list) > 5:
+            logger.info(f"批量预取 {len(scan_list)} 只股票历史数据...")
+            batch_history = {}
+            for sym in scan_list:
+                try:
+                    df = await self._dm.fetch_stock_history(sym, days=60)
+                    if not df.empty:
+                        batch_history[sym] = df
+                except Exception:
                     continue
+            logger.info(f"批量预取完成: {len(batch_history)}/{len(scan_list)}")
+        else:
+            batch_history = {}
 
-                meta = await self._dm.fetch_stock_meta(symbol)
-                portfolio = self._broker.get_portfolio()
-                account = self._broker.get_account()
+        async def _scan_single(symbol: str) -> dict[str, Any] | None:
+            """扫描单只股票（供并发调用）。"""
+            async with semaphore:
+                try:
+                    # 优先使用预取数据
+                    df = batch_history.get(symbol)
+                    if df is None:
+                        df = await self._dm.fetch_stock_history(symbol, days=60)
+                    if df is None or df.empty:
+                        return None
 
-                # delegating filtering to SignalPipeline
-                signal = await self._pipeline.process(
-                    symbol=symbol,
-                    df=df,
-                    meta=meta,
-                    budget=budget,
-                    rt_all=rt_all,
-                    watchlist=self._watchlist,
-                    portfolio=portfolio,
-                    account=account,
-                )
-                if signal is None:
-                    continue
+                    meta = await self._dm.fetch_stock_meta(symbol)
+                    portfolio = self._broker.get_portfolio()
+                    account = self._broker.get_account()
 
-                # 市场 regime 覆盖（SignalPipeline 无法访问 TradingEngine 的 _regime_detector 返回）
-                signal["market_context"]["regime"] = regime["regime"]
-
-                # 注入原始 df 数据，供 _process_signal 中的 ATR 自适应移动止损使用
-                signal["_df"] = df
-
-                # L3 市场状态仓位修正信息记录
-                if (
-                    signal["direction"] == "buy"
-                    and not signal.get("wisdom_filtered")
-                    and regime.get("sell_signal_required")
-                ):
-                    logger.info(
-                        f"{symbol} 市场状态 {regime['regime']} 建议减仓，"
-                        f"仓位上限已由 budget 限制为 {signal['suggested_position_ratio']:.2%}"
+                    signal = await self._pipeline.process(
+                        symbol=symbol,
+                        df=df,
+                        meta=meta,
+                        budget=budget,
+                        rt_all=rt_all,
+                        watchlist=self._watchlist,
+                        portfolio=portfolio,
+                        account=account,
+                        regime=regime["regime"],
                     )
+                    if signal is None:
+                        return None
 
-                signals.append(signal)
-            except Exception as e:
-                logger.error(f"扫描 {symbol} 失败: {e}")
+                    # 市场 regime 覆盖
+                    signal["market_context"]["regime"] = regime["regime"]
+                    # 注入原始 df 数据，供 _process_signal 中的 ATR 自适应移动止损使用
+                    signal["_df"] = df
+
+                    # L3 市场状态仓位修正信息记录
+                    if (
+                        signal["direction"] == "buy"
+                        and not signal.get("wisdom_filtered")
+                        and regime.get("sell_signal_required")
+                    ):
+                        logger.info(
+                            f"{symbol} 市场状态 {regime['regime']} 建议减仓，"
+                            f"仓位上限已由 budget 限制为 {signal['suggested_position_ratio']:.2%}"
+                        )
+
+                    return signal
+                except Exception as e:
+                    logger.error(f"扫描 {symbol} 失败: {e}")
+                    return None
+
+        # 并发执行所有扫描任务
+        if scan_list:
+            tasks = [_scan_single(sym) for sym in scan_list]
+            results = await asyncio.gather(*tasks)
+            signals = [s for s in results if s is not None]
+
         return signals
 
     def _load_notified_signals(self) -> dict[str, str]:

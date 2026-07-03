@@ -106,7 +106,7 @@ async def test_notify_signal_sends_post_with_correct_url_and_payload(mock_env):
         assert body["receive_id"] == "chat-id"
         assert body["msg_type"] == "interactive"
         content = json.loads(body["content"])
-        assert content["header"]["template"] == "green"  # buy = green
+        assert content["header"]["template"] == "red"  # buy = red (A 股红涨)
         assert "600519" in content["header"]["title"]["content"]
     finally:
         await mock_client.aclose()

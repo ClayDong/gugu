@@ -1099,3 +1099,165 @@ async def run_close_report() -> dict[str, Any]:
     else:
         card = build_close_card(data)
     return {"card": card, "data": data}
+
+
+# ── 14:30 盘后资金流决策报告 ──────────────────────────────────
+
+
+def _format_decision_guidance(data: dict[str, Any]) -> str:
+    """根据资金流数据生成决策指导建议（基于跟随资金强度原则）。"""
+    sectors = data.get("sectors", {})
+    strong_stocks = data.get("strong_stocks", [])
+    market = data.get("market", {})
+    divergences = sectors.get("divergence", [])
+
+    lines: list[str] = []
+
+    # 大盘资金方向判断
+    main_inflow = market.get("main_net_inflow") if market else None
+    if main_inflow is not None:
+        if main_inflow > 30:
+            lines.append("📈 **大盘资金面偏强**：主力大幅流入，可适度参与强势板块")
+        elif main_inflow > 0:
+            lines.append("📊 **大盘资金中性偏多**：主力小幅流入，跟随强势个股")
+        elif main_inflow > -30:
+            lines.append("⚠️ **大盘资金中性偏空**：主力小幅流出，谨慎操作")
+        else:
+            lines.append("🟢 **大盘资金面偏弱**：主力大幅流出，建议观望为主")
+
+    # 背离预警提示
+    top_div = [d for d in divergences if "顶背离" in d.get("type", "")]
+    bottom_div = [d for d in divergences if "底背离" in d.get("type", "")]
+    if top_div:
+        names = "、".join(d["name"] for d in top_div[:3])
+        lines.append(f"🔺 **顶背离预警**：{names} 资金流出但上涨，警惕主力出货")
+    if bottom_div:
+        names = "、".join(d["name"] for d in bottom_div[:3])
+        lines.append(f"🔻 **底背离关注**：{names} 资金流入但下跌，可能吸筹中")
+
+    # 强势个股提示
+    if strong_stocks:
+        top_stock = strong_stocks[0]
+        lines.append(
+            f"🔥 **资金最强个股**：{top_stock.get('name', '')}({top_stock.get('code', '')}) "
+            f"主力净占比 +{top_stock.get('main_ratio', 0):.1f}%"
+        )
+
+    # 策略原则提醒
+    lines.append("---")
+    lines.append("**📋 操作原则**：")
+    lines.append("• 跟随资金强度，拒绝滞涨股补涨幻想")
+    lines.append("• 优先创历史新高个股（主力消化套牢盘）")
+    lines.append("• 等待缩量回踩后放量确认入场，不追涨")
+    lines.append("• 无论确定性多强，必须设止损")
+
+    return "\n".join(lines) if lines else ""
+
+
+def build_afternoon_card(data: dict[str, Any]) -> dict[str, Any]:
+    """构建 14:30 盘后资金流决策报告卡片。
+
+    聚焦决策指导：大盘资金面、热点行业、重点行业、强流入个股、背离预警、操作原则。
+    """
+    from gugu.notifier.formatter import _card
+
+    market = data.get("market", {})
+    north = data.get("north_bound", {})
+    overview = data.get("market_overview", {})
+    sectors = data.get("sectors", {})
+    key_industries = data.get("key_industries", [])
+    strong_stocks = data.get("strong_stocks", [])
+
+    sections: list[str] = []
+
+    # ── 大盘资金面速览 ──
+    if market:
+        m_date = market.get("date", "")
+        north_only = market.get("north_only", False)
+        lines = ["**📊 大盘资金面**"]
+        if north_only:
+            nb = north or {}
+            lines.append(f"📅 {m_date}")
+            lines.append("📊 **北向资金代理**（东方财富 API 暂不可用）")
+            n_total = _fmt_flow(nb.get("total"))
+            lines.append(f"  北向总额: {n_total}")
+            if overview.get("main_vs_retail"):
+                lines.append(f"  博弈: {overview['main_vs_retail']}")
+        else:
+            sh_pct = _fmt(market.get("sh_change"), "%")
+            sz_pct = _fmt(market.get("sz_change"), "%")
+            main_flow = _fmt_flow(market.get("main_net_inflow"))
+            lines.append(f"📅 {m_date}")
+            lines.append(f"上证 {sh_pct} | 深证 {sz_pct}")
+            lines.append(f"主力净流入: {main_flow}")
+            if north:
+                lines.append(f"北向资金: {_fmt_flow(north.get('total'))}")
+            if overview.get("main_vs_retail"):
+                lines.append(f"博弈: {overview['main_vs_retail']}")
+        sections.append("\n".join(lines))
+    else:
+        sections.append("**📊 大盘资金面**\n数据暂不可用（非交易时段）")
+
+    # ── 热点行业 TOP5（流入）──
+    inflow = sectors.get("inflow_top", [])
+    if inflow:
+        lines = ["**🔥 热点行业 TOP（资金流入）**"]
+        for i, s in enumerate(inflow[:5], 1):
+            name = s.get("name", "")
+            f_main = _fmt_flow(s.get("main_inflow"))
+            pct = _fmt(s.get("price_change"), "%")
+            lines.append(f"{i}. {name} {f_main} ({pct})")
+        sections.append("\n".join(lines))
+
+    # ── 重点行业资金流 ──
+    key_section = _format_key_industries_section(key_industries)
+    if key_section:
+        sections.append(key_section)
+
+    # ── 强流入个股 TOP5 ──
+    if strong_stocks:
+        lines = ["**💰 强流入个股 TOP**"]
+        for i, s in enumerate(strong_stocks[:5], 1):
+            name = s.get("name", "")
+            code = s.get("code", "")
+            ratio = s.get("main_ratio", 0)
+            inflow_val = s.get("main_inflow", 0)
+            pct = s.get("price_change", 0)
+            lines.append(
+                f"{i}. {name}({code}) 主力+{ratio:.1f}% {_fmt_flow(inflow_val)} ({_fmt(pct, '%')})"
+            )
+        sections.append("\n".join(lines))
+
+    # ── 决策指导 ──
+    guidance = _format_decision_guidance(data)
+    if guidance:
+        sections.append(guidance)
+
+    note = f"明策 · gugu · 盘后资金流决策报告 | 📈 {data.get('timestamp', _now_str())}"
+
+    title = f"📊 盘后资金流决策报告（{_date_str()} 14:30）"
+    template = "blue"
+
+    return _card(title, template, sections, note=note)
+
+
+async def run_afternoon_report() -> dict[str, Any]:
+    """运行盘后资金流决策报告（14:30）。
+
+    在交易日 14:30 采集资金流数据，生成决策指导卡片推送飞书。
+    与 15:10 收盘日报区别：
+    - 14:30 报告聚焦"决策指导"：操作原则 + 资金方向判断 + 强势个股
+    - 15:10 报告聚焦"收盘复盘"：全量数据汇总 + 概念热点 + 轮动强度
+    """
+    data = await collect_all()
+    market = data.get("market")
+    has_valid_data = market is not None and (
+        market.get("north_only", False)
+        or market.get("sh_close") or market.get("sz_close") or market.get("main_net_inflow")
+    )
+    if not has_valid_data and not data.get("sectors") and not data.get("strong_stocks"):
+        logger.warning("盘后资金流决策报告: 全部数据源不可用，跳过推送")
+        card = build_unavailable_card("盘后资金流决策报告")
+    else:
+        card = build_afternoon_card(data)
+    return {"card": card, "data": data}

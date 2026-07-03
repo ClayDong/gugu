@@ -42,6 +42,7 @@ strategy:
     - dual_ma
     - bollinger
     - rsi_reversal
+    - money_flow_follow
   # 信号融合规则：unanimous（全票通过）/ majority（多数）/ any（任一）/ weighted（策略池加权）
   signal_fusion: weighted
   min_confidence: 0.6            # 最低置信度阈值

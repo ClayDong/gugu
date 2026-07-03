@@ -62,6 +62,8 @@ class TrailingStopState:
     wave_valleys: list[float] = field(default_factory=list)
     # 跌破浪谷次数
     valley_break_count: int = 0
+    # 上次跌破日期（防止同日多次扫描重复计数）
+    last_break_date: str = ""
     # 上次更新日期
     last_update: str = ""
     # 最近信号
@@ -98,12 +100,41 @@ class TrailingStopEngine:
     TIGHTEN_FACTOR = 0.5  # 危险信号收紧因子
     MIN_VALLEY_PCT = 0.005  # P2 修复：浪谷之间最小价格差异比例（避免接近的重复浪谷）
 
+    # 市场状态自适应参数（P3 优化）
+    # 不同市场状态下 ATR 倍数调整：高波动市场放宽止损，低波动市场收紧止损
+    REGIME_ATR_MULTIPLIERS = {
+        "bull": 3.5,      # 牛市放宽止损，避免被震荡出局
+        "bear": 2.5,      # 熊市收紧止损，保护本金
+        "sideways": 2.0,  # 震荡市收紧止损，减少假突破损失
+        "crash": 2.0,     # 暴跌市收紧止损
+        "rally": 3.0,     # 反弹市适中
+    }
+
+    # 不同市场状态下最大回撤止损调整
+    REGIME_MAX_DRAWDOWN = {
+        "bull": 0.18,     # 牛市允许更大回撤
+        "bear": 0.10,     # 熊市严格限制回撤
+        "sideways": 0.12, # 震荡市适中
+        "crash": 0.08,    # 暴跌市严格限制
+        "rally": 0.15,    # 反弹市适中
+    }
+
+    # 不同市场状态下危险信号收紧因子
+    REGIME_TIGHTEN_FACTORS = {
+        "bull": 0.3,      # 牛市收紧幅度小，给更多空间
+        "bear": 0.6,      # 熊市收紧幅度大，快速保护
+        "sideways": 0.5,  # 震荡市适中
+        "crash": 0.7,     # 暴跌市大幅收紧
+        "rally": 0.4,     # 反弹市适度收紧
+    }
+
     def init_stop(
         self,
         entry_price: float,
         initial_stop_pct: float | None = None,
         df: pd.DataFrame | None = None,
         atr_multiplier: float | None = None,
+        regime: str | None = None,
     ) -> TrailingStopState:
         """初始化移动止损状态。
 
@@ -116,16 +147,23 @@ class TrailingStopEngine:
             initial_stop_pct: 初始止损比例（固定比例模式，默认8%）
             df: 行情 DataFrame（含 high/low/close），用于 ATR 计算
             atr_multiplier: ATR 倍数（默认 3.0），止损 = 入场价 - multiplier × ATR
+            regime: 市场状态（bull/bear/sideways/crash/rally），提供时使用自适应参数
 
         Returns:
             TrailingStopState 初始状态
         """
+        pct: float | None = None
         # ATR 自适应止损（优先）
         if df is not None and not df.empty:
             try:
                 from gugu.analysis.technical import atr as calc_atr
 
-                mult = atr_multiplier or self.DEFAULT_ATR_MULTIPLIER
+                # 市场状态自适应 ATR 倍数
+                if regime and regime in self.REGIME_ATR_MULTIPLIERS:
+                    mult = self.REGIME_ATR_MULTIPLIERS[regime]
+                    logger.info(f"[trailing-stop] 使用市场状态 {regime} 的 ATR 倍数: {mult}")
+                else:
+                    mult = atr_multiplier or self.DEFAULT_ATR_MULTIPLIER
                 atr_value = float(calc_atr(df, period=14).iloc[-1])
                 if atr_value > 0:
                     stop_price = round(entry_price - mult * atr_value, 2)
@@ -151,7 +189,7 @@ class TrailingStopEngine:
             pct = initial_stop_pct or self.DEFAULT_INITIAL_STOP_PCT
             stop_price = round(entry_price * (1 - pct), 2)
 
-        if "pct" not in dir() or pct is None:
+        if pct is None:
             pct = (entry_price - stop_price) / entry_price
 
         state = TrailingStopState(
@@ -176,6 +214,7 @@ class TrailingStopEngine:
         state: TrailingStopState,
         df: pd.DataFrame,
         danger_signals: list[str] | None = None,
+        regime: str | None = None,
     ) -> tuple[TrailingStopState, TrailingStopSignal]:
         """更新移动止损状态。
 
@@ -185,6 +224,8 @@ class TrailingStopEngine:
             state: 当前止损状态
             df: 行情DataFrame（含 close, high, low 列）
             danger_signals: 危险信号列表（来自DangerSignalDetector）
+            regime: 市场状态（bull/bear/sideways/crash/rally），
+                   提供时使用自适应参数（回撤止损、收紧因子）
 
         Returns:
             (更新后的状态, 信号)
@@ -193,19 +234,25 @@ class TrailingStopEngine:
             return state, TrailingStopSignal.HOLD
 
         current_price = float(df.iloc[-1]["close"])
-        df["high"].astype(float) if "high" in df.columns else df["close"].astype(float)
         low_series = df["low"].astype(float) if "low" in df.columns else df["close"].astype(float)
 
         # 1. 更新最高价
         if current_price > state.highest_price:
             state.highest_price = current_price
 
-        # 2. 识别浪谷
-        new_valleys = self._find_wave_valleys(low_series, self.WAVE_WINDOW)
+        # 2. 识别浪谷（自适应窗口：高波动用大窗口过滤噪音，低波动用小窗口捕捉细节）
+        wave_window = self._adaptive_wave_window(df)
+        new_valleys = self._find_wave_valleys(low_series, wave_window)
         if new_valleys:
-            # 只保留最近5个浪谷
+            # 合并历史浪谷和新浪谷（均为时间顺序），按价格近邻去重后保留最近5个
             all_valleys = state.wave_valleys + new_valleys
-            state.wave_valleys = sorted(set(all_valleys))[-5:]
+            deduped: list[float] = []
+            for v in all_valleys:
+                if deduped and abs(v - deduped[-1]) / max(deduped[-1], 1.0) < self.MIN_VALLEY_PCT:
+                    deduped[-1] = v  # 价格相近时替换为更新的浪谷
+                else:
+                    deduped.append(v)
+            state.wave_valleys = deduped[-5:]
 
         # 3. 更新止损价
         latest_valley = state.wave_valleys[-1] if state.wave_valleys else state.initial_stop_price
@@ -219,12 +266,15 @@ class TrailingStopEngine:
                 f"[trailing-stop] 止损上移: {old_stop:.2f} → {state.current_stop_price:.2f}"
             )
 
-        # 4. 危险信号收紧止损
+        # 4. 危险信号收紧止损（市场状态自适应）
+        tighten_factor = self.TIGHTEN_FACTOR
+        if regime and regime in self.REGIME_TIGHTEN_FACTORS:
+            tighten_factor = self.REGIME_TIGHTEN_FACTORS[regime]
         if danger_signals:
             if not state.tightened:
                 tighten_price = round(
                     state.current_stop_price
-                    + (current_price - state.current_stop_price) * self.TIGHTEN_FACTOR,
+                    + (current_price - state.current_stop_price) * tighten_factor,
                     2,
                 )
                 if tighten_price > state.current_stop_price:
@@ -241,8 +291,11 @@ class TrailingStopEngine:
                 state.tightened = False
                 logger.info("[trailing-stop] 危险信号解除，收紧状态已复位")
 
-        # 5. 最大回撤止损兜底
-        max_dd_stop = round(state.highest_price * (1 - self.MAX_DRAWDOWN_STOP_PCT), 2)
+        # 5. 最大回撤止损兜底（市场状态自适应）
+        max_drawdown_pct = self.MAX_DRAWDOWN_STOP_PCT
+        if regime and regime in self.REGIME_MAX_DRAWDOWN:
+            max_drawdown_pct = self.REGIME_MAX_DRAWDOWN[regime]
+        max_dd_stop = round(state.highest_price * (1 - max_drawdown_pct), 2)
         if max_dd_stop > state.current_stop_price and current_price > max_dd_stop:
             state.current_stop_price = max_dd_stop
 
@@ -282,28 +335,61 @@ class TrailingStopEngine:
         """识别浪谷（局部低点）。
 
         在最近30根K线中寻找局部低点。
+        优化1：使用更稳健的峰谷识别算法（双侧比较 + 置信度评分）
+        优化2：仅保留置信度 >= 0.6 的浪谷，过滤震荡市的伪浪谷
         """
         lookback = min(30, len(low_series))
         recent = low_series.iloc[-lookback:]
-        raw_valleys: list[float] = []
+        raw_valleys: list[tuple[float, float]] = []  # (price, confidence)
 
         for i in range(window, len(recent) - window):
-            segment = recent.iloc[i - window : i + window + 1]
-            if recent.iloc[i] == segment.min():
-                raw_valleys.append(float(recent.iloc[i]))
+            left = recent.iloc[i - window : i]
+            right = recent.iloc[i + 1 : i + window + 1]
+            center = recent.iloc[i]
 
-        # 末尾低点
+            # 必须是局部最低点
+            if center != recent.iloc[i - window : i + window + 1].min():
+                continue
+
+            # 计算置信度：
+            # 1. 左右两侧的上升幅度（浪谷越深，置信度越高）
+            left_min = left.min()
+            right_min = right.min()
+            left_rise = (left.iloc[-1] - center) / center if center > 0 else 0
+            right_rise = (right.iloc[0] - center) / center if center > 0 else 0
+
+            # 2. 谷底相对于左右最低点的优势
+            left_advantage = (center - left_min) / left_min if left_min > 0 else 0
+            right_advantage = (center - right_min) / right_min if right_min > 0 else 0
+
+            # 置信度 = 平均上升幅度 + 谷底优势
+            confidence = (left_rise + right_rise + abs(left_advantage) + abs(right_advantage)) / 4
+            confidence = min(confidence * 5, 1.0)  # 归一化到 0-1
+
+            raw_valleys.append((float(center), confidence))
+
+        # 末尾低点（权重低）
         if len(recent) > 0:
-            raw_valleys.append(float(recent.iloc[-1]))
+            raw_valleys.append((float(recent.iloc[-1]), 0.3))
 
-        # P2 修复：过滤过于接近的浪谷（差异 < MIN_VALLEY_PCT 的合并）
-        # 防止连续上涨行情中接近的伪浪谷导致止损价被频繁上移至市价
-        if not raw_valleys:
-            return []
-        valleys = [raw_valleys[0]]
-        for v in raw_valleys[1:]:
-            if abs(v - valleys[-1]) / max(valleys[-1], 1) > cls.MIN_VALLEY_PCT:
-                valleys.append(v)
+        # 过滤低置信度浪谷（置信度 < 0.6 的震荡伪浪谷被过滤）
+        filtered = [(p, c) for p, c in raw_valleys if c >= 0.6]
+
+        # 如果没有高置信度浪谷，回退到普通识别但使用更大的窗口
+        if not filtered:
+            # 用更宽松的阈值重新筛选
+            filtered = [(p, c) for p, c in raw_valleys if c >= 0.4]
+        if not filtered:
+            # 最终回退：取最近最低点
+            return [float(recent.min())]
+
+        # 去重（按时间顺序，价格相近时保留更新的浪谷 — 与 update() 逻辑一致）
+        valleys: list[float] = []
+        for p, _ in filtered:
+            if valleys and abs(p - valleys[-1]) / max(valleys[-1], 1.0) < cls.MIN_VALLEY_PCT:
+                valleys[-1] = p  # 价格相近时替换为更新的浪谷
+            else:
+                valleys.append(p)
 
         return valleys
 
@@ -322,6 +408,16 @@ class TrailingStopEngine:
         4. 跌破浪谷1次 → ALERT
         5. 有危险信号 → TIGHTEN
         6. 正常 → HOLD
+
+        跌破计数重置规则（完善修复）：
+        - 旧逻辑：价格回升超过浪谷2%时每天递减1（过于激进，单日跌破被快速原谅）
+        - 新逻辑：价格显著恢复（超过浪谷2%）时完全重置计数为0
+          理由：陈江挺的"递进警报"是事件计数，不应因短暂回升而衰减；
+          显著恢复才意味着趋势恢复，此时重置计数合理。
+
+        同日去重（P0 修复）：
+        - 盘中多次扫描（4次/日）同日跌破同一浪谷只计1次
+        - 用 last_break_date 防止同日累计计数导致提前清仓
         """
         # 触发止损价
         if current_price <= state.current_stop_price:
@@ -331,24 +427,31 @@ class TrailingStopEngine:
             return TrailingStopSignal.EXIT
 
         # 检查跌破浪谷次数
-        latest_valley = state.wave_valleys[-1] if state.wave_valleys else 0
-        if latest_valley > 0 and current_price < latest_valley:
-            # 跌破最近浪谷
-            state.valley_break_count += 1
-            logger.warning(
-                f"[trailing-stop] 跌破浪谷 {latest_valley:.2f}，第 {state.valley_break_count} 次"
-            )
+        if state.wave_valleys:
+            latest_valley = state.wave_valleys[-1]
+            today = pd.Timestamp.now().strftime("%Y-%m-%d")
+            if current_price < latest_valley:
+                # P0 修复：同日多次扫描只计1次（防止盘中4次扫描误触3次EXIT）
+                if state.last_break_date != today:
+                    state.valley_break_count += 1
+                    state.last_break_date = today
+                    logger.warning(
+                        f"[trailing-stop] 跌破浪谷 {latest_valley:.2f}，第 {state.valley_break_count} 次"
+                    )
 
-            if state.valley_break_count >= 3:
-                return TrailingStopSignal.EXIT
-            elif state.valley_break_count == 2:
-                return TrailingStopSignal.WARNING
-            else:
-                return TrailingStopSignal.ALERT
-        else:
-            # 价格回到浪谷之上，重置计数（但不完全重置，保留记忆）
-            if current_price > latest_valley * 1.02:  # 超过浪谷2%以上
-                state.valley_break_count = max(0, state.valley_break_count - 1)
+                if state.valley_break_count >= 3:
+                    return TrailingStopSignal.EXIT
+                elif state.valley_break_count == 2:
+                    return TrailingStopSignal.WARNING
+                else:
+                    return TrailingStopSignal.ALERT
+            elif current_price > latest_valley * 1.02 and state.valley_break_count > 0:
+                # 显著恢复（超过浪谷2%），完全重置计数
+                logger.info(
+                    f"[trailing-stop] 价格显著恢复 {current_price:.2f} > 浪谷 {latest_valley:.2f} × 1.02，"
+                    f"跌破计数 {state.valley_break_count} → 0"
+                )
+                state.valley_break_count = 0
 
         # 危险信号
         if danger_signals:

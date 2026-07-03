@@ -9,7 +9,7 @@
 - 11:35  午盘信号汇总（个股层面）
 - 11:40  午间宏观简报（含 A 股指数，错开 5 分钟）
 - 13:05  午盘扫描（下午开盘后信号更新）
-- 14:30  尾盘扫描（尾盘信号 + 止损检查）+ 尾盘选股
+- 14:30  尾盘扫描（尾盘信号 + 止损检查）+ 尾盘选股 + 盘后资金流决策报告
 - 15:10  收盘信号汇总（个股层面）
 - 15:15  收盘宏观全球概览（含 A 股指数 + 资金流日报 + 大师兄解读，错开 5 分钟）
 - 15:35  基金监控推送
@@ -84,6 +84,15 @@ class TradingScheduler:
             CronTrigger(hour=14, minute=30, day_of_week="mon-fri"),
             id="screener_1430",
             name="尾盘选股-14:30",
+        )
+
+        # 盘后资金流决策报告（14:30，交易日）
+        # 采集资金流数据生成决策指导卡片，与尾盘扫描/选股并行（I/O 密集不阻塞 CPU 扫描）
+        self._scheduler.add_job(
+            self._safe_afternoon_flow,
+            CronTrigger(hour=14, minute=30, day_of_week="mon-fri"),
+            id="afternoon_flow_1430",
+            name="盘后资金流决策报告-14:30",
         )
 
         # 尾盘选股次日验证（09:35，开盘价已更新）
@@ -228,6 +237,23 @@ class TradingScheduler:
                 )
         except Exception as e:
             logger.exception(f"尾盘选股验证异常: {e}")
+
+    async def _safe_afternoon_flow(self) -> None:
+        """安全执行盘后资金流决策报告（14:30，非交易日跳过）。
+
+        采集资金流数据，生成决策指导卡片推送飞书。
+        与 15:10 收盘日报区别：聚焦"决策指导"而非"数据汇总"。
+        """
+        if not is_trading_day():
+            return
+        try:
+            from gugu.notifier.flow_report import run_afternoon_report
+
+            result = await run_afternoon_report()
+            await self._engine._notifier.notify_flow_report("afternoon", result)
+            logger.info("盘后资金流决策报告推送完成（14:30）")
+        except Exception as e:
+            logger.exception(f"盘后资金流决策报告异常: {e}")
 
     async def _safe_fund_monitor(self) -> None:
         """安全执行基金监控（非交易日跳过）。"""

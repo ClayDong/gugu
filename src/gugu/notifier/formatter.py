@@ -1,8 +1,8 @@
 """Feishu interactive card formatters for gugu notifications.
 
-Color semantics:
-- green: buy / profit
-- red: sell / loss
+Color semantics (A 股惯例：红涨绿跌):
+- red: buy / profit / up / positive
+- green: sell / loss / down / negative
 - yellow: warning
 - grey: info
 """
@@ -178,7 +178,8 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     """
     direction = str(signal.get("direction", "buy")).lower()
     is_buy = direction == "buy"
-    template = "green" if is_buy else "red"
+    # A 股惯例：红涨绿跌 — 买入(看涨)用红色，卖出(看跌)用绿色
+    template = "red" if is_buy else "green"
     action = "买入" if is_buy else "卖出"
 
     symbol = signal.get("symbol", "")
@@ -228,7 +229,8 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     elif signal.get("sector_check", {}).get("is_hot") and signal.get("multi_period", {}).get(
         "weekly_aligned"
     ):
-        strength = "🟢 强信号"
+        # A 股惯例：红涨绿跌 — 强买入信号用红色
+        strength = "🔴 强信号"
     elif signal.get("weekly_misaligned") or signal.get("sector_check", {}).get("is_cold"):
         strength = "🟡 弱信号"
     else:
@@ -710,7 +712,8 @@ def format_backtest_report(report: dict[str, Any]) -> dict[str, Any]:
         return_val = float(total_return)
     except (TypeError, ValueError):
         return_val = 0.0
-    template = "green" if return_val >= 0 else "red"
+    # A 股惯例：红涨绿跌 — 盈利用红色，亏损用绿色
+    template = "red" if return_val >= 0 else "green"
 
     strategy = report.get("strategy", "")
     sharpe = report.get("sharpe", 0)

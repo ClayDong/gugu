@@ -2,11 +2,18 @@
 
 内存中维护现金、持仓、交易记录。模拟真实交易成本。
 状态持久化到 JSON 文件，重启后自动恢复。
+
+P3 优化：
+- 部分成交模拟（大单批量分拆）
+- 流动性感知滑点模型（小盘股滑点更高）
+- 涨跌停成交概率模型
 """
 
 from __future__ import annotations
 
 import json
+import math
+import random
 from datetime import date
 from typing import Any
 
@@ -19,6 +26,21 @@ logger = get_logger()
 
 # 持久化文件路径
 STATE_FILE = PROJECT_ROOT / "data" / "paper_broker_state.json"
+
+# 流动性分级（按日均成交额大致估算）
+# 格式：(threshold_market_value_billions, slippage_bps, partial_fill_probability)
+# 市值越小，滑点越大，部分成交概率越高
+LIQUIDITY_TIERS = [
+    (100, 5, 0.02),   # 超大市值（>1000亿）：滑点0.05%，部分成交概率2%
+    (30, 10, 0.05),   # 大市值（300-1000亿）：滑点0.1%，部分成交概率5%
+    (10, 20, 0.10),   # 中市值（100-300亿）：滑点0.2%，部分成交概率10%
+    (3, 40, 0.20),    # 小市值（30-100亿）：滑点0.4%，部分成交概率20%
+    (1, 60, 0.30),    # 微小市值（10-30亿）：滑点0.6%，部分成交概率30%
+]
+
+# 涨跌停附近成交概率
+LIMIT_UP_FILL_PROB = 0.3   # 涨停时买入成交概率 30%
+LIMIT_DOWN_FILL_PROB = 0.3  # 跌停时卖出成交概率 30%
 
 
 class PaperBroker(BaseBroker):
@@ -39,8 +61,101 @@ class PaperBroker(BaseBroker):
         self._positions: dict[str, Position] = {}
         self._trades: list[dict[str, Any]] = []
         self._daily_start_value: float | None = None
+        # 部分成交状态缓存 {symbol: market_value_in_billions}
+        self._market_value_cache: dict[str, float] = {}
         # 从磁盘恢复状态
         self._load_state()
+
+    def _get_liquidity_tier(self, symbol: str) -> tuple[int, float, float]:
+        """获取股票的流动性等级参数。
+
+        Returns:
+            (slippage_bps, partial_fill_probability) 滑点基点（bps）和部分成交概率
+        """
+        if symbol in self._market_value_cache:
+            market_value = self._market_value_cache[symbol]
+        else:
+            # 如果没有缓存，使用默认中等流动性
+            # 实际可通过行情数据获取市值
+            return 30, 0.15
+
+        for threshold_billion, slippage_bps, partial_prob in LIQUIDITY_TIERS:
+            if market_value >= threshold_billion:
+                return slippage_bps, partial_prob
+        # 最小市值（<10亿）
+        return 80, 0.35
+
+    def _simulate_partial_fill(
+        self, quantity: int, fill_price: float, partial_prob: float
+    ) -> tuple[int, float]:
+        """模拟部分成交。
+
+        Args:
+            quantity: 请求数量
+            fill_price: 成交价
+            partial_prob: 部分成交概率
+
+        Returns:
+            (实际成交数量, 成交价)
+            部分成交时价格按比例偏移（模拟抢筹/砸盘效应）
+        """
+        if partial_prob <= 0 or random.random() > partial_prob:
+            return quantity, fill_price
+
+        # 部分成交比例在 30%-80% 之间随机
+        fill_ratio = random.uniform(0.3, 0.8)
+        partial_qty = int(math.floor(quantity * fill_ratio / 100) * 100)
+        if partial_qty < 100:
+            partial_qty = 100 if quantity >= 100 else 0
+
+        if partial_qty == 0:
+            # 完全未成交（极低概率）
+            logger.info(f"[模拟盘] 订单完全未成交（流动性不足），请求量={quantity}")
+            return 0, fill_price
+
+        logger.info(
+            f"[模拟盘] 部分成交: 请求{quantity}股 → 实际{partial_qty}股 "
+            f"(比例={fill_ratio:.0%})"
+        )
+        return partial_qty, fill_price
+
+    def _estimate_market_value(self, symbol: str, price: float, quantity: int) -> None:
+        """估算股票市值（用于滑点计算）。"""
+        trade_value = price * quantity
+        market_value = trade_value / 0.01  # 简单估算：一次交易量约为流通市值的 1%
+        if symbol not in self._market_value_cache:
+            self._market_value_cache[symbol] = market_value
+        # 更新缓存（指数移动平滑）
+        old_val = self._market_value_cache[symbol]
+        self._market_value_cache[symbol] = old_val * 0.7 + market_value * 0.3
+
+    def _check_limit_tradable(
+        self, direction: str, price: float, prev_close: float | None
+    ) -> bool:
+        """检查涨跌停附近是否可成交。
+
+        Args:
+            direction: 买卖方向
+            price: 当前价格
+            prev_close: 前收盘价
+
+        Returns:
+            是否可成交
+        """
+        if prev_close is None or prev_close <= 0:
+            return True
+
+        change_pct = (price - prev_close) / prev_close
+
+        # 涨停附近（>= 9.5%）— 买入概率降低
+        if direction == "buy" and change_pct >= 0.095:
+            return random.random() < self.__class__.LIMIT_UP_FILL_PROB
+
+        # 跌停附近（<= -9.5%）— 卖出概率降低
+        if direction == "sell" and change_pct <= -0.095:
+            return random.random() < self.__class__.LIMIT_DOWN_FILL_PROB
+
+        return True
 
     def order(
         self,
@@ -49,7 +164,7 @@ class PaperBroker(BaseBroker):
         quantity: int,
         price: float | None = None,
     ) -> OrderResult:
-        """下单。模拟成交，扣手续费/印花税/滑点。"""
+        """下单。模拟成交，扣手续费/印花税/滑点，支持部分成交。"""
         symbol = symbol.strip().zfill(6)
         direction = direction.lower().strip()  # 规范化，与 RiskManager 保持一致
         if quantity <= 0 or quantity % 100 != 0:
@@ -78,18 +193,52 @@ class PaperBroker(BaseBroker):
                         message=f"价格偏离持仓成本 {deviation:.1f}x (现价{cur_price:.2f} vs 成本{pos.avg_cost:.2f})，拒绝下单",
                     )
 
+        # 获取前收盘价（T+1 / 涨跌停检查用）
+        prev_close = None
+        existing_pos = self._positions.get(symbol)
+        if existing_pos:
+            prev_close = existing_pos.prev_close or existing_pos.current_price
+
+        # 流动性感知滑点
+        slippage_bps, partial_prob = self._get_liquidity_tier(symbol)
+        effective_slippage = max(self._slippage, slippage_bps / 10000)
+
         if direction == "buy":
-            fill_price = cur_price * (1 + self._slippage)
-            commission = fill_price * quantity * self._commission_rate
-            total_cost = fill_price * quantity + commission
+            # 涨跌停成交检查
+            if not self._check_limit_tradable("buy", cur_price, prev_close):
+                logger.info(f"[模拟盘] 涨停附近{cur_price:.2f}，买入{quantity}股未成交(概率)")
+                return OrderResult(False, symbol, direction, 0, 0, 0, message="涨停附近买入未成交")
+
+            fill_price = cur_price * (1 + effective_slippage)
+            # 大单部分成交模拟
+            actual_quantity, fill_price = self._simulate_partial_fill(
+                quantity, fill_price, partial_prob
+            )
+            if actual_quantity <= 0:
+                return OrderResult(False, symbol, direction, 0, 0, 0, message="流动性不足，未成交")
+
+            # 估算市值
+            self._estimate_market_value(symbol, fill_price, actual_quantity)
+
+            commission = fill_price * actual_quantity * self._commission_rate
+            total_cost = fill_price * actual_quantity + commission
             if total_cost > self._cash:
-                return OrderResult(False, symbol, direction, 0, 0, 0, message="资金不足")
+                # 如果是部分成交导致的资金不足，尝试进一步缩小数量
+                if actual_quantity < quantity:
+                    affordable = int(math.floor(self._cash / (fill_price * (1 + self._commission_rate)) / 100) * 100)
+                    if affordable >= 100:
+                        actual_quantity = affordable
+                        total_cost = fill_price * actual_quantity + fill_price * actual_quantity * self._commission_rate
+                    else:
+                        return OrderResult(False, symbol, direction, 0, 0, 0, message="资金不足（部分成交调整后仍不足）")
+                else:
+                    return OrderResult(False, symbol, direction, 0, 0, 0, message="资金不足")
 
             self._cash -= total_cost
             pos = self._positions.get(symbol)
             if pos:
-                new_qty = pos.quantity + quantity
-                pos.avg_cost = (pos.avg_cost * pos.quantity + fill_price * quantity) / new_qty
+                new_qty = pos.quantity + actual_quantity
+                pos.avg_cost = (pos.avg_cost * pos.quantity + fill_price * actual_quantity) / new_qty
                 pos.quantity = new_qty
                 # 加仓后同步更新现价，避免止损检查用旧价
                 pos.current_price = cur_price
@@ -97,32 +246,49 @@ class PaperBroker(BaseBroker):
             else:
                 self._positions[symbol] = Position(
                     symbol=symbol,
-                    quantity=quantity,
+                    quantity=actual_quantity,
                     available=0,  # T+1
                     avg_cost=fill_price,
                     current_price=cur_price,
                 )
 
             result = OrderResult(
-                True, symbol, direction, fill_price, quantity, commission, 0, "买入成功"
+                True, symbol, direction, fill_price, actual_quantity, commission, 0,
+                f"买入成功{'（部分成交）' if actual_quantity < quantity else ''}",
             )
             logger.info(
-                f"[模拟盘] 买入 {symbol} {quantity}股 @ {fill_price:.2f} 佣金 {commission:.2f}"
+                f"[模拟盘] 买入 {symbol} {actual_quantity}股 @ {fill_price:.2f} "
+                f"佣金 {commission:.2f} 滑点={effective_slippage:.4f}"
+                f"{'（部分成交）' if actual_quantity < quantity else ''}"
             )
 
         elif direction == "sell":
             pos = self._positions.get(symbol)
-            if not pos or pos.available < quantity:
+            if not pos or pos.available < 100:
                 return OrderResult(False, symbol, direction, 0, 0, 0, message="可卖数量不足（T+1）")
 
-            fill_price = cur_price * (1 - self._slippage)
-            commission = fill_price * quantity * self._commission_rate
-            stamp_tax = fill_price * quantity * self._stamp_tax
-            proceeds = fill_price * quantity - commission - stamp_tax
+            # 跌停成交检查
+            if not self._check_limit_tradable("sell", cur_price, prev_close):
+                logger.info(f"[模拟盘] 跌停附近{cur_price:.2f}，卖出{quantity}股未成交(概率)")
+                return OrderResult(False, symbol, direction, 0, 0, 0, message="跌停附近卖出未成交")
+
+            fill_price = cur_price * (1 - effective_slippage)
+            # 限制卖出不超出可卖数量
+            actual_quantity = min(quantity, pos.available)
+            # 部分成交模拟
+            actual_quantity, fill_price = self._simulate_partial_fill(
+                actual_quantity, fill_price, partial_prob
+            )
+            if actual_quantity <= 0:
+                return OrderResult(False, symbol, direction, 0, 0, 0, message="流动性不足，未成交")
+
+            commission = fill_price * actual_quantity * self._commission_rate
+            stamp_tax = fill_price * actual_quantity * self._stamp_tax
+            proceeds = fill_price * actual_quantity - commission - stamp_tax
 
             self._cash += proceeds
-            pos.quantity -= quantity
-            pos.available -= quantity
+            pos.quantity -= actual_quantity
+            pos.available -= actual_quantity
             if pos.quantity <= 0:
                 del self._positions[symbol]
 
@@ -131,14 +297,15 @@ class PaperBroker(BaseBroker):
                 symbol,
                 direction,
                 fill_price,
-                quantity,
+                actual_quantity,
                 commission,
                 stamp_tax,
-                "卖出成功",
+                f"卖出成功{'（部分成交）' if actual_quantity < quantity else ''}",
             )
             logger.info(
-                f"[模拟盘] 卖出 {symbol} {quantity}股 @ {fill_price:.2f} "
+                f"[模拟盘] 卖出 {symbol} {actual_quantity}股 @ {fill_price:.2f} "
                 f"佣金 {commission:.2f} 印花税 {stamp_tax:.2f}"
+                f"{'（部分成交）' if actual_quantity < quantity else ''}"
             )
         else:
             return OrderResult(False, symbol, direction, 0, 0, 0, message=f"未知方向: {direction}")
@@ -149,7 +316,7 @@ class PaperBroker(BaseBroker):
                 "symbol": symbol,
                 "direction": direction,
                 "price": result.price,
-                "quantity": quantity,
+                "quantity": result.quantity,
                 "commission": result.commission,
                 "stamp_tax": result.stamp_tax,
             }

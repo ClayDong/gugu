@@ -71,10 +71,11 @@ class FeishuNotifier:
         self._token_expires_at: float = 0.0
         self._client: httpx.AsyncClient = httpx.AsyncClient(timeout=10.0)
 
-        # 测试环境保护：检测 pytest 运行环境，将重试队列重定向到临时目录
+        # 测试环境保护：通过显式环境变量将重试队列重定向到临时目录
         # 防止测试中的失败通知污染生产数据文件 data/notify_queue.jsonl
-        import sys
-        if "pytest" in sys.modules:
+        # 不再使用 "pytest" in sys.modules 检测（避免生产代码依赖测试框架）
+        import os
+        if os.environ.get("GUGU_TEST_MODE"):
             import tempfile
             self._queue_path: Path = Path(tempfile.gettempdir()) / "gugu_test_notify_queue.jsonl"
         else:
@@ -518,8 +519,8 @@ class FeishuNotifier:
         """Format and send a capital flow report.
 
         Args:
-            period: "morning" (盘前复盘) or "close" (收盘日报).
-            data: Result from run_morning_report() or run_close_report().
+            period: "morning" (盘前复盘) / "afternoon" (14:30决策报告) / "close" (收盘日报).
+            data: Result from run_morning_report() / run_afternoon_report() / run_close_report().
         """
         card = data["card"]
         return await self.send_card(card)

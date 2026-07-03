@@ -504,7 +504,7 @@ wheels = [
 
 [[package]]
 name = "gugu"
-version = "0.3.2"
+version = "0.3.6"
 source = { editable = "." }
 dependencies = [
     { name = "akshare" },

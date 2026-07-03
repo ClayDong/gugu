@@ -42,6 +42,13 @@ LLM_MAX_TRIAL_RATIO = 0.15  # LLM 首次试仓硬上限 15%
 LLM_MIN_STOP_LOSS_PCT = 0.05  # LLM 止损最小幅度 5%
 LLM_MAX_STOP_LOSS_PCT = 0.10  # LLM 止损最大幅度 10%
 
+# ========== LLM 输出校验增强 ==========
+# 价格合理性: 拒绝价格偏离市场均价超过 N 倍标准差
+LLM_PRICE_DEVIATION_STD = 3.0
+# 仓位一致性: LLM 建议仓位与信号方向不一致时拒绝
+# 止损价位置: 止损价必须低于当前价 >= 2%（买入时）
+LLM_STOP_LOSS_MIN_DISTANCE = 0.02
+
 
 def _max_single_position() -> float:
     """从配置读取单股最大仓位上限，与风控 L1 保持一致。"""
@@ -675,11 +682,53 @@ class WisdomAdvisor:
     def _apply_llm_decision(
         self, signal: dict[str, Any], llm_decision: dict[str, Any]
     ) -> dict[str, Any]:
-        """将 LLM 决策应用到信号。"""
+        """将 LLM 决策应用到信号。
+
+        安全墙（新增）：
+        1. Action 一致性校验：LLM action 必须与信号场景匹配
+        2. 止损价位置校验：止损价不能高于入场价的 2%（买入时）
+        3. 仓位数值域校验：position_ratio 必须 0-1
+        """
         action = llm_decision["action"]
         reason = llm_decision.get("reason", "")
         position_ratio = float(llm_decision.get("position_ratio", 0))
         stop_loss_price = llm_decision.get("stop_loss_price")
+
+        # 安全墙：校验 action 与 direction 的兼容性
+        direction = signal.get("direction", "")
+        if direction == "buy" and action not in ("buy", "hold", "filter"):
+            logger.warning(
+                f"[wisdom-LLM] {signal.get('symbol', '')} 安全墙: "
+                f"买入信号被 LLM 输出非买入 action={action}，强制转为 filter"
+            )
+            action = "filter"
+            reason = f"安全墙: 买入信号不兼容 LLM action={action}"
+        elif direction == "sell" and action not in ("sell", "hold", "filter"):
+            logger.warning(
+                f"[wisdom-LLM] {signal.get('symbol', '')} 安全墙: "
+                f"卖出信号被 LLM 输出非卖出 action={action}，强制转为 filter"
+            )
+            action = "filter"
+            reason = f"安全墙: 卖出信号不兼容 LLM action={action}"
+
+        # 安全墙：校验 position_ratio 值域
+        if not (0.0 <= position_ratio <= 1.0):
+            logger.warning(
+                f"[wisdom-LLM] {signal.get('symbol', '')} 安全墙: "
+                f"position_ratio={position_ratio} 超出 0-1 范围，截断为 0"
+            )
+            position_ratio = max(0.0, min(1.0, position_ratio))
+
+        # 安全墙：校验止损价位置（买入时必须低于当前价至少 2%）
+        price = signal.get("price", 0)
+        if stop_loss_price is not None and float(stop_loss_price) > 0 and price > 0:
+            sl = float(stop_loss_price)
+            if sl >= price * (1 - LLM_STOP_LOSS_MIN_DISTANCE):
+                logger.warning(
+                    f"[wisdom-LLM] {signal.get('symbol', '')} 安全墙: "
+                    f"止损价 {sl:.2f} 距离当前价 {price:.2f} 不足 2%，已修正"
+                )
+                stop_loss_price = round(price * (1 - LLM_STOP_LOSS_MIN_DISTANCE), 2)
 
         decision: dict[str, Any] = {
             "source": "llm",

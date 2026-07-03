@@ -194,10 +194,12 @@ class DataManager:
                 async with self._lock:
                     await self._on_success_locked()
                 df = self._validate(method, df, args)
-                cache().set(cache_key, df)
-                # 持久化缓存：仅对历史数据
-                if method == "fetch_stock_history" and len(args) >= 1 and not df.empty:
-                    self._parquet_cache.set(str(args[0]), int(args[1]) if len(args) > 1 else 60, df)
+                # P0 修复：空结果不缓存，避免 120s 内持续返回空且不触发降级
+                if not df.empty:
+                    cache().set(cache_key, df)
+                    # 持久化缓存：仅对历史数据
+                    if method == "fetch_stock_history" and len(args) >= 1:
+                        self._parquet_cache.set(str(args[0]), int(args[1]) if len(args) > 1 else 60, df)
                 return df
             except Exception as e:
                 logger.error(f"主源 {method} 异常: {e}")

@@ -47,3 +47,16 @@ dual_thrust:
   lookback: 5
   k_up: 0.5
   k_down: 0.5
+
+money_flow_follow:
+  # 资金流跟随策略：5步复盘流程
+  ma_periods: [5, 10, 20, 60]        # 多头排列均线周期
+  new_high_window: 20                # 创新高回看窗口
+  new_high_lookback: 120             # 历史新高回看长度
+  pullback_max_pct: 0.05             # 回踩最大幅度 5%
+  volume_shrink_days: 2              # 缩量回踩天数
+  volume_expand_ratio: 1.5           # 放量确认量比阈值
+  abnormal_volume_ratio: 3.0         # 天量剔除阈值（3倍60日均量）
+  recent_gain_window: 10             # 近期涨幅窗口
+  recent_gain_threshold: 0.03        # 近期最低涨幅 3%（热点近似）
+  vol_ma_window: 60                  # 成交量均线窗口

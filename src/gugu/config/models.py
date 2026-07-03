@@ -98,6 +98,7 @@ class ExecutionConfig(BaseModel):
     mode: str = Field(default="paper", description="运行模式: backtest / paper / live")
     paper: PaperConfig = Field(default_factory=PaperConfig)
     live: LiveConfig = Field(default_factory=LiveConfig)
+    scan_concurrency: int = Field(default=10, description="全市场扫描并发数（P3 优化）")
 
     # ── aliases ──
     @property

@@ -8,6 +8,7 @@ from typing import Any
 from gugu.strategies.base import Strategy
 from gugu.strategies.breakout import BoxBreakoutStrategy, DualThrustStrategy
 from gugu.strategies.mean_revert import BollingerStrategy, KDJStrategy, RSIStrategy
+from gugu.strategies.money_flow_follow import MoneyFlowFollowStrategy
 from gugu.strategies.trend import DualMAStrategy, MACDStrategy, TurtleStrategy
 
 # 策略注册表：name -> class
@@ -20,6 +21,7 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "kdj": KDJStrategy,
     "box_breakout": BoxBreakoutStrategy,
     "dual_thrust": DualThrustStrategy,
+    "money_flow_follow": MoneyFlowFollowStrategy,
 }
 
 

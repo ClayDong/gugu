@@ -133,7 +133,7 @@ python scripts/build_kb_index.py --force
 
 ## 测试
 
-818 测试，70% 覆盖率。
+878 测试，64% 覆盖率。
 
 ```bash
 # 运行全部测试

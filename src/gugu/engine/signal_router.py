@@ -4,6 +4,7 @@
 - unanimous: 全票通过
 - majority: 多数通过
 - any: 任一策略触发
+- weighted: 加权融合（支持市场状态自适应权重）
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from typing import Any
 
 import pandas as pd
 
+from gugu.analysis.regime_strategy_adjuster import compute_regime_weights
 from gugu.analysis.strategy_pool import StrategyPool
 from gugu.config import get_config
 from gugu.strategies.base import Strategy
@@ -57,13 +59,21 @@ class SignalRouter:
         """添加策略。"""
         self._strategies.append(strategy)
 
-    def route(self, df: pd.DataFrame, symbol: str, name: str = "") -> dict[str, Any] | None:
+    def route(
+        self,
+        df: pd.DataFrame,
+        symbol: str,
+        name: str = "",
+        regime: str | None = None,
+    ) -> dict[str, Any] | None:
         """对单只股票融合多策略信号。
 
         Args:
             df: 行情数据
             symbol: 股票代码
             name: 股票名称（可选，用于飞书卡片展示）
+            regime: 市场状态（bull/bear/sideways/crash/rally），
+                   提供时启用市场状态自适应权重调整
 
         Returns:
             融合后的信号 dict，无信号返回 None
@@ -75,6 +85,7 @@ class SignalRouter:
                 "strategy": str,           # 触发策略字符串（逗号分隔）
                 "strategies": [触发策略名],
                 "reason": str,
+                "regime": str,             # 市场状态（如有）
             }
         """
         if df.empty or len(df) < 30:
@@ -108,12 +119,36 @@ class SignalRouter:
 
         # P2 修复：weighted 模式使用 StrategyPool 加权融合
         if self._fusion_rule == "weighted" and self._pool is not None:
+            # 市场状态自适应权重调整
+            if regime:
+                base_weights = self._pool.get_weights()
+                adjusted_weights = compute_regime_weights(base_weights, regime)
+                # P0 修复：深拷贝原始权重，防止就地修改 WeightEntry 导致并发数据竞争
+                import copy as _copy
+                original_weights = _copy.deepcopy(self._pool._weights)
+                for name, w in self._pool._weights.items():
+                    if name in adjusted_weights:
+                        w.weight = adjusted_weights[name] * sum(
+                            v.weight for v in original_weights.values()
+                        )
+                # 归一化
+                total = sum(v.weight for v in self._pool._weights.values() if v.enabled)
+                if total > 0:
+                    for v in self._pool._weights.values():
+                        if v.enabled:
+                            v.weight /= total
+
             # 将 votes 转为 StrategyPool 可接受的信号格式
             pool_signals = [
                 {"direction": "buy" if s == 1 else "sell", "confidence": c, "strategy_name": n}
                 for n, s, c in votes
             ]
             pool_result = self._pool.weighted_fusion(pool_signals)
+
+            # 恢复原始权重（避免影响后续交易的性能追踪）
+            if regime:
+                self._pool._weights = original_weights
+
             if pool_result["direction"] == "buy":
                 direction = "buy"
                 triggered = pool_result.get("strategies", ["weighted"])
@@ -166,7 +201,7 @@ class SignalRouter:
             )
             return None
 
-        return {
+        result = {
             "symbol": symbol,
             "name": name,
             "direction": direction,
@@ -175,3 +210,9 @@ class SignalRouter:
             "strategies": triggered,
             "reason": f"策略 {','.join(triggered)} 触发 {direction} 信号",
         }
+
+        # 附加市场状态信息
+        if regime:
+            result["regime"] = regime
+
+        return result

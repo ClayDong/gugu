@@ -140,7 +140,9 @@ class RiskManager:
         return self._last_reset_date
 
     def _save_halt_state(self) -> None:
-        """P0-2 修复：将熔断状态持久化到磁盘，含 last_reset_date 用于跨日同步。"""
+        """P0-2 修复：将熔断状态持久化到磁盘，含 last_reset_date 用于跨日同步。
+        P0 修复：同时保存 _portfolio_peak，防止重启后组合回撤熔断失效。
+        """
         try:
             RISK_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
             from datetime import date as _date
@@ -149,6 +151,7 @@ class RiskManager:
                 "halted": self._halted,
                 "halt_date": _date.today().isoformat(),
                 "last_reset_date": self._last_reset_date,
+                "portfolio_peak": self._portfolio_peak,  # P0: 持久化组合峰值
                 "updated_at": __import__("pandas").Timestamp.now().isoformat(),
             }
             RISK_STATE_FILE.write_text(
@@ -186,12 +189,12 @@ class RiskManager:
         Returns:
             RiskCheckResult. HALT means the order must be rejected.
         """
-        # Iron law: once halted, all orders are blocked
-        if self._halted:
+        # P0 修复：熔断时仅阻断买入，卖出/止损豁免（防止熔断后无法止损导致亏损扩大）
+        if self._halted and direction.lower().strip() == "buy":
             return RiskCheckResult(
                 level=RiskLevel.L2_DAILY_LOSS,
                 action=RiskAction.HALT,
-                message="Daily loss halt is active, all trading blocked. Call reset() to resume.",
+                message="Daily loss halt is active, buy blocked. Sell/stop-loss still allowed. Call reset() to resume buy.",
             )
 
         direction = direction.lower().strip()
@@ -465,9 +468,12 @@ class RiskManager:
     # ── P1 新增：组合级风控 ─────────────────────────────────────────
 
     def update_portfolio_peak(self, total_value: float) -> None:
-        """更新组合历史最高净值（每日循环结束时调用）。"""
+        """更新组合历史最高净值（每日循环结束时调用）。
+        P0 修复：峰值更新时持久化到磁盘，防止重启后回撤熔断失效。
+        """
         if total_value > self._portfolio_peak:
             self._portfolio_peak = total_value
+            self._save_halt_state()  # P0: 持久化峰值防止重启绕过回撤铁律
 
     def check_portfolio_drawdown(self, total_value: float) -> RiskCheckResult:
         """检查组合从高点回撤是否触发熔断。
