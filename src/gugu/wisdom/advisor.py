@@ -900,9 +900,8 @@ class WisdomAdvisor:
         decision: dict[str, Any] = {"source": "fallback"}
 
         if direction == "buy":
-            advice["entry_check"] = self._get_skill_advice("stock-entry-decision")
-            advice["stop_loss"] = self._get_skill_advice("stock-stop-loss-decision")
-            advice["position_sizing"] = self._get_skill_advice("stock-position-sizing")
+            # 数据驱动建议（替代格言摘录）
+            advice = self._build_data_driven_advice(signal, "buy")
 
             # 入场过滤——低置信度信号降级
             if confidence < FALLBACK_ENTRY_MIN_CONFIDENCE:
@@ -967,8 +966,8 @@ class WisdomAdvisor:
                 )
 
         elif direction == "sell":
-            advice["profit_taking"] = self._get_skill_advice("stock-profit-taking-decision")
-            advice["trailing_stop"] = self._get_skill_advice("stock-trailing-stop")
+            # 数据驱动建议（替代格言摘录）
+            advice = self._build_data_driven_advice(signal, "sell")
 
             # P1 修复：fallback 卖出信号校验——无持仓时过滤卖出信号
             has_position = signal.get("has_position", False)
@@ -979,8 +978,6 @@ class WisdomAdvisor:
             elif price > 0:
                 decision["sell_reason"] = "策略信号触发卖出"
                 logger.info(f"[wisdom-fallback] {signal.get('symbol', '')} 卖出决策: 策略信号触发")
-
-        advice["psychology_check"] = self._get_skill_advice("stock-psychology-check")
 
         signal["wisdom"] = advice
         signal["wisdom_decision"] = decision
@@ -1058,6 +1055,173 @@ class WisdomAdvisor:
             if len("\n".join(summary_lines)) > 500:
                 break
         return "\n".join(summary_lines)
+
+    def _get_skill_source(self, skill_name: str) -> str:
+        """从 SKILL.md 的 YAML frontmatter 提取 source_book 字段。"""
+        content = self._skills.get(skill_name, "")
+        if not content:
+            return ""
+        # 解析 YAML frontmatter
+        if content.startswith("---"):
+            end = content.find("---", 3)
+            if end > 0:
+                frontmatter = content[3:end]
+                for line in frontmatter.split("\n"):
+                    if line.strip().startswith("source_book:"):
+                        return line.split(":", 1)[1].strip()
+        return ""
+
+    def _build_data_driven_advice(
+        self, signal: dict[str, Any], direction: str
+    ) -> dict[str, str]:
+        """基于信号实际数据生成交易智慧建议（替代格言摘录）。
+
+        每条建议包含：
+        1. 基于当前信号数据的具体结论
+        2. 应用的策略原则（含出处）
+        """
+        advice: dict[str, str] = {}
+        symbol = signal.get("symbol", "")
+        name = signal.get("name", "") or symbol
+        price = signal.get("price", 0.0)
+        confidence = signal.get("confidence", 1.0)
+        atr = signal.get("atr", 0.0)
+        has_position = signal.get("has_position", False)
+        profit_pct = signal.get("profit_pct", 0.0)
+        strategies = signal.get("strategies", []) or [signal.get("strategy", "")]
+        if isinstance(strategies, str):
+            strategies = [strategies]
+
+        # 市场分析数据（从 signal_pipeline 注入）
+        stage = signal.get("stage", "")
+        danger_signals = signal.get("danger_signals", [])
+        divergence = signal.get("divergence", {})
+        money_flow = signal.get("money_flow", {})
+        fundamental = signal.get("fundamental", {})
+        multi_period = signal.get("multi_period", {})
+
+        if direction == "buy":
+            # ── 入场建议 ──
+            entry_parts: list[str] = []
+            entry_parts.append(f"**{name}({symbol})** 当前价 ¥{price:.2f}，置信度 {confidence:.0%}")
+
+            # 阶段判断
+            if stage:
+                stage_map = {
+                    "bullish": "升势",
+                    "crazy": "疯狂",
+                    "final": "最后",
+                    "flat": "牛皮市",
+                }
+                stage_text = stage_map.get(stage, stage)
+                entry_parts.append(f"市场阶段：{stage_text}")
+                if stage in ("crazy", "final"):
+                    entry_parts.append("⚠️ 疯狂/最后阶段禁止入场（P0 规则）")
+
+            # 危险信号
+            if danger_signals:
+                entry_parts.append(
+                    f"⚠️ 检测到 {len(danger_signals)} 个危险信号：{', '.join(danger_signals[:2])}"
+                )
+
+            # 量价背离
+            if divergence and isinstance(divergence, dict) and divergence.get("diverged"):
+                entry_parts.append("⚠️ 量价背离：价涨量缩，警惕主力出货")
+
+            # 资金流
+            if money_flow and isinstance(money_flow, dict):
+                net_inflow = money_flow.get("net_inflow", 0)
+                if net_inflow < 0:
+                    entry_parts.append(f"⚠️ 资金净流出 {abs(net_inflow):.2f}亿，主力在撤")
+
+            # 基本面
+            if fundamental and isinstance(fundamental, dict):
+                pe = fundamental.get("pe")
+                if pe and pe > 0:
+                    entry_parts.append(f"PE={pe:.1f}")
+
+            # 策略出处
+            source = self._get_skill_source("stock-entry-decision")
+            entry_parts.append(f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》")
+            advice["entry_check"] = "\n".join(entry_parts)
+
+            # ── 止损建议 ──
+            stop_parts: list[str] = []
+            stop_price = signal.get("stop_loss_price", 0.0)
+            if stop_price and price > 0:
+                stop_pct = (price - stop_price) / price
+                stop_parts.append(f"建议止损价：¥{stop_price:.2f}（-{stop_pct:.1%}）")
+                if atr > 0:
+                    stop_parts.append(f"ATR={atr:.2f}（占价 {atr/price:.1%}），止损幅度参考 ATR")
+                else:
+                    stop_parts.append("无 ATR 数据，使用默认 8% 止损")
+            else:
+                stop_parts.append("建议止损价：¥{:.2f}（-8%）".format(price * 0.92) if price > 0 else "价格无效")
+            stop_parts.append("原则：止损是铁律，不可违反，跌破立即执行")
+            source = self._get_skill_source("stock-stop-loss-decision")
+            stop_parts.append(f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》")
+            advice["stop_loss"] = "\n".join(stop_parts)
+
+            # ── 仓位建议 ──
+            pos_parts: list[str] = []
+            ratio = signal.get("suggested_position_ratio", 0.0)
+            if has_position:
+                pos_parts.append(f"已持仓，当前盈利 {profit_pct:+.1%}")
+                if profit_pct > 0.05:
+                    pos_parts.append(f"盈利确认，可加码至 {ratio:.1%}（加仓策略）")
+                else:
+                    pos_parts.append(f"建议加码比例：{ratio:.1%}")
+            else:
+                pos_parts.append(f"未持仓，建议试仓 {ratio:.1%}（首次建仓 20%）")
+                pos_parts.append("分层下注：试仓 20% → 盈利确认加码 40% → 满仓 30%")
+            source = self._get_skill_source("stock-position-sizing")
+            pos_parts.append(f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》")
+            advice["position_sizing"] = "\n".join(pos_parts)
+
+        elif direction == "sell":
+            # ── 止盈建议 ──
+            profit_parts: list[str] = []
+            profit_parts.append(f"**{name}({symbol})** 卖出信号触发")
+            profit_parts.append(f"当前价 ¥{price:.2f}，持仓盈利 {profit_pct:+.1%}")
+            if profit_pct > 0.30:
+                profit_parts.append("⚠️ 已达 +30%，按财叔策略应减仓 1/3")
+            elif profit_pct > 0.15:
+                profit_parts.append("💡 盈利 >15%，考虑部分止盈")
+            elif profit_pct < -0.08:
+                profit_parts.append("⚠️ 亏损 >8%，应执行止损")
+            source = self._get_skill_source("stock-profit-taking-decision")
+            profit_parts.append(f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》")
+            advice["profit_taking"] = "\n".join(profit_parts)
+
+            # ── 追踪止损 ──
+            trail_parts: list[str] = []
+            if has_position and profit_pct > 0:
+                trail_parts.append(f"持仓盈利 {profit_pct:+.1%}，启用追踪止损")
+                trail_parts.append("止损价随浪谷上移，只上不下")
+            else:
+                trail_parts.append("无持仓或亏损中，不适用追踪止损")
+            source = self._get_skill_source("stock-trailing-stop")
+            trail_parts.append(f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》")
+            advice["trailing_stop"] = "\n".join(trail_parts)
+
+        # ── 心态检查 ──
+        psych_parts: list[str] = []
+        if direction == "buy":
+            if confidence < 0.6:
+                psych_parts.append("⚠️ 置信度偏低，警惕 FOMO 情绪驱动入场")
+            if stage in ("crazy", "final"):
+                psych_parts.append("⚠️ 市场过热，警惕贪婪情绪")
+        elif direction == "sell":
+            if profit_pct > 0.30:
+                psych_parts.append("💡 盈利丰厚，警惕贪婪不愿卖")
+            elif profit_pct < -0.05:
+                psych_parts.append("💡 亏损中，警惕侥幸心理不止损")
+        psych_parts.append("原则：纪律 > 情绪，按策略执行而非凭感觉")
+        source = self._get_skill_source("stock-psychology-check")
+        psych_parts.append(f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》")
+        advice["psychology_check"] = "\n".join(psych_parts)
+
+        return advice
 
     # ========== LLM 自然语言解读（保留，用于飞书通知） ==========
 

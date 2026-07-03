@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from functools import lru_cache
 
 # 交易时段（A 股）
@@ -48,3 +48,20 @@ def _holiday_set() -> set[date]:
     for m, d in fixed:
         holidays.append(date(year, m, d))
     return set(holidays)
+
+
+def last_trading_day(ref: date | None = None, max_lookback: int = 15) -> date:
+    """返回 ref 之前的最近一个交易日（不含 ref 自身）。
+
+    用于"T+1 日验证昨日选股"场景：周一执行时返回上周五，
+    节后首日执行时返回节前最后一个交易日。
+    """
+    if ref is None:
+        ref = date.today()
+    d = ref - timedelta(days=1)
+    for _ in range(max_lookback):
+        if is_trading_day(d):
+            return d
+        d -= timedelta(days=1)
+    # 兜底：返回自然日昨天
+    return ref - timedelta(days=1)

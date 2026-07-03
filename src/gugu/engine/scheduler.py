@@ -13,6 +13,7 @@
 - 15:10  收盘信号汇总（个股层面）
 - 15:15  收盘宏观全球概览（含 A 股指数 + 资金流日报 + 大师兄解读，错开 5 分钟）
 - 15:35  基金监控推送
+- 20:00  舆情日报（个股新闻情感分析 + 操作建议）
 - 07:00  Parquet 缓存定期清理（删除 >7天 过期文件）
 - 每 10 分钟重试失败的通知队列
 
@@ -145,6 +146,16 @@ class TradingScheduler:
             name="每日概念-20:00",
         )
 
+        # 舆情日报推送：20:30（交易日，收盘后分析新闻情感）
+        # 通过 SentimentSystem 采集东方财富新闻，金融情感词典分析，
+        # 生成舆情报告推送到飞书（含操作建议）
+        self._scheduler.add_job(
+            self._safe_sentiment_daily,
+            CronTrigger(hour=20, minute=30, day_of_week="mon-fri"),
+            id="sentiment_daily_2030",
+            name="舆情日报-20:30",
+        )
+
         # Parquet 缓存定期清理：07:00（交易日，盘前清理过期缓存文件）
         self._scheduler.add_job(
             self._safe_cleanup_cache,
@@ -235,6 +246,10 @@ class TradingScheduler:
                     f"日内冲高 {win_high}/{n}({win_high/n*100:.0f}%) | "
                     f"平均开盘溢价 {sum(v.open_premium for v in results)/n:+.2f}%"
                 )
+                # 推送飞书验证结果卡片
+                await self._engine._notifier.notify_screener_validation(results)
+            else:
+                logger.info("尾盘验证: 无结果（昨日无选股记录或行情获取失败）")
         except Exception as e:
             logger.exception(f"尾盘选股验证异常: {e}")
 
@@ -309,7 +324,21 @@ class TradingScheduler:
             )
             logger.info(f"每日概念推送完成: {concept['name']}")
         except Exception as e:
-            logger.exception(f"每日概念推送异常: {e}")
+            logger.exception(f"概念推送异常: {e}")
+
+    async def _safe_sentiment_daily(self) -> None:
+        """安全执行舆情日报推送（20:30 交易日）。"""
+        if not __import__("gugu.utils.calendar", fromlist=["is_trading_day"]).is_trading_day():
+            return
+        try:
+            from gugu.analysis.sentiment import SentimentSystem
+            from gugu.notifier import feishu_notifier
+
+            notifier = feishu_notifier()
+            system = SentimentSystem(stock_name="自选股池")
+            await system.run_and_notify(notifier)
+        except Exception as e:
+            logger.exception(f"舆情日报异常: {e}")
 
     async def _safe_cleanup_cache(self) -> None:
         """安全执行 Parquet 缓存清理（非交易日也执行，长假后清理积压）。"""

@@ -436,8 +436,8 @@ def test_resolve_name_unknown_symbol():
     """不在内置映射表的股票回退为代码。"""
     from gugu.notifier.formatter import _resolve_name
 
-    signal = {"symbol": "000001"}
-    assert _resolve_name(signal) == "000001"
+    signal = {"symbol": "830879"}  # 北交所冷门股，不在映射表
+    assert _resolve_name(signal) == "830879"
 
 
 def test_format_signal_missing_name():

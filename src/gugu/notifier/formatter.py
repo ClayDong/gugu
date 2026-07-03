@@ -117,9 +117,9 @@ def _format_wisdom(wisdom: dict[str, Any]) -> str:
             continue
         label = label_map.get(key, key)
         text = val if isinstance(val, str) else str(val)
-        # truncate at 200 chars to keep card short
-        if len(text) > 200:
-            text = text[:200] + "..."
+        # 数据驱动建议内容更长（含多行结论+出处），放宽到 400 字符
+        if len(text) > 400:
+            text = text[:400] + "..."
         lines.append(f"- **{label}**：{text}")
     return "\n".join(lines) if lines else ""
 

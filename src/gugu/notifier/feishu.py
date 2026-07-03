@@ -528,6 +528,15 @@ class FeishuNotifier:
         card = format_screener_report(results, total_scanned)
         return await self.send_card(card)
 
+    async def notify_screener_validation(self, results: list) -> bool:
+        """发送尾盘选股次日验证结果。"""
+        if not self._signal_enabled:
+            return False
+        from gugu.screener.report import format_screener_validation
+
+        card = format_screener_validation(results)
+        return await self.send_card(card)
+
     async def notify_error(self, error: dict[str, Any]) -> bool:
         """Format and send a system error notification.
 

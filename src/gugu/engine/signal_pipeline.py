@@ -117,11 +117,17 @@ class SignalPipeline:
             )
             signal["is_st"] = bool(meta.get("is_st", False))
             signal["is_suspended"] = bool(meta.get("is_suspended", False))
+            # 保留 name：API 有效就用 API 的，API 脏数据（等于代码）就留给 formatter 的 fallback 表解析
+            # 不再清空为 ""，避免下游 fallback 表查不到时只显示代码
             raw_name = signal.get("name") or meta.get("name", "")
-            if raw_name and raw_name != signal["symbol"] and raw_name != f"{signal['symbol']}":
+            if raw_name and raw_name != signal["symbol"]:
                 signal["name"] = raw_name
             else:
-                signal["name"] = ""
+                # API 脏数据/空：用本地映射表兜底（formatter 也会再查一次）
+                from gugu.data.stock_names import lookup_stock_name
+
+                local_name = lookup_stock_name(signal["symbol"])
+                signal["name"] = local_name  # 查不到为 ""，formatter 会 fallback 到代码
 
             signal["price"] = float(df.iloc[-1]["close"])
             signal["price_is_realtime"] = False

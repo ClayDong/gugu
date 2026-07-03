@@ -20,12 +20,13 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any
 
 import httpx
 import pandas as pd
 
+from gugu.utils.calendar import last_trading_day
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -151,7 +152,8 @@ async def validate_yesterday_screener() -> list[ValidationResult]:
 
     读取昨日选股记录，获取今日开盘价/最高价，计算溢价。
     """
-    yesterday_str = (date.today() - timedelta(days=1)).isoformat()
+    # 修复：用上一交易日而非自然日昨天，周一/节后首日不漏验证
+    yesterday_str = last_trading_day().isoformat()
     records = _load_records_by_date(yesterday_str)
     if not records:
         logger.info(f"尾盘验证: {yesterday_str} 无选股记录")
