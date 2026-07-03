@@ -10,6 +10,7 @@ Color semantics (A 股惯例：红涨绿跌):
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Any
 
 from gugu.data.stock_names import lookup_stock_name
@@ -19,19 +20,38 @@ from gugu.data.stock_names import lookup_stock_name
 _STOCK_NAMES: dict[str, str] = {}
 
 
+@lru_cache(maxsize=1)
+def _strategy_names() -> frozenset[str]:
+    """获取已注册的策略名集合（用于识别脏数据：name='money_flow_follow' 等）。
+
+    延迟导入避免启动开销，lru_cache 确保只调用一次。
+    若 strategies 模块加载失败，返回空集合（不做策略名过滤，保持原行为）。
+    """
+    try:
+        from gugu.strategies.registry import list_strategies
+
+        return frozenset(list_strategies())
+    except Exception:
+        return frozenset()
+
+
 def _resolve_name(signal: dict[str, Any]) -> str:
     """从信号字典解析股票中文名称，支持多层 fallback。
 
-    优先级：signal["name"]（有效时）> _STOCK_NAMES 映射 > signal["symbol"]
-    同时校验 name 不能等于代码本身（防止 API 返回脏数据）。
+    优先级：本地映射表（可信源）> signal["name"]（非脏数据时）> signal["symbol"]
+    脏数据识别：name 等于代码、等于策略名（如 "money_flow_follow"）、或为空。
     """
     symbol = signal.get("symbol", "")
     name = signal.get("name", "") or ""
-    # 如果 name 为空或等于代码（API 脏数据），用内置映射
-    if not name or name == symbol:
-        name = lookup_stock_name(symbol)
-    # 仍然为空，回退为代码
-    return name or symbol
+    # 1. 本地映射表优先（可信源，避免 API 脏数据污染）
+    local_name = lookup_stock_name(symbol)
+    if local_name:
+        return local_name
+    # 2. API 返回的 name 有效（非空、非代码、非策略名）时使用
+    if name and name != symbol and name not in _strategy_names():
+        return name
+    # 3. 都没有，回退为代码
+    return symbol
 
 
 def _card(

@@ -1247,8 +1247,12 @@ class TradingEngine:
                         direction = rec.get("direction", "")
                         key = f"{symbol}_{direction}"
                         raw_name = rec.get("name", "") or ""
-                        if not raw_name or raw_name == symbol:
-                            raw_name = lookup_stock_name(symbol) or symbol
+                        # 本地映射表优先（可信源），过滤 API 脏数据与策略名污染
+                        local_name = lookup_stock_name(symbol)
+                        if local_name:
+                            raw_name = local_name
+                        elif not raw_name or raw_name == symbol:
+                            raw_name = symbol
                         seen[key] = {
                             "symbol": symbol,
                             "name": raw_name,
