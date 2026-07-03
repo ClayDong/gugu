@@ -93,6 +93,7 @@ def engine(
     mock_notifier: mock.AsyncMock,
     mock_broker: mock.MagicMock,
     mock_risk: mock.MagicMock,
+    tmp_path,
 ) -> TradingEngine:
     """构造一个所有依赖均被 mock 的 TradingEngine。"""
     # 测试中默认使用 paper 模式（而非 signal_only），以便测试下单逻辑
@@ -116,6 +117,13 @@ def engine(
         mock_cfg.return_value.watchlist = ["600519", "000858"]
         mock_cfg.return_value.strategy.auto_select = False
         eng = TradingEngine()
+        # P0 修复：将止盈引擎指向 tmp_path，避免测试污染生产数据文件
+        # take_profit_state.json（_process_signal → register 会写文件）
+        from gugu.analysis.dynamic_take_profit import DynamicTakeProfitEngine
+
+        eng._take_profit_engine = DynamicTakeProfitEngine(
+            state_path=tmp_path / "tp_state.json"
+        )
     return eng
 
 
