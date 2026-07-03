@@ -39,7 +39,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from gugu.backtest.engine import walk_forward_optimize  # noqa: E402
+from gugu.backtest.engine import walk_forward_optimize, walk_forward_optimize_multi_stock  # noqa: E402
 from gugu.config import PROJECT_ROOT  # noqa: E402
 from gugu.data import data_manager  # noqa: E402
 from gugu.strategies.registry import get_strategy, list_strategies  # noqa: E402
@@ -460,6 +460,160 @@ def _check_unlock_conditions(
     }
 
 
+async def run_multi_stock_optimization(
+    strategy_name: str,
+    symbols: list[str],
+    days: int,
+    n_splits: int,
+    write: bool,
+    force: bool = False,
+) -> dict | None:
+    """多股聚合 Walk-Forward 优化（解决单股过拟合问题）。
+
+    第一性原理：单股在 600519 上训练 Sharpe 5.01 vs 测试 -6.28 = 过拟合
+    修复：用 5-10 只不同行业代表股聚合训练，找跨股票稳健参数
+
+    Args:
+        strategy_name: 策略名
+        symbols: 股票代码列表（建议 5-10 只）
+        days: 每只股票的历史数据天数
+        n_splits: Walk-Forward 窗口数
+        write: 是否写回参数（需通过 4 项解锁条件）
+        force: 是否强制写回
+    """
+    from gugu.strategies.registry import get_strategy_cls
+
+    strategy_cls = get_strategy_cls(strategy_name)
+    if strategy_cls is None:
+        logger.error(f"策略类 {strategy_name} 未注册")
+        return None
+
+    dm = data_manager()
+    print(f"\n并发批量获取 {len(symbols)} 只股票历史数据...")
+    stock_dfs = await dm.fetch_stock_history_batch(symbols, days=days)
+    # 过滤空数据
+    stock_dfs = {s: df for s, df in stock_dfs.items() if not df.empty and len(df) >= 120}
+    if len(stock_dfs) < 3:
+        logger.error(f"有效股票数 {len(stock_dfs)} < 3，多股聚合无意义")
+        return None
+
+    print(f"成功获取 {len(stock_dfs)}/{len(symbols)} 只（≥120 行）")
+
+    defaults = load_defaults()
+    param_grid = build_param_grid(strategy_name, defaults)
+    if not param_grid:
+        logger.warning(f"策略 {strategy_name} 无参数网格，跳过")
+        return None
+
+    print(f"\n开始多股聚合 Walk-Forward 优化: {strategy_name}")
+    print(f"  股票数: {len(stock_dfs)}")
+    print(f"  参数组合数: {len(list(__import__('itertools').product(*param_grid.values())))}")
+    print(f"  预计耗时: ~{len(stock_dfs) * len(list(__import__('itertools').product(*param_grid.values()))) * n_splits * 0.1:.0f}s")
+
+    results = walk_forward_optimize_multi_stock(
+        strategy_cls=strategy_cls,
+        stock_dfs=stock_dfs,
+        param_grid=param_grid,
+        train_ratio=0.6,
+        n_splits=n_splits,
+    )
+
+    if not results or "error" in results[0]:
+        error_msg = results[0].get("error", "未知错误") if results else "无结果"
+        logger.error(f"多股 Walk-Forward 失败: {error_msg}")
+        return None
+
+    # 投票选出最优参数
+    param_votes: dict[str, dict] = {}
+    for r in results:
+        for param_name, param_val in r.get("best_params", {}).items():
+            if param_name not in param_votes:
+                param_votes[param_name] = {}
+            key = str(param_val)
+            param_votes[param_name][key] = param_votes[param_name].get(key, 0) + 1
+
+    best_params: dict[str, float] = {}
+    for param_name, votes in param_votes.items():
+        best_val_str = max(votes, key=votes.get)
+        best_val = float(best_val_str) if "." in best_val_str else int(best_val_str)
+        best_params[param_name] = best_val
+
+    # 聚合统计
+    avg_sharpe = sum(r.get("test_avg_sharpe", 0) for r in results) / max(len(results), 1)
+    avg_return = sum(r.get("test_avg_return", 0) for r in results) / max(len(results), 1)
+    avg_max_dd = sum(r.get("test_avg_max_dd", 0) for r in results) / max(len(results), 1)
+    avg_win_rate = sum(r.get("test_avg_win_rate", 0) for r in results) / max(len(results), 1)
+
+    print(f"\n{'=' * 70}")
+    print(f"策略: {strategy_name} (多股聚合)")
+    print(f"{'=' * 70}")
+    print(f"股票: {list(stock_dfs.keys())}")
+    print(f"窗口: {n_splits}, 训练比例: 60%")
+    print(f"平均训练 Sharpe:   {results[0].get('train_avg_sharpe', 0):.4f}")
+    print(f"平均测试 Sharpe:   {avg_sharpe:.4f}")
+    print(f"平均样本外收益:    {avg_return:.2%}")
+    print(f"平均最大回撤:      {avg_max_dd:.2%}")
+    print(f"平均胜率:           {avg_win_rate:.2%}")
+    print(f"\n最优参数（多窗口投票）:")
+    for k, v in best_params.items():
+        default_val = defaults.get(strategy_name, {}).get(k, "?")
+        print(f"  {k}: {v} (原值: {default_val})")
+    print(f"\n各窗口聚合详情:")
+    for r in results:
+        print(
+            f"  窗口{r.get('window', '?')}: "
+            f"训练avg_sharpe={r.get('train_avg_sharpe', 0):.4f}, "
+            f"测试avg_sharpe={r.get('test_avg_sharpe', 0):.4f}, "
+            f"收益={r.get('test_avg_return', 0):.2%}, "
+            f"参数={r.get('best_params', {})}"
+        )
+        # 显示各股明细
+        for d in r.get("test_details", [])[:3]:  # 只显示前3只
+            print(f"    {d['symbol']}: sharpe={d['test_sharpe']:.4f} ret={d['test_return']:.2%} dd={d['test_max_dd']:.2%} trades={d['trades']}")
+
+    if write:
+        unlock_report = _check_unlock_conditions(
+            strategy_name=strategy_name,
+            results=results,
+            avg_sharpe=avg_sharpe,
+            avg_return=avg_return,
+            avg_max_dd=avg_max_dd,
+            param_votes=param_votes,
+        )
+
+        if unlock_report["unlocked"] or force:
+            if force and not unlock_report["unlocked"]:
+                print(f"\n⚠️  --force 强制写回（跳过 {len(unlock_report['failed_checks'])} 项解锁条件）")
+                logger.warning(f"强制写回 {strategy_name} 参数: {unlock_report['failed_checks']}")
+            if strategy_name not in defaults:
+                defaults[strategy_name] = {}
+            for k, v in best_params.items():
+                defaults[strategy_name][k] = v
+            write_defaults(defaults)
+            print(f"\n优化参数已写回 config/strategy_defaults.yaml")
+        else:
+            print(f"\n❌ 参数写回被拒绝（未通过 {len(unlock_report['failed_checks'])} 项解锁条件）:")
+            for check in unlock_report["checks"]:
+                status = "✓" if check["passed"] else "✗"
+                print(f"  {status} {check['name']}: {check['detail']}")
+            print(f"\n建议:")
+            print(f"  1. 扩大样本（当前 {len(stock_dfs)} 只，建议 10+ 只不同行业代表股）")
+            print(f"  2. 增加数据量（--days 1000+）")
+            print(f"  3. 紧急情况可用 --force 强制写回（需 PR 评审说明理由）")
+
+    return {
+        "strategy": strategy_name,
+        "best_params": best_params,
+        "avg_sharpe": avg_sharpe,
+        "avg_return": avg_return,
+        "avg_max_dd": avg_max_dd,
+        "avg_win_rate": avg_win_rate,
+        "n_splits": n_splits,
+        "n_stocks": len(stock_dfs),
+        "results": results,
+    }
+
+
 async def main(
     strategy_name: str | None,
     symbol: str,
@@ -468,10 +622,45 @@ async def main(
     write: bool,
     show: bool,
     force: bool,
+    multi_stock: str | None,
 ) -> None:
     """主入口。"""
     if show:
         show_current_params()
+        return
+
+    # P2 新增：多股聚合模式（解决单股过拟合）
+    if multi_stock:
+        # 解析股票列表（逗号分隔）
+        symbols = [s.strip().zfill(6) for s in multi_stock.split(",") if s.strip()]
+        if len(symbols) < 3:
+            logger.error("--multi-stock 至少需要 3 只股票，用逗号分隔，如 600519,000858,002714")
+            return
+
+        if strategy_name:
+            await run_multi_stock_optimization(strategy_name, symbols, days, n_splits, write, force)
+        else:
+            from gugu.config import get_config
+            cfg = get_config()
+            enabled = cfg.strategy.enabled
+            if not enabled:
+                logger.error("无启用策略")
+                return
+            print(f"\n将对 {len(enabled)} 个策略运行多股聚合 Walk-Forward 优化")
+            print(f"股票池: {symbols}")
+            if write:
+                if force:
+                    print("⚠️  --force 强制写回（跳过解锁条件检查）")
+                else:
+                    print("写回前将执行 4 项解锁条件检查")
+            print()
+            for s_name in enabled:
+                try:
+                    await run_multi_stock_optimization(s_name, symbols, days, n_splits, write, force)
+                    print()
+                except Exception as e:
+                    logger.error(f"策略 {s_name} 多股优化失败: {e}")
+                    continue
         return
 
     if strategy_name:
@@ -513,8 +702,10 @@ if __name__ == "__main__":
     parser.add_argument("--splits", type=int, default=3, help="Walk-Forward 窗口数（默认=3）")
     parser.add_argument("--write", action="store_true", help="将最优参数写回 strategy_defaults.yaml（需通过解锁条件）")
     parser.add_argument("--force", action="store_true", help="强制写回，跳过解锁条件检查（紧急情况使用）")
+    parser.add_argument("--multi-stock", type=str, default=None,
+                        help="多股聚合模式：逗号分隔的股票代码（如 600519,000858,002714），解决单股过拟合")
     parser.add_argument("--show", action="store_true", help="显示当前策略参数")
     parser.add_argument("--version", action="version", version="gugu 0.1.0")
     args = parser.parse_args()
 
-    asyncio.run(main(args.strategy, args.symbol, args.days, args.splits, args.write, args.show, args.force))
+    asyncio.run(main(args.strategy, args.symbol, args.days, args.splits, args.write, args.show, args.force, args.multi_stock))

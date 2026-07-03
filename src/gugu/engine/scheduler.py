@@ -39,7 +39,7 @@ from gugu.screener.validator import (
     save_screener_records,
     validate_yesterday_screener,
 )
-from gugu.utils.calendar import is_trading_day
+from gugu.utils.calendar import is_trading_day, is_trading_time
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -358,12 +358,16 @@ class TradingScheduler:
         logger.info("调度器已启动，按 Ctrl+C 退出")
 
         # 启动后立即扫描一次（避免重启后等到下一个时间点）
-        if is_trading_day():
-            logger.info("启动后立即执行一次盘中扫描...")
+        # P0 修复：原仅 is_trading_day() 检查，导致非交易时段启动也会立即执行
+        # 必须同时满足 is_trading_time() 才执行，否则会产生非交易时段垃圾信号
+        if is_trading_day() and is_trading_time():
+            logger.info("启动后立即执行一次盘中扫描（交易时段内）...")
             try:
                 await self._engine.run_daily_cycle()
             except Exception as e:
                 logger.exception(f"启动扫描异常: {e}")
+        elif is_trading_day():
+            logger.info("启动时为交易日但非交易时段，跳过立即扫描（等待下次定时触发）")
 
         # 独立心跳协程：每 60 秒写入一次，区分"进程活着"和"交易循环运行中"
         async def _heartbeat_loop() -> None:

@@ -478,7 +478,10 @@ class TradingEngine:
             batch_history = {}
             for sym in scan_list:
                 try:
-                    df = await self._dm.fetch_stock_history(sym, days=90)
+                    # P0 修复：days=90 日历日≈63交易日 < StageDetector 要求的 MA_LONG+10=70
+                    # 导致 stage 永远返回"数据不足"，四阶段判断完全失效
+                    # 改为 days=120（≈84交易日）确保覆盖 StageDetector/TrailingStop 窗口
+                    df = await self._dm.fetch_stock_history(sym, days=120)
                     if not df.empty:
                         batch_history[sym] = df
                 except Exception:
@@ -494,7 +497,8 @@ class TradingEngine:
                     # 优先使用预取数据
                     df = batch_history.get(symbol)
                     if df is None:
-                        df = await self._dm.fetch_stock_history(symbol, days=90)
+                        # P0 修复：同步 batch_history 的 days=120，保证 StageDetector 窗口充足
+                        df = await self._dm.fetch_stock_history(symbol, days=120)
                     if df is None or df.empty:
                         return None
 
@@ -551,18 +555,23 @@ class TradingEngine:
             if self._notified_signals_file.exists():
                 with open(self._notified_signals_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                # 清理过期记录（只保留今日的）
-                today_str = date.today().isoformat()
+                # P0 修复：原仅保留当日记录 → 改为保留近 7 天
+                # 原因：A股周一信号周二才推送时，周一的去重记录已被清理，
+                # 会导致同一信号重复推送（用户已反馈"信号重复"问题）
+                # 7 天窗口覆盖跨周末的持仓信号场景，且不会无限增长
+                from datetime import date as _date, timedelta as _timedelta
+                today = _date.today()
+                cutoff_date = (today - _timedelta(days=7)).isoformat()
                 # P0 修复：清理旧格式 key（含 strategy_key 后缀的 3 段下划线格式）
                 # 旧格式如 "600519_sell_money_flow_follow" 会导致新代码用
                 # "{symbol}_{direction}" 查不到记录，去重失效
                 cleaned = {
                     k: v for k, v in data.items()
-                    if v == today_str and k.count("_") <= 1
+                    if v >= cutoff_date and k.count("_") <= 1
                 }
                 if len(cleaned) != len(data):
                     logger.info(
-                        f"清理旧格式去重 key: {len(data)} → {len(cleaned)} 条"
+                        f"清理过期/旧格式去重 key: {len(data)} → {len(cleaned)} 条"
                     )
                 return cleaned
         except Exception as e:
@@ -869,7 +878,8 @@ class TradingEngine:
 
         # P2 优化：批量拉取所有持仓的历史数据，避免 N 次串行 HTTP 请求
         try:
-            batch_dfs = await self._dm.fetch_stock_history_batch(symbols, days=90)
+            # P0 修复：同步 days=90→120，确保 StageDetector 窗口充足
+            batch_dfs = await self._dm.fetch_stock_history_batch(symbols, days=120)
         except Exception as e:
             logger.warning(f"批量拉取持仓历史数据失败，回退到逐股获取: {e}")
             batch_dfs = {}
@@ -880,7 +890,8 @@ class TradingEngine:
             df = batch_dfs.get(symbol, pd.DataFrame())
             if df.empty:
                 with contextlib.suppress(Exception):
-                    df = await self._dm.fetch_stock_history(symbol, days=90)
+                    # P0 修复：同步 days=90→120
+                    df = await self._dm.fetch_stock_history(symbol, days=120)
 
             # 移动止损更新：如果有 trailing_stop 状态，先更新
             # P0 修复：注入持仓无 trailing_stop 状态时自动补建（避免移动止损完全失效）
