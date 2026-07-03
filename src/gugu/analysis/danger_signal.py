@@ -14,12 +14,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import pandas as pd
 
 from gugu.utils.log import get_logger
 
 logger = get_logger()
+
+# 阈值常量
+GAP_DOWN_THRESHOLD = -0.03  # 跳空低开 3%
+BIG_DROP_THRESHOLD = -0.05  # 单日大跌 5%
+VOLUME_SURGE_THRESHOLD = 1.5  # 放量 50%
+TWO_DAY_TURN_THRESHOLD = -0.02  # 两天转头 2%
+SENTIMENT_NEGATIVE_THRESHOLD = -0.3  # 舆情负面增强阈值
+SENTIMENT_ENABLED = True  # 是否启用舆情增强检测
 
 
 @dataclass
@@ -215,7 +224,59 @@ class DangerSignalDetector:
 
         # 单日跌幅 > 5%
         daily_return = (today_close - ref_close) / ref_close
-        return daily_return < self.BIG_DROP_THRESHOLD
+        if daily_return < self.BIG_DROP_THRESHOLD:
+            return True
+
+        # 舆情增强检测（如果启用了舆情模块）
+        if SENTIMENT_ENABLED:
+            try:
+                sentiment_negative = self._check_news_sentiment()
+            except Exception:
+                sentiment_negative = False
+            if sentiment_negative:
+                # 舆情负面 + 日内下跌 > 2% = 坏消息
+                if daily_return < -0.02:
+                    logger.warning(f"[danger-signal] 舆情负面增强: 日内下跌 {daily_return:.1%}")
+                    return True
+                # 舆情负面 + 跳空低开 > 1.5%（即使未达 3% 阈值）
+                if gap_pct < -0.015:
+                    logger.warning(f"[danger-signal] 舆情负面增强: 跳空低开 {gap_pct:.1%}")
+                    return True
+
+        return False
+
+    def _check_news_sentiment(self) -> bool:
+        """检测新闻舆情是否为负面（增强 bad_news 检测）。
+
+        用 SentimentAnalyzer 分析当日个股新闻情感，
+        若整体情感分数 < SENTIMENT_NEGATIVE_THRESHOLD 返回 True。
+        使用自选股第一只股票作为舆情分析代表。
+        """
+        try:
+            from gugu.analysis.sentiment import SentimentAnalyzer, NewsFetcher
+
+            fetcher = NewsFetcher()
+            # 从配置获取自选股第一只作为舆情分析代表
+            from gugu.config import get_config
+            watchlist = get_config().watchlist
+            symbol = watchlist[0] if watchlist else "600519"
+            news_list = fetcher.fetch_stock_news(symbol, max_news=5)
+            if not news_list:
+                return False
+
+            analyzer = SentimentAnalyzer()
+            neg_count = 0
+            for n in news_list:
+                text = f"{n.get('title', '')} {n.get('content', '')}"
+                result = analyzer.analyze(text)
+                if result.get("sentiment_score", 0) < SENTIMENT_NEGATIVE_THRESHOLD:
+                    neg_count += 1
+
+            # 负面新闻占比 > 50% 判定为舆情负面
+            return neg_count > 0 and neg_count / len(news_list) > 0.5
+        except Exception as e:
+            logger.debug(f"[danger-signal] 舆情分析失败（模块可能未初始化）: {e}")
+            return False
 
     def _check_price_volume_divergence(self, df: pd.DataFrame) -> bool:
         """检测量价背离（简化版：价格新高但成交量未新高）。"""

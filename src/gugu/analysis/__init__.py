@@ -1,4 +1,4 @@
-"""分析层：市场择时、仓位控制、因子工厂、参数优化、板块轮动、个股评分、策略池、执行优化、持仓管理、绩效归因、信号追踪、技术指标。"""
+"""分析层：市场择时、仓位控制、因子工厂、参数优化、板块轮动、个股评分、策略池、执行优化、持仓管理、绩效归因、信号追踪、技术指标、舆情分析。"""
 
 from gugu.analysis.alpha_factory import AlphaFactor, AlphaFactory
 from gugu.analysis.danger_signal import DangerSignalDetector, DangerSignalResult
@@ -15,6 +15,7 @@ from gugu.analysis.signal_tracker import SignalTracker
 from gugu.analysis.stage_detector import MarketStage, StageDetector, StageResult
 from gugu.analysis.stock_ranker import StockRanker
 from gugu.analysis.strategy_pool import StrategyPool, StrategyWeight
+from gugu.analysis.sentiment import SentimentSystem, NewsFetcher, SentimentAnalyzer, SentimentReport
 from gugu.analysis.trailing_stop import TrailingStopEngine, TrailingStopSignal, TrailingStopState
 
 __all__ = [
@@ -44,6 +45,10 @@ __all__ = [
     "PyramidingLevel",
     "RegimeEvidence",
     "SectorRotation",
+    "SentimentAnalyzer",
+    "SentimentReport",
+    "SentimentSystem",
+    "NewsFetcher",
     "SignalTracker",
     "StageDetector",
     "StageResult",
