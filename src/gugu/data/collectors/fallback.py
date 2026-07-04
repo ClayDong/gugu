@@ -77,7 +77,13 @@ class SinaCollector(BaseCollector):
         if df is not None:
             return df
 
-        return pd.DataFrame()
+        # P1-10 修复：原逻辑返回空 DataFrame，不抛异常，
+        # 导致 DataManager 无法感知"两源均失败"→ _on_failure_locked 永不触发
+        # → 主源不会被切换到 eastmoney/akshare 兜底
+        # 改为抛异常，让外层 _call_with_fallback 进入 except 分支计数并降级
+        raise RuntimeError(
+            f"SinaCollector 双源均不可用: {code} (网易 502 + 新浪 K 线失败)"
+        )
 
     def _try_netease_history(self, code: str, sina_code: str, days: int) -> pd.DataFrame | None:
         """尝试网易财经历史 CSV 接口。失败返回 None。"""
