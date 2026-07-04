@@ -164,6 +164,16 @@ class TradingScheduler:
             name="缓存清理-07:00",
         )
 
+        # P1-7: 周参数优化（周日 03:00，避免交易日 + 凌晨低谷）
+        # 用多股聚合 Walk-Forward 寻找跨股鲁棒参数，写回需通过 4 项解锁条件
+        # 选 6 只行业代表股：白酒/养殖/电池/CXO/安防/金融
+        self._scheduler.add_job(
+            self._safe_optimize_params,
+            CronTrigger(hour=3, minute=0, day_of_week="sun"),
+            id="weekly_optimize_0300",
+            name="周参数优化-周日03:00",
+        )
+
         # 资金流数据已合并到宏观卡片中（08:00/15:15），不再单独注册 flow 任务
         # 宏观调度器 register_macro_jobs 已处理 early(08:00) 和 close(15:15) 的资金流合并
 
@@ -350,6 +360,63 @@ class TradingScheduler:
                 logger.info(f"Parquet 缓存清理: 删除 {count} 个过期文件")
         except Exception as e:
             logger.debug(f"缓存清理异常: {e}")
+
+    async def _safe_optimize_params(self) -> None:
+        """P1-7: 周参数优化（周日 03:00）。
+
+        用多股聚合 Walk-Forward 寻找跨股鲁棒参数。
+        写回需通过 4 项解锁条件（样本外 Sharpe>0、参数稳定性、回撤<25%、收益非负）。
+        失败不会污染生产参数（strategy_defaults.yaml 不变）。
+
+        设计原则：
+        - 周日 03:00 执行避免影响交易日
+        - 6 只行业代表股（白酒/养殖/电池/CXO/安防/金融）
+        - --write 模式：通过解锁条件才写回
+        - 失败仅记录日志，不影响下周一交易
+        """
+        try:
+            import subprocess
+            from pathlib import Path
+
+            from gugu.config import PROJECT_ROOT
+
+            script = PROJECT_ROOT / "scripts" / "optimize_params.py"
+            if not script.exists():
+                logger.warning(f"优化脚本不存在: {script}")
+                return
+
+            # 6 只行业代表股 + --write 模式（自动门控）
+            cmd = [
+                "uv", "run", "python", str(script),
+                "--multi-stock", "600519,002714,300750,603259,002415,601318",
+                "--days", "500",
+                "--splits", "3",
+                "--write",
+            ]
+            logger.info(f"启动周参数优化: {' '.join(cmd)}")
+
+            # 同步执行（ sunday 03:00 无其他任务竞争）
+            result = subprocess.run(
+                cmd,
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                timeout=3600,  # 1 小时超时
+            )
+
+            if result.returncode == 0:
+                logger.info(
+                    f"周参数优化完成: stdout={result.stdout[-500:] if result.stdout else ''}"
+                )
+            else:
+                logger.error(
+                    f"周参数优化失败 rc={result.returncode}: "
+                    f"stderr={result.stderr[-500:] if result.stderr else ''}"
+                )
+        except subprocess.TimeoutExpired:
+            logger.error("周参数优化超时（>1h），已终止")
+        except Exception as e:
+            logger.exception(f"周参数优化异常: {e}")
 
     async def start(self) -> None:
         """启动调度器。启动后立即执行一次盘中扫描（如果是交易日）。"""
