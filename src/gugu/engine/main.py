@@ -1411,9 +1411,11 @@ class TradingEngine:
                 "cash": account.cash,
                 "positions_count": len(account.positions),
             }
-            # 最新状态覆盖写入
-            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-            # 历史记录追加写入（每行一个 JSON）
+            # P1-5 修复：原 path.write_text 在写入中途崩溃会导致文件截断
+            # 改用 atomic_write_text（同目录 tmp → fsync → os.replace 原子替换）
+            from gugu.utils.atomic import atomic_write_text
+            atomic_write_text(path, json.dumps(payload, ensure_ascii=False))
+            # 历史记录追加写入（每行一个 JSON，append 模式天然原子）
             with history_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         except Exception as e:

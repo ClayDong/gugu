@@ -135,8 +135,12 @@ class DynamicTakeProfitEngine:
         try:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
             data = {sym: asdict(s) for sym, s in self._states.items()}
-            self._state_path.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            # P1-5 修复：原 write_text 在写入中途崩溃会导致状态文件截断
+            # 改用 atomic_write_text（同目录 tmp → fsync → os.replace 原子替换）
+            from gugu.utils.atomic import atomic_write_text
+            atomic_write_text(
+                self._state_path,
+                json.dumps(data, ensure_ascii=False, indent=2),
             )
         except Exception as e:
             logger.error(f"[take_profit] 状态持久化失败: {e}")
