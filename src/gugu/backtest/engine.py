@@ -558,6 +558,7 @@ def walk_forward_optimize(
     param_grid: dict[str, list] | None = None,
     train_ratio: float = 0.6,
     n_splits: int = 3,
+    param_constraints: "callable[[dict], bool] | None" = None,
 ) -> list[dict]:
     """Walk-forward 参数优化 + 滚动前向验证。
 
@@ -572,6 +573,8 @@ def walk_forward_optimize(
         param_grid: 参数网格（如 {"breakout_window": [10,20,30]}）。
         train_ratio: 训练集占比。
         n_splits: 滚动窗口数。
+        param_constraints: 可选的参数约束函数 (params_dict) -> bool，
+            返回 False 的参数组合将被跳过（如 short_window >= long_window）。
 
     Returns:
         每个窗口的优化结果列表 [{window, best_params, train_metrics, test_metrics}, ...]
@@ -611,6 +614,9 @@ def walk_forward_optimize(
         if keys:
             for values in itertools.product(*param_grid.values()):
                 params = dict(zip(keys, values, strict=True))
+                # P1 修复：参数约束过滤（如 short_window >= long_window 跳过）
+                if param_constraints is not None and not param_constraints(params):
+                    continue
                 try:
                     strategy = strategy_cls(params)
                     engine = BacktestEngine()
@@ -667,6 +673,7 @@ def walk_forward_optimize_multi_stock(
     param_grid: dict[str, list] | None = None,
     train_ratio: float = 0.6,
     n_splits: int = 3,
+    param_constraints: "callable[[dict], bool] | None" = None,
 ) -> list[dict]:
     """多股聚合 Walk-Forward 优化（解决单股过拟合问题）。
 
@@ -739,6 +746,9 @@ def walk_forward_optimize_multi_stock(
         if keys:
             for values in itertools.product(*param_grid.values()):
                 params = dict(zip(keys, values, strict=True))
+                # P1 修复：参数约束过滤（如 short_window >= long_window 跳过）
+                if param_constraints is not None and not param_constraints(params):
+                    continue
                 try:
                     train_sharpes: list[float] = []
                     for sym, tdf in train_dfs.items():

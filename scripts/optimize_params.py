@@ -134,6 +134,66 @@ STRATEGY_CONFIG_KEYS: dict[str, list[str]] = {
 }
 
 
+# P1 修复：参数约束函数字典
+# 第一性原理：参数语义要求某些参数之间有大小关系（如 dual_ma 的 short < long），
+# 否则会产出语义错误的"金叉/死叉"（短均线比长均线还长，失去均线交叉的意义）
+# 对抗性审查：在策略类 __init__ 中校验更彻底，但改动基类影响范围大；
+# 在 grid search 中过滤是最小侵入方案，仅优化路径生效，运行时仍依赖策略自身逻辑
+def _dual_ma_constraints(p: dict) -> bool:
+    """dual_ma: 短均线必须严格小于长均线。"""
+    sw = p.get("short_window", 0)
+    lw = p.get("long_window", 0)
+    return sw < lw
+
+
+def _macd_constraints(p: dict) -> bool:
+    """macd: 短均线必须严格小于长均线；信号线必须短于短均线。"""
+    sw = p.get("short_window", 0)
+    lw = p.get("long_window", 0)
+    sigw = p.get("signal_window", 0)
+    return sw < lw and sigw < sw
+
+
+def _turtle_constraints(p: dict) -> bool:
+    """turtle: 突破窗口必须严格大于出场窗口（出场信号应早于突破信号触发）。"""
+    bw = p.get("breakout_window", 0)
+    ew = p.get("exit_window", 0)
+    return bw > ew
+
+
+def _rsi_reversal_constraints(p: dict) -> bool:
+    """rsi_reversal: 超卖必须严格小于超买。"""
+    return p.get("oversold", 0) < p.get("overbought", 0)
+
+
+def _kdj_constraints(p: dict) -> bool:
+    """kdj: 超卖必须严格小于超买。"""
+    return p.get("oversold", 0) < p.get("overbought", 0)
+
+
+def _chen_jiangting_constraints(p: dict) -> bool:
+    """chen_jiangting: 短均线必须严格小于长均线。"""
+    return p.get("ma_short", 0) < p.get("ma_long", 0)
+
+
+def _money_flow_follow_constraints(p: dict) -> bool:
+    """money_flow_follow: 创高窗口必须小于回看窗口（创高是近期现象，回看是历史基线）。"""
+    nw = p.get("new_high_window", 0)
+    nl = p.get("new_high_lookback", 0)
+    return nw < nl
+
+
+STRATEGY_PARAM_CONSTRAINTS: dict[str, "callable[[dict], bool]"] = {
+    "dual_ma": _dual_ma_constraints,
+    "macd": _macd_constraints,
+    "turtle": _turtle_constraints,
+    "rsi_reversal": _rsi_reversal_constraints,
+    "kdj": _kdj_constraints,
+    "chen_jiangting": _chen_jiangting_constraints,
+    "money_flow_follow": _money_flow_follow_constraints,
+}
+
+
 def load_defaults() -> dict:
     """加载当前 strategy_defaults.yaml。"""
     path = PROJECT_ROOT / "config" / "strategy_defaults.yaml"
@@ -277,6 +337,7 @@ async def run_optimization(
         param_grid=param_grid,
         train_ratio=0.6,
         n_splits=n_splits,
+        param_constraints=STRATEGY_PARAM_CONSTRAINTS.get(strategy_name),
     )
 
     if not results or "error" in results[0]:
@@ -507,8 +568,16 @@ async def run_multi_stock_optimization(
 
     print(f"\n开始多股聚合 Walk-Forward 优化: {strategy_name}")
     print(f"  股票数: {len(stock_dfs)}")
-    print(f"  参数组合数: {len(list(__import__('itertools').product(*param_grid.values())))}")
-    print(f"  预计耗时: ~{len(stock_dfs) * len(list(__import__('itertools').product(*param_grid.values()))) * n_splits * 0.1:.0f}s")
+    constraint_fn = STRATEGY_PARAM_CONSTRAINTS.get(strategy_name)
+    # 统计合法参数组合数（约束过滤后）
+    all_combos = list(__import__('itertools').product(*param_grid.values()))
+    keys = list(param_grid.keys())
+    legal_combos = [
+        c for c in all_combos
+        if constraint_fn is None or constraint_fn(dict(zip(keys, c, strict=True)))
+    ]
+    print(f"  参数组合数: {len(all_combos)} 总 / {len(legal_combos)} 合法（约束过滤 {len(all_combos) - len(legal_combos)} 个）")
+    print(f"  预计耗时: ~{len(stock_dfs) * len(legal_combos) * n_splits * 0.1:.0f}s")
 
     results = walk_forward_optimize_multi_stock(
         strategy_cls=strategy_cls,
@@ -516,6 +585,7 @@ async def run_multi_stock_optimization(
         param_grid=param_grid,
         train_ratio=0.6,
         n_splits=n_splits,
+        param_constraints=constraint_fn,
     )
 
     if not results or "error" in results[0]:
