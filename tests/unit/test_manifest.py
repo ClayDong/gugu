@@ -185,3 +185,53 @@ class TestManifestEdgeCases:
             assert info is not None, f"缺失策略: {key}"
             has_params = "params" in info or "params_entry" in info
             assert has_params, f"{key} 缺少 params 和 params_entry"
+
+
+class TestManifestSettingsConsistency:
+    """P1-8: 配置权威源一致性校验。
+
+    manifest.yaml 与 settings.yaml 是两个独立配置源：
+    - settings.yaml: strategy.enabled 列表 = 实际启用的策略
+    - manifest.yaml: 每个策略的 enabled 字段 = 元数据描述
+
+    两者必须保持一致，否则会出现：
+    - settings 启用了 manifest 中没有的策略 → 看板缺失该策略
+    - manifest enabled=true 但 settings 没启用 → 看板显示与实际不符
+    """
+
+    def test_settings_enabled_strategies_exist_in_manifest(self, manifest):
+        """settings.yaml 启用的策略必须在 manifest 中有元数据。"""
+        from gugu.config import get_config
+
+        settings_enabled = set(get_config().strategy.enabled)
+        manifest_keys = set()
+        for category_strategies in manifest.list_all().values():
+            if isinstance(category_strategies, dict):
+                manifest_keys.update(category_strategies.keys())
+
+        missing_in_manifest = settings_enabled - manifest_keys
+        assert not missing_in_manifest, (
+            f"settings.yaml 启用的策略在 manifest 中缺失: {missing_in_manifest}. "
+            f"请在 config/strategy_manifest.yaml 中添加对应条目。"
+        )
+
+    def test_manifest_enabled_signal_strategies_match_settings(self, manifest):
+        """manifest 中 signal_strategies 的 enabled=true 集合应与 settings.yaml 一致。"""
+        from gugu.config import get_config
+
+        settings_enabled = set(get_config().strategy.enabled)
+        manifest_signal = manifest.list_by_category("signal_strategies")
+        manifest_enabled_signal = {
+            key for key, info in manifest_signal.items()
+            if isinstance(info, dict) and info.get("enabled", False)
+        }
+
+        # settings 启用的 signal 策略应在 manifest 中 enabled=true
+        not_enabled_in_manifest = settings_enabled - manifest_enabled_signal
+        # 允许 settings 启用非 signal 类别的策略（如 risk_strategies）
+        # 所以只检查 signal 类别中的策略
+        signal_only_in_settings = not_enabled_in_manifest & set(manifest_signal.keys())
+        assert not signal_only_in_settings, (
+            f"以下 signal 策略在 settings.yaml 启用但在 manifest 中 enabled=false/缺失: "
+            f"{signal_only_in_settings}"
+        )

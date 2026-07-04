@@ -125,6 +125,22 @@ signal_strategies:
       阶段过滤：排除当日涨幅 >7% 的"疯狂"阶段。
       卖出：跌破 MA20 或量价背离（价格创新高但量萎缩）。
 
+  leopard_three_factors:
+    name: 豹哥三要素选股
+    module: gugu.strategies.leopard_three_factors
+    class: LeopardThreeFactorsStrategy
+    source: 豹哥战法（微信公众号文章分析）
+    enabled: true
+    summary: 三要素准入（换手率≥15% + 成交额≥10亿 + 流通市值≥70亿）+ 放量突破择时
+    params_entry: strategy_defaults.yaml
+    validation: 单元测试通过，2026-07-03
+    notes: |
+      核心观点：高流动性 + 大资金承载 + 活跃博弈 = "大资金进得来、出得去"。
+      三要素作为"选股池准入"过滤，叠加"放量突破"择时信号。
+      买入：突破近 N 日高点 + 量比≥1.5 + 涨幅<7%（不追涨停）+ MA20>MA60。
+      卖出：跌破 MA20 或量价背离（价格创新高但量萎缩）。
+      数据可获性：实时模式用 akshare，回测降级到成交额 + 放量突破。
+
 # ============================================================
 # 二、风控/择时型策略（analysis/ + engine/，SignalPipeline 直接实例化）
 # ============================================================
