@@ -27,17 +27,21 @@ from gugu.strategies.base import Strategy
 class MoneyFlowFollowStrategy(Strategy):
     """资金流跟随策略。
 
-    P0 修复（基于全市场评估）：原 5 条件 AND 过严导致 250 天零信号。
-    改为 3 核心条件 + 2 增强条件（boost 置信度而非硬阻断）：
+    P1-11 重设计（基于多股聚合验证）：原 5 条件 AND 过严导致 32571 次回测 trades=0；
+    纯评分制过松导致震荡市误触发。改为混合模式（hard filter + soft score）：
 
-    核心条件（必须全部满足，AND）：
-    1. 均线多头排列：MA5 > MA10 > MA20 > MA60（趋势确认）
-    2. 创新高回踩不破 MA20：近 N 日创新高后回踩 0-5%，且收盘 > MA20
-    3. 放量确认：当日量比 ≥ 1.2（放宽原 1.5）
+    必要条件（hard filter，必须全部满足，AND）：
+    1. 4 均线多头排列：MA5 > MA10 > MA20 > MA60（趋势确认，避免震荡市 MA 短期缠绕误判）
+    2. MA20 上升趋势：MA20 > MA20.shift(5)（中期趋势确认）
+    3. 放量确认：当日量比 ≥ 1.2
+    4. 收盘 > MA20（趋势未破）
+    5. 非历史天量（剔除主力出货）
 
-    增强条件（满足提升置信度，不满足不阻断）：
-    4. 近期强势：10 日涨幅 ≥ 3%（热点近似）
-    5. 缩量回踩：前 2 日量能递减（健康回踩）
+    增强评分（soft score，仅提升置信度，不阻断）：
+    - 创新高回踩不破 MA20 → +0.2
+    - 涨幅强势（10 日涨幅 ≥ 3%）→ +0.1
+    - 缩量回踩 → +0.05
+    - 量比强度系数 → 0.0-0.1
 
     卖出条件（任一满足）：
     - 均线多头排列破坏：MA5 < MA10
@@ -113,13 +117,52 @@ class MoneyFlowFollowStrategy(Strategy):
         vol_ratio_today = df["volume"] / df["volume"].shift(1)
         cond_volume_confirm = vol_shrinking & (vol_ratio_today >= volume_expand_ratio)
 
-        # ── 买入信号：3 核心条件 AND（P0 修复：原 5 AND 过严零信号）──
+        # P1-11 修复：原 5 AND / 3 AND 过严导致 32571 次回测 trades=0（多股聚合验证）
+        # 基于第一性原理：资金流跟随的本质 = 趋势确认 + 资金进入
+        # 改为混合模式：
+        #   - 必要条件（hard filter）：4 均线多头 + MA20 上升 + 放量 + 收盘 > MA20 + 非天量
+        #   - 增强评分（soft score）：创新高回踩 / 涨幅强势 / 缩量回踩（仅影响置信度）
+        # 对抗性审查：
+        # - 评分制不能完全替代 hard filter，否则震荡市会因偶然的量价齐升误触发
+        # - 实测震荡市 6 个误触发，全部因去掉 MA60 限制 + MA20 未上升
+        #   （3 均线多头会因价格短暂上涨+均线滞后误成立，但 MA60 上升需中长期趋势确认）
+
+        # ── 必要条件（hard filter）──
+        # 1. 4 均线多头排列（恢复 MA60 限制，避免震荡市 MA 短期缠绕误判）
+        ma_aligned_4 = (ma5 > ma10) & (ma10 > ma20) & (ma20 > ma60)
+        # 2. MA20 上升趋势（中期趋势确认，避免震荡市均线缠绕触发）
+        ma20_rising = ma20 > ma20.shift(5)
+        # 3. 单独放量（放宽原"缩量+放量"组合，仅要求当日放量）
+        vol_expanding = vol_ratio_today >= volume_expand_ratio
+        # 4. 收盘在 MA20 之上（趋势未破）
+        # 5. 非历史天量（保留风控，避免主力出货）
         buy_cond = (
-            cond_ma_aligned          # 核心1: 均线多头排列
-            & cond_pullback_hold    # 核心2: 创新高回踩不破 MA20
+            ma_aligned_4
+            & ma20_rising
+            & vol_expanding
             & cond_above_ma20
-            & cond_volume_confirm    # 核心3: 放量确认
+            & cond_not_abnormal
         )
+
+        # ── 增强评分（soft score，仅影响置信度）──
+        # 基础置信度 0.5（满足必要条件）
+        base_confidence = pd.Series(0.5, index=df.index)
+        # 增强1：创新高回踩不破 MA20 → +0.2
+        new_high_boost = pd.Series(0.0, index=df.index)
+        new_high_boost[cond_pullback_hold] = 0.2
+        # 增强2：涨幅强势 → +0.1
+        hot_boost = pd.Series(0.0, index=df.index)
+        hot_boost[cond_hot] = 0.1
+        # 增强3：缩量回踩 → +0.05
+        shrink_boost = pd.Series(0.0, index=df.index)
+        shrink_boost[vol_shrinking] = 0.05
+        # 量比强度系数：放量越充分置信度越高（0.0-0.1）
+        vol_strength_bonus = (vol_ratio_today / volume_expand_ratio).clip(0, 2.0) / 20.0
+
+        confidence = (
+            base_confidence + new_high_boost + hot_boost
+            + shrink_boost + vol_strength_bonus
+        ).clip(0, 1.0).fillna(0.0)
 
         # ── 卖出信号：均线多头排列破坏 或 跌破 MA20 ──
         ma_breakdown = (ma5 < ma10) & (ma5.shift(1) >= ma10.shift(1))  # MA5 下穿 MA10
@@ -131,26 +174,7 @@ class MoneyFlowFollowStrategy(Strategy):
         # 风控优先：卖出信号覆盖买入信号（趋势破坏时不入场）
         df.loc[sell_cond, "signal"] = -1
 
-        # ── 置信度计算（P0 修复：3 核心保底 + 2 增强 + 1 反向惩罚）──
-        # 基础置信度 0.6（3 核心条件已满足）
-        base_confidence = pd.Series(0.6, index=df.index)
-        # 增强条件1：近期强势 → +0.2
-        hot_boost = pd.Series(0.0, index=df.index)
-        hot_boost[cond_hot] = 0.2
-        # 增强条件2：缩量回踩 → +0.1（健康回踩形态）
-        shrink_boost = pd.Series(0.0, index=df.index)
-        shrink_boost[vol_shrinking] = 0.1
-        # 量比强度系数：放量越充分置信度越高（0.0-0.1）
-        vol_strength_bonus = (vol_ratio_today / volume_expand_ratio).clip(0, 2.0) / 20.0
-        # 反向惩罚：历史天量 → -0.3（天量常见于主力出货，从核心条件降级为反向增强）
-        # 仍允许买入（不阻断），但显著降低置信度，使其易被 min_confidence 阈值过滤
-        abnormal_penalty = pd.Series(0.0, index=df.index)
-        abnormal_penalty[~cond_not_abnormal] = 0.3
-        # 组合
-        confidence = (
-            base_confidence + hot_boost + shrink_boost + vol_strength_bonus - abnormal_penalty
-        ).clip(0, 1.0).fillna(0.0)
-
+        # ── 置信度赋值 ──
         df["confidence"] = confidence
         # 无信号时置信度为 0
         df.loc[df["signal"] == 0, "confidence"] = 0.0

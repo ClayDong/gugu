@@ -49,7 +49,9 @@ dual_thrust:
   k_down: 0.5
 
 money_flow_follow:
-  # 资金流跟随策略：3 核心 + 2 增强（P0 修复：原 5 AND 过严零信号）
+  # 资金流跟随策略：混合模式（P1-11 重设计：原 5 AND 过严导致 32571 次回测 trades=0）
+  # 必要条件 hard filter：3 均线多头 + 放量 + 收盘>MA20 + 非历史天量
+  # 增强评分 soft score：4 均线 / 创新高 / 涨幅强势 / 缩量回踩（仅影响置信度）
   ma_periods: [5, 10, 20, 60]        # 多头排列均线周期
   new_high_window: 20                # 创新高回看窗口
   new_high_lookback: 60              # 历史新高回看长度（P0: 120→60 放宽）
