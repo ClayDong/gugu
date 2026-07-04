@@ -9,6 +9,12 @@
   - ROE > 0%（至少有盈利能力）
   - 营收增长率 > -20%（排除衰退股）
   - 任一指标获取失败时，该指标不参与过滤（宽松降级）
+
+P1-6 增强：行业景气度评分（0-100）
+  - 维度：涨跌幅 40% + 主力净流入 30% + 换手率 15% + 量比 15%
+  - 阈值：< 30 软警告（追加 reason），< 10 硬拦截（行业衰退）
+  - 数据缺失：仅记录，不影响 pass
+  - 缓存：行业板块数据日内复用（与 SectorRotation 数据源相同）
 """
 
 from __future__ import annotations
@@ -96,6 +102,204 @@ class _SnapshotCache:
         self._cached_at = time.time()
 
 
+@dataclass
+class _IndustryBoardCache:
+    """P1-6：行业板块数据缓存（日内复用）。
+
+    ak.stock_board_industry_name_em() 返回全市场行业板块行情，
+    同一交易日内多次调用复用，避免重复请求。
+    """
+
+    _df: Any = None  # pd.DataFrame | None
+    _cached_date: str = ""
+
+    def get(self) -> Any:
+        from datetime import date
+
+        today = str(date.today())
+        if self._df is not None and self._cached_date == today:
+            return self._df
+        return None
+
+    def set(self, df: Any) -> None:
+        from datetime import date
+
+        self._df = df
+        self._cached_date = str(date.today())
+
+
+class IndustryProsperityChecker:
+    """行业景气度评分器（P1-6）。
+
+    基于行业板块实时行情计算景气度评分（0-100）：
+
+    评分维度：
+    - 涨跌幅（板块涨跌幅）→ 40 分（[-5%, +5%] 线性映射到 [0, 40]）
+    - 主力净流入 → 30 分（[-10亿, +10亿] 线性映射到 [0, 30]）
+    - 换手率 → 15 分（[0%, 5%] 线性映射到 [0, 15]，过度活跃不加分）
+    - 量比 → 15 分（[0, 2] 线性映射到 [0, 15]）
+
+    阈值：
+    - < 30：软警告（追加 reason，不影响 pass）
+    - < 10：硬拦截（行业衰退，pass=False）
+
+    数据缺失：仅记录，不影响 pass（与基本面其他指标一致）。
+    """
+
+    # 评分维度权重
+    _SCORE_PCT_MAX = 40.0
+    _SCORE_FLOW_MAX = 30.0
+    _SCORE_TURNOVER_MAX = 15.0
+    _SCORE_VOL_RATIO_MAX = 15.0
+
+    # 归一化区间
+    _PCT_RANGE = 5.0  # ±5%
+    _FLOW_RANGE = 10.0  # ±10 亿
+    _TURNOVER_RANGE = 5.0  # 0-5%
+    _VOL_RATIO_RANGE = 2.0  # 0-2
+
+    # 阈值
+    _SOFT_WARN_THRESHOLD = 30
+    _HARD_FAIL_THRESHOLD = 10
+
+    def __init__(self) -> None:
+        self._board_cache = _IndustryBoardCache()
+
+    def score(self, industry: str) -> dict[str, Any]:
+        """计算行业景气度评分。
+
+        Args:
+            industry: 行业名称（如 "银行"、"电子"、"医药生物"）。
+
+        Returns:
+            评分结果字典：
+            - score: 0-100 景气度评分（None 表示数据缺失）
+            - pct_change: 板块涨跌幅（%）
+            - main_net_billion: 主力净流入（亿元）
+            - turnover_rate: 换手率（%）
+            - volume_ratio: 量比
+            - reason: 评分说明
+        """
+        if not industry:
+            return self._empty_result("行业名称为空，跳过景气度评分")
+
+        df = self._fetch_industry_board()
+        if df is None or df.empty:
+            return self._empty_result("行业板块数据获取失败")
+
+        # 匹配行业行
+        row = self._match_industry_row(df, industry)
+        if row is None:
+            return self._empty_result(f"未匹配到行业「{industry}」的板块数据")
+
+        pct_change = _safe_float(row.get("板块涨跌幅")) or 0.0
+        main_net = _safe_float(row.get("主力净流入")) or 0.0
+        turnover_rate = _safe_float(row.get("换手率")) or 0.0
+        volume_ratio = _safe_float(row.get("量比")) or 0.0
+
+        # 主力净流入转亿元
+        main_net_billion = main_net / 1e8
+
+        # 计算各维度得分
+        # pct_change / main_net 用对称映射（可正可负）
+        # turnover / vol_ratio 用正向映射（非负指标，0 = 无景气度）
+        pct_score = self._linear_map(pct_change, self._PCT_RANGE, self._SCORE_PCT_MAX)
+        flow_score = self._linear_map(main_net_billion, self._FLOW_RANGE, self._SCORE_FLOW_MAX)
+        turnover_score = self._linear_map_positive(
+            min(turnover_rate, self._TURNOVER_RANGE), self._TURNOVER_RANGE, self._SCORE_TURNOVER_MAX
+        )
+        vol_ratio_score = self._linear_map_positive(
+            min(volume_ratio, self._VOL_RATIO_RANGE), self._VOL_RATIO_RANGE, self._SCORE_VOL_RATIO_MAX
+        )
+
+        total = round(pct_score + flow_score + turnover_score + vol_ratio_score, 2)
+
+        # 生成 reason
+        parts = [
+            f"涨跌幅={pct_change:.2f}%",
+            f"主力净流入={main_net_billion:.2f}亿",
+            f"换手率={turnover_rate:.2f}%",
+            f"量比={volume_ratio:.2f}",
+        ]
+        if total < self._HARD_FAIL_THRESHOLD:
+            verdict = f"行业景气度极低（{total:.1f}/100），行业衰退"
+        elif total < self._SOFT_WARN_THRESHOLD:
+            verdict = f"行业景气度偏低（{total:.1f}/100）"
+        else:
+            verdict = f"行业景气度良好（{total:.1f}/100）"
+
+        return {
+            "score": total,
+            "pct_change": round(pct_change, 2),
+            "main_net_billion": round(main_net_billion, 2),
+            "turnover_rate": round(turnover_rate, 2),
+            "volume_ratio": round(volume_ratio, 2),
+            "reason": f"{verdict}（{', '.join(parts)}）",
+        }
+
+    def _fetch_industry_board(self) -> Any:
+        """获取行业板块行情（带日内缓存）。"""
+        cached = self._board_cache.get()
+        if cached is not None:
+            logger.debug("行业景气度：使用日内缓存")
+            return cached
+        try:
+            df = ak.stock_board_industry_name_em()
+            self._board_cache.set(df)
+            return df
+        except Exception as e:
+            logger.warning(f"行业景气度：获取行业板块数据失败: {e}")
+            return None
+
+    @staticmethod
+    def _match_industry_row(df: Any, industry: str) -> Any:
+        """从板块 DataFrame 中匹配行业行。
+
+        匹配策略：
+        1. 精确匹配「板块名称」
+        2. 包含匹配（industry 是板块名称的子串）
+        """
+        if "板块名称" not in df.columns:
+            return None
+        # 精确匹配
+        exact = df[df["板块名称"] == industry]
+        if not exact.empty:
+            return exact.iloc[0]
+        # 包含匹配（如 "半导体" 匹配 "半导体及元件"）
+        contains = df[df["板块名称"].str.contains(industry, na=False)]
+        if not contains.empty:
+            return contains.iloc[0]
+        return None
+
+    @staticmethod
+    def _linear_map(value: float, range_: float, max_score: float) -> float:
+        """对称线性映射：value（[-range, +range]）→ [0, max_score]。"""
+        # 截断到 [-range, +range]
+        clamped = max(-range_, min(range_, value))
+        # 映射到 [0, max_score]：0 分对应 -range，max_score 对应 +range
+        return float((clamped + range_) / (2 * range_) * max_score)
+
+    @staticmethod
+    def _linear_map_positive(value: float, range_: float, max_score: float) -> float:
+        """正向线性映射：value（[0, +range]）→ [0, max_score]。
+
+        用于非负指标（换手率/量比）：0 = 无景气度，range = 满分。
+        """
+        clamped = max(0.0, min(range_, value))
+        return float(clamped / range_ * max_score)
+
+    @staticmethod
+    def _empty_result(reason: str) -> dict[str, Any]:
+        return {
+            "score": None,
+            "pct_change": None,
+            "main_net_billion": None,
+            "turnover_rate": None,
+            "volume_ratio": None,
+            "reason": reason,
+        }
+
+
 def _load_thresholds() -> dict[str, Any]:
     """从 AppConfig 加载基本面过滤阈值，缺失字段用默认值。"""
     try:
@@ -136,6 +340,8 @@ class FundamentalFilter:
         # P1 修复：实例级缓存，避免测试间相互污染
         self._cache = _Cache()
         self._snapshot_cache = _SnapshotCache()
+        # P1-6：行业景气度评分器
+        self._prosperity_checker = IndustryProsperityChecker()
 
     def check(self, symbol: str) -> dict[str, Any]:
         """检查个股是否通过基本面过滤。
@@ -166,6 +372,7 @@ class FundamentalFilter:
                 "roe": None,
                 "revenue_growth": None,
                 "industry": "ETF/LOF",
+                "industry_prosperity": {},
                 "reasons": ["ETF/LOF 不适用个股基本面过滤，直接放行"],
             }
             self._cache.set(symbol, result)
@@ -253,6 +460,21 @@ class FundamentalFilter:
                 f"拒绝放行。akshare 与东方财富兜底均不可用。"
             )
 
+        # P1-6：行业景气度评分（仅在基本面通过时评估，避免双重拦截）
+        prosperity: dict[str, Any] = {}
+        if passed and industry:
+            prosperity = self._prosperity_checker.score(industry)
+            score = prosperity.get("score")
+            if score is not None:
+                reasons.append(prosperity.get("reason", ""))
+                # 硬拦截：行业衰退（< 10 分）
+                if score < self._prosperity_checker._HARD_FAIL_THRESHOLD:
+                    passed = False
+                    logger.warning(
+                        f"基本面过滤：{code} 行业「{industry}」景气度极低（{score}/100），"
+                        f"行业衰退，拒绝放行"
+                    )
+
         result: dict[str, Any] = {
             "pass": passed,
             "pe": pe,
@@ -260,6 +482,7 @@ class FundamentalFilter:
             "roe": roe,
             "revenue_growth": revenue_growth,
             "industry": industry,
+            "industry_prosperity": prosperity,
             "reasons": reasons,
         }
 

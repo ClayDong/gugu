@@ -176,6 +176,103 @@ class TestFundamentalFilter:
         assert result["industry"] == ""
         assert any("全部基本面指标获取失败" in r for r in result["reasons"])
 
+    @patch("gugu.filters.fundamental.ak.stock_board_industry_name_em")
+    @patch("gugu.filters.fundamental.ak.stock_zh_a_spot_em")
+    @patch("gugu.filters.fundamental.ak.stock_individual_info_em")
+    @patch("gugu.filters.fundamental.ak.stock_financial_analysis_indicator")
+    def test_industry_prosperity_high_score_passes(
+        self,
+        mock_financial: MagicMock,
+        mock_info: MagicMock,
+        mock_spot: MagicMock,
+        mock_board: MagicMock,
+    ) -> None:
+        """P1-6：高景气度行业（>=30）→ 基本面通过，prosperity 包含评分。"""
+        mock_spot.return_value = _make_spot_df([
+            {"代码": "000001", "市盈率-动态": 15.0, "市净率": 1.5},
+        ])
+        mock_info.return_value = _make_individual_info_df("电子")
+        mock_financial.return_value = _make_financial_df(roe=12.0, revenue_growth=5.0)
+        mock_board.return_value = pd.DataFrame([{
+            "板块名称": "电子",
+            "板块涨跌幅": 3.5,
+            "主力净流入": 15e8,
+            "换手率": 3.0,
+            "量比": 1.8,
+        }])
+
+        f = FundamentalFilter()
+        result = f.check("000001")
+
+        assert result["pass"] is True
+        prosperity = result["industry_prosperity"]
+        assert prosperity["score"] is not None
+        assert prosperity["score"] >= 50, f"强势行业得分应 >= 50, got {prosperity['score']}"
+        assert any("行业景气度良好" in r for r in result["reasons"])
+
+    @patch("gugu.filters.fundamental.ak.stock_board_industry_name_em")
+    @patch("gugu.filters.fundamental.ak.stock_zh_a_spot_em")
+    @patch("gugu.filters.fundamental.ak.stock_individual_info_em")
+    @patch("gugu.filters.fundamental.ak.stock_financial_analysis_indicator")
+    def test_industry_prosperity_extreme_low_blocks(
+        self,
+        mock_financial: MagicMock,
+        mock_info: MagicMock,
+        mock_spot: MagicMock,
+        mock_board: MagicMock,
+    ) -> None:
+        """P1-6：行业景气度极低（<10）→ 硬拦截，pass=False。"""
+        mock_spot.return_value = _make_spot_df([
+            {"代码": "000001", "市盈率-动态": 15.0, "市净率": 1.5},
+        ])
+        mock_info.return_value = _make_individual_info_df("衰退行业")
+        mock_financial.return_value = _make_financial_df(roe=12.0, revenue_growth=5.0)
+        mock_board.return_value = pd.DataFrame([{
+            "板块名称": "衰退行业",
+            "板块涨跌幅": -5.0,
+            "主力净流入": -10e8,
+            "换手率": 0.0,
+            "量比": 0.0,
+        }])
+
+        f = FundamentalFilter()
+        result = f.check("000001")
+
+        # 个股基本面良好但行业衰退 → 硬拦截
+        assert result["pass"] is False
+        prosperity = result["industry_prosperity"]
+        assert prosperity["score"] is not None
+        assert prosperity["score"] < 10, f"极端衰退行业得分应 < 10, got {prosperity['score']}"
+        assert any("行业景气度极低" in r for r in result["reasons"])
+
+    @patch("gugu.filters.fundamental.ak.stock_board_industry_name_em")
+    @patch("gugu.filters.fundamental.ak.stock_zh_a_spot_em")
+    @patch("gugu.filters.fundamental.ak.stock_individual_info_em")
+    @patch("gugu.filters.fundamental.ak.stock_financial_analysis_indicator")
+    def test_industry_prosperity_missing_data_does_not_block(
+        self,
+        mock_financial: MagicMock,
+        mock_info: MagicMock,
+        mock_spot: MagicMock,
+        mock_board: MagicMock,
+    ) -> None:
+        """P1-6：行业景气度数据缺失 → 不影响 pass，prosperity.score 为 None。"""
+        mock_spot.return_value = _make_spot_df([
+            {"代码": "000001", "市盈率-动态": 15.0, "市净率": 1.5},
+        ])
+        mock_info.return_value = _make_individual_info_df("银行")
+        mock_financial.return_value = _make_financial_df(roe=12.0, revenue_growth=5.0)
+        mock_board.side_effect = Exception("API error")
+
+        f = FundamentalFilter()
+        result = f.check("000001")
+
+        # 数据缺失不拦截
+        assert result["pass"] is True
+        prosperity = result["industry_prosperity"]
+        assert prosperity["score"] is None
+        assert "获取失败" in prosperity["reason"]
+
 
 # ============================================================
 # TestMoneyFlowFilter
