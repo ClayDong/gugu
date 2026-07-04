@@ -50,7 +50,14 @@ class TurtleStrategy(Strategy):
 
 
 class DualMAStrategy(Strategy):
-    """双均线交叉：短均线上穿长均线买入，下穿卖出。"""
+    """双均线交叉：短均线上穿长均线买入，下穿卖出。
+
+    P2-3 修复（炒股专家审查）：
+    - 加入成交量确认（金叉当日量比 ≥ 1.5）避免震荡市假信号
+    - 加入趋势强度过滤（MA20 斜率 > 0 + MA20 > MA60）避免下跌市金叉
+    - A 股 70% 时间震荡，原逻辑频繁假信号是亏损机器
+    - volume_confirm / trend_filter 可通过 params 关闭（用于回测对比）
+    """
 
     name = "dual_ma"
 
@@ -65,12 +72,29 @@ class DualMAStrategy(Strategy):
         df["ma_long"] = df["close"].rolling(lw).mean()
 
         df["signal"] = 0
-        # 金叉买入
         golden = (df["ma_short"] > df["ma_long"]) & (
             df["ma_short"].shift(1) <= df["ma_long"].shift(1)
         )
-        df.loc[golden, "signal"] = 1
-        # 死叉卖出
+
+        # P2-3：成交量确认 + 趋势强度过滤（可通过 params 关闭）
+        use_vol = self.params.get("volume_confirm", True)
+        use_trend = self.params.get("trend_filter", True)
+
+        buy_mask = golden
+        if use_vol or use_trend:
+            if use_vol:
+                df["vol_ma"] = df["volume"].rolling(20).mean()
+                vol_ratio = df["volume"] / df["vol_ma"].replace(0, 1)
+                buy_mask = buy_mask & (vol_ratio >= float(self.params.get("vol_ratio", 1.5)))
+            if use_trend:
+                ma20 = df["close"].rolling(20).mean()
+                ma20_slope = ma20 - ma20.shift(5)
+                ma60 = df["close"].rolling(60).mean()
+                trend_up = (ma20 > ma60) & (ma20_slope > 0)
+                buy_mask = buy_mask & trend_up
+
+        df.loc[buy_mask, "signal"] = 1
+        # 死叉卖出（不需要量配合）
         death = (df["ma_short"] < df["ma_long"]) & (
             df["ma_short"].shift(1) >= df["ma_long"].shift(1)
         )

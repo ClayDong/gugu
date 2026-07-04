@@ -40,9 +40,11 @@ def _golden_cross_df() -> pd.DataFrame:
     前 59 日收盘价恒为 10.0，第 60 日跳涨至 20.0，
     使 5 日均线上穿 20 日均线，产生买入信号。
     前一日收盘价（prev_close）= 10.0，用于涨跌停判断。
+    P2-3: 最后一日放量至 3M（量比 ≥ 1.5）以满足成交量确认过滤。
     """
     n = 60
     close = [10.0] * (n - 1) + [20.0]
+    volumes = [1_000_000] * (n - 1) + [3_000_000]
     return pd.DataFrame(
         {
             "date": pd.date_range("2024-01-01", periods=n, freq="D"),
@@ -50,8 +52,8 @@ def _golden_cross_df() -> pd.DataFrame:
             "high": [c + 1.0 for c in close],
             "low": [c - 1.0 for c in close],
             "close": close,
-            "volume": [1_000_000] * n,
-            "amount": [c * 1_000_000 for c in close],
+            "volume": volumes,
+            "amount": [c * v for c, v in zip(close, volumes)],
         }
     )
 

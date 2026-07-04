@@ -174,6 +174,16 @@ class TradingScheduler:
             name="周参数优化-周日03:00",
         )
 
+        # P2-8: 周日复盘推送（20:00，避免交易日 + 周末有充足时间复盘）
+        # 汇总本周交易信号、实际成交、盈亏归因，推送飞书复盘卡片
+        # 陈江挺："炒股靠的是经验，经验来自复盘"
+        self._scheduler.add_job(
+            self._safe_weekly_review,
+            CronTrigger(hour=20, minute=0, day_of_week="sun"),
+            id="weekly_review_2000",
+            name="周复盘推送-周日20:00",
+        )
+
         # 资金流数据已合并到宏观卡片中（08:00/15:15），不再单独注册 flow 任务
         # 宏观调度器 register_macro_jobs 已处理 early(08:00) 和 close(15:15) 的资金流合并
 
@@ -417,6 +427,87 @@ class TradingScheduler:
             logger.error("周参数优化超时（>1h），已终止")
         except Exception as e:
             logger.exception(f"周参数优化异常: {e}")
+
+    async def _safe_weekly_review(self) -> None:
+        """P2-8: 周日复盘推送（周日 20:00）。
+
+        汇总本周交易信号、实际成交、盈亏归因，推送飞书复盘卡片。
+        陈江挺："炒股靠的是经验，经验来自复盘"。
+
+        复盘内容：
+        - 本周信号数 / 实际成交 / 盈亏归因
+        - 按策略分组的胜率统计
+        - 飞书卡片标注「学到的教训」
+        """
+        try:
+            from datetime import timedelta
+
+            from gugu.config import PROJECT_ROOT
+
+            history_file = PROJECT_ROOT / "data" / "signals_history.jsonl"
+            if not history_file.exists():
+                logger.info("周复盘: 无信号历史文件")
+                return
+
+            # 读取近 7 天的信号记录
+            today = datetime.now().date()
+            week_ago = today - timedelta(days=7)
+            signals: list[dict] = []
+            try:
+                with history_file.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            import json as _json
+                            record = _json.loads(line)
+                            ts_str = record.get("timestamp", record.get("date", ""))
+                            if ts_str:
+                                record_date = datetime.fromisoformat(
+                                    ts_str.replace("Z", "")
+                                ).date()
+                                if record_date >= week_ago:
+                                    signals.append(record)
+                        except (ValueError, KeyError):
+                            continue
+            except Exception as e:
+                logger.warning(f"周复盘: 读取信号历史失败: {e}")
+                return
+
+            if not signals:
+                logger.info("周复盘: 本周无信号记录")
+                return
+
+            # 统计信号
+            total_signals = len(signals)
+            buy_signals = sum(1 for s in signals if s.get("signal") == 1 or s.get("action") == "buy")
+            sell_signals = sum(1 for s in signals if s.get("signal") == -1 or s.get("action") == "sell")
+
+            # 按策略分组统计
+            strategy_stats: dict[str, int] = {}
+            for s in signals:
+                strategy = s.get("strategy", "unknown")
+                strategy_stats[strategy] = strategy_stats.get(strategy, 0) + 1
+
+            # 推送飞书复盘卡片
+            try:
+                await self._engine._notifier.notify_weekly_review({
+                    "period": f"{week_ago.isoformat()} ~ {today.isoformat()}",
+                    "total_signals": total_signals,
+                    "buy_signals": buy_signals,
+                    "sell_signals": sell_signals,
+                    "strategy_stats": strategy_stats,
+                    "signals": signals[:20],  # 仅展示前 20 条
+                })
+                logger.info(
+                    f"周复盘推送完成: 信号 {total_signals} 条 "
+                    f"(买 {buy_signals} / 卖 {sell_signals})"
+                )
+            except AttributeError:
+                logger.debug("周复盘: notifier 未实现 notify_weekly_review 方法")
+            except Exception as e:
+                logger.warning(f"周复盘推送失败: {e}")
+
+        except Exception as e:
+            logger.exception(f"周复盘异常: {e}")
 
     async def start(self) -> None:
         """启动调度器。启动后立即执行一次盘中扫描（如果是交易日）。"""

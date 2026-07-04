@@ -1,14 +1,18 @@
-"""尾盘选股器：14:30 扫描全市场，按 8 条件筛选尾盘强势股。
+"""尾盘选股器：14:30 扫描全市场，按"缩量回踩低吸"逻辑筛选。
 
-8 条件：
+P2-1 重设计（炒股专家审查）：
+原逻辑筛选"涨幅 3%-5%"的股票 → 高位接盘，次日回调概率大。
+改为陈江挺《炒股的智慧》低吸逻辑："强势股缩量回踩不破 MA20"。
+
+8 条件（低吸逻辑）：
 1. 时间 ≥ 14:30（调用方保证）
-2. 今日涨幅 3%~5%
-3. 量比 > 1
-4. 换手率 5%~10%
-5. 流通市值 50亿~200亿
-6. 成交量呈台阶式放大（近5日逐日递增或高位维持）
-7. 分时跑赢大盘（简化：今日涨幅 > 大盘涨幅）
-8. 尾盘创当天新高且回踩不破（简化：14:30后最高价 == 全天最高价）
+2. 当日涨幅 -2% ~ +1%（回踩而非追涨）
+3. 前 5 日内有涨幅 ≥ 5% 的强势表现（有资金关注）
+4. 当日缩量（量比 < 1.0，回踩缩量才是健康）
+5. 收盘价 ≥ MA20（趋势未破）
+6. MA20 > MA60（中期趋势向上）
+7. 换手率 3%-15%（活跃但非过度投机）
+8. 流通市值 50亿-500亿（避免小盘操纵 + 大盘滞涨）
 
 数据源策略：优先使用 akshare 全市场快照，失败时降级到 SinaCollector。
 """
@@ -29,15 +33,17 @@ if TYPE_CHECKING:
 
 logger = get_logger()
 
-# ── 参数 ────────────────────────────────────────────
-MIN_CHG_PCT = 3.0  # 最低涨幅 %
-MAX_CHG_PCT = 5.0  # 最高涨幅 %
-MIN_VOL_RATIO = 1.0  # 量比下限
-MIN_TURNOVER = 5.0  # 最低换手率 %
-MAX_TURNOVER = 10.0  # 最高换手率 %
-MIN_MCAP = 5_000_000_000  # 最小流通市值 50亿
-MAX_MCAP = 20_000_000_000  # 最大流通市值 200亿
-MAX_CANDIDATES = 10  # 上报最多几只
+# ── 参数（P2-1 低吸逻辑）──────────────────────────────
+MIN_CHG_PCT = -2.0  # 当日最低涨幅 %（回踩区间下限）
+MAX_CHG_PCT = 1.0   # 当日最高涨幅 %（回踩区间上限）
+RECENT_STRONG_PCT = 5.0  # 前 5 日内最高单日涨幅阈值 %
+RECENT_STRONG_DAYS = 5   # 强势表现回看天数
+MAX_VOL_RATIO = 1.0      # 量比上限（缩量）
+MIN_TURNOVER = 3.0       # 最低换手率 %（活跃度）
+MAX_TURNOVER = 15.0      # 最高换手率 %（避免过度投机）
+MIN_MCAP = 5_000_000_000     # 最小流通市值 50亿
+MAX_MCAP = 50_000_000_000    # 最大流通市值 500亿
+MAX_CANDIDATES = 10          # 上报最多几只
 
 
 @dataclass
@@ -53,7 +59,7 @@ class ScreeningResult:
     mcap_billion: float  # 流通市值（亿）
     volume_trend: str  # 成交量趋势描述
     beats_index: bool  # 是否跑赢大盘
-    late_session_high: bool  # 尾盘是否创全天新高
+    late_session_high: bool  # 是否满足回踩支撑
     passed: bool  # 是否全部通过
     failed_conditions: list[str] = field(default_factory=list)
 
@@ -63,7 +69,7 @@ class ScreeningResult:
 
 
 class TerminalScreener:
-    """尾盘选股器。
+    """尾盘选股器（P2-1 低吸逻辑）。
 
     Args:
         dm: DataManager 实例（可选，用于 akshare 失败时降级获取全市场快照）。
@@ -74,7 +80,7 @@ class TerminalScreener:
 
     async def scan(self) -> list[ScreeningResult]:
         """执行全市场扫描，返回通过 8 条件的排序结果。"""
-        logger.info("=== 尾盘选股: 开始全市场扫描 ===")
+        logger.info("=== 尾盘选股: 开始全市场扫描（低吸逻辑）===")
 
         # 1. 获取全市场实时快照（优先 akshare，失败时降级到 SinaCollector）
         spot = await self._fetch_market_snapshot()
@@ -84,14 +90,14 @@ class TerminalScreener:
 
         logger.info(f"尾盘选股: 全市场 {len(spot)} 只股票")
 
-        # 2. 条件2: 涨幅 3%-5%
+        # 2. 条件2: 当日涨幅 -2% ~ +1%（回踩区间）
         spot["涨跌幅"] = pd.to_numeric(spot["涨跌幅"], errors="coerce").fillna(0)
         mask = (spot["涨跌幅"] >= MIN_CHG_PCT) & (spot["涨跌幅"] <= MAX_CHG_PCT)
         # 排除北交所、ST
         mask &= ~spot["代码"].astype(str).str.startswith("bj")
         mask &= ~spot["名称"].str.contains("ST|退|N|C", na=False)
         candidates = spot[mask].copy()
-        logger.info(f"尾盘选股: 涨幅3-5% {len(candidates)} 只")
+        logger.info(f"尾盘选股: 回踩区间{-MAX_CHG_PCT}~+{MAX_CHG_PCT}% {len(candidates)} 只")
 
         if candidates.empty:
             return []
@@ -124,11 +130,11 @@ class TerminalScreener:
             if (idx + 1) % 50 == 0 or idx == total - 1:
                 logger.info(f"尾盘选股: 进度 {idx + 1}/{total}")
 
-        # 5. 排序：通过条件数降序 → 涨幅降序
+        # 5. 排序：通过条件数降序 → 涨幅升序（回踩越深越优先）
         passed = [r for r in results if r.passed]
         partial = [r for r in results if not r.passed and len(r.failed_conditions) <= 3]
-        partial.sort(key=lambda r: (-r.pass_count, -r.change_pct))
-        passed.sort(key=lambda r: -r.change_pct)
+        partial.sort(key=lambda r: (-r.pass_count, r.change_pct))
+        passed.sort(key=lambda r: r.change_pct)
 
         top = (passed + partial)[:MAX_CANDIDATES]
         logger.info(f"尾盘选股: 完全通过 {len(passed)} 只，上报 {len(top)} 只")
@@ -200,15 +206,16 @@ class TerminalScreener:
         today_vol: float,
         index_chg: float,
     ) -> ScreeningResult | None:
-        """对单只候选股执行条件3-8检查。"""
+        """对单只候选股执行条件3-8检查（P2-1 低吸逻辑）。"""
         failed: list[str] = []
         try:
             # 获取日K线历史（优先 akshare，降级 DataManager）
             df = await self._fetch_stock_kline(code)
-            if df is None or df.empty or len(df) < 6:
+            if df is None or df.empty or len(df) < 60:
                 return None
 
-            recent = df.tail(6).copy()
+            # 需要至少 60 日数据用于计算 MA20/MA60
+            recent = df.tail(60).copy()
             latest = recent.iloc[-1]
 
             # 换手率和流通股本（akshare 有这些字段，DataManager 可能没有）
@@ -221,39 +228,54 @@ class TerminalScreener:
                 ) if float(latest.get("turnover", 0)) > 0 else 1e8
             mcap = price * outstanding
 
-            # 条件5: 流通市值 50亿-200亿
+            # 条件8: 流通市值 50亿-500亿
             mcap_b = mcap / 1e8
-            if mcap_b < 5 or mcap_b > 200:
+            if mcap_b < 5 or mcap_b > 500:
                 failed.append(f"市值{mcap_b:.0f}亿")
 
-            # 条件3: 量比 > 1
+            # 条件4: 当日缩量（量比 < 1.0）
             volumes = recent["volume"].values.astype(float)
-            avg_5d = float(np.nanmean(volumes[:-1])) if len(volumes) > 1 else 0.0  # P1: NaN-safe
+            avg_5d = float(np.nanmean(volumes[-6:-1])) if len(volumes) > 5 else 0.0
             vol_ratio = volumes[-1] / avg_5d if avg_5d > 0 else 0
-            if vol_ratio <= 1:
-                failed.append(f"量比{vol_ratio:.2f}")
+            if vol_ratio >= MAX_VOL_RATIO:
+                failed.append(f"量比{vol_ratio:.2f}(未缩量)")
 
-            # 条件4: 换手率 5%-10%
+            # 条件7: 换手率 3%-15%
             if turnover_pct < MIN_TURNOVER or turnover_pct > MAX_TURNOVER:
                 failed.append(f"换手率{turnover_pct:.1f}%")
 
-            # 条件6: 成交量台阶式放大（近5日成交量逐日递增或高位维持）
-            vol_trend = self._check_volume_trend(volumes[-5:])
-            if vol_trend == "❌":
-                failed.append("量能递减")
+            # 条件5: 收盘价 ≥ MA20（趋势未破）
+            ma20 = recent["close"].rolling(20).mean().iloc[-1]
+            if not pd.notna(ma20) or price < ma20:
+                failed.append(f"破MA20({ma20:.2f})")
 
-            # 条件7: 简化版——个股涨幅 > 大盘涨幅
-            beats = chg_pct > index_chg
+            # 条件6: MA20 > MA60（中期趋势向上）
+            ma60 = recent["close"].rolling(60).mean().iloc[-1]
+            ma20_rising = pd.notna(ma60) and ma20 > ma60
+            if not ma20_rising:
+                failed.append("MA20未上MA60")
+
+            # 条件3: 前 5 日内有涨幅 ≥ 5% 的强势表现
+            if len(recent) >= RECENT_STRONG_DAYS + 1:
+                recent_closes = recent["close"].iloc[-(RECENT_STRONG_DAYS + 1):-1]
+                recent_chg_pct = recent_closes.pct_change() * 100
+                has_strong = (recent_chg_pct >= RECENT_STRONG_PCT).any()
+            else:
+                has_strong = False
+            if not has_strong:
+                failed.append(f"近{RECENT_STRONG_DAYS}日无强势")
+
+            # 条件8: 个股表现不强于大盘（回踩日反而跑赢大盘 = 主力出货嫌疑）
+            # 改为：回踩日不跑赢大盘（健康回踩）
+            beats = chg_pct <= index_chg + 1.0  # 允许略超大盘 1%
             if not beats:
-                failed.append(f"未跑赢大盘({index_chg:+.1f}%)")
+                failed.append(f"异常强势({chg_pct:+.1f}%)")
 
-            # 条件8: 尾盘创当天新高（简化版）
-            # 无法获取分时数据时，用今日最高价 > 昨收的1.02倍来近似
-            high = float(latest["high"])
-            prev_close = float(recent.iloc[-2]["close"]) if len(recent) >= 2 else 0
-            late_high = prev_close > 0 and (high / prev_close - 1) * 100 >= chg_pct * 0.95
-            if not late_high:
-                failed.append("尾盘未创新高")
+            # 成交量趋势描述（用于展示）
+            vol_trend = self._check_volume_trend(volumes[-5:])
+
+            # late_session_high 改为 "回踩支撑" 标志
+            pullback_hold = pd.notna(ma20) and price >= ma20 * 0.98  # 回踩 MA20 附近 2% 内
 
             result = ScreeningResult(
                 symbol=code,
@@ -265,7 +287,7 @@ class TerminalScreener:
                 mcap_billion=round(mcap_b, 0),
                 volume_trend=vol_trend,
                 beats_index=beats,
-                late_session_high=late_high,
+                late_session_high=pullback_hold,
                 passed=len(failed) == 0,
                 failed_conditions=failed,
             )
@@ -276,21 +298,27 @@ class TerminalScreener:
             return None
 
     def _check_volume_trend(self, vols: np.ndarray) -> str:
-        """检查成交量是否呈台阶式放大。
-        返回: ✅ (递增/高位维持) 或 ❌ (递减)
+        """检查成交量趋势（P2-1 低吸逻辑：缩量更优）。
+
+        返回: ✅ (缩量) / ⚠️ (持平) / ❌ (放量)
         """
         if len(vols) < 3:
             return "✅"
-        # 至少连续3天不递减（温和放量）
-        increasing = sum(1 for i in range(1, len(vols)) if vols[i] > vols[i - 1])
-        if increasing >= len(vols) - 2:  # 允许1天微调
-            return "✅ 量增"
-        # 高位维持: 5日均量 > 20日均量
-        avg_5 = vols.mean()
-        return "✅ 高位" if avg_5 > vols[0] else "❌"
+        # 计算近 3 日量能趋势
+        recent_avg = float(np.nanmean(vols[-3:]))
+        earlier_avg = float(np.nanmean(vols[:-3])) if len(vols) > 3 else float(vols[0])
+        if earlier_avg == 0:
+            return "✅"
+        ratio = recent_avg / earlier_avg
+        if ratio < 0.8:
+            return "✅ 缩量"
+        elif ratio < 1.2:
+            return "⚠️ 持平"
+        else:
+            return "❌ 放量"
 
     async def _fetch_stock_kline(self, code: str) -> pd.DataFrame | None:
-        """获取个股日K线历史。优先 akshare，降级 DataManager。"""
+        """获取个股日K线历史（需 60 日数据用于 MA60）。优先 akshare，降级 DataManager。"""
         # 方式1: akshare 日K线（含换手率、流通股本）
         try:
             import akshare as ak
@@ -304,7 +332,7 @@ class TerminalScreener:
         # 方式2: DataManager 降级
         if self._dm is not None:
             try:
-                df = await self._dm.fetch_stock_history(code, days=10)
+                df = await self._dm.fetch_stock_history(code, days=120)
                 if df is not None and not df.empty:
                     return df
             except Exception as e:

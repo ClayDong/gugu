@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import date
 from typing import Any
@@ -27,6 +28,11 @@ logger = get_logger()
 _HS300_SYMBOL = "sh000300"
 # 东方财富 secid 格式：1.000300（沪市指数）
 _HS300_SECID = "1.000300"
+# P2-7 新增：中证500 + 创业板指（中小盘判断）
+_ZZ500_SYMBOL = "sh000905"
+_ZZ500_SECID = "1.000905"
+_CYB_SYMBOL = "sz399006"
+_CYB_SECID = "0.399006"
 # 新浪 K 线接口（指数日K，scale=240 表示日K）
 _SINA_KLINE_URL = (
     "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketData.getKLineData"
@@ -172,13 +178,19 @@ class MarketFilter:
             return None
 
     async def check_market(self) -> dict[str, Any]:
-        """检查大市状态。
+        """检查大市状态（P2-7：增加中小盘指数校验）。
 
         Returns:
             ``{"bullish": bool, "regime": "bull"/"bear"/"range",
             "reason": str, "index_close": float, "ma200": float}``
 
             其中 ``bullish`` 表示是否满足顺势条件（True 才允许选股/进场）。
+
+        P2-7 修复（炒股专家审查）：
+        - 原逻辑仅看沪深300，2024 年小盘股暴跌时沪深300 仍上涨
+          → 系统在中小盘股上误判"牛市可买"
+        - 改为同时判断沪深300 + 中证500 + 创业板指
+        - 三者中任意 2 个破 MA200 → 中小盘股禁止买入
 
             **fail-safe 策略**（《炒股的智慧》铁律——只在牛市操作）：
             数据获取失败时返回 ``{"bullish": False, "regime": "unknown",
@@ -193,6 +205,19 @@ class MarketFilter:
         try:
             df = await self.fetch_index_data(days=250)
             result = self._analyze(df)
+
+            # P2-7 新增：中小盘指数校验
+            small_cap_bullish = await self._check_small_cap_indices()
+            result["small_cap_bullish"] = small_cap_bullish["bullish"]
+            result["small_cap_reason"] = small_cap_bullish["reason"]
+
+            # 综合判断：大盘 + 中小盘任一不满足 → 整体不满足
+            # 避免在中小盘暴跌时仍买入中小盘股
+            if result["bullish"] and not small_cap_bullish["bullish"]:
+                result["bullish"] = False
+                result["regime"] = "range"
+                result["reason"] += f"；{small_cap_bullish['reason']}"
+
             # 仅缓存成功结果，失败不缓存以便后续重试
             self._cache_date = today
             self._cache = result
@@ -206,6 +231,190 @@ class MarketFilter:
                 "reason": f"大市数据获取失败，fail-safe 拒绝: {e}",
             }
         return result
+
+    async def _check_small_cap_indices(self) -> dict[str, Any]:
+        """P2-7 新增：检查中小盘指数（中证500 + 创业板指）。
+
+        三级冗余：akshare → 新浪 → 东方财富，与主 index 一致。
+        任一指数在 MA200 之下即视为中小盘弱势。
+        """
+        results: list[bool] = []
+        reasons: list[str] = []
+
+        for symbol, secid, name in [
+            (_ZZ500_SYMBOL, _ZZ500_SECID, "中证500"),
+            (_CYB_SYMBOL, _CYB_SECID, "创业板指"),
+        ]:
+            try:
+                df = await self._fetch_index_data_with_fallback(symbol, secid, days=250)
+                if df is None or df.empty or len(df) < _MA200:
+                    reasons.append(f"{name}数据不足")
+                    results.append(False)
+                    continue
+
+                close = df["close"]
+                index_close = float(close.iloc[-1])
+                ma200 = float(close.rolling(window=_MA200).mean().iloc[-1])
+                above_ma = index_close > ma200
+                results.append(above_ma)
+                reasons.append(
+                    f"{name}{index_close:.0f}{'>' if above_ma else '<'}MA200({ma200:.0f})"
+                )
+            except Exception as e:
+                logger.debug(f"{name}数据获取失败: {e}")
+                reasons.append(f"{name}获取失败")
+                results.append(False)
+
+        # 两个中小盘指数中至少 1 个在 MA200 之上才算中小盘可买
+        small_cap_bullish = any(results)
+        reason = "中小盘：" + "；".join(reasons) + (
+            " → 可买" if small_cap_bullish else " → 不可买"
+        )
+
+        return {
+            "bullish": small_cap_bullish,
+            "reason": reason,
+        }
+
+    async def _fetch_index_data_with_fallback(
+        self, symbol: str, secid: str, days: int = 250
+    ) -> pd.DataFrame | None:
+        """P2-7 新增：获取指定指数的 K 线数据（三级冗余）。"""
+        # 通道1：akshare
+        try:
+            raw = await asyncio.to_thread(ak.stock_zh_index_daily_em, symbol=symbol)
+            if raw is not None and not raw.empty:
+                return self._normalize_index_df(raw)
+        except Exception as e:
+            logger.debug(f"akshare {symbol} 失败: {e}")
+
+        # 通道2：新浪 K 线
+        try:
+            raw = self._fetch_index_sina_by_symbol(symbol, days)
+            if raw is not None and not raw.empty:
+                return raw
+        except Exception as e:
+            logger.debug(f"新浪 {symbol} 失败: {e}")
+
+        # 通道3：东方财富 push2
+        try:
+            raw = self._fetch_index_eastmoney_by_secid(secid, days)
+            if raw is not None and not raw.empty:
+                return raw
+        except Exception as e:
+            logger.debug(f"东方财富 {secid} 失败: {e}")
+
+        return None
+
+    def _fetch_index_sina_by_symbol(self, symbol: str, days: int) -> pd.DataFrame | None:
+        """P2-7 新增：新浪 K 线接口获取指定指数日K。"""
+        datalen = max(days + 20, 300)
+        url = _SINA_KLINE_URL.format(symbol=symbol, datalen=datalen)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Referer": "https://finance.sina.com.cn/",
+        }
+        try:
+            with httpx.Client(timeout=15.0, headers=headers) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                text = resp.text.strip()
+            if not text:
+                return None
+            data = json.loads(text)
+            if not data:
+                return None
+            rows: list[dict[str, Any]] = []
+            for item in data:
+                try:
+                    rows.append({
+                        "date": item["day"],
+                        "open": float(item["open"]),
+                        "high": float(item["high"]),
+                        "low": float(item["low"]),
+                        "close": float(item["close"]),
+                        "volume": float(item.get("volume", 0)),
+                    })
+                except (KeyError, ValueError, TypeError):
+                    continue
+            if not rows:
+                return None
+            df = pd.DataFrame(rows)
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df = df.dropna(subset=["date"])
+            df = df.sort_values("date").reset_index(drop=True)
+            return df
+        except Exception as e:
+            logger.warning(f"新浪 {symbol} K 线 API 失败: {e}")
+            return None
+
+    def _fetch_index_eastmoney_by_secid(self, secid: str, days: int) -> pd.DataFrame | None:
+        """P2-7 新增：东方财富 push2 API 获取指定指数日K。"""
+        url = "https://push2.eastmoney.com/api/qt/stock/kline/get"
+        params = {
+            "secid": secid,
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "klt": "101",
+            "fqt": "0",
+            "end": "20500101",
+            "lmt": str(max(days * 2, 500)),
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Referer": "https://quote.eastmoney.com/",
+        }
+        try:
+            with httpx.Client(timeout=15.0, headers=headers) as client:
+                resp = client.get(url, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+            if not data or not data.get("data") or not data["data"].get("klines"):
+                return None
+            klines = data["data"]["klines"]
+            rows: list[dict[str, Any]] = []
+            for line in klines:
+                parts = line.split(",")
+                if len(parts) < 7:
+                    continue
+                try:
+                    rows.append({
+                        "date": parts[0],
+                        "open": float(parts[1]),
+                        "close": float(parts[2]),
+                        "high": float(parts[3]),
+                        "low": float(parts[4]),
+                        "volume": float(parts[5]),
+                    })
+                except (ValueError, IndexError):
+                    continue
+            if not rows:
+                return None
+            df = pd.DataFrame(rows)
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df = df.dropna(subset=["date"])
+            df = df.sort_values("date")
+            return df
+        except Exception as e:
+            logger.warning(f"东方财富 {secid} HTTP API 失败: {e}")
+            return None
+
+    @staticmethod
+    def _normalize_index_df(raw: pd.DataFrame) -> pd.DataFrame:
+        """P2-7 新增：规范化指数 DataFrame 列名。"""
+        column_map = {
+            "日期": "date", "开盘": "open", "最高": "high",
+            "最低": "low", "收盘": "close", "成交量": "volume",
+        }
+        df = raw.rename(columns=column_map)
+        needed = ["date", "open", "high", "low", "close", "volume"]
+        for col in needed:
+            if col not in df.columns:
+                df[col] = pd.NA
+        df = df[needed]
+        df["date"] = pd.to_datetime(df["date"]).dt.date
+        df = df.sort_values("date").reset_index(drop=True)
+        return df
 
     async def fetch_index_data(self, days: int = 250) -> pd.DataFrame:
         """获取沪深300指数日 K 数据（三级冗余，保证健壮性）。

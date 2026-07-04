@@ -587,6 +587,18 @@ tests/
 | 54 | P1-11: money_flow_follow 重设计混合模式（hard filter + soft score，震荡市 0 误触发） | `strategies/money_flow_follow.py` |
 | 55 | P1-8: leopard_three_factors 补入 manifest + 配置一致性测试（防 settings/manifest 分裂） | `config/strategy_manifest.yaml`, `tests/unit/test_manifest.py` |
 
+### 八之六、v0.3.8 修复（迭代 9：炒股专家审查）
+
+| # | 修复 | 涉及文件 |
+|---|------|----------|
+| 56 | P0-1: 尾盘选股器从"涨幅 3-5% 追涨"改为"缩量回踩 MA20 低吸"（8 条件低吸逻辑） | `screener/terminal_screener.py` |
+| 57 | P0-2: 移动止损去掉递减逻辑 + 仅创新高重置 + 放量跌破浪谷直接 EXIT | `analysis/trailing_stop.py` |
+| 58 | P0-3: 双均线金叉加成交量确认（量比≥1.5）+ 趋势强度过滤（MA20>MA60+斜率>0），可配置关闭 | `strategies/trend.py` |
+| 59 | P1-4: 资金流过滤器数据缺失时默认拒绝（paper/live 模式 pass=False） | `filters/money_flow.py` |
+| 60 | P1-5: 风控增加持仓时间风控（30 天未盈利警告减半仓，60 天未盈利强制清仓） | `risk/manager.py` |
+| 61 | P1-7: 大市过滤增加中证 500 + 创业板指（三级冗余，任一破 MA200 则中小盘禁止买入） | `engine/market_filter.py` |
+| 62 | P2-8: 周日 20:00 周复盘推送（汇总本周信号统计推送飞书） | `engine/scheduler.py` |
+
 ## 九、可观测性数据文件
 
 | 文件 | 格式 | 写入时机 | 用途 |

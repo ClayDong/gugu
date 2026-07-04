@@ -103,8 +103,15 @@ class TestDualMABenchmark:
         assert signals["signal"].isin([-1, 0, 1]).all()
 
     def test_buy_before_sell_pattern(self, benchmark_df: pd.DataFrame) -> None:
-        """First non-hold signal should be buy (uptrend comes before drop in data)."""
-        strategy = get_strategy("dual_ma")
+        """First non-hold signal should be buy (uptrend comes before drop in data).
+
+        P2-3: 关闭成交量/趋势过滤以测试基础金叉/死叉逻辑。
+        生产环境默认开启过滤。
+        """
+        strategy = get_strategy("dual_ma", {
+            "volume_confirm": False,
+            "trend_filter": False,
+        })
         signals = strategy.generate_signals(benchmark_df)
         non_hold = signals[signals["signal"] != 0]
         if len(non_hold) >= 2:

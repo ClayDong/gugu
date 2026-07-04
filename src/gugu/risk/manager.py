@@ -55,6 +55,9 @@ class RiskManager:
             self.daily_loss_halt = rc.daily_loss_halt
             self.max_total_positions = rc.max_total_positions
             self.t_plus_1 = rc.t_plus_1
+            # P2-5 新增：单股最大持仓时间（防阴跌套牢）
+            self.max_holding_days_warn = 30   # 持仓 30 天未盈利 → 警告减半仓
+            self.max_holding_days_halt = 60   # 持仓 60 天未盈利 → 强制清仓
             cfg = config.flatten().get("risk", {})
         elif config is not None:
             cfg = config
@@ -63,6 +66,9 @@ class RiskManager:
             self.daily_loss_halt = float(cfg.get("daily_loss_halt", 0.05))
             self.max_total_positions = int(cfg.get("max_total_positions", 5))
             self.t_plus_1 = bool(cfg.get("t_plus_1", True))
+            # P2-5 新增
+            self.max_holding_days_warn = int(cfg.get("max_holding_days_warn", 30))
+            self.max_holding_days_halt = int(cfg.get("max_holding_days_halt", 60))
         else:
             rc = get_config().risk
             self.max_position_ratio = rc.max_position_ratio
@@ -70,6 +76,9 @@ class RiskManager:
             self.daily_loss_halt = rc.daily_loss_halt
             self.max_total_positions = rc.max_total_positions
             self.t_plus_1 = rc.t_plus_1
+            # P2-5 新增
+            self.max_holding_days_warn = 30
+            self.max_holding_days_halt = 60
             cfg = get_config().flatten().get("risk", {})
         self._logger = get_logger()
         self._halted: bool = False
@@ -513,6 +522,82 @@ class RiskManager:
             level=RiskLevel.L2_DAILY_LOSS,
             action=RiskAction.ALLOW,
             message=f"组合回撤 {dd:.2%} 在安全范围内",
+        )
+
+    def check_holding_duration(self, symbol: str, entry_date: str, current_pnl_pct: float) -> RiskCheckResult:
+        """P2-5 新增：检查单股持仓时间是否超限。
+
+        防止阴跌股套牢：不触发止损（每天跌 1-2%）但持仓 3 个月亏 20%。
+
+        Args:
+            symbol: 股票代码
+            entry_date: 建仓日期（ISO 格式字符串 YYYY-MM-DD）
+            current_pnl_pct: 当前盈亏比例（如 0.05 = +5%, -0.10 = -10%）
+
+        Returns:
+            RiskCheckResult: action=HALT 强制清仓 / action=WARN 警告减半仓 / action=ALLOW 正常
+        """
+        if not entry_date:
+            return RiskCheckResult(
+                level=RiskLevel.L1_POSITION,
+                action=RiskAction.ALLOW,
+                message="无建仓日期",
+            )
+
+        try:
+            from datetime import date as _date
+            entry = _date.fromisoformat(entry_date)
+            today = _date.today()
+            holding_days = (today - entry).days
+        except (ValueError, TypeError):
+            return RiskCheckResult(
+                level=RiskLevel.L1_POSITION,
+                action=RiskAction.ALLOW,
+                message=f"建仓日期格式错误: {entry_date}",
+            )
+
+        # 已盈利则不强制平仓（即使持仓时间长）
+        if current_pnl_pct >= 0:
+            return RiskCheckResult(
+                level=RiskLevel.L1_POSITION,
+                action=RiskAction.ALLOW,
+                message=f"持仓 {holding_days} 天，盈利 {current_pnl_pct:+.2%}",
+            )
+
+        # 持仓 60 天未盈利 → 强制清仓
+        if holding_days >= self.max_holding_days_halt:
+            self._logger.warning(
+                f"P2-5: {symbol} 持仓 {holding_days} 天未盈利（{current_pnl_pct:+.2%}），"
+                f"强制清仓（>={self.max_holding_days_halt} 天）"
+            )
+            return RiskCheckResult(
+                level=RiskLevel.L2_DAILY_LOSS,
+                action=RiskAction.HALT,
+                message=(
+                    f"持仓 {holding_days} 天未盈利（{current_pnl_pct:+.2%}），"
+                    f"超过 {self.max_holding_days_halt} 天上限，强制清仓"
+                ),
+            )
+
+        # 持仓 30 天未盈利 → 警告减半仓
+        if holding_days >= self.max_holding_days_warn:
+            self._logger.warning(
+                f"P2-5: {symbol} 持仓 {holding_days} 天未盈利（{current_pnl_pct:+.2%}），"
+                f"建议减半仓（>={self.max_holding_days_warn} 天）"
+            )
+            return RiskCheckResult(
+                level=RiskLevel.L2_DAILY_LOSS,
+                action=RiskAction.WARN,
+                message=(
+                    f"持仓 {holding_days} 天未盈利（{current_pnl_pct:+.2%}），"
+                    f"超过 {self.max_holding_days_warn} 天，建议减半仓"
+                ),
+            )
+
+        return RiskCheckResult(
+            level=RiskLevel.L1_POSITION,
+            action=RiskAction.ALLOW,
+            message=f"持仓 {holding_days} 天，亏损 {current_pnl_pct:+.2%}",
         )
 
     @staticmethod

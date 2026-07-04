@@ -30,7 +30,14 @@ def turtle() -> TurtleStrategy:
 
 @pytest.fixture(scope="module")
 def dual_ma() -> DualMAStrategy:
-    return DualMAStrategy(params={"short_window": 3, "long_window": 5})
+    # P2-3: 回测基准测试关闭成交量/趋势过滤，验证基础金叉/死叉逻辑
+    # 生产环境默认开启过滤（volume_confirm=True, trend_filter=True）
+    return DualMAStrategy(params={
+        "short_window": 3,
+        "long_window": 5,
+        "volume_confirm": False,
+        "trend_filter": False,
+    })
 
 
 @pytest.fixture(scope="module")

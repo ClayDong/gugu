@@ -313,16 +313,15 @@ class TestValleyBreakCount:
         _, signal = engine.update(state, df)
         assert signal == TrailingStopSignal.EXIT
 
-    def test_valley_break_count_resets_on_significant_recovery(self) -> None:
-        """价格显著恢复（超过浪谷2%）时跌破计数应递减1次（非重置为0）。
+    def test_valley_break_count_no_decrement_on_recovery(self) -> None:
+        """价格恢复但未创新高时跌破计数不递减（P2-2 修复）。
 
-        P0 修复：原逻辑"完全重置为0"导致震荡市中3次清仓永远触发不了。
-        修复后改为递减1次，仅当价格创新高时才完全重置。
-        场景：止损价 < 最近浪谷（止损未更新到浪谷），价格在两者之间时跌破计数增加，
-        价格回升超过浪谷 2% 时计数递减1（非重置）。
+        P2-2 修复：去掉原递减逻辑（价格回升浪谷 2% → 计数 -1），
+        原因：A 股主力常用"跌停板吃货→拉升诱多→再下跌"手法，
+        递减逻辑导致 3 次清仓永远触发不了。
+        修复后：仅当价格真正创新高时才完全重置为 0。
         """
         engine = TrailingStopEngine()
-        # 手动构造状态：止损价 9.0，浪谷 10.5（止损 < 浪谷，模拟止损未追上浪谷的场景）
         state = TrailingStopState(
             initial_stop_price=9.0,
             current_stop_price=9.0,
@@ -334,20 +333,48 @@ class TestValleyBreakCount:
             tightened=False,
         )
 
-        # 构造价格回升超过浪谷 10.5 * 1.02 = 10.71 的场景
         np.random.seed(42)
         n_rows = 40
         dates = pd.date_range("2026-01-01", periods=n_rows, freq="B")
-        prices = np.full(n_rows, 10.8)  # 价格 10.8 > 10.5 * 1.02 = 10.71
+        prices = np.full(n_rows, 10.8)  # 价格 10.8 < highest_price 11.0，未创新高
         df = pd.DataFrame({
             "date": dates, "open": prices * 0.99, "high": prices * 1.01,
             "low": prices * 0.98, "close": prices, "volume": np.random.uniform(1000, 2000, n_rows),
         })
 
         state, _ = engine.update(state, df)
-        # P0 修复后：跌破计数从 2 递减为 1（而非重置为0）
-        assert state.valley_break_count == 1, (
-            f"价格显著恢复后跌破计数应从 2 递减为 1（非重置为0），got {state.valley_break_count}"
+        # P2-2 修复后：未创新高 → 计数不变（不递减、不重置）
+        assert state.valley_break_count == 2, (
+            f"未创新高时跌破计数应保持 2（不递减），got {state.valley_break_count}"
+        )
+
+    def test_valley_break_count_resets_on_new_high(self) -> None:
+        """价格真正创新高时跌破计数重置为 0（P2-2 修复）。"""
+        engine = TrailingStopEngine()
+        state = TrailingStopState(
+            initial_stop_price=9.0,
+            current_stop_price=9.0,
+            highest_price=11.0,
+            wave_valleys=[9.0, 10.5],
+            valley_break_count=2,
+            last_update="2026-07-03",
+            last_signal="warning",
+            tightened=False,
+        )
+
+        np.random.seed(42)
+        n_rows = 40
+        dates = pd.date_range("2026-01-01", periods=n_rows, freq="B")
+        prices = np.full(n_rows, 11.5)  # 价格 11.5 > highest_price 11.0，创新高
+        df = pd.DataFrame({
+            "date": dates, "open": prices * 0.99, "high": prices * 1.01,
+            "low": prices * 0.98, "close": prices, "volume": np.random.uniform(1000, 2000, n_rows),
+        })
+
+        state, _ = engine.update(state, df)
+        # P2-2 修复后：创新高 → 计数重置为 0
+        assert state.valley_break_count == 0, (
+            f"创新高后跌破计数应重置为 0，got {state.valley_break_count}"
         )
 
     def test_consecutive_breaks_accumulate_to_exit(self) -> None:

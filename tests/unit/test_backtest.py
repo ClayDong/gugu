@@ -12,13 +12,24 @@ from gugu.strategies import DualMAStrategy
 
 @pytest.fixture
 def trend_df() -> pd.DataFrame:
-    """生成一段先跌后涨的行情。"""
+    """生成「上涨→回调→再上涨」行情。
+
+    P0-3: 确保 dual_ma 的金叉+放量+MA20>MA60+MA20斜率>0 同时满足。
+    - 前 60 行: 上涨 10→25（建立 MA20 > MA60 基础）
+    - 60-65 行: 回调 25→22（制造 MA3 < MA8 的金叉前置条件）
+    - 65-100 行: 再上涨 22→38（MA3 上穿 MA8 = 金叉，MA20 斜率恢复向上）
+    """
     np.random.seed(7)
-    n = 40
+    n = 100
     dates = pd.date_range("2026-01-01", periods=n, freq="B").date
-    # 前20天下跌，后20天上涨
-    phase = np.concatenate([np.linspace(12, 8, 20), np.linspace(8.1, 14, 20)])
-    close = phase + np.random.normal(0, 0.15, n)
+    close = np.zeros(n)
+    close[:60] = np.linspace(10, 25, 60)  # 第一段：上涨
+    close[60:65] = np.linspace(25, 22, 5)  # 第二段：回调
+    close[65:] = np.linspace(22, 38, n - 65)  # 第三段：再上涨
+    close = close + np.random.normal(0, 0.2, n)
+    # 金叉区域（row 65-75）固定放量 10M 确保量比 ≥ 1.5
+    volumes = np.random.randint(1e6, 3e6, n).astype(float)
+    volumes[65:75] = 10e6
     return pd.DataFrame(
         {
             "date": dates,
@@ -26,8 +37,8 @@ def trend_df() -> pd.DataFrame:
             "high": close + 0.3,
             "low": close - 0.3,
             "close": close,
-            "volume": np.random.randint(1e6, 5e6, n).astype(float),
-            "amount": np.random.randint(1e7, 5e7, n).astype(float),
+            "volume": volumes,
+            "amount": volumes * close,
         }
     )
 

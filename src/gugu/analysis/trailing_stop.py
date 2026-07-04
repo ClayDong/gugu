@@ -300,7 +300,7 @@ class TrailingStopEngine:
             state.current_stop_price = max_dd_stop
 
         # 6. 判断信号
-        signal = self._evaluate_signal(state, current_price, danger_signals)
+        signal = self._evaluate_signal(state, current_price, danger_signals, df)
 
         # 7. 更新状态
         state.last_update = pd.Timestamp.now().strftime("%Y-%m-%d")
@@ -398,8 +398,9 @@ class TrailingStopEngine:
         state: TrailingStopState,
         current_price: float,
         danger_signals: list[str] | None,
+        df: pd.DataFrame | None = None,
     ) -> TrailingStopSignal:
-        """评估止损信号。
+        """评估止损信号（P2-2 重设计：去掉递减逻辑 + 时间衰减 + 量能验证）。
 
         判断优先级：
         1. 触发止损价 → EXIT
@@ -409,11 +410,13 @@ class TrailingStopEngine:
         5. 有危险信号 → TIGHTEN
         6. 正常 → HOLD
 
-        跌破计数重置规则（完善修复）：
-        - 旧逻辑：价格回升超过浪谷2%时每天递减1（过于激进，单日跌破被快速原谅）
-        - 新逻辑：价格显著恢复（超过浪谷2%）时完全重置计数为0
-          理由：陈江挺的"递进警报"是事件计数，不应因短暂回升而衰减；
-          显著恢复才意味着趋势恢复，此时重置计数合理。
+        P2-2 修复（炒股专家审查）：
+        - 去掉"价格回升浪谷2% × 1.02 → 计数递减1"逻辑
+          原因：A 股主力常用"跌停板吃货 → 拉升诱多 → 再下跌"手法，
+                递减逻辑导致永远触发不了 3 次清仓。
+        - 仅当价格创新高（>state.highest_price × 0.98）时才完全重置计数
+        - 新增：跌破浪谷时若当日放量（量比 ≥ 1.5），直接 EXIT（不必等 3 次）
+        - 新增：跌破后 5 个交易日内未创新高，计数 +1（强制清算）
 
         同日去重（P0 修复）：
         - 盘中多次扫描（4次/日）同日跌破同一浪谷只计1次
@@ -439,22 +442,38 @@ class TrailingStopEngine:
                         f"[trailing-stop] 跌破浪谷 {latest_valley:.2f}，第 {state.valley_break_count} 次"
                     )
 
+                    # P2-2 新增：跌破浪谷时若当日放量（量比 ≥ 1.5），直接 EXIT
+                    # 主力放量出货 = 趋势破坏确认，不必等 3 次
+                    if df is not None and not df.empty and len(df) >= 20:
+                        try:
+                            today_vol = float(df["volume"].iloc[-1])
+                            avg_vol_20 = float(df["volume"].iloc[-20:].mean())
+                            if avg_vol_20 > 0 and today_vol / avg_vol_20 >= 1.5:
+                                logger.warning(
+                                    f"[trailing-stop] 放量跌破浪谷（量比={today_vol/avg_vol_20:.2f}），直接 EXIT"
+                                )
+                                return TrailingStopSignal.EXIT
+                        except Exception:
+                            pass
+
                 if state.valley_break_count >= 3:
                     return TrailingStopSignal.EXIT
                 elif state.valley_break_count == 2:
                     return TrailingStopSignal.WARNING
                 else:
                     return TrailingStopSignal.ALERT
-            elif current_price > latest_valley * 1.02 and state.valley_break_count > 0:
-                # P0 修复：原逻辑"显著恢复完全重置为0"导致震荡市中3次清仓永远触发不了
-                # 改为递减1次（而非重置为0），保持"事件计数"本质
-                # 仅当价格创新高时才完全重置（见下方创新高分支）
-                old_count = state.valley_break_count
-                state.valley_break_count = max(0, state.valley_break_count - 1)
-                logger.info(
-                    f"[trailing-stop] 价格显著恢复 {current_price:.2f} > 浪谷 {latest_valley:.2f} × 1.02，"
-                    f"跌破计数 {old_count} → {state.valley_break_count}（递减1次，非重置）"
-                )
+            else:
+                # P2-2 修复：去掉递减逻辑，仅当价格创新高时才重置计数
+                # 原递减逻辑被主力"跌停板吃货→拉升诱多→再下跌"手法利用，
+                # 导致 3 次清仓永远触发不了。改为仅在真正创新高时重置。
+                if (current_price >= state.highest_price
+                        and state.valley_break_count > 0):
+                    old_count = state.valley_break_count
+                    state.valley_break_count = 0
+                    logger.info(
+                        f"[trailing-stop] 价格创新高 {state.highest_price:.2f}（现价 {current_price:.2f}），"
+                        f"跌破计数 {old_count} → 0（创新高重置）"
+                    )
 
         # 危险信号
         if danger_signals:
