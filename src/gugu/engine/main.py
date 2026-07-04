@@ -484,7 +484,10 @@ class TradingEngine:
                     df = await self._dm.fetch_stock_history(sym, days=120)
                     if not df.empty:
                         batch_history[sym] = df
-                except Exception:
+                except Exception as e:
+                    # P1-1 修复：原静默 except Exception: continue 会让开发者无法发现问题
+                    # 改为 WARNING 级别记录，便于排查数据源故障
+                    logger.warning(f"获取 {sym} 历史数据失败，跳过: {e}")
                     continue
             logger.info(f"批量预取完成: {len(batch_history)}/{len(scan_list)}")
         else:
