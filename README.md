@@ -18,13 +18,17 @@
 - **移动止损引擎** — 基于《炒股的智慧》浪谷递进算法，ATR 自适应初始止损
 - **交易智慧决策层** — 28 本书籍视角多维度决策支持，LLM 增强或硬编码规则 fallback
 - **认知引擎** — 四阶段判断、五大危险信号检测、向下摊平检查、多周期趋势确认
-- **Walk-Forward 参数优化** — 滚动窗口网格搜索，自动写回最优参数
+- **Walk-Forward 参数优化** — 滚动窗口网格搜索 + 多股聚合训练，4 项解锁条件门控自动写回
+- **自优化调度闭环** — 周日 03:00 自动跑多股聚合 Walk-Forward，6 只行业代表股，失败不污染生产参数
 - **三级缓存** — Parquet 持久化缓存 + 内存 LRU 缓存 + API 实时请求
-- **数据源三级冗余** — sina（主）+ akshare（降级）+ eastmoney（兜底，httpx 直连 push2），主源失败自动并发降级
+- **数据源三级冗余** — sina（主）+ akshare（降级）+ eastmoney（兜底，httpx 直连 push2），主源失败自动并发降级，双源失败抛异常触发降级
 - **大市数据三通道** — akshare → 新浪K线 JSON → 东方财富 push2，逐级降级确保选股可用
 - **飞书通知** — 信号卡片、日报、风控告警、回测报告、基金监控、宏观简报（含大师兄解读）、动态止盈减仓、策略全景看板
 - **Web 仪表盘** — FastAPI + 持仓/信号/风险/净值历史可视化
 - **盈亏归因分析** — 消费 signals_history.jsonl，生成按过滤步骤/策略/Wisdom 决策的归因报告
+- **状态原子写入** — heartbeat / take_profit_state 改用 atomic_write_text，防崩溃截断
+- **测试隔离** — 4 个 monkeypatch 重定向到 tmp_path，防污染生产文件
+- **配置一致性** — settings.yaml 与 manifest.yaml CI 自动校验，防止策略清单分裂
 
 ## 快速开始
 
@@ -133,7 +137,7 @@ python scripts/build_kb_index.py --force
 
 ## 测试
 
-878 测试，64% 覆盖率。
+910 测试，62% 覆盖率。
 
 ```bash
 # 运行全部测试

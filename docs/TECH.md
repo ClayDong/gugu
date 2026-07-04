@@ -575,15 +575,28 @@ tests/
 | 47 | walk_forward_optimize 空网格 best_sharpe 兜底 | `backtest/engine.py` |
 | 48 | 信号历史胜率注入飞书卡片（_inject_performance_summary） | `engine/main.py` |
 
+### 八之五、v0.3.7 修复（迭代 8：多股聚合优化 + 自优化闭环）
+
+| # | 修复 | 涉及文件 |
+|---|------|----------|
+| 49 | P1-9: df.iloc 逐行访问性能瓶颈（cProfile 575s→129s，4.5x 加速） | `backtest/engine.py` |
+| 50 | P1-2: 测试隔离 4 个 monkeypatch 漏洞（paper.STATE_FILE / config.PROJECT_ROOT / record_signal_history / _notified_signals_file） | `tests/conftest.py` |
+| 51 | P1-5: 状态文件原子写入（heartbeat + take_profit_state 改用 atomic_write_text） | `engine/main.py`, `analysis/dynamic_take_profit.py` |
+| 52 | P1-7: 调度器新增 weekly_optimize_0300 任务（周日 03:00 多股聚合 Walk-Forward，6 只行业代表股，4 项解锁条件门控） | `engine/scheduler.py` |
+| 53 | P1-10: SinaCollector 双源失败不抛异常 → 主源无法触发降级 | `data/collectors/fallback.py` |
+| 54 | P1-11: money_flow_follow 重设计混合模式（hard filter + soft score，震荡市 0 误触发） | `strategies/money_flow_follow.py` |
+| 55 | P1-8: leopard_three_factors 补入 manifest + 配置一致性测试（防 settings/manifest 分裂） | `config/strategy_manifest.yaml`, `tests/unit/test_manifest.py` |
+
 ## 九、可观测性数据文件
 
 | 文件 | 格式 | 写入时机 | 用途 |
 |------|------|----------|------|
-| `data/heartbeat.json` | JSON | 每次循环结束 | 最新状态，外部监控检查 |
+| `data/heartbeat.json` | JSON | 每次循环结束（原子写入） | 最新状态，外部监控检查 |
 | `data/heartbeat_history.jsonl` | JSONL | 每次循环追加 | 历史心跳，回溯崩溃时间点 |
 | `data/signals_history.jsonl` | JSONL | 每次信号处理追加 | 信号决策全链路，回溯分析 |
 | `data/paper_broker_state.json` | JSON | 每次下单后 | 持仓与交易持久化 |
 | `data/paper_broker_state.json.bak` | JSON | 每次保存前备份 | 原子写入保护，崩溃回滚 |
 | `data/risk_state.json` | JSON | L2 熔断触发/解除时 | 熔断状态持久化，防重启绕过 |
 | `data/notified_signals.json` | JSON | 每次信号通知后 | 信号去重记录（symbol_direction_strategy → date），防重复推送 |
+| `data/take_profit_state.json` | JSON | 止盈状态变更时（原子写入） | 财叔动态止盈状态持久化 |
 | `logs/gugu_*.log` | 文本 | 实时 | 详细运行日志（10MB 轮转，30 天保留） |
