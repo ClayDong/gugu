@@ -346,6 +346,27 @@ class SignalPipeline:
                     logger.debug(f"板块轮动检查失败 {symbol}: {e}")
                     signal["sector_check"] = {"error": str(e)}
 
+            # 2.3 高低切换板块轮动过滤（v0.4.5 新增）
+            # 高位板块（涨幅大+资金流出）→ 拒绝买入，不追高
+            # 低位板块（跌幅深+资金流入）→ 放行并标记，适合低吸
+            if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
+                try:
+                    hl_check = await self._sector_rotation.check_high_low_filter(symbol)
+                    signal["high_low_check"] = hl_check
+                    if not hl_check.get("allow_buy", True):
+                        logger.warning(
+                            f"{symbol} 高低切换拦截: {hl_check.get('reason', '')}"
+                        )
+                        signal["wisdom_filtered"] = True
+                        signal["filter_reason"] = f"高低切换: {hl_check.get('reason', '')}"
+                    elif hl_check.get("is_undervalued"):
+                        logger.info(
+                            f"{symbol} 所属板块 {hl_check.get('sector', '?')} "
+                            f"处于低位+资金流入，适合低吸"
+                        )
+                except Exception as e:
+                    logger.debug(f"高低切换检查失败 {symbol}: {e}")
+
             # 2.5 向下摊平检查
             if (
                 signal["direction"] == "buy"

@@ -198,3 +198,166 @@ class SectorRotation:
             "categories": [],
             "reason": "板块数据获取失败",
         }
+
+    # ════════════════════════════════════════════════════════════
+    # 高低切换板块轮动检测（v0.4.5 新增）
+    # ════════════════════════════════════════════════════════════
+    # 来源：实战派「双阴钱袋子」战法中的高低切换理念
+    # 核心逻辑：
+    #   - 高位板块（涨幅已大 + 资金流出）→ 规避，不追高
+    #   - 低位板块（跌幅已深 + 资金流入）→ 布局，等反转
+    #   - 资金从高位流向低位时 → 板块轮动信号
+
+    # 高位板块判定阈值
+    HIGH_SECTOR_PCT_THRESHOLD = 5.0   # 20日涨幅 > 5% 视为高位
+    LOW_SECTOR_PCT_THRESHOLD = -3.0   # 20日涨幅 < -3% 视为低位
+
+    async def detect_high_low_rotation(self) -> dict[str, Any]:
+        """检测高低切换板块轮动。
+
+        识别两类板块：
+        - overextended_sectors: 高位板块（涨幅大 + 主力净流出），资金可能撤出
+        - undervalued_sectors: 低位板块（跌幅深 + 主力净流入），资金可能进入
+
+        Returns:
+            dict with: overextended_sectors, undervalued_sectors,
+                       rotation_signal, reason
+        """
+        from datetime import date
+
+        today = str(date.today())
+        cache_key = f"highlow_{today}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        try:
+            df = ak.stock_board_industry_name_em()
+            if df.empty:
+                return self._highlow_fallback()
+
+            scores = self._score_sectors(df)
+            overextended = []
+            undervalued = []
+
+            for name, score in scores.items():
+                pct = score.get("pct_change", 0)
+                flow = score.get("main_net_billion", 0)
+
+                # 高位板块：涨幅大 + 主力净流出（资金撤退信号）
+                if pct > self.HIGH_SECTOR_PCT_THRESHOLD and flow < 0:
+                    overextended.append({
+                        "sector": name,
+                        "pct_change": pct,
+                        "main_net_billion": flow,
+                        "category": SW_INDUSTRY_MAP.get(name, "其他"),
+                    })
+
+                # 低位板块：跌幅深 + 主力净流入（资金抄底信号）
+                elif pct < self.LOW_SECTOR_PCT_THRESHOLD and flow > 0:
+                    undervalued.append({
+                        "sector": name,
+                        "pct_change": pct,
+                        "main_net_billion": flow,
+                        "category": SW_INDUSTRY_MAP.get(name, "其他"),
+                    })
+
+            # 按涨幅排序
+            overextended.sort(key=lambda x: x["pct_change"], reverse=True)
+            undervalued.sort(key=lambda x: x["pct_change"])
+
+            # 轮动信号：同时存在高位流出和低位流入
+            rotation_signal = bool(overextended and undervalued)
+
+            result = {
+                "overextended_sectors": overextended[:5],
+                "undervalued_sectors": undervalued[:5],
+                "rotation_signal": rotation_signal,
+                "reason": (
+                    f"高位板块{len(overextended)}个（资金撤出），"
+                    f"低位板块{len(undervalued)}个（资金流入），"
+                    f"{'高低切换进行中' if rotation_signal else '无明显切换'}"
+                ),
+            }
+
+            self._cache[cache_key] = result
+            return result
+
+        except Exception as e:
+            logger.error(f"高低切换检测失败: {e}")
+            return self._highlow_fallback()
+
+    async def check_high_low_filter(self, symbol: str) -> dict[str, Any]:
+        """检查个股是否处于高位/低位板块，用于信号过滤。
+
+        高位板块的买入信号应被拒绝（不追高），
+        低位板块的买入信号应被优先考虑（等反转）。
+
+        Args:
+            symbol: 股票代码
+
+        Returns:
+            dict with: allow_buy, is_overextended, is_undervalued,
+                       sector, category, reason
+        """
+        from gugu.filters.industry_constraint import IndustryConstraint
+
+        try:
+            rotation = await self.detect_high_low_rotation()
+            overextended_names = {s["sector"] for s in rotation.get("overextended_sectors", [])}
+            undervalued_names = {s["sector"] for s in rotation.get("undervalued_sectors", [])}
+            overextended_cats = {s["category"] for s in rotation.get("overextended_sectors", [])}
+            undervalued_cats = {s["category"] for s in rotation.get("undervalued_sectors", [])}
+
+            ic = IndustryConstraint()
+            industry = ic.get_industry(symbol)
+            category = SW_INDUSTRY_MAP.get(industry, "其他")
+
+            is_overextended = industry in overextended_names or category in overextended_cats
+            is_undervalued = industry in undervalued_names or category in undervalued_cats
+
+            if is_overextended:
+                return {
+                    "allow_buy": False,
+                    "is_overextended": True,
+                    "is_undervalued": False,
+                    "sector": industry,
+                    "category": category,
+                    "reason": f"板块「{industry}」处于高位（涨幅大+资金流出），规避追高",
+                }
+            elif is_undervalued:
+                return {
+                    "allow_buy": True,
+                    "is_overextended": False,
+                    "is_undervalued": True,
+                    "sector": industry,
+                    "category": category,
+                    "reason": f"板块「{industry}」处于低位（跌幅深+资金流入），适合低吸",
+                }
+            else:
+                return {
+                    "allow_buy": True,
+                    "is_overextended": False,
+                    "is_undervalued": False,
+                    "sector": industry,
+                    "category": category,
+                    "reason": f"板块「{industry}」处于正常区间",
+                }
+
+        except Exception as e:
+            logger.warning(f"高低切换过滤检查失败({symbol}): {e}")
+            return {
+                "allow_buy": True,
+                "is_overextended": False,
+                "is_undervalued": False,
+                "sector": "",
+                "category": "",
+                "reason": f"高低切换检查失败: {e}",
+            }
+
+    def _highlow_fallback(self) -> dict[str, Any]:
+        return {
+            "overextended_sectors": [],
+            "undervalued_sectors": [],
+            "rotation_signal": False,
+            "reason": "高低切换数据获取失败",
+        }

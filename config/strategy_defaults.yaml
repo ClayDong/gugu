@@ -101,3 +101,35 @@ pullback_low:
   take_profit_window: 20             # 前高回看窗口（止盈目标位）
   time_stop_window: 5                # 时间止损窗口（持仓 N 日无进展）
   time_stop_threshold: 0.02          # 时间止损阈值（涨幅 < 2% 减半仓）
+
+double_yin:
+  # 双阴钱袋子策略：主力洗盘结束 + 倍量反转确认（波段拐点信号）
+  # 来源：实战派「双阴钱袋子」战法（微信公众号文章深度整理）
+  # 与 pullback_low 互补：pullback_low 单K低吸，本策略 3K 组合拐点确认
+  # 架构：4核心硬AND（趋势+双阴+支撑+反转K线）+ 5评分项置信度 + 次日倍量加仓
+
+  # ── 均线参数 ──
+  ma_trend_window: 20                 # 趋势均线（MA20）
+  ma_long_window: 60                  # 长期均线（MA60）
+  ma_slope_window: 5                  # MA20 斜率计算窗口（持续向上拐头判定）
+
+  # ── 双阴量能配合（评分项，非硬性门槛）──
+  first_yin_vol_ratio_max: 0.9       # 第一根阴量比上限（小幅缩量，评分用）
+  second_yin_vol_ratio_max: 0.6      # 第二根阴量比上限（极致缩量，评分用）
+
+  # ── 反转K线参数 ──
+  doji_body_max: 0.01                # 十字星实体阈值（body < 1%）
+  small_yang_max_gain: 0.03          # 小阳线最大涨幅 3%
+
+  # ── 倍量反转加仓（次日独立买入信号）──
+  breakout_vol_ratio_min: 2.0        # 倍量反转量比下限（2倍量红柱）
+  breakout_pct_min: 0.0              # 倍量阳线涨幅下限（收复双阴失地）
+
+  # ── 置信度过滤 ──
+  min_confidence: 0.0                # 核心信号置信度下限（0=不过滤，用评分仅作置信度展示）
+
+  # ── 止损止盈 ──
+  stop_loss_pct: 0.0                 # 止损百分比（0=跌破MA20即止损，盘中刺破收回可持有）
+  take_profit_pct: 0.08              # 止盈位 8%（减半仓触发阈值 × 0.6 = 4.8%）
+  max_upper_shadow_pct: 0.02        # 长上影阈值（高位滞涨判定）
+  stagnation_vol_ratio: 2.5          # 巨量滞涨量比阈值（清仓信号）

@@ -141,6 +141,40 @@ signal_strategies:
       卖出：跌破 MA20 或量价背离（价格创新高但量萎缩）。
       数据可获性：实时模式用 akshare，回测降级到成交额 + 放量突破。
 
+  pullback_low:
+    name: 低吸回踩
+    module: gugu.strategies.pullback_low
+    class: PullbackLowStrategy
+    source: 《炒股的智慧》陈江挺"回调不破支撑才买" + 尾盘选股器实战逻辑
+    enabled: true
+    summary: 缩量回踩不破 MA20 的低吸策略（震荡市专用），与 box_breakout 互补
+    params_entry: strategy_defaults.yaml
+    validation: v0.4.4 多股聚合回测通过（4 项解锁条件全满足）
+    notes: |
+      核心观点：牛市用 box_breakout 突破追势，震荡市用 pullback_low 缩量低吸。
+      买入条件：当日涨幅 -2%~+1% + 量比 < 1.0 + 收盘价 ≥ MA20 + 前 5 日内有涨幅 ≥ 5% 强势表现。
+      卖出：跌破 MA20×0.97 止损 + 前高止盈 + 5 日时间止损。
+      验证结果：30 股 +5.82%/夏普0.24/胜率47%（首次）；100 股 -0.73%/夏普-0.33（扩大后不稳定）。
+      样本扩大后不稳定，依赖 MarketFilter 在非牛市拦截信号。
+
+  double_yin:
+    name: 双阴钱袋子
+    module: gugu.strategies.double_yin
+    class: DoubleYinMoneyBagStrategy
+    source: 实战派「双阴钱袋子」战法（微信公众号文章深度整理）
+    enabled: true
+    summary: 主力洗盘结束 + 倍量反转确认的波段拐点信号（3K 组合确认）
+    params_entry: strategy_defaults.yaml
+    validation: v0.4.5 多股聚合回测（2-3 项解锁条件通过）
+    notes: |
+      核心观点：主力洗盘闭环 = 缩阴洗盘 → 倍量红拉升，散户割肉完毕后主力锁仓启动。
+      与 pullback_low 根本差异：pullback_low 单K低吸，本策略 3K 组合拐点确认。
+      架构：4 核心硬 AND（趋势+双阴+支撑+反转K线）+ 5 评分项置信度 + 次日倍量加仓信号。
+      两个入场点分离：钱袋子日（核心信号）+ 倍量反转日（次日加仓）。
+      卖出：跌破 MA20 止损 + 大阳线 4.8% 止盈 + 巨量滞涨清仓。
+      验证结果：30 股 +3.11%/50 股 +3.90% 夏普0.03/100 股 +2.81% 夏普-0.02，收益稳定为正。
+      依赖 MarketFilter 在熊市拦截，与 pullback_low 互补。
+
 # ============================================================
 # 二、风控/择时型策略（analysis/ + engine/，SignalPipeline 直接实例化）
 # ============================================================
