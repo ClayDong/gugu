@@ -104,6 +104,17 @@ class TradingScheduler:
             name="尾盘验证-09:35",
         )
 
+        # P1-1: 震荡市盘中观察列表推送（10:30 / 13:05）
+        # 在震荡市下，盘中扫描不推荐买入，但推送接近 MA20 支撑的股票列表
+        # 让用户有心理准备，14:30 推送正式选股结果
+        for h, m in [(10, 30), (13, 5)]:
+            self._scheduler.add_job(
+                self._safe_range_watchlist,
+                CronTrigger(hour=h, minute=m, day_of_week="mon-fri"),
+                id=f"range_watchlist_{h:02d}{m:02d}",
+                name=f"震荡市观察列表-{h:02d}:{m:02d}",
+            )
+
         # 日报推送
         period_map = {"09:10": "morning", "11:35": "noon", "15:10": "close"}
         for t in report_times:
@@ -285,6 +296,79 @@ class TradingScheduler:
                 await self._engine._notifier.notify_screener_validation([])
         except Exception as e:
             logger.exception(f"尾盘选股验证异常: {e}")
+
+    async def _safe_range_watchlist(self) -> None:
+        """P1-1: 震荡市盘中观察列表推送。
+
+        在震荡市（range）下，盘中扫描不推荐买入（box_breakout 实证亏钱），
+        但推送接近 MA20 支撑的股票列表，让用户有心理准备，
+        14:30 推送正式选股结果（含入场/止损/目标位）。
+
+        牛市下不推送（避免干扰，牛市依赖 box_breakout 盘中扫描推荐）。
+        """
+        if not is_trading_day():
+            return
+        try:
+            market_status = await self._engine._market_filter.check_market()
+            regime = market_status.get("regime", "unknown")
+
+            # 仅在震荡市和熊市推送观察列表（牛市依赖盘中扫描推荐）
+            if regime == "bull":
+                logger.debug(f"盘中观察: 牛市，跳过观察列表推送（依赖盘中扫描推荐）")
+                return
+
+            # 扫描 watchlist + 自动选股候选中接近 MA20 的股票
+            candidates = await self._scan_range_candidates()
+            if candidates:
+                logger.info(f"盘中观察: 震荡市推送 {len(candidates)} 只接近 MA20 的候选")
+                await self._engine._notifier.notify_range_watchlist(candidates, regime)
+            else:
+                # 无候选也推送（避免静默）
+                await self._engine._notifier.notify_range_watchlist([], regime)
+        except Exception as e:
+            logger.exception(f"震荡市观察列表异常: {e}")
+
+    async def _scan_range_candidates(self) -> list[dict]:
+        """扫描接近 MA20 支撑位的候选股（用于震荡市观察列表）。"""
+        import asyncio
+
+        import pandas as pd
+
+        from gugu.utils.calendar import last_trading_day
+
+        candidates: list[dict] = []
+        watchlist = self._engine._watchlist[:20]  # 最多扫描 20 只，避免耗时过长
+
+        async def check_one(symbol: str) -> dict | None:
+            try:
+                df = await self._engine._dm.fetch_stock_kline(
+                    symbol, end_date=last_trading_day().isoformat(), limit=60
+                )
+                if df is None or len(df) < 30:
+                    return None
+                price = float(df["close"].iloc[-1])
+                ma20 = float(df["close"].rolling(20).mean().iloc[-1])
+                if ma20 <= 0:
+                    return None
+                distance_pct = (price - ma20) / ma20 * 100
+                # 距离 MA20 ±5% 以内的股票才推送
+                if abs(distance_pct) > 5.0:
+                    return None
+                return {
+                    "symbol": symbol,
+                    "name": self._engine._dm.get_stock_name(symbol) or symbol,
+                    "price": price,
+                    "ma20": round(ma20, 2),
+                    "distance_pct": round(distance_pct, 2),
+                }
+            except Exception:
+                return None
+
+        results = await asyncio.gather(*[check_one(s) for s in watchlist], return_exceptions=False)
+        for r in results:
+            if r is not None:
+                candidates.append(r)
+        return candidates
 
     async def _safe_afternoon_flow(self) -> None:
         """安全执行盘后资金流决策报告（14:30，非交易日跳过）。

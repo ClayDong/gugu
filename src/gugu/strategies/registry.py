@@ -11,6 +11,7 @@ from gugu.strategies.chen_jiangting import ChenJiangtingStrategy
 from gugu.strategies.leopard_three_factors import LeopardThreeFactorsStrategy
 from gugu.strategies.mean_revert import BollingerStrategy, KDJStrategy, RSIStrategy
 from gugu.strategies.money_flow_follow import MoneyFlowFollowStrategy
+from gugu.strategies.pullback_low import PullbackLowStrategy
 from gugu.strategies.trend import DualMAStrategy, MACDStrategy, TurtleStrategy
 
 # 策略注册表：name -> class
@@ -26,6 +27,7 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "money_flow_follow": MoneyFlowFollowStrategy,
     "chen_jiangting": ChenJiangtingStrategy,
     "leopard_three_factors": LeopardThreeFactorsStrategy,
+    "pullback_low": PullbackLowStrategy,  # 震荡市专用低吸回踩策略
 }
 
 

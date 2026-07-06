@@ -537,6 +537,19 @@ class FeishuNotifier:
         card = format_screener_validation(results)
         return await self.send_card(card)
 
+    async def notify_range_watchlist(self, candidates: list, market_regime: str) -> bool:
+        """P1-1: 震荡市盘中扫描推送观察列表（非买入建议）。
+
+        让用户在盘中知道有哪些股票接近买点，14:30 推送时已有心理准备。
+        明确标注"观察，非买入"，避免用户提前介入。
+        """
+        if not self._signal_enabled:
+            return False
+        from gugu.screener.report import format_range_watchlist
+
+        card = format_range_watchlist(candidates, market_regime)
+        return await self.send_card(card)
+
     async def notify_error(self, error: dict[str, Any]) -> bool:
         """Format and send a system error notification.
 

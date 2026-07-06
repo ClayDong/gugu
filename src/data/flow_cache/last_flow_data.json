@@ -1,35 +1,284 @@
 {
   "market": {
-    "date": "2026-06-30",
-    "sh_close": null,
-    "sh_change": null,
-    "sz_close": null,
-    "sz_change": null,
-    "main_net_inflow": 0.0,
-    "main_net_ratio": null,
-    "super_large_inflow": null,
-    "large_inflow": null,
-    "medium_inflow": null,
-    "small_inflow": -0.0,
-    "north_only": true
+    "date": "2026-07-06",
+    "sh_close": 4041.24,
+    "sh_change": -0.06,
+    "sz_close": 15416.8,
+    "sz_change": -1.16,
+    "main_net_inflow": -872.93,
+    "main_net_ratio": -2.82,
+    "super_large_inflow": -552.03,
+    "large_inflow": -320.9,
+    "medium_inflow": 206.3,
+    "small_inflow": 666.62
   },
   "north_bound": {
-    "date": "2026-06-30",
+    "date": "2026-07-06",
     "time": "15:00",
     "total": 0.0,
-    "sh_connect": 0.0,
-    "sz_connect": 0.0
+    "sh_connect": null,
+    "sz_connect": null
   },
   "market_overview": {
-    "main_vs_retail": "主力散户同步卖出",
+    "main_vs_retail": "主力卖出，散户接盘（警惕）",
     "north_analysis": {
-      "total": 0,
+      "total": 0.0,
       "direction": "流出",
       "significant": "一般"
     }
   },
-  "sectors": {},
-  "concepts": [],
-  "strong_stocks": [],
-  "timestamp": "2026-07-01 08:00"
+  "sectors": {
+    "inflow_top": [
+      {
+        "name": "医药生物",
+        "main_inflow": 29.11,
+        "main_ratio": 1.59,
+        "price_change": 0.64
+      },
+      {
+        "name": "化学制药",
+        "main_inflow": 20.65,
+        "main_ratio": 2.52,
+        "price_change": 0.96
+      },
+      {
+        "name": "化学制剂",
+        "main_inflow": 19.95,
+        "main_ratio": 2.91,
+        "price_change": 1.13
+      },
+      {
+        "name": "其他计算机设备",
+        "main_inflow": 17.63,
+        "main_ratio": 5.09,
+        "price_change": -1.3
+      },
+      {
+        "name": "计算机设备",
+        "main_inflow": 15.34,
+        "main_ratio": 3.66,
+        "price_change": -1.64
+      }
+    ],
+    "outflow_top": [
+      {
+        "name": "电子",
+        "main_inflow": -331.53,
+        "main_ratio": -3.43,
+        "price_change": -2.03
+      },
+      {
+        "name": "通信",
+        "main_inflow": -146.14,
+        "main_ratio": -7.13,
+        "price_change": -2.45
+      },
+      {
+        "name": "通信设备",
+        "main_inflow": -138.64,
+        "main_ratio": -7.32,
+        "price_change": -2.32
+      },
+      {
+        "name": "电力设备",
+        "main_inflow": -101.54,
+        "main_ratio": -4.29,
+        "price_change": -2.57
+      },
+      {
+        "name": "半导体",
+        "main_inflow": -95.24,
+        "main_ratio": -1.84,
+        "price_change": -0.54
+      }
+    ],
+    "divergence": [
+      {
+        "name": "其他计算机设备",
+        "type": "底背离",
+        "detail": "主力+17.6亿 但跌-1.3%",
+        "action": "资金流入但下跌，可能是吸筹"
+      },
+      {
+        "name": "计算机设备",
+        "type": "底背离",
+        "detail": "主力+15.3亿 但跌-1.6%",
+        "action": "资金流入但下跌，可能是吸筹"
+      },
+      {
+        "name": "贵金属",
+        "type": "底背离",
+        "detail": "主力+4.5亿 但跌-2.0%",
+        "action": "资金流入但下跌，可能是吸筹"
+      },
+      {
+        "name": "逆变器",
+        "type": "底背离",
+        "detail": "主力+3.5亿 但跌-1.2%",
+        "action": "资金流入但下跌，可能是吸筹"
+      },
+      {
+        "name": "黑色家电",
+        "type": "底背离",
+        "detail": "主力+2.7亿 但跌-2.0%",
+        "action": "资金流入但下跌，可能是吸筹"
+      },
+      {
+        "name": "聚氨酯",
+        "type": "底背离",
+        "detail": "主力+1.7亿 但跌-1.4%",
+        "action": "资金流入但下跌，可能是吸筹"
+      },
+      {
+        "name": "门户网站",
+        "type": "底背离",
+        "detail": "主力+1.5亿 但跌-1.3%",
+        "action": "资金流入但下跌，可能是吸筹"
+      },
+      {
+        "name": "电工仪器仪表",
+        "type": "底背离",
+        "detail": "主力+1.3亿 但跌-2.0%",
+        "action": "资金流入但下跌，可能是吸筹"
+      },
+      {
+        "name": "涂料油墨",
+        "type": "底背离",
+        "detail": "主力+1.2亿 但跌-1.1%",
+        "action": "资金流入但下跌，可能是吸筹"
+      },
+      {
+        "name": "电网自动化设备",
+        "type": "底背离",
+        "detail": "主力+1.2亿 但跌-2.8%",
+        "action": "资金流入但下跌，可能是吸筹"
+      },
+      {
+        "name": "装修建材",
+        "type": "底背离",
+        "detail": "主力+1.1亿 但跌-1.3%",
+        "action": "资金流入但下跌，可能是吸筹"
+      },
+      {
+        "name": "集成电路封测",
+        "type": "顶背离",
+        "detail": "主力-6.4亿 但涨1.8%",
+        "action": "资金流出但上涨，警惕出货"
+      }
+    ],
+    "rotation_score": 0.13
+  },
+  "key_industries": [
+    {
+      "category": "医疗/医药",
+      "name": "医药生物",
+      "main_inflow": 29.11,
+      "main_ratio": 1.59,
+      "price_change": 0.64
+    },
+    {
+      "category": "半导体/芯片",
+      "name": "半导体",
+      "main_inflow": -95.24,
+      "main_ratio": -1.84,
+      "price_change": -0.54
+    },
+    {
+      "category": "金融",
+      "name": "银行Ⅱ",
+      "main_inflow": 14.75,
+      "main_ratio": 5.14,
+      "price_change": 2.31
+    },
+    {
+      "category": "新能源",
+      "name": "电池",
+      "main_inflow": -48.66,
+      "main_ratio": -5.23,
+      "price_change": -2.65
+    },
+    {
+      "category": "消费",
+      "name": "消费电子零部件及组装",
+      "main_inflow": -32.11,
+      "main_ratio": -3.57,
+      "price_change": -2.54
+    },
+    {
+      "category": "科技/软件",
+      "name": "通信",
+      "main_inflow": -146.14,
+      "main_ratio": -7.13,
+      "price_change": -2.45
+    },
+    {
+      "category": "军工",
+      "name": "国防军工",
+      "main_inflow": -20.18,
+      "main_ratio": -2.05,
+      "price_change": -2.62
+    },
+    {
+      "category": "房地产",
+      "name": "建筑材料",
+      "main_inflow": -44.53,
+      "main_ratio": -9.45,
+      "price_change": -1.93
+    }
+  ],
+  "concepts": [
+    {
+      "name": "创新药",
+      "main_inflow": 26.59,
+      "main_ratio": 2.27
+    },
+    {
+      "name": "证金持股",
+      "main_inflow": 24.59,
+      "main_ratio": 1.13
+    },
+    {
+      "name": "大盘价值",
+      "main_inflow": 22.88,
+      "main_ratio": 1.53
+    }
+  ],
+  "strong_stocks": [
+    {
+      "code": "200045",
+      "name": "深纺织Ｂ",
+      "main_ratio": 74.92,
+      "main_inflow": 0.0,
+      "price_change": -1.89
+    },
+    {
+      "code": "000892",
+      "name": "欢瑞世纪",
+      "main_ratio": 57.8,
+      "main_inflow": 1.09,
+      "price_change": 9.94
+    },
+    {
+      "code": "603722",
+      "name": "阿科力",
+      "main_ratio": 55.82,
+      "main_inflow": 0.14,
+      "price_change": 10.0
+    },
+    {
+      "code": "000545",
+      "name": "金浦钛业",
+      "main_ratio": 50.56,
+      "main_inflow": 0.78,
+      "price_change": 10.16
+    },
+    {
+      "code": "002403",
+      "name": "爱仕达",
+      "main_ratio": 45.29,
+      "main_inflow": 0.4,
+      "price_change": 9.99
+    }
+  ],
+  "timestamp": "2026-07-06 15:15"
 }

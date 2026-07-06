@@ -75,10 +75,43 @@ class ScreeningResult:
     late_session_high: bool
     passed: bool
     failed_conditions: list[str] = field(default_factory=list)
+    # P0-2: 可执行性信息（入场区间/止损位/仓位/目标位）
+    ma20: float = 0.0           # MA20 支撑位
+    recent_high: float = 0.0    # 前 20 日最高价（止盈目标位）
+    suggested_position: float = 0.10  # 建议仓位占比（默认 10%）
 
     @property
     def pass_count(self) -> int:
         return 8 - len(self.failed_conditions)
+
+    @property
+    def entry_low(self) -> float:
+        """入场区间下限（MA20 ± 0.5%）。"""
+        return self.ma20 * 0.995 if self.ma20 > 0 else self.price * 0.99
+
+    @property
+    def entry_high(self) -> float:
+        """入场区间上限。"""
+        return self.price * 1.005
+
+    @property
+    def stop_loss_price(self) -> float:
+        """止损位：MA20 × 0.97（3% 缓冲）。"""
+        return self.ma20 * 0.97 if self.ma20 > 0 else self.price * 0.95
+
+    @property
+    def take_profit_price(self) -> float:
+        """止盈目标位：前高。"""
+        return self.recent_high if self.recent_high > 0 else self.price * 1.10
+
+    @property
+    def risk_reward_ratio(self) -> float:
+        """盈亏比 = (止盈 - 当前价) / (当前价 - 止损)。"""
+        if self.stop_loss_price <= 0 or self.take_profit_price <= self.price:
+            return 0.0
+        risk = self.price - self.stop_loss_price
+        reward = self.take_profit_price - self.price
+        return round(reward / risk, 2) if risk > 0 else 0.0
 
 
 class TerminalScreener:
@@ -428,6 +461,10 @@ class TerminalScreener:
             # 回踩支撑标志
             pullback_hold = pd.notna(ma20) and price >= ma20 * 0.98
 
+            # P0-2: 计算前 20 日最高价（止盈目标位）
+            recent_high_val = float(recent["high"].iloc[-20:].max()) if len(recent) >= 20 else float(recent["high"].max())
+            ma20_val = float(ma20) if pd.notna(ma20) else price
+
             result = ScreeningResult(
                 symbol=code,
                 name=name,
@@ -441,6 +478,8 @@ class TerminalScreener:
                 late_session_high=pullback_hold,
                 passed=len(failed) == 0,
                 failed_conditions=failed,
+                ma20=ma20_val,
+                recent_high=recent_high_val,
             )
             return result
 

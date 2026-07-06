@@ -187,11 +187,10 @@ def test_format_stock_line_all_passed():
     assert "+3.6%" in line or "+3.6" in line  # 四舍五入
     assert "¥1520.50" in line
     assert "量比2.1" in line
-    assert "换手6.5%" in line
-    assert "市值100亿" in line
+    # P2-1: 紧凑格式不再显示换手/市值，改为显示止损/目标
+    assert "止损" in line
+    assert "目标" in line
     assert "✅ 量增" in line
-    assert "📈" in line
-    assert "🔝" in line
     assert "⚠️" not in line
 
 
@@ -214,10 +213,11 @@ def test_format_stock_line_partial_failed():
     line = _format_stock_line(r)
     assert "平安银行" in line
     assert "⚠️" in line
+    # P2-1: 紧凑格式最多显示前 2 个 failed_conditions
     assert "量比不足" in line
     assert "换手率不足" in line
-    assert "量能递减" in line
-    # 最多显示前 3 个 failed_conditions
+    # 第 3 个及之后不再显示
+    assert "量能递减" not in line
     assert "未跑赢大盘" not in line
     assert "尾盘未创新高" not in line
     assert "📈" not in line
@@ -305,7 +305,8 @@ def test_format_screener_report_all_passed():
     card = format_screener_report([r], total_scanned=5000)
     assert card["card"]["header"]["template"] == "green"
     content = str(card)
-    assert "完全通过（1 只）" in content
+    # P2-1: 新格式用"首选"替代"完全通过"
+    assert "首选" in content
     assert "扫描 5000 只" in content
     assert "贵州茅台" in content
 
@@ -342,7 +343,8 @@ def test_format_screener_report_mixed():
     )
     card = format_screener_report([passed_r, failed_r], total_scanned=5000)
     content = str(card)
-    assert "完全通过（1 只）" in content
+    # P2-1: 新格式用"首选"替代"完全通过"
+    assert "首选" in content
     assert "部分通过（1 只）" in content
     assert "贵州茅台" in content
     assert "平安银行" in content

@@ -80,8 +80,24 @@ leopard_three_factors:
   volume_ratio: 1.5                  # 量比阈值（放量确认）
   vol_ma_window: 20                  # 成交量均线窗口
   ma_short: 20                       # 短期均线（趋势判断 + 跌破卖出）
-  ma_long: 60                        # 长期均线（中期趋势过滤）
-  max_daily_gain_pct: 0.07           # 非涨停过滤：当日涨幅 >7% 不追（避免追涨停买不到）
+  ma_long: 60                         # 长期均线（中期趋势过滤）
+  max_daily_gain_pct: 0.07            # 非涨停过滤：当日涨幅 >7% 不追（避免追涨停买不到）
   amount_threshold: 1000000000       # 成交额阈值 10亿（豹哥三要素之一）
   turnover_threshold: 0.15           # 换手率阈值 15%（豹哥三要素之二）
   market_cap_threshold: 7000000000   # 流通市值阈值 70亿（豹哥三要素之三）
+
+pullback_low:
+  # 低吸回踩策略：缩量回踩不破 MA20（震荡市专用）
+  # 来源：陈江挺《炒股的智慧》"回调不破支撑才买" + 尾盘选股器实战逻辑
+  # 与 box_breakout 互补：牛市用突破，震荡市用低吸
+  ma_short: 20                        # 短期均线（支撑位）
+  ma_long: 60                         # 长期均线（中期趋势过滤）
+  strong_window: 5                    # 前 N 日内有强势表现的窗口
+  strong_pct: 0.05                    # 强势涨幅阈值 5%
+  pullback_min_pct: -0.02            # 回踩涨幅下限 -2%
+  pullback_max_pct: 0.01             # 回踩涨幅上限 +1%
+  vol_ratio_max: 1.0                 # 量比上限（缩量确认）
+  stop_loss_pct: 0.03                # 止损百分比（跌破 MA20 × 0.97）
+  take_profit_window: 20             # 前高回看窗口（止盈目标位）
+  time_stop_window: 5                # 时间止损窗口（持仓 N 日无进展）
+  time_stop_threshold: 0.02          # 时间止损阈值（涨幅 < 2% 减半仓）
