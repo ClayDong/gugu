@@ -58,37 +58,52 @@ def get_enabled_strategies() -> list[str]:
             return strategies
     except Exception:
         pass
-    # 默认回退
-    return ["box_breakout", "turtle", "dual_ma", "bollinger", "rsi_reversal"]
+    # 默认回退（与 settings.yaml enabled 列表一致）
+    return ["box_breakout", "pullback_low", "double_yin"]
 
 
 async def fetch_stock_list(max_stocks: int | None = None) -> list[str]:
-    """获取全市场股票列表，过滤 ST/北交所/新股。"""
+    """获取全市场股票列表，过滤 ST/北交所/新股。
+
+    优先 akshare 实时接口；失败时降级从 parquet_cache 目录读取已缓存股票代码。
+    """
+    candidates: list[str] = []
     try:
         spot = await asyncio.to_thread(ak.stock_zh_a_spot_em)
+        # 标准化列名
+        col_map = {"code": "代码", "name": "名称"}
+        spot = spot.rename(columns={k: v for k, v in col_map.items() if k in spot.columns})
+        # 过滤
+        spot["代码"] = spot["代码"].astype(str)
+        mask = ~spot["代码"].str.startswith(("bj", "43", "83", "87", "88", "4", "8"))
+        mask &= ~spot["名称"].str.contains("ST|退|N|^C", na=False, regex=True)
+        candidates = spot[mask]["代码"].tolist()
+        logger.info(f"akshare 获取候选股票: {len(candidates)} 只")
     except Exception as e:
-        logger.warning(f"stock_zh_a_spot_em 失败，降级 stock_zh_a_spot: {e}")
-        spot = await asyncio.to_thread(ak.stock_zh_a_spot)
+        logger.warning(f"akshare 股票列表获取失败: {e}")
 
-    # 标准化列名
-    col_map = {
-        "code": "代码", "name": "名称",
-    }
-    spot = spot.rename(columns={k: v for k, v in col_map.items() if k in spot.columns})
-
-    # 过滤
-    spot["代码"] = spot["代码"].astype(str)
-    mask = ~spot["代码"].str.startswith(("bj", "43", "83", "87", "88", "4", "8"))
-    mask &= ~spot["名称"].str.contains("ST|退|N|^C", na=False, regex=True)
-    # 排除科创板（688）和创业板（300）— 走势差异大，单独回测更准
-    # 这里保留，全市场回测
-    candidates = spot[mask]["代码"].tolist()
+    # 降级：从 parquet_cache 读取已缓存股票代码
+    if not candidates:
+        cache_dir = Path("data/parquet_cache")
+        if cache_dir.exists():
+            # 文件名格式：{code}_{days}d.parquet
+            # 优先 500d（全量回测），降级 250d
+            codes = set()
+            for pattern in ("*_500d.parquet", "*_250d.parquet"):
+                for p in cache_dir.glob(pattern):
+                    code = p.stem.split("_")[0]
+                    if not code.startswith(("43", "83", "87", "88", "4", "8", "bj")):
+                        codes.add(code)
+                if codes:
+                    break  # 500d 命中即不再降级
+            candidates = sorted(codes)
+            logger.info(f"parquet_cache 降级读取候选股票: {len(candidates)} 只")
 
     if max_stocks and len(candidates) > max_stocks:
         candidates = candidates[:max_stocks]
         logger.info(f"限制为前 {max_stocks} 只股票（调试模式）")
 
-    logger.info(f"全市场候选股票: {len(candidates)} 只")
+    logger.info(f"最终候选股票: {len(candidates)} 只")
     return candidates
 
 
