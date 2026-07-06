@@ -1,4 +1,4 @@
-"""分析层：市场择时、仓位控制、因子工厂、参数优化、板块轮动、个股评分、策略池、执行优化、持仓管理、绩效归因、信号追踪、技术指标、舆情分析。"""
+"""分析层：市场择时、仓位控制、因子工厂、参数优化、板块轮动、个股评分、策略池、执行优化、持仓管理、绩效归因、信号追踪、技术指标、舆情分析、十大视角综合分析。"""
 
 from gugu.analysis.alpha_factory import AlphaFactor, AlphaFactory
 from gugu.analysis.danger_signal import DangerSignalDetector, DangerSignalResult
@@ -11,12 +11,22 @@ from gugu.analysis.position_controller import PositionBudget, PositionController
 from gugu.analysis.position_manager import PositionAdvice, PositionManager
 from gugu.analysis.regime_detector import MultiPeriodRegimeDetector, RegimeEvidence
 from gugu.analysis.sector_rotation import SW_INDUSTRY_MAP, SectorRotation
+from gugu.analysis.sentiment import SentimentSystem, NewsFetcher, SentimentAnalyzer, SentimentReport
 from gugu.analysis.signal_tracker import SignalTracker
 from gugu.analysis.stage_detector import MarketStage, StageDetector, StageResult
 from gugu.analysis.stock_ranker import StockRanker
 from gugu.analysis.strategy_pool import StrategyPool, StrategyWeight
-from gugu.analysis.sentiment import SentimentSystem, NewsFetcher, SentimentAnalyzer, SentimentReport
 from gugu.analysis.trailing_stop import TrailingStopEngine, TrailingStopSignal, TrailingStopState
+from gugu.analysis.perspectives import (
+    PerspectiveAnalysisResult,
+    PerspectiveEngine,
+    PerspectiveScore,
+    StockDataContext,
+    attach_perspective_to_signal,
+    build_context_from_kline,
+    build_context_from_signal,
+    filter_by_perspective,
+)
 
 __all__ = [
     "SW_INDUSTRY_MAP",
@@ -58,4 +68,13 @@ __all__ = [
     "TrailingStopEngine",
     "TrailingStopSignal",
     "TrailingStopState",
+    # 十大视角分析系统
+    "PerspectiveAnalysisResult",
+    "PerspectiveEngine",
+    "PerspectiveScore",
+    "StockDataContext",
+    "attach_perspective_to_signal",
+    "build_context_from_kline",
+    "build_context_from_signal",
+    "filter_by_perspective",
 ]

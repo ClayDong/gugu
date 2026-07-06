@@ -183,3 +183,29 @@ log:
   dir: logs
   rotation: "10 MB"
   retention: "30 days"
+
+# ========== 十大视角分析 ==========
+perspective:
+  enabled: true
+  # 启用的视角列表
+  perspectives:
+    - buffett
+    - munger
+    - soros
+    - lynch
+    - livermore
+    - qiu_guo_lu
+    - chen_jiang_ting
+    - technical
+    - investing_habits
+    - dashixiong
+  # 评分阈值
+  pass_threshold: 6.0           # 单视角通过分
+  composite_pass_threshold: 7.0   # 综合评分通过分
+  min_perspective_score: 4.0      # 单视角最低容忍分（低于此直接否决）
+  # 功能开关
+  auto_analyze_watchlist: true    # 每日自动分析自选股
+  scan_with_perspectives: true    # 选股时运行视角分析
+  # 报告
+  report_time: "08:30"           # 每日推送时间（交易日，08:00宏观简报后）
+  top_n_report: 5                # 报告展示前N只

@@ -38,7 +38,8 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     # P1-7: 新增 weekly_optimize_0300（周日 03:00 周参数优化）
     # P2-8: 新增 weekly_review_2000（周日 20:00 周复盘推送）
     # v0.4.4: 新增 range_observe_1030 + range_observe_1305（震荡市盘中观察列表）
-    assert len(jobs) == 23
+    # v0.5.0: 新增 perspective_report_0830（十大视角分析日报）
+    assert len(jobs) == 24
     job_ids = {j.id for j in jobs}
     assert "scan_1" in job_ids
     assert "scan_2" in job_ids

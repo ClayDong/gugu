@@ -195,6 +195,14 @@ class TradingScheduler:
             name="周复盘推送-周日20:00",
         )
 
+        # 十大视角分析日报：08:30（宏观简报08:00后，供用户深度分析自选股）
+        self._scheduler.add_job(
+            self._safe_perspective_report,
+            CronTrigger(hour=8, minute=30, day_of_week="mon-fri"),
+            id="perspective_report_0830",
+            name="十大视角日报-08:30",
+        )
+
         # 资金流数据已合并到宏观卡片中（08:00/15:15），不再单独注册 flow 任务
         # 宏观调度器 register_macro_jobs 已处理 early(08:00) 和 close(15:15) 的资金流合并
 
@@ -605,6 +613,71 @@ class TradingScheduler:
 
         except Exception as e:
             logger.exception(f"周复盘异常: {e}")
+
+    async def _safe_perspective_report(self) -> None:
+        """十大视角分析日报（08:30，非交易日跳过）。
+
+        对自选股池运行十大视角综合分析，推送飞书报告卡片。
+        在 08:00 宏观简报之后，为用户提供深度分析参考。
+        """
+        if not is_trading_day():
+            return
+        try:
+            from gugu.config import get_config
+            from gugu.analysis.perspectives import (
+                PerspectiveEngine,
+                StockDataContext,
+                build_context_from_kline,
+            )
+            from gugu.notifier.perspective_report import build_batch_summary_card
+
+            cfg = get_config()
+            if not cfg.perspective.enabled:
+                logger.debug("十大视角分析已禁用，跳过")
+                return
+
+            # 获取自选股列表
+            watchlist = cfg.watchlist
+            if not watchlist:
+                logger.debug("自选股为空，跳过十大视角分析")
+                return
+
+            engine = PerspectiveEngine(
+                perspectives=cfg.perspective.perspectives or None,
+            )
+
+            # 为每只自选股构建上下文并分析
+            contexts: list[StockDataContext] = []
+            from gugu.data.stock_names import lookup_stock_name
+
+            for symbol in watchlist[:10]:  # 最多分析10只，避免耗时过长
+                try:
+                    df = await self._engine._dm.fetch_stock_history(symbol, days=60)
+                    if df is not None and len(df) >= 30:
+                        name = lookup_stock_name(symbol) or symbol
+                        ctx = build_context_from_kline(symbol, name, df)
+                        contexts.append(ctx)
+                except Exception as e:
+                    logger.debug(f"十大视角: {symbol} 构建上下文失败: {e}")
+
+            if not contexts:
+                logger.info("十大视角: 无有效上下文，跳过")
+                return
+
+            # 批量分析
+            results = engine.analyze_batch(contexts)
+
+            # 生成报告卡片
+            card = build_batch_summary_card(results)
+            await self._engine._notifier.send_card(card)
+
+            passed_count = sum(1 for r in results if r.passed)
+            logger.info(
+                f"十大视角日报推送完成: 分析 {len(results)} 只, "
+                f"通过 {passed_count} 只"
+            )
+        except Exception as e:
+            logger.exception(f"十大视角分析日报异常: {e}")
 
     async def start(self) -> None:
         """启动调度器。启动后立即执行一次盘中扫描（如果是交易日）。"""

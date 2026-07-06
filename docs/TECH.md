@@ -73,7 +73,8 @@ gugu/
 │   │   ├── feishu.py            # 飞书推送（含 tenacity 重试）
 │   │   ├── formatter.py         # 卡片格式化（类型安全）
 │   │   ├── fund_monitor.py      # 基金净值监控
-│   │   └── flow_report.py       # 资金流日报 + 14:30 盘中决策报告
+│   │   ├── flow_report.py       # 资金流日报 + 14:30 盘中决策报告
+│   │   └── perspective_report.py # 十大视角分析飞书报告（v0.5.0）
 │   ├── macro/                   # 宏观五维模块
 │   ├── selector/                # 选股层
 │   │   └── stock_selector.py    # 资金流 + 策略筛选
@@ -97,7 +98,12 @@ gugu/
 │   │   ├── trailing_stop.py    # P0 浪谷递进移动止损引擎
 │   │   ├── danger_signal.py    # P0 五大危险信号检测器
 │   │   ├── no_average_down.py  # P0 向下摊平检查器
-│   │   └── dynamic_take_profit.py # 财叔动态止盈减仓引擎
+│   │   ├── dynamic_take_profit.py # 财叔动态止盈减仓引擎
+│   │   └── perspectives/       # 十大视角分析引擎（v0.5.0）
+│   │       ├── data_types.py    # StockDataContext + 评分结果模型
+│   │       ├── scorer.py       # 10个投资大师视角评分函数
+│   │       ├── engine.py       # PerspectiveEngine（单股/批量分析）
+│   │       └── integrators.py  # 与现有模块的集成桥接
 │   ├── wisdom/                  # 决策层
 │   │   ├── advisor.py           # WisdomAdvisor（LLM 决策 + 多视角路由 + fallback）
 │   │   ├── book_router.py       # P0 BookPerspectiveRouter（28 本书多视角路由）
@@ -153,6 +159,8 @@ gugu/
 过滤层(filters/)     基本面 → 资金流 → 行业约束（仅买入信号）
        ↓
 决策层(wisdom/)      BookPerspectiveRouter（28本书多视角）→ LLM决策 → fallback
+       ↓
+视角层(perspectives/) 10个投资大师视角评分 → 加权综合 → 木桶效应判定（v0.5.0）
        ↓
 移动止损(analysis/)  浪谷递进止损引擎（每日动态更新止损价）
        ↓
@@ -296,6 +304,59 @@ STOCK_FLOW_VALIDATOR:
 - `majority`：多数策略同方向才输出
 - `unanimous`：全部策略同方向才输出
 
+### 3.8 十大视角分析引擎（v0.5.0）
+
+`PerspectiveEngine`（[analysis/perspectives/engine.py](src/gugu/analysis/perspectives/engine.py)）：
+
+**核心理念**：将10位投资大师的认知框架量化为可计算的评分维度，每个视角独立评分（0-10分），加权汇总为综合评分。
+
+**数据流**：
+```
+K线数据 / 信号字典 → build_context_from_kline() / build_context_from_signal()
+    → StockDataContext（~50字段）
+    → PerspectiveEngine.analyze()（同步，纯计算）
+    → 10个评分函数独立评分
+    → _aggregate() 加权汇总 + 木桶效应判定
+    → PerspectiveAnalysisResult（含综合分/操作建议/价位）
+```
+
+**10个视角及权重**：
+
+| 视角 | 权重 | 核心评估逻辑 |
+|------|------|-------------|
+| buffett | 0.15 | 护城河/ROE/PE/PB/低负债/内部人行为 |
+| munger | 0.12 | 多元思维/盈利质量/现金流/资本配置 |
+| soros | 0.10 | 反身性/市场环境/资金流向/趋势确认 |
+| lynch | 0.10 | PEG/成长性/市值适配/分类（6类） |
+| livermore | 0.10 | 趋势方向/关键点/成交量/仓位管理 |
+| qiu_guo_lu | 0.10 | 行业格局/胜率/行业估值对比 |
+| chen_jiang_ting | 0.08 | 趋势方向/止损/仓位/等待策略 |
+| technical | 0.10 | 均线/RSI/MACD/布林带/52周位置 |
+| investing_habits | 0.08 | 纪律性/风险控制/市场周期/耐心 |
+| dashixiong | 0.07 | 五维框架（金油汇债G）/三层传导 |
+
+**判定规则**：
+- 单项 ≥ 6分通过，< 4分致命缺陷
+- 综合分 ≥ 7.0 + 最低分 ≥ 4.0 + 通过视角 ≥ 7 → 整体通过
+- 最低分决定木桶效应（单一维度极差则整体不通过）
+
+**集成点**：
+- `integrators.py`：`attach_perspective_to_signal()` 将评分附加到信号字典
+- `filter_by_perspective()`：按最低分过滤信号列表
+- `perspective_report.py`：飞书卡片报告生成
+- `scheduler.py`：08:30 每日分析任务
+
+**配置**：
+```yaml
+perspective:
+  enabled: true
+  perspectives: [buffett, munger, soros, lynch, livermore, qiu_guo_lu, chen_jiang_ting, technical, investing_habits, dashixiong]
+  min_composite_score: 7.0
+  min_perspective_score: 4.0
+  min_pass_count: 7
+  auto_notify: true
+```
+
 ## 四、配置体系
 
 ### 4.1 配置分层
@@ -315,8 +376,9 @@ class AppConfig(BaseModel):
     risk: RiskConfig           # max_position_ratio, daily_loss_warn/halt, ...
     data: DataConfig           # primary_source, fail_threshold, cache_ttl, ...
     strategy: StrategyConfig   # enabled, fusion_mode, min_confidence, ...
-    execution: ExecutionConfig # mode, paper.capital, live.confirm_required, ...
+    execution: ExecutionConfig # mode, paper_capital, live_confirm_required, ...
     feishu: FeishuConfig       # enabled, notify_signal, report_times, ...
+    perspective: PerspectiveConfig # enabled, perspectives, min_scores, ...
     scheduler: SchedulerConfig # timezone, scan_times, ...
     wisdom: WisdomConfig       # skill_dir, skill_names, ...
     fundamental: FundamentalConfig  # pe_min/max, pb_min/max, roe_min, ...
@@ -598,6 +660,16 @@ tests/
 | 60 | P1-5: 风控增加持仓时间风控（30 天未盈利警告减半仓，60 天未盈利强制清仓） | `risk/manager.py` |
 | 61 | P1-7: 大市过滤增加中证 500 + 创业板指（三级冗余，任一破 MA200 则中小盘禁止买入） | `engine/market_filter.py` |
 | 62 | P2-8: 周日 20:00 周复盘推送（汇总本周信号统计推送飞书） | `engine/scheduler.py` |
+
+### 八之八、v0.5.0 新增（十大视角分析系统）
+
+| # | 功能 | 涉及文件 |
+|---|------|----------|
+| 64 | 十大视角分析引擎核心模块（data_types/scorer/engine/integrators） | `analysis/perspectives/*.py` |
+| 65 | 飞书报告卡片生成器 | `notifier/perspective_report.py` |
+| 66 | 配置集成（PerspectiveConfig + settings.yaml） | `config/models.py`, `config/settings.yaml` |
+| 67 | 调度器集成（08:30 十大视角日报） | `engine/scheduler.py` |
+| 68 | 105个全面单元测试 | `tests/unit/test_perspectives.py` |
 
 ### 八之七、v0.3.9 修复（迭代 10：行业景气度评分）
 

@@ -198,6 +198,27 @@ class LogConfig(BaseModel):
     retention: str = Field(default="30 days", description="日志保留时间")
 
 
+class PerspectiveConfig(BaseModel):
+    """十大视角分析配置."""
+
+    enabled: bool = Field(default=True, description="是否启用十大视角分析")
+    perspectives: list[str] = Field(
+        default_factory=lambda: [
+            "buffett", "munger", "soros", "lynch", "livermore",
+            "qiu_guo_lu", "chen_jiang_ting", "technical",
+            "investing_habits", "dashixiong",
+        ],
+        description="启用的视角列表",
+    )
+    pass_threshold: float = Field(default=6.0, ge=0.0, le=10.0, description="单视角通过阈值")
+    composite_pass_threshold: float = Field(default=7.0, ge=0.0, le=10.0, description="综合评分通过阈值")
+    min_perspective_score: float = Field(default=4.0, ge=0.0, le=10.0, description="单视角最低容忍分（低于此否决）")
+    auto_analyze_watchlist: bool = Field(default=True, description="是否自动分析自选股")
+    scan_with_perspectives: bool = Field(default=True, description="选股时是否运行视角分析")
+    report_time: str = Field(default="08:30", description="每日推送时间（交易日）")
+    top_n_report: int = Field(default=5, ge=1, description="报告展示前N只")
+
+
 # ──────────────────────────────────────────────────────────────────────
 #  Top-level application config
 # ──────────────────────────────────────────────────────────────────────
@@ -221,6 +242,7 @@ class AppConfig(BaseModel):
     fundamental: FundamentalConfig = Field(default_factory=FundamentalConfig)
     fund: FundConfig = Field(default_factory=FundConfig)
     log: LogConfig = Field(default_factory=LogConfig)
+    perspective: PerspectiveConfig = Field(default_factory=PerspectiveConfig)
 
     # ── classmethod factory ──────────────────────────────────────────
 
@@ -355,5 +377,16 @@ def flatten_config(app_config: AppConfig) -> dict[str, Any]:
             "dir": app_config.log.dir,
             "rotation": app_config.log.rotation,
             "retention": app_config.log.retention,
+        },
+        "perspective": {
+            "enabled": app_config.perspective.enabled,
+            "perspectives": list(app_config.perspective.perspectives),
+            "pass_threshold": app_config.perspective.pass_threshold,
+            "composite_pass_threshold": app_config.perspective.composite_pass_threshold,
+            "min_perspective_score": app_config.perspective.min_perspective_score,
+            "auto_analyze_watchlist": app_config.perspective.auto_analyze_watchlist,
+            "scan_with_perspectives": app_config.perspective.scan_with_perspectives,
+            "report_time": app_config.perspective.report_time,
+            "top_n_report": app_config.perspective.top_n_report,
         },
     }
