@@ -242,74 +242,108 @@ async def _fetch_today_prices(
 ) -> list[tuple[float, float, float] | None]:
     """批量获取 T+1 日开盘价/最高价和沪深300开盘涨幅。
 
-    使用东财日K线接口获取最新两根 K 线数据。
+    P0 修复：改用东财 push2 批量实时行情接口（ulist.np/get），
+    而非日K线接口。原因：
+    1. 日K线接口在盘中没有当日数据（要收盘后才生成）
+    2. 09:35 验证时需要实时开盘价/最高价，只有实时行情接口才有
+    3. 批量接口一次获取所有选股记录，避免逐只请求
     """
-    today_str = date.today().isoformat()
-    sem = asyncio.Semaphore(10)  # 限流
+    if not records:
+        return []
 
-    async def _fetch_one(symbol: str) -> dict[str, Any] | None:
-        market = _get_market(symbol)
-        url = _EASTMONEY_KLINE_URL.format(
-            market=market, symbol=symbol, end_date=today_str, limit=2
-        )
-        async with sem:
-            try:
-                async with httpx.AsyncClient(timeout=10) as client:
-                    resp = await client.get(url)
-                    resp.raise_for_status()
-                    data = resp.json()
-                    return data
-            except Exception as e:
-                logger.debug(f"获取 {symbol} 日K线失败: {e}")
-                return None
+    # 构造 secids 列表（如 0.300970,1.603190）
+    secids = []
+    symbol_to_idx: dict[str, int] = {}
+    for i, rec in enumerate(records):
+        clean = rec.symbol[-6:] if len(rec.symbol) > 6 else rec.symbol
+        market = _get_market(clean)
+        secids.append(f"{market}.{clean}")
+        symbol_to_idx[clean] = i
 
-    tasks = [_fetch_one(r.symbol) for r in records]
-    raw_results = await asyncio.gather(*tasks)
+    # 东财 push2 批量实时行情
+    # f2=最新价, f12=代码, f14=名称, f15=最高, f17=今开, f18=昨收
+    url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+    params = {
+        "fields": "f2,f12,f14,f15,f17,f18",
+        "secids": ",".join(secids),
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://quote.eastmoney.com/",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, params=params, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        logger.warning(f"尾盘验证: 东财批量实时行情获取失败: {e}")
+        return [(None, None, None)] * len(records)
+
+    # 解析返回数据
+    diff_list = data.get("data", {}).get("diff", []) if data.get("data") else []
+    if not diff_list:
+        logger.warning("尾盘验证: 东财批量接口返回空数据")
+        return [(None, None, None)] * len(records)
+
+    # 建立代码 → (今开, 最高, 昨收) 映射
+    price_map: dict[str, tuple[float, float, float]] = {}
+    for item in diff_list:
+        code = str(item.get("f12", ""))
+        # 东财返回的价格是原始值÷100（如 2089 → 20.89 元）
+        open_raw = item.get("f17")
+        high_raw = item.get("f15")
+        prev_close_raw = item.get("f18")
+        if open_raw is not None and high_raw is not None:
+            price_map[code] = (
+                float(open_raw) / 100,
+                float(high_raw) / 100,
+                float(prev_close_raw) / 100 if prev_close_raw else 0.0,
+            )
 
     # 获取沪深300今日开盘涨幅
-    hs300_open_chg = await _fetch_hs300_open_change(today_str)
+    hs300_open_chg = await _fetch_hs300_open_change()
 
+    # 按 records 顺序输出结果
     final: list[tuple[float, float, float] | None] = []
-    for raw in raw_results:
-        if raw is None:
-            final.append(None)
-            continue
-        try:
-            klines = raw.get("data", {}).get("klines", [])
-            if len(klines) < 1:
-                final.append(None)
-                continue
-            latest = klines[-1].split(",")
-            if len(latest) < 5:
-                final.append(None)
-                continue
-            open_price = float(latest[1])
-            high_price = float(latest[3])
-            final.append((open_price, high_price, hs300_open_chg))
-        except (ValueError, IndexError, KeyError, TypeError):
+    for rec in records:
+        clean = rec.symbol[-6:] if len(rec.symbol) > 6 else rec.symbol
+        prices = price_map.get(clean)
+        if prices:
+            final.append((prices[0], prices[1], hs300_open_chg))
+        else:
             final.append(None)
 
     return final
 
 
-async def _fetch_hs300_open_change(today_str: str) -> float:
-    """获取沪深300今日开盘涨幅（作为基准）。"""
+async def _fetch_hs300_open_change() -> float:
+    """获取沪深300今日开盘涨幅（作为基准）。
+
+    P0 修复：改用东财 push2 实时行情接口，而非日K线接口。
+    原因：日K线在盘中没有当日数据。
+    """
     try:
-        url = _EASTMONEY_KLINE_URL.format(
-            market=1, symbol="000300", end_date=today_str, limit=2
-        )
+        url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+        params = {
+            "fields": "f2,f12,f15,f17,f18",
+            "secids": "1.000300",  # 沪深300
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://quote.eastmoney.com/",
+        }
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url)
+            resp = await client.get(url, params=params, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-            klines = data.get("data", {}).get("klines", [])
-            if len(klines) >= 2:
-                prev_close = float(klines[-2].split(",")[2])
-                today_open = float(klines[-1].split(",")[1])
-                return round((today_open - prev_close) / prev_close * 100, 2)
-            if len(klines) == 1:
-                today_open = float(klines[-1].split(",")[1])
-                prev_close = float(klines[-1].split(",")[2])
+        diff_list = data.get("data", {}).get("diff", []) if data.get("data") else []
+        if diff_list:
+            item = diff_list[0]
+            today_open = float(item.get("f17", 0)) / 100
+            prev_close = float(item.get("f18", 0)) / 100
+            if prev_close > 0:
                 return round((today_open - prev_close) / prev_close * 100, 2)
     except Exception as e:
         logger.debug(f"获取沪深300开盘涨幅失败: {e}")

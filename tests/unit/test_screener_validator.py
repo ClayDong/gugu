@@ -31,18 +31,24 @@ class _MockResponse:
 
 
 class _MockAsyncClient:
-    """模拟 httpx.AsyncClient，根据 URL 返回不同的 K 线数据。"""
-    def __init__(self, kline_data, hs300_data):
-        self._kline = kline_data
+    """模拟 httpx.AsyncClient，根据 secids 参数返回东财 push2 批量实时行情。
+
+    P0 修复后 validator 改用 ulist.np/get 批量接口（非日K线），
+    mock 数据格式同步更新为 {data: {diff: [{f12, f14, f15, f17, f18}]}}。
+    """
+    def __init__(self, stock_data, hs300_data):
+        self._stock = stock_data
         self._hs300 = hs300_data
     async def __aenter__(self):
         return self
     async def __aexit__(self, *args):
         return None
-    async def get(self, url, **kwargs):
-        if "000300" in url:
+    async def get(self, url, params=None, **kwargs):
+        # 东财批量接口: secids=0.600519,1.603190,...
+        secids = params.get("secids", "") if params else ""
+        if "000300" in secids:
             return _MockResponse(self._hs300)
-        return _MockResponse(self._kline)
+        return _MockResponse(self._stock)
 
 
 class TestScreenerRecord:
@@ -196,24 +202,29 @@ class TestValidateYesterdayScreener:
 
     @pytest.mark.asyncio
     async def test_validate(self, mock_history, mock_validation_file):
-        """完整验证流程：读取历史 → 获取行情 → 计算溢价 → 保存结果。"""
-        mock_kline_data = {
+        """完整验证流程：读取历史 → 获取行情 → 计算溢价 → 保存结果。
+
+        P0 修复后 mock 数据格式改为东财 push2 批量实时行情：
+        f12=代码, f14=名称, f15=最高, f17=今开, f18=昨收（价格×100）。
+        """
+        # 东财返回价格需÷100（如 153000 → 1530.0 元）
+        mock_stock_data = {
             "data": {
-                "klines": [
-                    "20260630,1530.0,1535.0,1540.0,1528.0,100000",
+                "diff": [
+                    {"f12": "600519", "f14": "茅台", "f15": 154000, "f17": 153000, "f18": 152050}
                 ]
             }
         }
+        # 沪深300: 今开=403000→4030, 昨收=401000→4010 → 涨幅 +0.50%
         mock_hs300_data = {
             "data": {
-                "klines": [
-                    "20260629,4000,4020,3980,4010,500000",
-                    "20260630,4010,4030,3990,4020,600000",
+                "diff": [
+                    {"f12": "000300", "f14": "沪深300", "f15": 403000, "f17": 403000, "f18": 401000}
                 ]
             }
         }
 
-        mock_client = _MockAsyncClient(mock_kline_data, mock_hs300_data)
+        mock_client = _MockAsyncClient(mock_stock_data, mock_hs300_data)
 
         with (
             patch("gugu.screener.validator._SCREENER_HISTORY_FILE", mock_history),
@@ -238,24 +249,27 @@ class TestValidateYesterdayScreener:
 
     @pytest.mark.asyncio
     async def test_validate_negative_premium(self, mock_history, mock_validation_file):
-        """负溢价（低开）场景验证。"""
-        mock_kline_data = {
+        """负溢价（低开）场景验证。
+
+        P0 修复后 mock 数据格式改为东财 push2 批量实时行情。
+        """
+        # 今开=150000→1500.0, 最高=152500→1525.0, 昨收=152050→1520.5
+        mock_stock_data = {
             "data": {
-                "klines": [
-                    "20260630,1500.0,1510.0,1525.0,1495.0,100000",
+                "diff": [
+                    {"f12": "600519", "f14": "茅台", "f15": 152500, "f17": 150000, "f18": 152050}
                 ]
             }
         }
         mock_hs300_data = {
             "data": {
-                "klines": [
-                    "20260629,4000,4020,3980,4010,500000",
-                    "20260630,4020,4040,4000,4030,600000",
+                "diff": [
+                    {"f12": "000300", "f14": "沪深300", "f15": 403000, "f17": 403000, "f18": 401000}
                 ]
             }
         }
 
-        mock_client = _MockAsyncClient(mock_kline_data, mock_hs300_data)
+        mock_client = _MockAsyncClient(mock_stock_data, mock_hs300_data)
 
         with (
             patch("gugu.screener.validator._SCREENER_HISTORY_FILE", mock_history),
