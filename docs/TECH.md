@@ -671,6 +671,28 @@ tests/
 | 67 | 调度器集成（08:30 十大视角日报） | `engine/scheduler.py` |
 | 68 | 105个全面单元测试 | `tests/unit/test_perspectives.py` |
 
+### 八之八、v0.5.1 新增（视角信号流融合 + 信号质量控制）
+
+| # | 功能 | 涉及文件 |
+|---|------|----------|
+| 69 | 十大视角接入信号过滤流水线（SignalPipeline 步骤3.6） | `engine/signal_pipeline.py` |
+| 70 | signal_only 附加视角评分 + paper/live 硬过滤 | `engine/signal_pipeline.py` |
+| 71 | 信号去重内存管理（保存前清理7天过期） | `engine/main.py` |
+| 72 | SignalAggregationConfig（min_interval/max_daily/batch） | `config/models.py` |
+| 73 | E2E 集成测试骨架（20+模块导入验证） | `tests/integration/test_e2e_pipeline.py` |
+| 74 | POST /api/stop_loss/{symbol} Web API | `web/app.py` |
+
+### 八之九、v0.5.2 新增（宏观增强 + 引擎拆分）
+
+| # | 功能 | 涉及文件 |
+|---|------|----------|
+| 75 | MacroRegimeEnhancer（金/油/汇/债/G→仓位上限调整） | `analysis/macro_regime_enhancer.py` |
+| 76 | detect_with_macro() 便捷方法 | `analysis/regime_detector.py` |
+| 77 | DailyReportManager 提取（send_daily_report → 独立类） | `notifier/daily_report_manager.py` |
+| 78 | OrderManager + StopLossManager 提取到 execution/ | `execution/order_manager.py`, `execution/stop_loss_manager.py` |
+| 79 | main.py 1142→999 行（拆出 ~180 行） | `engine/main.py` |
+| 80 | 宏观增强 5 个单元测试 | `tests/unit/test_macro_regime_enhancer.py` |
+
 ### 八之七、v0.3.9 修复（迭代 10：行业景气度评分）
 
 | # | 修复 | 涉及文件 |

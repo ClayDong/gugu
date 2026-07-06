@@ -156,7 +156,7 @@ class WisdomAdvisor:
     - _advise_llm_async() 使用 AsyncClient 调用 LLM
     """
 
-    def __init__(self) -> None:
+    def __init__(self, book_router: BookPerspectiveRouter | None = None) -> None:
         self._skills: dict[str, str] = {}
         self._skill_names: list[str] = get_config().wisdom.skill_names
         self._load_skills()
@@ -166,7 +166,12 @@ class WisdomAdvisor:
         # 原逻辑无条件创建 BookPerspectiveRouter，导致 settings.yaml 的
         # enable_multi_perspective: false 配置完全不生效
         self._enable_multi_perspective = get_config().wisdom.enable_multi_perspective
-        self._book_router = BookPerspectiveRouter() if self._enable_multi_perspective else None
+        if book_router is not None:
+            self._book_router = book_router
+        elif self._enable_multi_perspective:
+            self._book_router = BookPerspectiveRouter()
+        else:
+            self._book_router = None
 
         # async HTTP client 连接池（复用，避免每次创建新连接）
         self._async_client: httpx.AsyncClient | None = None
@@ -195,6 +200,118 @@ class WisdomAdvisor:
         if self._async_client is not None:
             await self._async_client.aclose()
             self._async_client = None
+
+    # ========== 多视角共识注入 ==========
+
+    def _inject_perspective_consensus(self, signal: dict[str, Any]) -> dict[str, Any]:
+        """将多视角分析结果注入信号。
+
+        调用 book_router.get_advice(signal) 获取多视角分析，
+        计算共识指标并更新 mentor_perspectives 字段。
+        高共识增强置信度，低共识降低置信度。
+
+        Args:
+            signal: 信号 dict（需包含 direction, confidence 等字段）
+
+        Returns:
+            更新后的信号 dict（含 mentor_perspectives 字段）
+        """
+        if self._book_router is None:
+            return signal
+
+        try:
+            advice = self._book_router.get_advice(signal)
+            perspectives = advice.get("perspectives", [])
+            if not perspectives:
+                return signal
+
+            consensus = advice.get("consensus", {})
+            buy_pct = consensus.get("buy_pct", 0)
+            sell_pct = consensus.get("sell_pct", 0)
+            hold_pct = consensus.get("hold_pct", 0)
+
+            # 分类视角
+            buy_perspectives: list[str] = []
+            sell_perspectives: list[str] = []
+            hold_perspectives: list[str] = []
+            top_reasons: list[dict] = []
+
+            for p in perspectives:
+                action = p.get("action", "")
+                name = p.get("name", "")
+                reason = p.get("reason", "")
+                if action == "buy":
+                    buy_perspectives.append(name)
+                elif action == "sell":
+                    sell_perspectives.append(name)
+                else:
+                    hold_perspectives.append(name)
+
+                # 收集置信度最高的视角理由
+                top_reasons.append({
+                    "perspective": name,
+                    "reason": reason,
+                })
+
+            # 取 top-3 理由
+            top_reasons = sorted(
+                top_reasons,
+                key=lambda x: next(
+                    (p.get("confidence", 0) for p in perspectives if p.get("name") == x["perspective"]),
+                    0,
+                ),
+                reverse=True,
+            )[:3]
+
+            # 确定共识标签
+            if buy_pct >= 0.7:
+                consensus_label = "strong_buy"
+            elif buy_pct >= 0.5 and buy_pct > sell_pct:
+                consensus_label = "buy"
+            elif sell_pct >= 0.7:
+                consensus_label = "strong_sell"
+            elif sell_pct >= 0.5 and sell_pct > buy_pct:
+                consensus_label = "sell"
+            elif abs(buy_pct - sell_pct) < 0.2 and buy_pct > 0 and sell_pct > 0:
+                consensus_label = "conflict"
+            else:
+                consensus_label = "conflict"
+
+            mentor_perspectives = {
+                "analyzed_count": len(perspectives),
+                "buy_agreement_pct": buy_pct,
+                "sell_agreement_pct": sell_pct,
+                "hold_agreement_pct": hold_pct,
+                "buy_perspectives": buy_perspectives,
+                "sell_perspectives": sell_perspectives,
+                "hold_perspectives": hold_perspectives,
+                "top_reasons": top_reasons,
+                "consensus": consensus_label,
+            }
+
+            signal["mentor_perspectives"] = mentor_perspectives
+
+            # 高共识（>70%同意买入）→ 增强置信度
+            if buy_pct > 0.70:
+                current_conf = float(signal.get("confidence", 0.5))
+                signal["confidence"] = min(1.0, current_conf + 0.1)
+                logger.info(
+                    f"[wisdom-perspective] 高共识({buy_pct:.0%}买入)增强置信度: "
+                    f"{current_conf:.2f} → {signal['confidence']:.2f}"
+                )
+            # 低共识（<30%同意买入）→ 降低置信度
+            elif buy_pct < 0.30 and signal.get("direction") == "buy":
+                current_conf = float(signal.get("confidence", 0.5))
+                signal["confidence"] = max(0.1, current_conf - 0.1)
+                logger.info(
+                    f"[wisdom-perspective] 低共识({buy_pct:.0%}买入)降低置信度: "
+                    f"{current_conf:.2f} → {signal['confidence']:.2f}"
+                )
+
+        except Exception as e:
+            logger.warning(f"[wisdom-perspective] 多视角分析异常，跳过: {e}")
+
+        return signal
 
     def _load_skills(self) -> None:
         """加载配置中指定的交易决策 skill（按配置目录顺序，后加载的不覆盖先加载的）。
@@ -242,6 +359,8 @@ class WisdomAdvisor:
         优先使用 LLM 决策，LLM 不可用时降级到硬编码规则。
         同时接受 Signal 数据类和 dict 作为输入。
 
+        决策完成后注入多视角共识分析。
+
         Args:
             signal: 策略信号，Signal 数据类或 dict
 
@@ -252,11 +371,13 @@ class WisdomAdvisor:
 
         if self._llm_available:
             try:
-                return self._advise_llm(signal)
+                result = self._advise_llm(signal)
+                return self._inject_perspective_consensus(result)
             except Exception as e:
                 logger.warning(f"[wisdom] LLM 决策失败，降级到硬编码规则: {e}")
 
-        return self._advise_fallback(signal)
+        result = self._advise_fallback(signal)
+        return self._inject_perspective_consensus(result)
 
     async def advise_async(self, signal: dict[str, Any] | Signal) -> dict[str, Any]:
         """异步版本：为策略信号提供交易智慧决策。
@@ -266,6 +387,7 @@ class WisdomAdvisor:
 
         优先使用冲突裁决器（多维权重融合），失败时降级到单LLM决策，
         再失败降级到硬编码规则。
+        所有路径完成后注入多视角共识分析。
         """
         signal = self._as_dict(signal)
 
@@ -274,17 +396,19 @@ class WisdomAdvisor:
             try:
                 result = await self._advise_with_conflict_resolution(signal)
                 if result is not None:
-                    return result
+                    return self._inject_perspective_consensus(result)
             except Exception as e:
                 logger.warning(f"[wisdom] 冲突裁决失败，降级到单LLM决策: {e}")
 
             # 降级到单 LLM 决策
             try:
-                return await self._advise_llm_async(signal)
+                result = await self._advise_llm_async(signal)
+                return self._inject_perspective_consensus(result)
             except Exception as e:
                 logger.warning(f"[wisdom] LLM 异步决策失败，降级到硬编码规则: {e}")
 
-        return self._advise_fallback(signal)
+        result = self._advise_fallback(signal)
+        return self._inject_perspective_consensus(result)
 
     async def _advise_with_conflict_resolution(
         self, signal: dict[str, Any]
@@ -1024,7 +1148,9 @@ class WisdomAdvisor:
 
         signal["wisdom"] = advice
         signal["wisdom_decision"] = decision
-        return signal
+
+        # 注入多视角共识分析（signal_only 模式下也填充 mentor_perspectives）
+        return self._inject_perspective_consensus(signal)
 
     @staticmethod
     def _get_strategy_win_rate(strategy_name: str) -> float | None:

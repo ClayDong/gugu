@@ -383,7 +383,231 @@ class BookPerspectiveRouter:
                     break
                 if line.strip():
                     summary_lines.append(line.strip())
-                if len("\n".join(summary_lines)) > 300:
+                if len(" ".join(summary_lines)) > 300:
                     break
 
         return " ".join(summary_lines)[:300]
+
+    # ========== 多视角信号分析 ==========
+
+    # 视角中文显示名称映射
+    _DISPLAY_NAMES: dict[str, str] = {
+        "benjamin-graham-perspective": "本杰明·格雷厄姆",
+        "warren-buffett-perspective": "沃伦·巴菲特",
+        "charles-munger-perspective": "查理·芒格",
+        "pat-dorsey-perspective": "帕特·多尔西",
+        "qiu-guo-lu-perspective": "邱国鹭",
+        "peter-lynch-perspective": "彼得·林奇",
+        "william-oneil-perspective": "威廉·欧奈尔",
+        "k-line-analysis-perspective": "K线分析",
+        "richard-schabacker-perspective": "理查德·沙巴克",
+        "technical-analysis-perspective": "技术分析",
+        "steve-nison-perspective": "史蒂夫·尼森",
+        "jesse-livermore-perspective": "杰西·利弗莫尔",
+        "turtle-trader-perspective": "海龟交易",
+        "mark-douglas-perspective": "马克·道格拉斯",
+        "van-tharp-perspective": "范·撒普",
+        "ghost-trader-perspective": "鬼才操盘手",
+        "chen-jiang-ting-perspective": "陈江挺",
+        "adam-smith-perspective": "亚当·斯密",
+        "macroeconomics-perspective": "宏观经济学",
+        "microeconomics-perspective": "微观经济学",
+        "dashi-xiong-perspective": "大师兄",
+        "common-prosperity-perspective": "共同富裕",
+        "george-soros-perspective": "乔治·索罗斯",
+        "nassim-taleb-perspective": "纳西姆·塔勒布",
+        "burton-malkiel-perspective": "伯顿·麦基尔",
+        "bernard-baruch-perspective": "伯纳德·巴鲁克",
+        "zeng-shi-qiang-perspective": "曾仕强",
+        "investing-habits-perspective": "投资习惯",
+    }
+
+    def load_all_perspectives(self) -> list[dict]:
+        """返回所有已加载视角的元数据列表。
+
+        Returns:
+            list[dict]: [{name, category, display_name, summary, available}, ...]
+        """
+        result: list[dict] = []
+        for name in self._perspectives:
+            # 确定所属分类
+            category = "unknown"
+            for cat_name, cat_members in BOOK_CATEGORIES.items():
+                if name in cat_members:
+                    category = cat_name
+                    break
+            result.append({
+                "name": name,
+                "display_name": self._DISPLAY_NAMES.get(name, name),
+                "category": category,
+                "summary": self.get_perspective_summary(name),
+                "available": True,
+            })
+        return result
+
+    def get_advice(self, signal: dict[str, Any]) -> dict[str, Any]:
+        """为信号提供多视角分析建议。
+
+        基于信号方向和特征，从已加载的书籍视角中选择相关视角，
+        为每个视角预测其对该信号的交易建议。
+
+        Args:
+            signal: 信号 dict（需包含 direction, confidence 等字段）
+
+        Returns:
+            {
+                "perspectives": [{name, action, reason, confidence}, ...],
+                "consensus": {"buy_pct": 0.x, "sell_pct": 0.x, "hold_pct": 0.x},
+                "conflicts": [],
+            }
+        """
+        direction = signal.get("direction", "")
+        scenario = (
+            "entry"
+            if direction == "buy"
+            else "profit_taking"
+            if direction == "sell"
+            else "psychology_check"
+        )
+
+        # 动态选择相关视角
+        selected = self.select_perspectives_dynamic(scenario, direction, signal=signal)
+        if not selected:
+            return {"perspectives": [], "consensus": {"buy_pct": 0, "sell_pct": 0, "hold_pct": 0}, "conflicts": []}
+
+        signal_confidence = signal.get("confidence", 0.5)
+        is_filtered = signal.get("wisdom_filtered", False)
+
+        perspectives_advice: list[dict] = []
+        for name in selected:
+            content = self._perspectives.get(name, "")
+            if not content:
+                continue
+
+            # 确定分类
+            category = "unknown"
+            for cat_name, cat_members in BOOK_CATEGORIES.items():
+                if name in cat_members:
+                    category = cat_name
+                    break
+
+            action, reason, conf = self._predict_perspective_action(
+                name, category, direction, signal_confidence, signal, is_filtered
+            )
+
+            perspectives_advice.append({
+                "name": self._DISPLAY_NAMES.get(name, name),
+                "action": action,
+                "reason": reason,
+                "confidence": round(conf, 2),
+            })
+
+        # 计算共识
+        total = len(perspectives_advice) if perspectives_advice else 1
+        buy_count = sum(1 for p in perspectives_advice if p["action"] == "buy")
+        sell_count = sum(1 for p in perspectives_advice if p["action"] == "sell")
+        hold_count = sum(1 for p in perspectives_advice if p["action"] == "hold")
+        filter_count = sum(1 for p in perspectives_advice if p["action"] == "filter")
+
+        # filter 归到 hold（表示不建议当前方向操作）
+        hold_count += filter_count
+
+        return {
+            "perspectives": perspectives_advice,
+            "consensus": {
+                "buy_pct": round(buy_count / total, 2),
+                "sell_pct": round(sell_count / total, 2),
+                "hold_pct": round(hold_count / total, 2),
+            },
+            "conflicts": [],
+        }
+
+    @staticmethod
+    def _predict_perspective_action(
+        name: str,
+        category: str,
+        signal_direction: str,
+        signal_confidence: float,
+        signal: dict[str, Any],
+        is_filtered: bool,
+    ) -> tuple[str, str, float]:
+        """预测单视角对信号的交易建议。
+
+        基于视角分类和信号特征的规则引擎：
+        - 价值投资类：注重安全边际，低置信度时保守
+        - 成长选股类：顺势而为，高置信度积极
+        - 技术分析类：重趋势和形态
+        - 交易系统类：强调止损和风控
+        - 宏观经济类：关注大局
+        - 投资哲学类：保守审慎
+
+        Returns:
+            (action, reason, confidence_score)
+        """
+        if signal_direction == "buy":
+            if category == "value_investing":
+                if is_filtered:
+                    return ("hold", "存在风险信号，安全边际不足，建议观望", 0.35)
+                if signal_confidence >= 0.7:
+                    return ("buy", "优质标的估值合理，符合价值投资标准", 0.80)
+                elif signal_confidence >= 0.5:
+                    return ("buy", "估值合理，可小仓位试仓等待确认", 0.60)
+                else:
+                    return ("hold", "信号置信度不足，安全边际不够，观望", 0.35)
+
+            elif category == "growth_selecting":
+                if signal_confidence >= 0.65:
+                    return ("buy", "成长趋势确认，符合选股标准，建议参与", 0.75)
+                else:
+                    return ("hold", "成长信号不够明确，等待更强确认", 0.40)
+
+            elif category == "technical_analysis":
+                if is_filtered:
+                    return ("hold", "技术面存在危险信号，不宜入场", 0.30)
+                return ("buy", "技术形态支持入场，按信号操作", 0.70)
+
+            elif category == "trading_system":
+                if is_filtered:
+                    return ("filter", "多重风险信号叠加，应过滤该信号", 0.20)
+                return ("buy", "信号符合交易系统规则，设好止损入场", 0.70)
+
+            elif category == "macro_economics":
+                return ("buy", "宏观环境未见系统性风险，可操作", 0.60)
+
+            elif category == "investment_philosophy":
+                return ("hold", "保持投资纪律，不因单一信号冲动操作", 0.50)
+
+            # 默认
+            if signal_confidence >= 0.6:
+                return ("buy", "信号质量尚可，建议参与", 0.60)
+            return ("hold", "信号强度不足，观望为宜", 0.40)
+
+        elif signal_direction == "sell":
+            if category == "value_investing":
+                if is_filtered:
+                    return ("sell", "基本面恶化，应果断离场", 0.75)
+                return ("sell", "达到目标价或基本面变化，按规则卖出", 0.65)
+
+            elif category == "growth_selecting":
+                if signal_confidence >= 0.6:
+                    return ("sell", "成长逻辑松动，应止盈/止损", 0.70)
+                return ("hold", "卖出信号不够强，观察下个周期", 0.40)
+
+            elif category == "technical_analysis":
+                return ("sell", "技术形态走坏，应执行卖出", 0.75)
+
+            elif category == "trading_system":
+                return ("sell", "严格遵守交易系统的卖出规则", 0.80)
+
+            elif category == "macro_economics":
+                return ("sell", "宏观环境变化，减仓避险为妥", 0.65)
+
+            elif category == "investment_philosophy":
+                return ("sell", "保住本金是第一原则，建议卖出", 0.60)
+
+            if signal_confidence >= 0.6:
+                return ("sell", "卖出信号明确，建议执行", 0.65)
+            return ("hold", "卖出信号偏弱，可再观察", 0.40)
+
+        # 非买卖方向
+        return ("hold", "当前信号方向不明，建议观望", 0.30)

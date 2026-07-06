@@ -320,6 +320,35 @@ def create_app() -> FastAPI:
         risk.reset()
         return {"success": True, "message": "L2 熔断已手动解除"}
 
+    @app.post("/api/stop_loss/{symbol}")
+    async def stop_loss(symbol: str) -> dict[str, Any]:
+        """手动触发指定持仓的止损卖出。"""
+        broker = _get_web_broker()
+        try:
+            position = broker.get_position(symbol)
+            if position is None or position.quantity <= 0:
+                return {
+                    "status": "error",
+                    "message": f"未找到 {symbol} 的持仓",
+                }
+            quantity = position.quantity
+            result = broker.order(symbol, "sell", quantity, price=None)
+            if result.success:
+                return {
+                    "status": "ok",
+                    "symbol": symbol,
+                    "sold": result.quantity,
+                    "price": round(result.price, 2),
+                }
+            return {
+                "status": "error",
+                "symbol": symbol,
+                "message": result.message or "卖出下单失败",
+            }
+        except Exception as e:
+            logger.error(f"止损卖出 {symbol} 失败: {e}")
+            return {"status": "error", "message": str(e)}
+
     @app.post("/api/engine/run")
     async def trigger_engine_run() -> dict[str, Any]:
         """触发一次交易循环。"""

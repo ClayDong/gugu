@@ -31,6 +31,12 @@ import pandas as pd
 from gugu import config as gugu_config
 from gugu.analysis.danger_signal import DangerSignalDetector
 from gugu.analysis.no_average_down import NoAverageDownChecker
+from gugu.analysis.perspectives.data_types import StockDataContext
+from gugu.analysis.perspectives.engine import PerspectiveEngine
+from gugu.analysis.perspectives.integrators import (
+    attach_perspective_to_signal,
+    build_context_from_signal,
+)
 from gugu.analysis.position_controller import PositionBudget, PositionController
 from gugu.analysis.regime_detector import MultiPeriodRegimeDetector
 from gugu.analysis.sector_rotation import SectorRotation
@@ -94,6 +100,23 @@ class SignalPipeline:
         self._danger_detector = DangerSignalDetector()
         self._no_avg_down_checker = NoAverageDownChecker()
         self._divergence_detector = DivergenceDetector()
+
+        # 十大视角过滤引擎（可选，由配置控制）
+        self._perspective_engine: PerspectiveEngine | None = None
+        self._scan_with_perspectives = False
+        self._perspective_min_composite = 6.0
+        self._perspective_min_single = 4.0
+        try:
+            cfg = gugu_config.get_config()
+            if cfg.perspective.enabled and cfg.perspective.scan_with_perspectives:
+                self._perspective_engine = PerspectiveEngine()
+                self._scan_with_perspectives = True
+                self._perspective_min_composite = cfg.perspective.pass_threshold
+                self._perspective_min_single = cfg.perspective.min_perspective_score
+                logger.info("十大视角过滤已启用 (综合≥%.1f, 单项≥%.1f)",
+                            self._perspective_min_composite, self._perspective_min_single)
+        except Exception as e:
+            logger.debug(f"十大视角引擎初始化跳过: {e}")
 
     async def process(
         self,
@@ -298,6 +321,21 @@ class SignalPipeline:
                 except Exception as e:
                     logger.warning(f"signal_only Wisdom fallback 失败 {symbol}: {e}")
                     signal["llm_pending"] = False
+                # signal_only 模式：附加视角评分数据（不过滤，仅用于通知卡片展示）
+                if self._scan_with_perspectives:
+                    try:
+                        ctx = build_context_from_signal(signal)
+                        result = self._perspective_engine.analyze(ctx)  # type: ignore[union-attr]
+                        attach_perspective_to_signal(signal, result)
+                        signal["perspective_check"] = {
+                            "composite_score": result.composite_score,
+                            "min_score": result.min_score,
+                            "passed": result.passed,
+                            "fatal_count": result.fatal_count,
+                            "verdict": result.overall_verdict,
+                        }
+                    except Exception as e:
+                        logger.debug(f"signal_only 视角分析失败 {symbol}: {e}")
                 logger.info(
                     f"信号(仅通知): {signal['symbol']} {signal['direction']} "
                     f"置信度 {signal['confidence']} 策略 {signal['strategies']} "
@@ -306,6 +344,41 @@ class SignalPipeline:
                 return signal
 
             # ===== 以下为 paper/live 模式完整过滤链 =====
+
+            # 3.6 十大视角质量门禁（基于认知评分过滤低质量信号）
+            # 只在非 signal_only 模式下生效：综合评分低于阈值或有致命缺陷的信号被拦截
+            if self._scan_with_perspectives and not signal.get("wisdom_filtered"):
+                try:
+                    ctx = build_context_from_signal(signal)
+                    result = self._perspective_engine.analyze(ctx)  # type: ignore[union-attr]
+                    # 将视角结果附加到信号（用于通知卡片和历史记录）
+                    attach_perspective_to_signal(signal, result)
+                    signal["perspective_check"] = {
+                        "composite_score": result.composite_score,
+                        "min_score": result.min_score,
+                        "passed": result.passed,
+                        "fatal_count": result.fatal_count,
+                        "verdict": result.overall_verdict,
+                    }
+                    if not result.passed:
+                        logger.info(
+                            f"{symbol} 视角过滤: 综合{result.composite_score:.1f} "
+                            f"最低{result.min_score:.1f} 致命{result.fatal_count}条 — {result.overall_verdict}"
+                        )
+                        if result.fatal_count > 0:
+                            signal["wisdom_filtered"] = True
+                            signal["filter_reason"] = (
+                                f"视角过滤: {result.overall_verdict} "
+                                f"(致命{result.fatal_count}条/最低{result.min_score:.1f})"
+                            )
+                    else:
+                        logger.debug(
+                            f"{symbol} 视角通过: 综合{result.composite_score:.1f} "
+                            f"最低{result.min_score:.1f}"
+                        )
+                except Exception as e:
+                    logger.debug(f"视角质量检查失败 {symbol}: {e}")
+                    # 检查失败不影响信号
 
             # 1. 基本面过滤（仅买入信号）
             if signal["direction"] == "buy":
@@ -653,6 +726,20 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "result": "allowed" if ind_info.get("allowed") else "blocked",
                 "reason": ind_info.get("reason", ""),
                 "passed": ind_info.get("allowed", True),
+            })
+
+        persp_info = signal.get("perspective_check", {})
+        if persp_info:
+            decision_chain.append({
+                "step": 3.6,
+                "name": "十大视角质量门禁",
+                "result": f"综合{persp_info.get('composite_score', 0):.1f} "
+                         f"最低{persp_info.get('min_score', 0):.1f}",
+                "composite_score": persp_info.get("composite_score", 0),
+                "min_score": persp_info.get("min_score", 0),
+                "fatal_count": persp_info.get("fatal_count", 0),
+                "verdict": persp_info.get("verdict", ""),
+                "passed": persp_info.get("passed", True),
             })
 
         wisdom_dec = signal.get("wisdom_decision", {})

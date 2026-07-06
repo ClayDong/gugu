@@ -61,10 +61,11 @@ class MultiPeriodRegimeDetector:
     - 成交量验证
     """
 
-    def __init__(self) -> None:
+    def __init__(self, enhancer: Any = None) -> None:
         self._dm = data_manager()
         self._cache: dict[str, Any] = {}
         self._cache_date: str = ""
+        self._enhancer = enhancer
 
     async def detect(self) -> dict[str, Any]:
         """检测当前市场状态并返回总仓位建议。"""
@@ -194,6 +195,32 @@ class MultiPeriodRegimeDetector:
                 ),
             }
 
+            # ── 宏观数据增强 ──
+            if self._enhancer is not None:
+                try:
+                    enhanced = await self._enhancer.enhance(result)
+                    macro_adj = enhanced.get("macro_adjustment", {})
+                    score_delta = macro_adj.get("score_delta", 0.0)
+
+                    if score_delta != 0:
+                        result["score"] = round(result["score"] + score_delta, 3)
+                        result["regime"] = self._determine_regime_from_score(
+                            result["score"], result["volatility"], result["recent_return"]
+                        )
+                        result["total_position_limit"] = POSITION_LIMIT_MAP[result["regime"]]
+                        result["buy_signal_allowed"] = result["regime"] not in ("crash",)
+                        result["sell_signal_required"] = result["regime"] in ("bear", "crash")
+                        result["confidence"] = abs(result["score"])
+
+                    macro_reasons = macro_adj.get("reasons", [])
+                    if macro_reasons:
+                        result["reason"] += "；" + "；".join(macro_reasons)
+
+                    result["macro_adjustment"] = macro_adj
+
+                except Exception as e:
+                    logger.warning(f"宏观数据增强失败: {e}")
+
             self._cache = result
             self._cache_date = today
             return result
@@ -201,6 +228,18 @@ class MultiPeriodRegimeDetector:
         except Exception as e:
             logger.error(f"多周期择时检测失败: {e}")
             return self._fallback()
+
+    async def detect_with_macro(self) -> dict[str, Any]:
+        """便捷方法：带宏观数据增强的市场状态检测。
+
+        自动创建 MacroRegimeEnhancer（若尚未配置），然后调用 detect()。
+        返回增强后的结果。
+        """
+        if self._enhancer is None:
+            from gugu.analysis.macro_regime_enhancer import MacroRegimeEnhancer
+
+            self._enhancer = MacroRegimeEnhancer()
+        return await self.detect()
 
     def _analyze_period(
         self, df: pd.DataFrame, period: str, ma_configs: list[tuple[str, int]]
@@ -281,6 +320,21 @@ class MultiPeriodRegimeDetector:
                 f"{period_cn.get(ev.period, ev.period)}{signal_cn.get(ev.signal, ev.signal)}(强度{ev.strength:.2f})"
             )
         return "；".join(parts)
+
+    @staticmethod
+    def _determine_regime_from_score(
+        score: float, volatility: float, recent_return: float
+    ) -> str:
+        """根据评分、波动率和收益率确定市场状态。"""
+        if recent_return < -0.50 and volatility > 0.40:
+            return "crash"
+        if recent_return > 0.50 and volatility > 0.30:
+            return "rally"
+        if score > 0.3:
+            return "bull"
+        if score < -0.3:
+            return "bear"
+        return "sideways"
 
     def _fallback(self) -> dict[str, Any]:
         """安全降级：数据获取失败时返回保守设置。"""

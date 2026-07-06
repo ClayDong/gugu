@@ -13,6 +13,7 @@
     uv run python scripts/backtest_all_strategies.py
     uv run python scripts/backtest_all_strategies.py --max-stocks 100  # 限制股票数（调试用）
     uv run python scripts/backtest_all_strategies.py --days 200 --workers 10
+    uv run python scripts/backtest_all_strategies.py --max-stocks 100 --report  # 回测后生成报告
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from datetime import date
 from pathlib import Path
 
 import akshare as ak
+import numpy as np
 import pandas as pd
 
 from gugu.backtest import BacktestEngine
@@ -40,6 +42,12 @@ logger = get_logger()
 _STOCK_CONCURRENCY = 10  # 数据获取并发度
 _KLINE_TIMEOUT = 15      # 单股 K 线获取超时秒
 _MIN_DATA_DAYS = 100     # 最少数据天数（不足跳过）
+
+# 需要计算分布统计的指标
+_DISTRIBUTION_METRICS = [
+    "total_return", "annual_return", "sharpe", "max_drawdown",
+    "win_rate", "profit_factor", "total_trades", "avg_hold_days",
+]
 
 
 def get_enabled_strategies() -> list[str]:
@@ -125,17 +133,25 @@ async def run_batch_backtest(
     symbols: list[str],
     strategies: list[str],
     days: int,
-) -> dict[str, list[dict]]:
-    """批量回测，返回 {策略名: [metrics_dict, ...]}。"""
+) -> tuple[dict[str, list[dict]], dict[str, dict[str, dict]]]:
+    """批量回测，返回 (per_strategy_metrics, per_symbol_metrics)。
+
+    Returns:
+        tuple:
+            - per_strategy_metrics: {策略名: [metrics_dict, ...]}
+            - per_symbol_metrics: {symbol: {策略名: {metrics字段: 值}}}
+    """
     # 每个策略一个结果列表
     all_results: dict[str, list[dict]] = {s: [] for s in strategies}
+    # 每只股票每个策略的结果
+    per_symbol_results: dict[str, dict[str, dict]] = {}
     engine = BacktestEngine()
 
     sem = asyncio.Semaphore(_STOCK_CONCURRENCY)
 
-    async def _one(symbol: str) -> dict[str, dict]:
+    async def _one(symbol: str) -> tuple[str, dict[str, dict]]:
         async with sem:
-            return await backtest_one_stock(symbol, strategies, days, engine)
+            return symbol, await backtest_one_stock(symbol, strategies, days, engine)
 
     tasks = [_one(sym) for sym in symbols]
     total = len(tasks)
@@ -143,10 +159,14 @@ async def run_batch_backtest(
     t0 = time.time()
 
     for coro in asyncio.as_completed(tasks):
-        result = await coro
+        symbol, result = await coro
+        per_symbol_results[symbol] = {}
         for strategy_name, metrics in result.items():
             if metrics:
                 all_results[strategy_name].append(metrics)
+                per_symbol_results[symbol][strategy_name] = metrics
+            else:
+                per_symbol_results[symbol][strategy_name] = {}
         completed += 1
         if completed % 50 == 0 or completed == total:
             elapsed = time.time() - t0
@@ -159,22 +179,16 @@ async def run_batch_backtest(
                 f"ETA: {eta/60:.1f}分钟"
             )
 
-    return all_results
+    return all_results, per_symbol_results
 
 
 def aggregate_metrics(results: list[dict]) -> dict:
-    """聚合单策略多股的 metrics，输出统计摘要。"""
+    """聚合单策略多股的 metrics，输出统计摘要（含分布原始值）。"""
     if not results:
         return {}
 
-    # 提取每个指标
-    metric_keys = [
-        "total_return", "annual_return", "sharpe", "max_drawdown",
-        "win_rate", "profit_factor", "total_trades", "avg_hold_days",
-    ]
-
     summary = {}
-    for key in metric_keys:
+    for key in _DISTRIBUTION_METRICS:
         values = [r.get(key, 0.0) for r in results if r.get(key) is not None]
         if not values:
             summary[key] = {"mean": 0, "median": 0, "std": 0, "n": 0}
@@ -184,9 +198,12 @@ def aggregate_metrics(results: list[dict]) -> dict:
             "mean": float(series.mean()),
             "median": float(series.median()),
             "std": float(series.std()),
+            "p25": float(series.quantile(0.25)),
+            "p75": float(series.quantile(0.75)),
             "min": float(series.min()),
             "max": float(series.max()),
             "n": len(values),
+            "raw_values": values,  # 保留原始值，用于 t 检验和分布分析
         }
 
     # 额外统计
@@ -194,6 +211,7 @@ def aggregate_metrics(results: list[dict]) -> dict:
     summary["_win_rate_mean"] = summary.get("win_rate", {}).get("mean", 0)
     summary["_return_mean"] = summary.get("total_return", {}).get("mean", 0)
     summary["_sharpe_mean"] = summary.get("sharpe", {}).get("mean", 0)
+    summary["_sharpe_median"] = summary.get("sharpe", {}).get("median", 0)
     summary["_max_dd_mean"] = summary.get("max_drawdown", {}).get("mean", 0)
     # 盈利股比例
     profitable = sum(1 for r in results if r.get("total_return", 0) > 0)
@@ -207,22 +225,22 @@ def print_report(
     days: int,
     elapsed: float,
 ) -> None:
-    """打印对比报告。"""
+    """打印对比报告（含分布统计 p25/p75）。"""
     print()
-    print("=" * 110)
+    print("=" * 130)
     print(f"全市场策略回测对比报告 — {date.today()}")
     print(f"股票数: {n_stocks} | 回测天数: {days} | 耗时: {elapsed/60:.1f} 分钟")
-    print("=" * 110)
+    print("=" * 130)
 
     # 表头
     print(
-        f"{'策略':<25}{'样本':<8}{'总收益%':<12}{'年化%':<12}"
+        f"{'策略':<25}{'样本':<8}{'总收益%':<20}{'年化%':<12}"
         f"{'夏普':<10}{'最大回撤%':<12}{'胜率%':<10}"
-        f"{'盈利比%':<10}{'平均交易':<10}{'持仓天数':<10}"
+        f"{'盈亏比':<10}{'交易次':<8}{'持仓天':<8}"
     )
-    print("-" * 110)
+    print("-" * 130)
 
-    # 按"总收益"排序
+    # 按总收益排序
     sorted_strategies = sorted(
         all_summaries.items(),
         key=lambda x: x[1].get("_return_mean", 0),
@@ -247,24 +265,26 @@ def print_report(
 
         print(
             f"{name:<25}{n:<8}"
-            f"{ret.get('mean', 0)*100:+.2f}/M{ret.get('median', 0)*100:+.2f}    "
-            f"{ann.get('mean', 0)*100:+.2f}    "
+            f"{ret.get('mean', 0)*100:+.2f}% "
+            f"[P25:{ret.get('p25', 0)*100:+.2f} "
+            f"P75:{ret.get('p75', 0)*100:+.2f}]  "
+            f"{ann.get('mean', 0)*100:+.2f}%    "
             f"{sharpe.get('mean', 0):.2f}      "
-            f"{dd.get('mean', 0)*100:.2f}      "
-            f"{wr.get('mean', 0)*100:.1f}      "
-            f"{summary.get('_profitable_ratio', 0)*100:.0f}        "
-            f"{tt.get('mean', 0):.0f}        "
+            f"{dd.get('mean', 0)*100:.2f}%      "
+            f"{wr.get('mean', 0)*100:.1f}%      "
+            f"{pf.get('mean', 0):.2f}    "
+            f"{tt.get('mean', 0):.0f}      "
             f"{hd.get('mean', 0):.1f}"
         )
 
     print()
-    print("说明: M=中位数, 盈利比=正收益股票占比")
+    print("说明: [P25 P75] 为收益分布的 25%/75% 分位数")
     print()
 
     # 策略间对比结论
-    print("=" * 110)
+    print("=" * 130)
     print("策略评估结论")
-    print("=" * 110)
+    print("=" * 130)
     if not sorted_strategies:
         print("无数据")
         return
@@ -275,6 +295,7 @@ def print_report(
     print(f"最佳策略: {best_name}")
     print(f"  总收益均值: {best_summary.get('_return_mean', 0)*100:+.2f}%")
     print(f"  夏普均值: {best_summary.get('_sharpe_mean', 0):.2f}")
+    print(f"  夏普中位数: {best_summary.get('_sharpe_median', 0):.2f}")
     print(f"  胜率均值: {best_summary.get('_win_rate_mean', 0)*100:.1f}%")
     print(f"  盈利比: {best_summary.get('_profitable_ratio', 0)*100:.0f}%")
     print()
@@ -313,7 +334,7 @@ async def main_async(args: argparse.Namespace) -> None:
 
     # 3. 批量回测
     logger.info(f"开始批量回测: {len(symbols)} 只股票 × {len(strategies)} 策略 × {args.days} 天")
-    all_results = await run_batch_backtest(symbols, strategies, args.days)
+    all_results, per_symbol_results = await run_batch_backtest(symbols, strategies, args.days)
 
     # 4. 汇总
     all_summaries = {}
@@ -324,22 +345,67 @@ async def main_async(args: argparse.Namespace) -> None:
     elapsed = time.time() - t0
     print_report(all_summaries, len(symbols), args.days, elapsed)
 
-    # 6. 保存 JSON
-    if args.output:
-        output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        full_data = {
-            "date": str(date.today()),
-            "n_stocks": len(symbols),
-            "days": args.days,
-            "elapsed_sec": elapsed,
-            "strategies": all_summaries,
-        }
-        output_path.write_text(
-            json.dumps(full_data, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
-        )
-        logger.info(f"报告已保存: {output_path}")
+    # 6. 保存 JSON 到 docs/ 目录
+    today_str = str(date.today())
+    json_path = args.output or f"docs/backtest_results_{today_str}.json"
+    output_path = Path(json_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 构建聚合输出数据（过滤掉过大的 raw_values 以减小文件体积）
+    output_strategies = {}
+    for strategy_name, summary in all_summaries.items():
+        filtered = {}
+        for k, v in summary.items():
+            if isinstance(v, dict) and "raw_values" in v:
+                d = dict(v)
+                d["raw_values"] = v["raw_values"][:1000] if len(v["raw_values"]) > 1000 else v["raw_values"]
+                filtered[k] = d
+            else:
+                filtered[k] = v
+        output_strategies[strategy_name] = filtered
+
+    full_data = {
+        "date": today_str,
+        "n_stocks": len(symbols),
+        "days": args.days,
+        "elapsed_sec": elapsed,
+        "strategies": output_strategies,
+    }
+    output_path.write_text(
+        json.dumps(full_data, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    logger.info(f"回测结果已保存: {output_path}")
+
+    # 6b. 保存 per-symbol JSON（详细原始数据）
+    per_symbol_path = Path(f"docs/backtest_raw_{today_str}.json")
+    per_symbol_data = {
+        "date": today_str,
+        "n_stocks": len(symbols),
+        "days": args.days,
+        "elapsed_sec": elapsed,
+        "strategies": strategies,
+        "results": per_symbol_results,
+    }
+    per_symbol_path.write_text(
+        json.dumps(per_symbol_data, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    logger.info(f"逐股票原始结果已保存: {per_symbol_path}")
+
+    # 7. 报告生成（如果指定 --report）
+    if args.report:
+        try:
+            from scripts.backtest_report import generate_markdown_report, save_report
+
+            report_md = generate_markdown_report(full_data)
+            report_path = f"docs/backtest_report_{today_str}.md"
+            save_report(report_md, report_path)
+            logger.info(f"对比报告已生成: {report_path}")
+        except ImportError as e:
+            logger.warning(f"报告生成模块导入失败: {e}，跳过报告生成")
+        except Exception as e:
+            logger.warning(f"报告生成失败: {e}，跳过")
 
 
 def main() -> None:
@@ -347,7 +413,8 @@ def main() -> None:
     parser.add_argument("--max-stocks", type=int, default=None, help="限制股票数（调试用）")
     parser.add_argument("--days", type=int, default=200, help="回测历史天数")
     parser.add_argument("--strategies", type=str, default=None, help="逗号分隔的策略名，空则用 settings.yaml")
-    parser.add_argument("--output", type=str, default="data/backtest_report.json", help="输出 JSON 路径")
+    parser.add_argument("--output", type=str, default=None, help="输出 JSON 路径（默认: docs/backtest_results_YYYY-MM-DD.json）")
+    parser.add_argument("--report", action="store_true", help="回测完成后自动生成 Markdown 对比报告到 docs/ 目录")
     args = parser.parse_args()
     asyncio.run(main_async(args))
 

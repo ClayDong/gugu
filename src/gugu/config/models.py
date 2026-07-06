@@ -130,6 +130,20 @@ class ExecutionConfig(BaseModel):
         return self.live.confirm_required
 
 
+class SignalAggregationConfig(BaseModel):
+    """信号聚合配置 — 降低飞书通知疲劳.
+
+    Attributes:
+        min_interval_minutes: 同一只股票两次信号的最小间隔（分钟）。
+        max_daily_signals: 单只股票每日信号上限。
+        batch_direction_signals: 是否将同一方向的信号批量合并为一张卡片。
+    """
+
+    min_interval_minutes: int = Field(default=30, ge=5, description="同股最小通知间隔（分钟）")
+    max_daily_signals: int = Field(default=10, ge=1, le=100, description="单股每日信号上限")
+    batch_direction_signals: bool = Field(default=True, description="同方向信号批量聚合")
+
+
 class FeishuConfig(BaseModel):
     """飞书通知配置."""
 
@@ -143,6 +157,10 @@ class FeishuConfig(BaseModel):
         default_factory=lambda: ["09:10", "11:35", "15:10"],
         description="日报推送时段",
         alias="report_times",
+    )
+    signal_aggregation: SignalAggregationConfig = Field(
+        default_factory=SignalAggregationConfig,
+        description="信号聚合配置",
     )
 
     model_config = {"populate_by_name": True}
