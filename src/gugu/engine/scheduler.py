@@ -220,7 +220,10 @@ class TradingScheduler:
             logger.debug(f"通知重试异常: {e}")
 
     async def _safe_screener(self) -> None:
-        """安全执行尾盘选股（非交易日跳过）。"""
+        """安全执行尾盘选股（非交易日跳过）。
+
+        P0 修复：异常时也发送错误通知（避免静默失败，用户不知情）。
+        """
         if not is_trading_day():
             return
         try:
@@ -247,9 +250,17 @@ class TradingScheduler:
             await self._engine._notifier.notify_screener(results, total)
         except Exception as e:
             logger.exception(f"尾盘选股异常: {e}")
+            # P0 修复：异常时也通知用户（避免静默失败）
+            try:
+                await self._engine._notifier.notify_screener([], 0)
+            except Exception as notify_err:
+                logger.error(f"尾盘选股异常通知发送失败: {notify_err}")
 
     async def _safe_validate_screener(self) -> None:
-        """安全执行尾盘选股次日验证（非交易日跳过）。"""
+        """安全执行尾盘选股次日验证（非交易日跳过）。
+
+        P0 修复：无结果时也通知用户"昨日无选股记录"（避免静默）。
+        """
         if not is_trading_day():
             return
         try:
@@ -270,6 +281,8 @@ class TradingScheduler:
                 await self._engine._notifier.notify_screener_validation(results)
             else:
                 logger.info("尾盘验证: 无结果（昨日无选股记录或行情获取失败）")
+                # P0 修复：无结果也通知，告知用户系统正常运行但昨日无选股
+                await self._engine._notifier.notify_screener_validation([])
         except Exception as e:
             logger.exception(f"尾盘选股验证异常: {e}")
 

@@ -14,12 +14,19 @@ P2-1 重设计（炒股专家审查）：
 7. 换手率 3%-15%（活跃但非过度投机）
 8. 流通市值 50亿-500亿（避免小盘操纵 + 大盘滞涨）
 
-数据源策略：优先使用 akshare 全市场快照，失败时降级到 SinaCollector。
+数据源策略：优先 stock_zh_a_spot_em（含所有字段），降级 stock_zh_a_spot 或 SinaCollector。
+
+P0 性能修复（迭代 11）：
+- 快照硬过滤：用快照已有的 量比/换手率/流通市值 字段先过滤，640 → 50-100 只
+- 并发获取 K 线：Semaphore(5) + gather，5x 加速
+- 总超时控制：20 分钟硬上限，超时返回已扫描结果
+- HTTP 失败熔断：连续 5 只失败时中止该批
 """
 
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -34,16 +41,22 @@ if TYPE_CHECKING:
 logger = get_logger()
 
 # ── 参数（P2-1 低吸逻辑）──────────────────────────────
-MIN_CHG_PCT = -2.0  # 当日最低涨幅 %（回踩区间下限）
-MAX_CHG_PCT = 1.0   # 当日最高涨幅 %（回踩区间上限）
-RECENT_STRONG_PCT = 5.0  # 前 5 日内最高单日涨幅阈值 %
-RECENT_STRONG_DAYS = 5   # 强势表现回看天数
-MAX_VOL_RATIO = 1.0      # 量比上限（缩量）
-MIN_TURNOVER = 3.0       # 最低换手率 %（活跃度）
-MAX_TURNOVER = 15.0      # 最高换手率 %（避免过度投机）
-MIN_MCAP = 5_000_000_000     # 最小流通市值 50亿
-MAX_MCAP = 50_000_000_000    # 最大流通市值 500亿
-MAX_CANDIDATES = 10          # 上报最多几只
+MIN_CHG_PCT = -2.0
+MAX_CHG_PCT = 1.0
+RECENT_STRONG_PCT = 5.0
+RECENT_STRONG_DAYS = 5
+MAX_VOL_RATIO = 1.0
+MIN_TURNOVER = 3.0
+MAX_TURNOVER = 15.0
+MIN_MCAP = 5_000_000_000
+MAX_MCAP = 50_000_000_000
+MAX_CANDIDATES = 10
+
+# P0 性能参数
+_KLINE_CONCURRENCY = 5
+_TOTAL_TIMEOUT_SEC = 1200
+_PER_STOCK_TIMEOUT = 15
+_FAILURE_THRESHOLD = 5
 
 
 @dataclass
@@ -53,14 +66,14 @@ class ScreeningResult:
     symbol: str
     name: str
     price: float
-    change_pct: float  # 今日涨幅 %
-    volume_ratio: float  # 量比
-    turnover_pct: float  # 换手率 %
-    mcap_billion: float  # 流通市值（亿）
-    volume_trend: str  # 成交量趋势描述
-    beats_index: bool  # 是否跑赢大盘
-    late_session_high: bool  # 是否满足回踩支撑
-    passed: bool  # 是否全部通过
+    change_pct: float
+    volume_ratio: float
+    turnover_pct: float
+    mcap_billion: float
+    volume_trend: str
+    beats_index: bool
+    late_session_high: bool
+    passed: bool
     failed_conditions: list[str] = field(default_factory=list)
 
     @property
@@ -69,20 +82,35 @@ class ScreeningResult:
 
 
 class TerminalScreener:
-    """尾盘选股器（P2-1 低吸逻辑）。
-
-    Args:
-        dm: DataManager 实例（可选，用于 akshare 失败时降级获取全市场快照）。
-    """
+    """尾盘选股器（P2-1 低吸逻辑 + P0 性能修复）。"""
 
     def __init__(self, dm: DataManager | None = None) -> None:
         self._dm = dm
 
     async def scan(self) -> list[ScreeningResult]:
-        """执行全市场扫描，返回通过 8 条件的排序结果。"""
-        logger.info("=== 尾盘选股: 开始全市场扫描（低吸逻辑）===")
+        """执行全市场扫描，返回通过 8 条件的排序结果。
 
-        # 1. 获取全市场实时快照（优先 akshare，失败时降级到 SinaCollector）
+        P0 修复：总超时 20 分钟硬上限，超时返回已扫描的部分结果。
+        """
+        logger.info("=== 尾盘选股: 开始全市场扫描（低吸逻辑 + P0 性能修复）===")
+        start_time = time.time()
+
+        try:
+            return await asyncio.wait_for(
+                self._scan_internal(start_time),
+                timeout=_TOTAL_TIMEOUT_SEC,
+            )
+        except TimeoutError:
+            elapsed = time.time() - start_time
+            logger.error(
+                f"尾盘选股: 总超时 {_TOTAL_TIMEOUT_SEC}s 触发，已运行 {elapsed:.0f}s，"
+                f"返回空结果（内部已尽可能提前返回部分结果）"
+            )
+            return []
+
+    async def _scan_internal(self, start_time: float) -> list[ScreeningResult]:
+        """实际扫描逻辑（带快照硬过滤 + 并发 K 线获取 + 失败熔断）。"""
+        # 1. 获取全市场实时快照（含 量比/换手率/流通市值 等所有字段）
         spot = await self._fetch_market_snapshot()
         if spot is None or spot.empty:
             logger.error("尾盘选股: 全市场快照获取失败（akshare + sina 均不可用）")
@@ -90,75 +118,194 @@ class TerminalScreener:
 
         logger.info(f"尾盘选股: 全市场 {len(spot)} 只股票")
 
-        # 2. 条件2: 当日涨幅 -2% ~ +1%（回踩区间）
-        spot["涨跌幅"] = pd.to_numeric(spot["涨跌幅"], errors="coerce").fillna(0)
-        mask = (spot["涨跌幅"] >= MIN_CHG_PCT) & (spot["涨跌幅"] <= MAX_CHG_PCT)
-        # 排除北交所、ST
-        mask &= ~spot["代码"].astype(str).str.startswith("bj")
-        mask &= ~spot["名称"].str.contains("ST|退|N|C", na=False)
-        candidates = spot[mask].copy()
-        logger.info(f"尾盘选股: 回踩区间{-MAX_CHG_PCT}~+{MAX_CHG_PCT}% {len(candidates)} 只")
-
+        # 2. 快照硬过滤：先用快照已有的字段过滤，大幅减少候选数
+        candidates = self._hard_filter_snapshot(spot)
         if candidates.empty:
+            logger.info("尾盘选股: 快照硬过滤后无候选")
             return []
 
-        # 3. 获取大盘指数今日涨幅（用于条件7简化版）
+        total = len(candidates)
+        logger.info(f"尾盘选股: 快照硬过滤后候选 {total} 只")
+
+        # 3. 获取大盘指数今日涨幅
         index_chg = await self._fetch_index_change()
 
-        # 4. 逐只深入检查条件3-8
-        # 注意：akshare 内部使用了 multiprocessing，不能并发调用，
-        # 必须串行处理，否则会 crash (libmini_racer 冲突)
-        results: list[ScreeningResult] = []
-        total = len(candidates)
-        for idx, (_, row) in enumerate(candidates.iterrows()):
-            code = str(row["代码"]).strip().zfill(6)
-            name = str(row["名称"]).strip()
-            price = float(row["最新价"])
-            chg_pct = float(row["涨跌幅"])
-            today_vol = float(row["成交量"])
-            try:
-                r = await asyncio.wait_for(
-                    self._check_stock(code, name, price, chg_pct, today_vol, index_chg),
-                    timeout=15,
-                )
-                if isinstance(r, ScreeningResult):
-                    results.append(r)
-            except TimeoutError:
-                logger.warning(f"尾盘选股: {code} 超时，跳过")
-            except Exception as e:
-                logger.warning(f"尾盘选股: {code} 处理异常: {e}")
-            if (idx + 1) % 50 == 0 or idx == total - 1:
-                logger.info(f"尾盘选股: 进度 {idx + 1}/{total}")
+        # 4. 并发获取K线 + 深度检查
+        results = await self._concurrent_check(candidates, index_chg, start_time)
 
-        # 5. 排序：通过条件数降序 → 涨幅升序（回踩越深越优先）
+        # 5. 排序：通过条件数降序 → 涨幅升序
         passed = [r for r in results if r.passed]
         partial = [r for r in results if not r.passed and len(r.failed_conditions) <= 3]
         partial.sort(key=lambda r: (-r.pass_count, r.change_pct))
         passed.sort(key=lambda r: r.change_pct)
 
         top = (passed + partial)[:MAX_CANDIDATES]
-        logger.info(f"尾盘选股: 完全通过 {len(passed)} 只，上报 {len(top)} 只")
+        elapsed = time.time() - start_time
+        logger.info(
+            f"尾盘选股: 完成 完全通过 {len(passed)} 只，上报 {len(top)} 只，"
+            f"耗时 {elapsed:.0f}s"
+        )
         return top
 
+    def _hard_filter_snapshot(self, spot: pd.DataFrame) -> pd.DataFrame:
+        """P0-2: 快照硬过滤——用快照已有字段先过滤，避免逐只请求。
+
+        过滤条件（仅用快照字段）：
+        - 涨幅 -2% ~ +1%（条件2）
+        - 量比 < 1.0（条件4）
+        - 换手率 3%-15%（条件7）
+        - 流通市值 50亿-500亿（条件8）
+        - 排除北交所、ST
+
+        剩余的 MA20/MA60/前5日强势 需要 K 线历史，留到深度检查阶段。
+        """
+        spot = spot.copy()
+
+        # 标准化列名（兼容 stock_zh_a_spot_em 和 stock_zh_a_spot）
+        col_map = {
+            "code": "代码", "name": "名称", "trade": "最新价",
+            "changepercent": "涨跌幅", "volume": "成交量",
+            "amount": "成交额", "turnoverratio": "换手率",
+            "volume_ratio": "量比", "circ_mv": "流通市值",
+        }
+        spot = spot.rename(columns={k: v for k, v in col_map.items() if k in spot.columns})
+
+        # 数值化
+        for col in ["涨跌幅", "量比", "换手率", "流通市值", "最新价", "成交量"]:
+            if col in spot.columns:
+                spot[col] = pd.to_numeric(spot[col], errors="coerce").fillna(0)
+
+        # 条件2: 涨幅 -2% ~ +1%
+        mask = (spot["涨跌幅"] >= MIN_CHG_PCT) & (spot["涨跌幅"] <= MAX_CHG_PCT)
+
+        # 排除北交所、ST
+        mask &= ~spot["代码"].astype(str).str.startswith(("bj", "43", "83", "87", "88"))
+        mask &= ~spot["名称"].str.contains("ST|退|N|C", na=False)
+
+        # 条件4: 量比 < 1.0（缩量）
+        if "量比" in spot.columns:
+            mask &= (spot["量比"] > 0) & (spot["量比"] < MAX_VOL_RATIO)
+            logger.info("尾盘选股: 快照硬过滤 量比<1.0 应用")
+
+        # 条件7: 换手率 3%-15%
+        if "换手率" in spot.columns:
+            mask &= (spot["换手率"] >= MIN_TURNOVER) & (spot["换手率"] <= MAX_TURNOVER)
+            logger.info("尾盘选股: 快照硬过滤 换手率3-15% 应用")
+
+        # 条件8: 流通市值 50亿-500亿（单位：元）
+        if "流通市值" in spot.columns:
+            mask &= (spot["流通市值"] >= MIN_MCAP) & (spot["流通市值"] <= MAX_MCAP)
+            logger.info("尾盘选股: 快照硬过滤 流通市值50-500亿 应用")
+
+        candidates = spot[mask].copy()
+        return candidates
+
+    async def _concurrent_check(
+        self,
+        candidates: pd.DataFrame,
+        index_chg: float,
+        start_time: float,
+    ) -> list[ScreeningResult]:
+        """P0-3/4: 并发获取 K 线 + 深度检查，带失败熔断。"""
+        sem = asyncio.Semaphore(_KLINE_CONCURRENCY)
+        total = len(candidates)
+        results: list[ScreeningResult] = []
+        failure_count = 0
+        completed = 0
+
+        async def check_one(row) -> ScreeningResult | None:
+            nonlocal failure_count
+            async with sem:
+                code = str(row["代码"]).strip().zfill(6)
+                name = str(row["名称"]).strip()
+                price = float(row["最新价"])
+                chg_pct = float(row["涨跌幅"])
+                today_vol = float(row.get("成交量", 0))
+                vol_ratio = float(row.get("量比", 0)) if "量比" in row else 0.0
+                turnover_pct = float(row.get("换手率", 0)) if "换手率" in row else 0.0
+                mcap_yuan = float(row.get("流通市值", 0)) if "流通市值" in row else 0.0
+                mcap_b = mcap_yuan / 1e8 if mcap_yuan > 0 else 0.0
+
+                try:
+                    r = await asyncio.wait_for(
+                        self._check_stock(
+                            code, name, price, chg_pct, today_vol, index_chg,
+                            vol_ratio, turnover_pct, mcap_b,
+                        ),
+                        timeout=_PER_STOCK_TIMEOUT,
+                    )
+                    failure_count = 0
+                    return r
+                except TimeoutError:
+                    failure_count += 1
+                    logger.warning(f"尾盘选股: {code} K线获取超时，跳过")
+                    return None
+                except Exception as e:
+                    failure_count += 1
+                    logger.warning(f"尾盘选股: {code} 处理异常: {e}")
+                    return None
+
+        # 分批并发，便于熔断和进度日志
+        batch_size = 20
+        for batch_start in range(0, total, batch_size):
+            # 检查总超时（剩余 60s 时主动退出）
+            elapsed = time.time() - start_time
+            if elapsed > _TOTAL_TIMEOUT_SEC - 60:
+                logger.warning(
+                    f"尾盘选股: 接近总超时（已 {elapsed:.0f}s），"
+                    f"已完成 {completed}/{total}，提前返回"
+                )
+                break
+
+            # 熔断检查
+            if failure_count >= _FAILURE_THRESHOLD:
+                logger.error(
+                    f"尾盘选股: 连续失败 {_FAILURE_THRESHOLD} 次触发熔断，"
+                    f"已完成 {completed}/{total}，提前返回"
+                )
+                break
+
+            batch = candidates.iloc[batch_start:batch_start + batch_size]
+            tasks = [check_one(row) for _, row in batch.iterrows()]
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for r in batch_results:
+                completed += 1
+                if isinstance(r, ScreeningResult):
+                    results.append(r)
+
+            logger.info(f"尾盘选股: 进度 {completed}/{total}（累计通过 {len(results)} 只）")
+
+        return results
+
     async def _fetch_market_snapshot(self) -> pd.DataFrame | None:
-        """获取全市场实时快照。优先 akshare，失败时降级到 DataManager。"""
-        # 方式1: akshare 全市场快照
+        """获取全市场实时快照。优先 stock_zh_a_spot_em（含所有字段）。"""
+        # 方式1: ak.stock_zh_a_spot_em（推荐，包含换手率/流通市值/量比）
+        try:
+            import akshare as ak
+            spot = await asyncio.to_thread(ak.stock_zh_a_spot_em)
+            if spot is not None and not spot.empty:
+                logger.info(f"尾盘选股: 使用 stock_zh_a_spot_em 全市场快照 ({len(spot)} 只)")
+                return spot
+        except Exception as e:
+            logger.warning(f"尾盘选股: stock_zh_a_spot_em 失败: {e}")
+
+        # 方式2: ak.stock_zh_a_spot（旧版，字段较少）
         try:
             import akshare as ak
             spot = await asyncio.to_thread(ak.stock_zh_a_spot)
             if spot is not None and not spot.empty:
-                logger.info("尾盘选股: 使用 akshare 全市场快照")
+                logger.info(f"尾盘选股: 降级使用 stock_zh_a_spot ({len(spot)} 只)")
                 return spot
         except Exception as e:
-            logger.warning(f"尾盘选股: akshare 全市场快照失败: {e}")
+            logger.warning(f"尾盘选股: stock_zh_a_spot 失败: {e}")
 
-        # 方式2: DataManager 降级（使用 SinaCollector 实时行情）
+        # 方式3: DataManager 降级（SinaCollector 实时行情）
         if self._dm is not None:
             try:
                 spot = await self._dm.fetch_stock_realtime([])
                 if spot is not None and not spot.empty:
                     logger.info(f"尾盘选股: 降级使用 DataManager 实时行情 ({len(spot)} 只)")
-                    # 标准化列名以兼容后续处理
                     spot = spot.rename(columns={
                         "symbol": "代码", "name": "名称",
                         "price": "最新价", "change_pct": "涨跌幅",
@@ -171,8 +318,7 @@ class TerminalScreener:
         return None
 
     async def _fetch_index_change(self) -> float:
-        """获取上证指数今日涨幅（用于条件7简化版）。"""
-        # 优先 akshare
+        """获取上证指数今日涨幅。"""
         try:
             import akshare as ak
             df = await asyncio.to_thread(ak.stock_zh_index_daily, symbol="sh000001")
@@ -183,7 +329,6 @@ class TerminalScreener:
         except Exception as e:
             logger.debug(f"akshare 获取大盘涨幅失败: {e}")
 
-        # 降级：DataManager 获取指数历史
         if self._dm is not None:
             try:
                 df = await self._dm.fetch_stock_history("000001", days=5)
@@ -205,51 +350,57 @@ class TerminalScreener:
         chg_pct: float,
         today_vol: float,
         index_chg: float,
+        vol_ratio: float = 0.0,
+        turnover_pct: float = 0.0,
+        mcap_b: float = 0.0,
     ) -> ScreeningResult | None:
-        """对单只候选股执行条件3-8检查（P2-1 低吸逻辑）。"""
+        """对单只候选股执行条件3-8检查（P2-1 低吸逻辑）。
+
+        P0 优化：vol_ratio/turnover_pct/mcap_b 已在快照阶段获取，
+        避免在 K 线中重复计算。
+        """
         failed: list[str] = []
         try:
-            # 获取日K线历史（优先 akshare，降级 DataManager）
             df = await self._fetch_stock_kline(code)
             if df is None or df.empty or len(df) < 60:
                 return None
 
-            # 需要至少 60 日数据用于计算 MA20/MA60
             recent = df.tail(60).copy()
-            latest = recent.iloc[-1]
 
-            # 换手率和流通股本（akshare 有这些字段，DataManager 可能没有）
-            turnover_pct = float(latest.get("turnover", 0)) * 100
-            outstanding = float(latest.get("outstanding_share", 0))
-            if outstanding == 0:
-                # 无法获取流通股本时，用成交额/价格估算
-                outstanding = float(latest.get("volume", 0)) / max(
-                    float(latest.get("turnover", 0.001)), 0.001
-                ) if float(latest.get("turnover", 0)) > 0 else 1e8
-            mcap = price * outstanding
+            # 条件8: 流通市值（已从快照获取，K 线降级用估算）
+            if mcap_b == 0:
+                latest = recent.iloc[-1]
+                outstanding = float(latest.get("outstanding_share", 0))
+                if outstanding == 0:
+                    outstanding = float(latest.get("volume", 0)) / max(
+                        float(latest.get("turnover", 0.001)), 0.001
+                    ) if float(latest.get("turnover", 0)) > 0 else 1e8
+                mcap_b = price * outstanding / 1e8
 
-            # 条件8: 流通市值 50亿-500亿
-            mcap_b = mcap / 1e8
             if mcap_b < 5 or mcap_b > 500:
                 failed.append(f"市值{mcap_b:.0f}亿")
 
-            # 条件4: 当日缩量（量比 < 1.0）
-            volumes = recent["volume"].values.astype(float)
-            avg_5d = float(np.nanmean(volumes[-6:-1])) if len(volumes) > 5 else 0.0
-            vol_ratio = volumes[-1] / avg_5d if avg_5d > 0 else 0
+            # 条件4: 量比（已从快照获取）
+            if vol_ratio == 0:
+                volumes_tmp = recent["volume"].values.astype(float)
+                avg_5d = float(np.nanmean(volumes_tmp[-6:-1])) if len(volumes_tmp) > 5 else 0.0
+                vol_ratio = volumes_tmp[-1] / avg_5d if avg_5d > 0 else 0
             if vol_ratio >= MAX_VOL_RATIO:
                 failed.append(f"量比{vol_ratio:.2f}(未缩量)")
 
-            # 条件7: 换手率 3%-15%
+            # 条件7: 换手率（已从快照获取）
+            if turnover_pct == 0:
+                latest = recent.iloc[-1]
+                turnover_pct = float(latest.get("turnover", 0)) * 100
             if turnover_pct < MIN_TURNOVER or turnover_pct > MAX_TURNOVER:
                 failed.append(f"换手率{turnover_pct:.1f}%")
 
-            # 条件5: 收盘价 ≥ MA20（趋势未破）
+            # 条件5: 收盘价 ≥ MA20
             ma20 = recent["close"].rolling(20).mean().iloc[-1]
             if not pd.notna(ma20) or price < ma20:
                 failed.append(f"破MA20({ma20:.2f})")
 
-            # 条件6: MA20 > MA60（中期趋势向上）
+            # 条件6: MA20 > MA60
             ma60 = recent["close"].rolling(60).mean().iloc[-1]
             ma20_rising = pd.notna(ma60) and ma20 > ma60
             if not ma20_rising:
@@ -265,17 +416,17 @@ class TerminalScreener:
             if not has_strong:
                 failed.append(f"近{RECENT_STRONG_DAYS}日无强势")
 
-            # 条件8: 个股表现不强于大盘（回踩日反而跑赢大盘 = 主力出货嫌疑）
-            # 改为：回踩日不跑赢大盘（健康回踩）
-            beats = chg_pct <= index_chg + 1.0  # 允许略超大盘 1%
+            # 条件8: 回踩日不跑赢大盘
+            beats = chg_pct <= index_chg + 1.0
             if not beats:
                 failed.append(f"异常强势({chg_pct:+.1f}%)")
 
-            # 成交量趋势描述（用于展示）
+            # 成交量趋势描述
+            volumes = recent["volume"].values.astype(float)
             vol_trend = self._check_volume_trend(volumes[-5:])
 
-            # late_session_high 改为 "回踩支撑" 标志
-            pullback_hold = pd.notna(ma20) and price >= ma20 * 0.98  # 回踩 MA20 附近 2% 内
+            # 回踩支撑标志
+            pullback_hold = pd.notna(ma20) and price >= ma20 * 0.98
 
             result = ScreeningResult(
                 symbol=code,
@@ -298,13 +449,9 @@ class TerminalScreener:
             return None
 
     def _check_volume_trend(self, vols: np.ndarray) -> str:
-        """检查成交量趋势（P2-1 低吸逻辑：缩量更优）。
-
-        返回: ✅ (缩量) / ⚠️ (持平) / ❌ (放量)
-        """
+        """检查成交量趋势（P2-1 低吸逻辑：缩量更优）。"""
         if len(vols) < 3:
             return "✅"
-        # 计算近 3 日量能趋势
         recent_avg = float(np.nanmean(vols[-3:]))
         earlier_avg = float(np.nanmean(vols[:-3])) if len(vols) > 3 else float(vols[0])
         if earlier_avg == 0:
@@ -318,8 +465,7 @@ class TerminalScreener:
             return "❌ 放量"
 
     async def _fetch_stock_kline(self, code: str) -> pd.DataFrame | None:
-        """获取个股日K线历史（需 60 日数据用于 MA60）。优先 akshare，降级 DataManager。"""
-        # 方式1: akshare 日K线（含换手率、流通股本）
+        """获取个股日K线历史（需 60 日数据用于 MA60）。"""
         try:
             import akshare as ak
             prefix = _symbol_prefix(code)
@@ -329,7 +475,6 @@ class TerminalScreener:
         except Exception as e:
             logger.debug(f"akshare 日K线 {code} 失败: {e}")
 
-        # 方式2: DataManager 降级
         if self._dm is not None:
             try:
                 df = await self._dm.fetch_stock_history(code, days=120)

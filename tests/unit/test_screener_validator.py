@@ -17,6 +17,7 @@ from gugu.screener.validator import (
     save_screener_records,
     validate_yesterday_screener,
 )
+from gugu.utils.calendar import last_trading_day
 
 
 class _MockResponse:
@@ -160,8 +161,13 @@ class TestValidateYesterdayScreener:
 
     @pytest.fixture
     def mock_history(self):
-        """创建包含昨日记录的 mock JSONL。"""
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        """创建包含昨日记录的 mock JSONL。
+
+        P0 修复：用 last_trading_day() 而非自然日昨天，
+        与 validator.validate_yesterday_screener() 的取数逻辑保持一致，
+        避免周一/节后首日运行时日期不匹配导致 _load_records_by_date 返回空。
+        """
+        yesterday = last_trading_day().isoformat()
         row = {
             "symbol": "600519",
             "name": "茅台",

@@ -147,6 +147,7 @@ class TestFundamentalFilter:
         assert result["pass"] is False
         assert any("盈利能力不足" in r for r in result["reasons"])
 
+    @patch("gugu.filters.fundamental.FundamentalFilter._fetch_pe_pb_eastmoney")
     @patch("gugu.filters.fundamental.ak.stock_zh_a_spot_em")
     @patch("gugu.filters.fundamental.ak.stock_individual_info_em")
     @patch("gugu.filters.fundamental.ak.stock_financial_analysis_indicator")
@@ -155,6 +156,7 @@ class TestFundamentalFilter:
         mock_financial: MagicMock,
         mock_info: MagicMock,
         mock_spot: MagicMock,
+        mock_em_fallback: MagicMock,
     ) -> None:
         """数据获取失败时宽松降级处理：缺失的指标不参与过滤。"""
         # 模拟异常：实时行情返回空 DataFrame
@@ -163,6 +165,8 @@ class TestFundamentalFilter:
         mock_info.side_effect = Exception("API error")
         # 财务指标也失败
         mock_financial.side_effect = Exception("API error")
+        # 东方财富兜底也失败（避免真实 HTTP 请求污染测试）
+        mock_em_fallback.return_value = (None, None)
 
         f = FundamentalFilter()
         result = f.check("000001")

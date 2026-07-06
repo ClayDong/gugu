@@ -384,3 +384,248 @@ def test_now_str(mock_datetime):
     mock_datetime.strftime = datetime.strftime
     result = _now_str()
     assert result == "03-15 14:30"
+
+
+# ========== G. P0 性能修复：快照硬过滤 + 并发 + 熔断 ==========
+
+
+def test_hard_filter_snapshot_filters_by_change_pct():
+    """P0-2: 快照硬过滤 涨幅 -2% ~ +1% 生效。"""
+    import pandas as pd
+    from gugu.screener.terminal_screener import TerminalScreener
+
+    spot = pd.DataFrame([
+        {"代码": "000001", "名称": "A", "最新价": 10.0, "涨跌幅": 0.5, "成交量": 1000,
+         "量比": 0.8, "换手率": 5.0, "流通市值": 100e8},  # 通过
+        {"代码": "000002", "名称": "B", "最新价": 10.0, "涨跌幅": 5.0, "成交量": 1000,
+         "量比": 0.8, "换手率": 5.0, "流通市值": 100e8},  # 涨幅过高
+        {"代码": "000003", "名称": "C", "最新价": 10.0, "涨跌幅": -3.0, "成交量": 1000,
+         "量比": 0.8, "换手率": 5.0, "流通市值": 100e8},  # 跌幅过深
+    ])
+    screener = TerminalScreener()
+    result = screener._hard_filter_snapshot(spot)
+    assert len(result) == 1
+    assert result.iloc[0]["代码"] == "000001"
+
+
+def test_hard_filter_snapshot_filters_by_volume_ratio():
+    """P0-2: 量比 < 1.0 生效。"""
+    import pandas as pd
+    from gugu.screener.terminal_screener import TerminalScreener
+
+    spot = pd.DataFrame([
+        {"代码": "000001", "名称": "A", "最新价": 10.0, "涨跌幅": 0.0, "成交量": 1000,
+         "量比": 0.5, "换手率": 5.0, "流通市值": 100e8},  # 通过
+        {"代码": "000002", "名称": "B", "最新价": 10.0, "涨跌幅": 0.0, "成交量": 1000,
+         "量比": 1.5, "换手率": 5.0, "流通市值": 100e8},  # 量比过高（放量）
+    ])
+    screener = TerminalScreener()
+    result = screener._hard_filter_snapshot(spot)
+    assert len(result) == 1
+    assert result.iloc[0]["代码"] == "000001"
+
+
+def test_hard_filter_snapshot_filters_by_turnover():
+    """P0-2: 换手率 3%-15% 生效。"""
+    import pandas as pd
+    from gugu.screener.terminal_screener import TerminalScreener
+
+    spot = pd.DataFrame([
+        {"代码": "000001", "名称": "A", "最新价": 10.0, "涨跌幅": 0.0, "成交量": 1000,
+         "量比": 0.5, "换手率": 5.0, "流通市值": 100e8},  # 通过
+        {"代码": "000002", "名称": "B", "最新价": 10.0, "涨跌幅": 0.0, "成交量": 1000,
+         "量比": 0.5, "换手率": 1.0, "流通市值": 100e8},  # 换手率过低
+        {"代码": "000003", "名称": "C", "最新价": 10.0, "涨跌幅": 0.0, "成交量": 1000,
+         "量比": 0.5, "换手率": 20.0, "流通市值": 100e8},  # 换手率过高
+    ])
+    screener = TerminalScreener()
+    result = screener._hard_filter_snapshot(spot)
+    assert len(result) == 1
+    assert result.iloc[0]["代码"] == "000001"
+
+
+def test_hard_filter_snapshot_filters_by_market_cap():
+    """P0-2: 流通市值 50亿-500亿 生效。"""
+    import pandas as pd
+    from gugu.screener.terminal_screener import TerminalScreener
+
+    spot = pd.DataFrame([
+        {"代码": "000001", "名称": "A", "最新价": 10.0, "涨跌幅": 0.0, "成交量": 1000,
+         "量比": 0.5, "换手率": 5.0, "流通市值": 100e8},  # 通过（100亿）
+        {"代码": "000002", "名称": "B", "最新价": 10.0, "涨跌幅": 0.0, "成交量": 1000,
+         "量比": 0.5, "换手率": 5.0, "流通市值": 10e8},  # 过小（10亿）
+        {"代码": "000003", "名称": "C", "最新价": 10.0, "涨跌幅": 0.0, "成交量": 1000,
+         "量比": 0.5, "换手率": 5.0, "流通市值": 800e8},  # 过大（800亿）
+    ])
+    screener = TerminalScreener()
+    result = screener._hard_filter_snapshot(spot)
+    assert len(result) == 1
+    assert result.iloc[0]["代码"] == "000001"
+
+
+def test_hard_filter_snapshot_excludes_st_and_bj():
+    """P0-2: 排除 ST/退/N/C 和北交所。"""
+    import pandas as pd
+    from gugu.screener.terminal_screener import TerminalScreener
+
+    spot = pd.DataFrame([
+        {"代码": "000001", "名称": "正常股", "最新价": 10.0, "涨跌幅": 0.0, "成交量": 1000,
+         "量比": 0.5, "换手率": 5.0, "流通市值": 100e8},  # 通过
+        {"代码": "000002", "名称": "ST退市", "最新价": 10.0, "涨跌幅": 0.0, "成交量": 1000,
+         "量比": 0.5, "换手率": 5.0, "流通市值": 100e8},  # ST
+        {"代码": "430001", "名称": "北交所", "最新价": 10.0, "涨跌幅": 0.0, "成交量": 1000,
+         "量比": 0.5, "换手率": 5.0, "流通市值": 100e8},  # 北交所
+    ])
+    screener = TerminalScreener()
+    result = screener._hard_filter_snapshot(spot)
+    assert len(result) == 1
+    assert result.iloc[0]["代码"] == "000001"
+
+
+def test_hard_filter_snapshot_normalizes_column_names():
+    """P0-2: 列名标准化（兼容 stock_zh_a_spot_em 的英文列名）。"""
+    import pandas as pd
+    from gugu.screener.terminal_screener import TerminalScreener
+
+    # 模拟 stock_zh_a_spot_em 的英文列名格式
+    spot = pd.DataFrame([{
+        "code": "000001", "name": "测试", "trade": 10.0,
+        "changepercent": 0.5, "volume": 1000,
+        "volume_ratio": 0.8, "turnoverratio": 5.0, "circ_mv": 100e8,
+    }])
+    screener = TerminalScreener()
+    result = screener._hard_filter_snapshot(spot)
+    assert len(result) == 1
+    # 标准化后应有中文列名
+    assert "量比" in result.columns
+    assert "换手率" in result.columns
+    assert "流通市值" in result.columns
+
+
+@pytest.mark.asyncio
+async def test_scan_returns_empty_when_snapshot_fails():
+    """P0-3: 快照获取失败时返回空列表，不抛异常。"""
+    from unittest.mock import AsyncMock, patch
+    from gugu.screener.terminal_screener import TerminalScreener
+
+    screener = TerminalScreener()
+    with patch.object(screener, "_fetch_market_snapshot", return_value=None):
+        results = await screener.scan()
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_scan_returns_empty_when_no_candidates():
+    """P0-3: 快照硬过滤后无候选时返回空列表。"""
+    from unittest.mock import AsyncMock, patch
+    import pandas as pd
+    from gugu.screener.terminal_screener import TerminalScreener
+
+    screener = TerminalScreener()
+    # 所有股票涨幅都过高（被涨幅 -2%~+1% 过滤）
+    empty_spot = pd.DataFrame([{
+        "代码": "000001", "名称": "A", "最新价": 10.0, "涨跌幅": 5.0,
+        "成交量": 1000, "量比": 0.5, "换手率": 5.0, "流通市值": 100e8,
+    }])
+    with patch.object(screener, "_fetch_market_snapshot", return_value=empty_spot):
+        results = await screener.scan()
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_scan_total_timeout_returns_empty():
+    """P0-3: 总超时触发时返回空列表（不抛异常）。"""
+    from unittest.mock import patch
+    import asyncio
+    from gugu.screener.terminal_screener import TerminalScreener
+
+    screener = TerminalScreener()
+
+    # mock _scan_internal 让其永久挂起，触发总超时
+    async def hang(*args, **kwargs):
+        await asyncio.sleep(10000)
+
+    with patch.object(screener, "_scan_internal", side_effect=hang):
+        # 临时把超时设小到 1 秒以加速测试
+        import gugu.screener.terminal_screener as ts
+        original = ts._TOTAL_TIMEOUT_SEC
+        ts._TOTAL_TIMEOUT_SEC = 1
+        try:
+            results = await screener.scan()
+            assert results == []
+        finally:
+            ts._TOTAL_TIMEOUT_SEC = original
+
+
+@pytest.mark.asyncio
+async def test_concurrent_check_circuit_breaker():
+    """P0-4: 连续失败 N 次触发熔断，提前返回。"""
+    from unittest.mock import patch
+    import pandas as pd
+    import time
+    from gugu.screener.terminal_screener import TerminalScreener
+
+    screener = TerminalScreener()
+
+    # 构造 10 只候选股
+    candidates = pd.DataFrame([
+        {"代码": f"00000{i}", "名称": f"S{i}", "最新价": 10.0, "涨跌幅": 0.0,
+         "成交量": 1000, "量比": 0.5, "换手率": 5.0, "流通市值": 100e8}
+        for i in range(10)
+    ])
+
+    # mock _check_stock 永远抛 TimeoutError
+    async def always_timeout(*args, **kwargs):
+        raise TimeoutError("mocked timeout")
+
+    with patch.object(screener, "_check_stock", side_effect=always_timeout):
+        results = await screener._concurrent_check(candidates, 0.0, time.time())
+
+    # 触发熔断（_FAILURE_THRESHOLD=5），返回空列表
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_check_returns_results_on_success():
+    """P0-3: 正常场景下并发返回结果。"""
+    from unittest.mock import patch
+    import pandas as pd
+    import time
+    from gugu.screener.terminal_screener import TerminalScreener, ScreeningResult
+
+    screener = TerminalScreener()
+
+    candidates = pd.DataFrame([
+        {"代码": "000001", "名称": "A", "最新价": 10.0, "涨跌幅": 0.0,
+         "成交量": 1000, "量比": 0.5, "换手率": 5.0, "流通市值": 100e8},
+        {"代码": "000002", "名称": "B", "最新价": 10.0, "涨跌幅": 0.5,
+         "成交量": 1000, "量比": 0.6, "换手率": 6.0, "流通市值": 200e8},
+    ])
+
+    mock_result = ScreeningResult(
+        symbol="000001", name="A", price=10.0, change_pct=0.0,
+        volume_ratio=0.5, turnover_pct=5.0, mcap_billion=100.0,
+        volume_trend="✅", beats_index=True, late_session_high=True,
+        passed=True, failed_conditions=[],
+    )
+
+    async def success_check(*args, **kwargs):
+        return mock_result
+
+    with patch.object(screener, "_check_stock", side_effect=success_check):
+        results = await screener._concurrent_check(candidates, 0.0, time.time())
+
+    assert len(results) == 2
+    assert all(isinstance(r, ScreeningResult) for r in results)
+
+
+def test_p0_performance_constants():
+    """P0: 性能参数常量值合理。"""
+    from gugu.screener.terminal_screener import (
+        _KLINE_CONCURRENCY, _TOTAL_TIMEOUT_SEC,
+        _PER_STOCK_TIMEOUT, _FAILURE_THRESHOLD,
+    )
+    assert _KLINE_CONCURRENCY >= 1 and _KLINE_CONCURRENCY <= 10
+    assert _TOTAL_TIMEOUT_SEC >= 600  # 至少 10 分钟
+    assert _PER_STOCK_TIMEOUT >= 5
+    assert _FAILURE_THRESHOLD >= 3 and _FAILURE_THRESHOLD <= 10
