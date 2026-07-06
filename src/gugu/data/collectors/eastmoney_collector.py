@@ -317,7 +317,8 @@ class EastmoneyCollector(BaseCollector):
             "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23",
             # f2=最新价, f3=涨跌幅, f4=涨跌额, f5=成交量, f6=成交额, f7=振幅
             # f8=换手率, f12=代码, f14=名称, f15=最高, f16=最低, f17=今开
-            "fields": "f2,f3,f4,f5,f6,f7,f8,f12,f14,f15,f16,f17",
+            # f20=总市值, f21=流通市值（v0.4.6 新增 f8/f21 支持豹哥三要素选股池过滤）
+            "fields": "f2,f3,f4,f5,f6,f7,f8,f12,f14,f15,f16,f17,f20,f21",
         }
         try:
             client = self._get_client()
@@ -346,6 +347,9 @@ class EastmoneyCollector(BaseCollector):
                         "open": float(item.get("f17", 0)),
                         "high": float(item.get("f15", 0)),
                         "low": float(item.get("f16", 0)),
+                        # v0.4.6: 换手率(%) + 流通市值(元)，支持豹哥三要素选股池过滤
+                        "turnover_pct": float(item.get("f8", 0) or 0),
+                        "circ_mv": float(item.get("f21", 0) or 0),
                     })
                 except (ValueError, TypeError):
                     continue

@@ -70,6 +70,16 @@ strategy:
   auto_select: true              # 启用自动选股（全市场扫描+策略信号+综合评分）
   select_top_n: 50               # 恢复 50，100 过大增加噪声
   select_max_candidates: 10      # 最大选股数量
+  # v0.4.6: 豹哥三要素选股池过滤器（默认关闭）
+  # 来源：豹哥战法 https://mp.weixin.qq.com/s/guNx28XZgrjSpPy2Ug6x7Q
+  # 三要素是「选股池准入」非「择时信号」，默认关闭因为：
+  # - 要求换手率≥15%（高度活跃），与 pullback_low/double_yin 缩量低吸逻辑冲突
+  # - 适合与 box_breakout（突破追势）配合，趋势市手动开启 enabled: true
+  leopard_universe_filter:
+    enabled: false
+    turnover_min: 15.0            # 换手率下限（%）
+    amount_min: 1000000000       # 成交额下限（元，10亿）
+    circ_mv_min: 7000000000     # 流通市值下限（元，70亿）
 
 # ========== 风控 ==========
 risk:

@@ -36,6 +36,7 @@ from gugu.config.models import (  # noqa: F401  # fmt: skip
     RiskConfig,
     SchedulerConfig,
     StrategyConfig,
+    LeopardUniverseConfig,
     WisdomConfig,
     flatten_config,
 )

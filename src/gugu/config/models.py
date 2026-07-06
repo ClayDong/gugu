@@ -69,11 +69,35 @@ class StrategyConfig(BaseModel):
     auto_select: bool = Field(default=False, description="是否启用自动选股")
     select_top_n: int = Field(default=50, ge=1, description="全市场资金流排序取前 N")
     select_max_candidates: int = Field(default=10, ge=1, description="最大选股数量")
+    # v0.4.6: 豹哥三要素选股池过滤器（默认关闭，仅与突破策略配合时开启）
+    leopard_universe_filter: "LeopardUniverseConfig" = Field(
+        default_factory=lambda: LeopardUniverseConfig(),
+        description="豹哥三要素选股池过滤器配置",
+    )
 
     # ── aliases ──
     @property
     def fusion_mode(self) -> str:
         return self.signal_fusion
+
+
+class LeopardUniverseConfig(BaseModel):
+    """豹哥三要素选股池过滤器配置.
+
+    来源：豹哥战法（微信公众号文章）
+    三要素是选股池准入，不是择时信号。默认关闭，因为：
+    - 三要素要求换手率≥15%（高度活跃），与 pullback_low/double_yin 缩量低吸逻辑冲突
+    - 适合与 box_breakout（突破追势）配合，趋势市手动开启
+    """
+
+    enabled: bool = Field(default=False, description="是否启用三要素选股池预筛")
+    turnover_min: float = Field(default=15.0, ge=0, description="换手率下限(%)")
+    amount_min: float = Field(
+        default=1_000_000_000, ge=0, description="成交额下限(元，10亿)"
+    )
+    circ_mv_min: float = Field(
+        default=7_000_000_000, ge=0, description="流通市值下限(元，70亿)"
+    )
 
 
 class PaperConfig(BaseModel):

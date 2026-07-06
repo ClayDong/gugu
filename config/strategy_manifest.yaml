@@ -126,20 +126,23 @@ signal_strategies:
       卖出：跌破 MA20 或量价背离（价格创新高但量萎缩）。
 
   leopard_three_factors:
-    name: 豹哥三要素选股
+    name: 豹哥三要素选股（已禁用，改为选股池过滤器）
     module: gugu.strategies.leopard_three_factors
     class: LeopardThreeFactorsStrategy
-    source: 豹哥战法（微信公众号文章分析）
-    enabled: true
-    summary: 三要素准入（换手率≥15% + 成交额≥10亿 + 流通市值≥70亿）+ 放量突破择时
+    source: 豹哥战法（微信公众号文章 https://mp.weixin.qq.com/s/guNx28XZgrjSpPy2Ug6x7Q）
+    enabled: false
+    summary: 已禁用。三要素本身是选股池准入，不产生 alpha，绑定放量突破后回测无效（v0.4.2 禁用）
     params_entry: strategy_defaults.yaml
-    validation: 单元测试通过，2026-07-03
+    validation: v0.4.2 全市场回测无效（收益+0.59%/夏普-0.11/盈利比42%）已禁用
     notes: |
-      核心观点：高流动性 + 大资金承载 + 活跃博弈 = "大资金进得来、出得去"。
-      三要素作为"选股池准入"过滤，叠加"放量突破"择时信号。
-      买入：突破近 N 日高点 + 量比≥1.5 + 涨幅<7%（不追涨停）+ MA20>MA60。
-      卖出：跌破 MA20 或量价背离（价格创新高但量萎缩）。
-      数据可获性：实时模式用 akshare，回测降级到成交额 + 放量突破。
+      v0.4.6 重新定位：三要素是「选股池准入」非「择时信号」（文章原文理念）。
+      正确用法：作为 StockSelector 的前置预筛器（leopard_universe_filter），
+      而非与放量突破绑定的完整策略。
+      文章原文：三要素层层筛选（5000+ → 165 → 104 → 86 只），帮助新手缩小范围。
+      三要素本身不解决"何时买"，只解决"在哪选"。
+      新实现见 filters/leopard_universe.py（LeopardUniverseFilter），
+      默认关闭，仅与 box_breakout（突破追势）配合时手动开启。
+      原策略保留供历史参考，不建议重新启用。
 
   pullback_low:
     name: 低吸回踩

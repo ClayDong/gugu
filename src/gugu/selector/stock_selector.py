@@ -5,6 +5,7 @@
 1. 获取全市场快照
 2. 基础过滤：价格 > 0、成交额 > 1000万、非 ST（停牌/涨跌停/新股
    需要前收盘价，延后到步骤4的 _process_stock 中通过 is_tradable 检查）
+2.5 [可选] 豹哥三要素选股池预筛（v0.4.6 新增，默认关闭）
 3. 按主力净占比排序取前 N
 4. 对候选股跑策略信号（并发，Semaphore(10)），内含涨跌停过滤
 5. StockRanker 综合评分排名（因子30%+基本面25%+资金流25%+板块20%）
@@ -19,9 +20,11 @@ from typing import Any
 import pandas as pd
 
 from gugu.analysis.stock_ranker import StockRanker
+from gugu.config import get_config
 from gugu.data import DataManager
 from gugu.data import data_manager as get_data_manager
 from gugu.engine.signal_router import SignalRouter
+from gugu.filters.leopard_universe import LeopardUniverseFilter
 from gugu.risk import RiskManager
 from gugu.strategies.registry import get_enabled_strategies
 from gugu.utils.log import get_logger
@@ -33,6 +36,7 @@ class StockSelector:
     """自动选股器。
 
     v2: 接入 StockRanker 综合评分，替换单一 main_pct 排序。
+    v0.4.6: 支持豹哥三要素选股池预筛（可选开关）。
     """
 
     def __init__(
@@ -47,6 +51,25 @@ class StockSelector:
         self._router = SignalRouter(get_enabled_strategies())
         self._risk = RiskManager()
         self._ranker = StockRanker()
+        # v0.4.6: 豹哥三要素选股池过滤器（从配置加载，默认关闭）
+        self._leopard_filter = self._init_leopard_filter()
+
+    def _init_leopard_filter(self) -> LeopardUniverseFilter | None:
+        """从配置初始化豹哥三要素过滤器，未启用时返回 None。"""
+        try:
+            cfg = get_config().strategy.leopard_universe_filter
+            if not cfg.enabled:
+                return None
+            return LeopardUniverseFilter(
+                params={
+                    "turnover_min": cfg.turnover_min,
+                    "amount_min": cfg.amount_min,
+                    "circ_mv_min": cfg.circ_mv_min,
+                }
+            )
+        except Exception as e:
+            logger.warning(f"豹哥三要素过滤器初始化失败，跳过预筛: {e}")
+            return None
 
     async def select(self) -> list[dict[str, Any]]:
         """执行选股。
@@ -73,6 +96,16 @@ class StockSelector:
         candidates = self._filter_basic(market_df)
         if candidates.empty:
             return []
+
+        # 2.5 [可选] 豹哥三要素选股池预筛（v0.4.6 新增）
+        # 三要素是选股池准入（换手率≥15% + 成交额≥10亿 + 流通市值≥70亿）
+        # 不产生买卖信号，只缩小候选范围。默认关闭，仅与突破策略配合时开启。
+        if self._leopard_filter is not None:
+            before = len(candidates)
+            candidates = self._leopard_filter.filter(candidates)
+            if candidates.empty:
+                logger.info("豹哥三要素预筛后无候选股，跳过本次选股")
+                return []
 
         # 3. 按主力净占比排序（如果列存在）
         if "main_pct" in candidates.columns:
