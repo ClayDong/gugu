@@ -149,16 +149,20 @@ signal_strategies:
     module: gugu.strategies.pullback_low
     class: PullbackLowStrategy
     source: 《炒股的智慧》陈江挺"回调不破支撑才买" + 尾盘选股器实战逻辑
-    enabled: true
+    enabled: false
     summary: 缩量回踩不破 MA20 的低吸策略（震荡市专用），与 box_breakout 互补
     params_entry: strategy_defaults.yaml
-    validation: v0.4.4 多股聚合回测通过（4 项解锁条件全满足）
+    validation: v0.4.8 禁用（大样本回测不通过）
     notes: |
       核心观点：牛市用 box_breakout 突破追势，震荡市用 pullback_low 缩量低吸。
       买入条件：当日涨幅 -2%~+1% + 量比 < 1.0 + 收盘价 ≥ MA20 + 前 5 日内有涨幅 ≥ 5% 强势表现。
       卖出：跌破 MA20×0.97 止损 + 前高止盈 + 5 日时间止损。
-      验证结果：30 股 +5.82%/夏普0.24/胜率47%（首次）；100 股 -0.73%/夏普-0.33（扩大后不稳定）。
-      样本扩大后不稳定，依赖 MarketFilter 在非牛市拦截信号。
+      验证结果（样本规模递增）：
+        30 股：+5.82%/夏普0.24/胜率47%（v0.4.4 首次验证通过，4 项解锁条件全满足）
+        100 股：-0.73%/夏普-0.33/胜率39%（v0.4.4 扩大后不稳定）
+        1710 股：-0.46%/夏普-0.21/胜率38%（v0.4.7 全市场大样本不通过）
+      结论：30 股小样本通过是过拟合，100 股/1710 股均不通过，v0.4.8 起禁用。
+      与 double_yin 的关系：double_yin 大样本 +2.65%/夏普0.01 仍为正，保留启用。
 
   double_yin:
     name: 双阴钱袋子
