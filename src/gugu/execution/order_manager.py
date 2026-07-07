@@ -14,14 +14,12 @@ from gugu.analysis.trailing_stop import TrailingStopEngine
 from gugu.analysis.dynamic_take_profit import DynamicTakeProfitEngine
 from gugu.analysis.signal_tracker import SignalTracker
 from gugu.config import get_config
-from gugu.engine.event_engine import (
-    EVENT_ORDER_FILLED,
-    EVENT_ORDER_SUBMITTED,
-    EVENT_SIGNAL,
-    EventEngine,
-)
-from gugu.engine.signal_pipeline import record_signal_history
 from gugu.utils.log import get_logger
+
+# 延迟导入 gugu.engine 下的模块，避免与 gugu.engine.main 形成循环导入：
+# web.app -> execution.PaperBroker -> execution.OrderManager -> engine.signal_pipeline
+# -> engine.__init__ -> engine.main -> execution.*（此时 execution 尚未初始化完成）
+# record_signal_history / event_engine 仅在 execute() 运行时局部导入。
 
 logger = get_logger()
 
@@ -124,6 +122,10 @@ class OrderManager:
             下单结果 dict（含 risk_allowed / risk_message / order_result / notify_ok），
             若跳过下单则返回 None。
         """
+        # 局部导入避免循环依赖
+        from gugu.engine.event_engine import EVENT_ORDER_FILLED, EVENT_ORDER_SUBMITTED, EVENT_SIGNAL
+        from gugu.engine.signal_pipeline import record_signal_history
+
         symbol = signal["symbol"]
         direction = signal["direction"]
         price = signal.get("price", 0)

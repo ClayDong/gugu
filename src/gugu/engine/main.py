@@ -13,15 +13,14 @@ from typing import Any
 
 import pandas as pd
 
+from gugu.analysis.dynamic_take_profit import DynamicTakeProfitEngine
 from gugu.analysis.position_controller import PositionController
 from gugu.analysis.regime_detector import MultiPeriodRegimeDetector
 from gugu.analysis.signal_tracker import SignalTracker
 from gugu.analysis.trailing_stop import TrailingStopEngine
-from gugu.analysis.dynamic_take_profit import DynamicTakeProfitEngine
 from gugu.config import PROJECT_ROOT, get_config
 from gugu.config.models import AppConfig
 from gugu.data import data_manager
-from gugu.data.stock_names import lookup_stock_name
 from gugu.engine.event_engine import (
     EVENT_CYCLE_END,
     EVENT_CYCLE_START,
@@ -29,9 +28,7 @@ from gugu.engine.event_engine import (
     EVENT_DAILY_LOSS_WARN,
     EVENT_MARKET_REGIME,
     EVENT_ORDER_FILLED,
-    EVENT_ORDER_SUBMITTED,
     EVENT_RISK_ALERT,
-    EVENT_SIGNAL,
     EVENT_STOP_LOSS,
     EventEngine,
 )
@@ -42,7 +39,6 @@ from gugu.execution import OrderManager, PaperBroker, StopLossManager
 from gugu.filters.fundamental import FundamentalFilter
 from gugu.filters.industry_constraint import IndustryConstraint
 from gugu.filters.money_flow import MoneyFlowFilter
-from gugu.models import Position  # forward reference for ruff
 from gugu.notifier import FeishuNotifier
 from gugu.notifier.daily_report_manager import DailyReportManager
 from gugu.risk import RiskManager
@@ -575,13 +571,14 @@ class TradingEngine:
         """从文件加载已通知信号记录（持久化去重）。"""
         try:
             if self._notified_signals_file.exists():
-                with open(self._notified_signals_file, "r", encoding="utf-8") as f:
+                with open(self._notified_signals_file, encoding="utf-8") as f:
                     data = json.load(f)
                 # P0 修复：原仅保留当日记录 → 改为保留近 7 天
                 # 原因：A股周一信号周二才推送时，周一的去重记录已被清理，
                 # 会导致同一信号重复推送（用户已反馈"信号重复"问题）
                 # 7 天窗口覆盖跨周末的持仓信号场景，且不会无限增长
-                from datetime import date as _date, timedelta as _timedelta
+                from datetime import date as _date
+                from datetime import timedelta as _timedelta
                 today = _date.today()
                 cutoff_date = (today - _timedelta(days=7)).isoformat()
                 # P0 修复：清理旧格式 key（含 strategy_key 后缀的 3 段下划线格式）
@@ -603,7 +600,8 @@ class TradingEngine:
     def _save_notified_signals(self) -> None:
         """保存已通知信号记录到文件（P0 修复：原子写入）。"""
         try:
-            from datetime import date as _date, timedelta as _timedelta
+            from datetime import date as _date
+            from datetime import timedelta as _timedelta
 
             # P1-4 修复：保存前清理过期记录（超过7天），防止文件无限增长
             today = _date.today()
@@ -899,21 +897,22 @@ class TradingEngine:
             price = sig.get("price", 0) or 0
             profit_pct = ((price - cost) / cost * 100) if cost and price else 0
 
+            signal_strategies = (
+                sig.get("strategies", [])
+                if isinstance(sig.get("strategies"), list)
+                else [sig.get("strategy", "?")]
+            )
             sell_alerts.append(
                 {
                     "name": sig.get("name", sym),
                     "symbol": sym,
                     "price": price,
                     "profit_pct": round(profit_pct, 2),
-                    "sell_count": len(sig.get("sell_signals", sig.get("strategies", []))),
+                    "sell_count": len(signal_strategies),
                     "buy_count": 1 if sig.get("buy_signals") else 0,
                     "sell_signals": [
                         {"strategy_name": s, "signal_strength": sig.get("confidence", 0.5)}
-                        for s in (
-                            sig.get("strategies", [])
-                            if isinstance(sig.get("strategies"), list)
-                            else [sig.get("strategy", "?")]
-                        )
+                        for s in signal_strategies
                     ],
                 }
             )

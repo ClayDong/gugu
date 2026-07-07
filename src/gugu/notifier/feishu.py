@@ -169,7 +169,8 @@ class FeishuNotifier:
         """Send an interactive card to the configured chat.
 
         Returns True on success, False on failure or when not configured.
-        失败时自动入队，等待后续重试。Never raises to caller.
+        失败时先等待 2 秒、刷新 token、立即重试一次，
+        仍失败才入队等待后续重试。Never raises to caller.
         """
         if not self._enabled:
             logger.debug("Feishu notifications disabled by config")
@@ -183,10 +184,22 @@ class FeishuNotifier:
             await self._post_card(token, card)
             return True
         except Exception as e:
-            logger.error(f"Feishu send_card failed: {e}")
-            # 入队等待重试（P1-4: 使用异步加锁版本，避免与 retry_queued 并发写文件）
-            await self._enqueue_async(card)
-            return False
+            logger.warning(f"Feishu send_card 首次失败: {e}, 2秒后刷新token重试")
+            # 立即重试一次：等待 2 秒 + 强制刷新 token
+            # 大部分 400 错误是 token 过期/限流导致，刷新后立即重试即可成功
+            await asyncio.sleep(2)
+            self._token = ""
+            self._token_expires_at = 0.0
+            try:
+                token = await self._get_tenant_token()
+                await self._post_card(token, card)
+                logger.info("Feishu send_card 重试成功")
+                return True
+            except Exception as e2:
+                logger.error(f"Feishu send_card 重试仍失败: {e2}")
+                # 入队等待后续重试（P1-4: 使用异步加锁版本，避免与 retry_queued 并发写文件）
+                await self._enqueue_async(card)
+                return False
 
     def _enqueue(self, card: dict[str, Any]) -> None:
         """失败通知入队，持久化到 data/notify_queue.jsonl。"""
@@ -218,9 +231,17 @@ class FeishuNotifier:
         发送在锁外（避免长时间持锁阻塞 _enqueue_async）。
         写回时合并发送期间新入队的条目，防止覆盖丢失。
 
+        重试前强制刷新 token：400 Bad Request 常因 token 过期或失效，
+        刷新后重试成功率大幅提升。
+
         Returns:
             成功重试的通知数
         """
+        # 强制刷新 token：清空缓存的 token，确保重试用的是全新 token
+        # （400 Bad Request 最常见原因是 token 过期/失效）
+        self._token = ""
+        self._token_expires_at = 0.0
+
         # P1-4: 第一段锁——读取 pending 列表
         async with self._queue_lock:
             if not self._queue_path.exists():

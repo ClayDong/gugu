@@ -156,10 +156,11 @@ class TradingScheduler:
                 name=f"信号汇总-{period}",
             )
 
-        # 通知重试队列：每 10 分钟重试失败的通知
+        # 通知重试队列：每 2 分钟重试失败的通知（原 10 分钟间隔太长，
+        # 飞书暂时性 400 错误会导致通知延迟 10 分钟才重发）
         self._scheduler.add_job(
             self._safe_retry_notify,
-            CronTrigger(minute="*/10"),
+            CronTrigger(minute="*/2"),
             id="retry_notify",
             name="通知重试队列",
         )
@@ -411,7 +412,14 @@ class TradingScheduler:
             logger.exception(f"震荡市观察列表异常: {e}")
 
     async def _scan_range_candidates(self) -> list[dict]:
-        """扫描接近 MA20 支撑位的候选股（用于震荡市观察列表）。"""
+        """扫描接近 MA20 支撑位的候选股（用于震荡市观察列表）。
+
+        v0.5.1 增强：接入资金流数据，优先推送主力净流入的股票。
+        过滤条件：
+        - 距离 MA20 ±5% 以内（支撑位附近）
+        - 主力净流入 > 0（资金不流出，排除弱势股）
+        - 主力净占比 > -3%（主力不大幅卖出）
+        """
         candidates: list[dict] = []
         watchlist = self._engine._watchlist[:20]  # 最多扫描 20 只，避免耗时过长
 
@@ -429,12 +437,34 @@ class TradingScheduler:
                 # 距离 MA20 ±5% 以内的股票才推送
                 if abs(distance_pct) > 5.0:
                     return None
+
+                # 资金流筛选：主力净流入 > 0 且占比 > -3%
+                # 排除主力大幅卖出的弱势股（即使接近 MA20 也不应推荐）
+                main_net = None
+                main_pct = None
+                try:
+                    flow_df = await self._engine._dm.fetch_stock_flow(symbol)
+                    if flow_df is not None and not flow_df.empty:
+                        latest_flow = flow_df.iloc[-1]
+                        main_net = float(latest_flow.get("main_net", 0) or 0)
+                        main_pct = float(latest_flow.get("main_pct", 0) or 0)
+                except Exception:
+                    pass  # 资金流获取失败时不阻塞，仅标记 None
+
+                # 资金流过滤：主力净流出 > 1 亿或占比 < -5% 的股票排除
+                if main_net is not None and main_net < -1.0:
+                    return None
+                if main_pct is not None and main_pct < -5.0:
+                    return None
+
                 return {
                     "symbol": symbol,
                     "name": lookup_stock_name(symbol) or symbol,
                     "price": price,
                     "ma20": round(ma20, 2),
                     "distance_pct": round(distance_pct, 2),
+                    "main_net": round(main_net, 2) if main_net is not None else None,
+                    "main_pct": round(main_pct, 2) if main_pct is not None else None,
                 }
             except Exception:
                 return None
@@ -443,6 +473,12 @@ class TradingScheduler:
         for r in results:
             if r is not None:
                 candidates.append(r)
+
+        # 按资金流强度排序：主力净流入多的排前面
+        candidates.sort(
+            key=lambda x: x.get("main_net") if x.get("main_net") is not None else -999,
+            reverse=True,
+        )
         return candidates
 
     async def _safe_afternoon_flow(self) -> None:

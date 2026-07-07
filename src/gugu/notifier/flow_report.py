@@ -27,24 +27,53 @@ _EASTMONEY_CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 _EASTMONEY_FFLOW_URL = "https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get"
 _EASTMONEY_HSGT_URL = "https://push2.eastmoney.com/api/qt/kamt.rtmin/get"
 
-_EASTMONEY_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+# User-Agent 池：东方财富会对单一 UA 限流，轮换提升成功率
+_USER_AGENTS = [
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+]
+
+_EASTMONEY_HEADERS_BASE = {
     "Referer": "https://data.eastmoney.com/",
     "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
 
 
-def _http_get_json(url: str, params: dict[str, str]) -> dict | None:
-    """直连东方财富 push API，返回 JSON dict 或 None。"""
-    try:
-        with httpx.Client(timeout=15.0) as client:
-            resp = client.get(url, params=params, headers=_EASTMONEY_HEADERS)
-            resp.raise_for_status()
-            data = resp.json()
-            if data and data.get("data"):
-                return data
-    except Exception as e:
-        logger.warning(f"东方财富 HTTP API 失败: {e}")
+def _http_get_json(url: str, params: dict[str, str], max_retries: int = 3) -> dict | None:
+    """直连东方财富 push API，返回 JSON dict 或 None。
+
+    Args:
+        url: 东方财富 API URL。
+        params: 请求参数。
+        max_retries: 最大重试次数（默认 3 次，每次换不同 User-Agent）。
+
+    Returns:
+        JSON dict 或 None。
+    """
+    import random
+
+    last_err: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            headers = {**_EASTMONEY_HEADERS_BASE, "User-Agent": random.choice(_USER_AGENTS)}
+            with httpx.Client(timeout=20.0) as client:
+                resp = client.get(url, params=params, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+                if data and data.get("data"):
+                    return data
+                # 数据为空也可能是参数问题，不再重试
+                return None
+        except Exception as e:
+            last_err = e
+            logger.debug(f"东方财富 HTTP API 第 {attempt + 1}/{max_retries} 次失败: {e}")
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(0.5 * (attempt + 1))  # 递增等待 0.5s, 1s
+    logger.warning(f"东方财富 HTTP API {max_retries} 次重试均失败: {last_err}")
     return None
 
 # ── 工具函数 ──────────────────────────────────────────────────
@@ -227,21 +256,50 @@ def _collect_market_flow_http() -> dict[str, Any] | None:
 
 
 def collect_market_flow() -> dict[str, Any] | None:
-    """采集大盘资金流 + 北向资金（akshare → HTTP 双通道冗余）。"""
+    """采集大盘资金流 + 北向资金（akshare → HTTP 双通道冗余）。
+
+    HTTP 降级触发条件（任一满足即降级）：
+    - akshare 完全失败
+    - market 字段缺失
+    - market 中 main_net_inflow 为 None（akshare 部分失败常见场景）
+    """
     # 通道1: akshare
     result = _collect_market_flow_akshare()
 
-    # 通道2: HTTP 直连（akshare 失败时）
-    if not result or ("market" not in result and "north_bound" not in result):
-        logger.info("akshare 大盘资金流不可用，降级到 HTTP 直连...")
+    # 判断是否需要降级到 HTTP：market 数据不完整时也降级
+    needs_http = (
+        not result
+        or "market" not in result
+        or (
+            result.get("market", {}).get("main_net_inflow") is None
+            and result.get("market", {}).get("sh_close") is None
+        )
+    )
+
+    # 通道2: HTTP 直连（akshare 失败或 market 数据不完整时）
+    if needs_http:
+        logger.info("akshare 大盘资金流不可用或数据不完整，降级到 HTTP 直连...")
         http_result = _collect_market_flow_http()
         if http_result:
             # 合并：HTTP 结果补充 akshare 缺失的字段
             if not result:
                 result = http_result
             else:
-                if "market" not in result and "market" in http_result:
-                    result["market"] = http_result["market"]
+                # market：akshare 缺失关键字段时用 HTTP 补全
+                ak_market = result.get("market", {})
+                http_market = http_result.get("market", {})
+                if http_market and (
+                    not ak_market
+                    or (
+                        ak_market.get("main_net_inflow") is None
+                        and http_market.get("main_net_inflow") is not None
+                    )
+                ):
+                    # 保留 akshare 已有的字段（更丰富），仅补充 HTTP 独有的字段
+                    for k, v in http_market.items():
+                        if ak_market.get(k) is None and v is not None:
+                            ak_market[k] = v
+                    result["market"] = ak_market
                 if "north_bound" not in result and "north_bound" in http_result:
                     result["north_bound"] = http_result["north_bound"]
 
@@ -1174,8 +1232,22 @@ def build_afternoon_card(data: dict[str, Any]) -> dict[str, Any]:
     if market:
         m_date = market.get("date", "")
         north_only = market.get("north_only", False)
+        is_fallback = market.get("data_source", "").startswith("量价推算")
         lines = ["**📊 大盘资金面**"]
-        if north_only:
+        if is_fallback:
+            # 量价推算模式
+            sh_pct = _fmt(market.get("sh_change"), "%")
+            sz_pct = _fmt(market.get("sz_change"), "%")
+            vol_ratio = market.get("vol_ratio", 1.0)
+            flow_direction = market.get("flow_direction", "")
+            lines.append(f"📅 {m_date}")
+            lines.append(f"上证 {sh_pct} | 深证 {sz_pct} | 量比 {vol_ratio}")
+            lines.append(f"⚠️ 资金流API不可用，量价推算: {flow_direction}")
+            lines.append(f"估算主力净流入: {_fmt_flow(market.get('main_net_inflow'))}")
+            if north:
+                n_total = _fmt_flow(north.get("total"))
+                lines.append(f"北向资金: {n_total}")
+        elif north_only:
             nb = north or {}
             lines.append(f"📅 {m_date}")
             lines.append("📊 **北向资金代理**（东方财富 API 暂不可用）")
@@ -1193,7 +1265,7 @@ def build_afternoon_card(data: dict[str, Any]) -> dict[str, Any]:
             if north:
                 lines.append(f"北向资金: {_fmt_flow(north.get('total'))}")
             if overview.get("main_vs_retail"):
-                lines.append(f"博弈: {overview['main_vs_retail']}")
+                lines.append(f"  博弈: {overview['main_vs_retail']}")
         sections.append("\n".join(lines))
     else:
         sections.append("**📊 大盘资金面**\n数据暂不可用（非交易时段）")
@@ -1248,16 +1320,119 @@ async def run_afternoon_report() -> dict[str, Any]:
     与 15:10 收盘日报区别：
     - 14:30 报告聚焦"决策指导"：操作原则 + 资金方向判断 + 强势个股
     - 15:10 报告聚焦"收盘复盘"：全量数据汇总 + 概念热点 + 轮动强度
+
+    v0.5.1 增强：资金流数据源全部失败时，使用 DataManager 的行情数据
+    做量价分析替代，确保用户始终能收到决策参考。
     """
     data = await collect_all()
     market = data.get("market")
+    # 判断资金流数据是否真正有效：仅 north_only=True 且 main_net_inflow=0 不算有效
     has_valid_data = market is not None and (
-        market.get("north_only", False)
-        or market.get("sh_close") or market.get("sz_close") or market.get("main_net_inflow")
+        market.get("sh_close")
+        or market.get("sz_close")
+        or (market.get("main_net_inflow") not in (None, 0, 0.0) and not market.get("north_only", False))
     )
-    if not has_valid_data and not data.get("sectors") and not data.get("strong_stocks"):
-        logger.warning("盘后资金流决策报告: 全部数据源不可用，跳过推送")
+    has_sector_data = bool(data.get("sectors"))
+    has_stock_data = bool(data.get("strong_stocks"))
+
+    if not has_valid_data and not has_sector_data and not has_stock_data:
+        # 资金流数据源全部失败，使用行情数据做量价分析替代
+        logger.warning("盘后资金流决策报告: 资金流数据源不可用，尝试使用行情数据替代...")
+        try:
+            fallback_data = await _collect_fallback_market_data()
+            if fallback_data:
+                data.update(fallback_data)
+                data["data_source"] = "fallback_price"  # 标记数据来源
+                card = build_afternoon_card(data)
+                return {"card": card, "data": data}
+        except Exception as e:
+            logger.error(f"行情数据替代分析失败: {e}")
         card = build_unavailable_card("盘后资金流决策报告")
     else:
+        data["data_source"] = "capital_flow"
         card = build_afternoon_card(data)
     return {"card": card, "data": data}
+
+
+async def _collect_fallback_market_data() -> dict[str, Any] | None:
+    """资金流数据源不可用时的行情数据替代分析。
+
+    使用 DataManager 获取指数和持仓股的行情数据，
+    通过量价关系推算市场强弱，作为资金流的替代参考。
+    """
+    from gugu.data import data_manager as dm_factory
+
+    dm = dm_factory()
+    result: dict[str, Any] = {}
+
+    # 1. 获取指数行情（上证、深证）
+    try:
+        sh_df = await dm.fetch_stock_history("000001", days=5)
+        sz_df = await dm.fetch_stock_history("399001", days=5)
+        if sh_df is not None and not sh_df.empty:
+            sh_latest = sh_df.iloc[-1]
+            sh_close = float(sh_latest.get("close", 0))
+            sh_prev = float(sh_df.iloc[-2].get("close", 0)) if len(sh_df) >= 2 else sh_close
+            sh_change = round((sh_close - sh_prev) / sh_prev * 100, 2) if sh_prev > 0 else 0.0
+            sh_vol = float(sh_latest.get("volume", 0))
+            sh_prev_vol = float(sh_df.iloc[-2].get("volume", 0)) if len(sh_df) >= 2 else 0
+            vol_ratio = round(sh_vol / sh_prev_vol, 2) if sh_prev_vol > 0 else 1.0
+
+            # 量价关系推算资金方向
+            if sh_change > 0 and vol_ratio > 1.0:
+                flow_direction = "放量上涨（资金流入信号）"
+                flow_estimate = round(sh_change * vol_ratio * 3, 1)  # 粗略估算
+            elif sh_change > 0 and vol_ratio < 0.8:
+                flow_direction = "缩量上涨（资金谨慎）"
+                flow_estimate = round(sh_change * vol_ratio * 1.5, 1)
+            elif sh_change < 0 and vol_ratio > 1.0:
+                flow_direction = "放量下跌（资金流出信号）"
+                flow_estimate = round(sh_change * vol_ratio * 3, 1)
+            elif sh_change < 0 and vol_ratio < 0.8:
+                flow_direction = "缩量下跌（抛压减轻）"
+                flow_estimate = round(sh_change * vol_ratio * 1.5, 1)
+            else:
+                flow_direction = "量价平衡（资金中性）"
+                flow_estimate = round(sh_change * vol_ratio * 2, 1)
+
+            result["market"] = {
+                "date": str(sh_latest.get("date", _date_str())),
+                "sh_close": sh_close,
+                "sh_change": sh_change,
+                "sz_close": float(sz_df.iloc[-1].get("close", 0)) if sz_df is not None and not sz_df.empty else None,
+                "sz_change": round(
+                    (float(sz_df.iloc[-1].get("close", 0)) - float(sz_df.iloc[-2].get("close", 0)))
+                    / float(sz_df.iloc[-2].get("close", 1)) * 100, 2
+                ) if sz_df is not None and len(sz_df) >= 2 else None,
+                "main_net_inflow": flow_estimate,  # 估算值
+                "main_net_ratio": None,
+                "vol_ratio": vol_ratio,
+                "flow_direction": flow_direction,
+                "data_source": "量价推算（资金流API不可用）",
+            }
+            logger.info(f"行情替代分析: 上证{sh_change}% 量比{vol_ratio} → {flow_direction}")
+    except Exception as e:
+        logger.warning(f"行情数据替代分析失败: {e}")
+
+    # 2. 获取北向资金（尝试 DataManager）
+    try:
+        from gugu.config import env
+        cfg = env()
+        # 如果 DataManager 有北向资金数据，使用它
+        import akshare as ak
+        df_n = ak.stock_hsgt_fund_min_em(symbol="北向资金")
+        if df_n is not None and not df_n.empty:
+            latest_n = df_n.iloc[-1].to_dict()
+            north_total = latest_n.get("北向资金")
+            if north_total is not None:
+                result["north_bound"] = {
+                    "date": str(latest_n.get("日期", "")),
+                    "time": str(latest_n.get("时间", "")),
+                    "total": _safe_float(north_total),
+                    "sh_connect": None,
+                    "sz_connect": None,
+                }
+    except Exception:
+        pass  # 北向资金也失败时不阻塞
+
+    return result if result else None

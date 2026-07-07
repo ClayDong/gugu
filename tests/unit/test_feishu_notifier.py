@@ -314,7 +314,7 @@ async def test_send_text_returns_false_when_webhook_empty(mock_env):
 
 @pytest.mark.asyncio
 async def test_retry_logic_retries_up_to_max_attempts(mock_env, no_sleep):
-    """重试逻辑：首次失败后重试至 max_retries（3 次）。"""
+    """重试逻辑：首次失败后刷新 token 再试一轮，每轮 tenacity 重试 3 次，共 6 次。"""
     call_count = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -333,8 +333,9 @@ async def test_retry_logic_retries_up_to_max_attempts(mock_env, no_sleep):
         )
 
         assert result is False
-        # _get_tenant_token has @retry(stop=stop_after_attempt(3))
-        assert call_count == 3
+        # send_card 首轮 _get_tenant_token tenacity 重试 3 次失败，
+        # 等待 2 秒刷新 token 后再试一轮（3 次），共 6 次
+        assert call_count == 6
     finally:
         await mock_client.aclose()
 

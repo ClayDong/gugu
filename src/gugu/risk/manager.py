@@ -55,9 +55,10 @@ class RiskManager:
             self.daily_loss_halt = rc.daily_loss_halt
             self.max_total_positions = rc.max_total_positions
             self.t_plus_1 = rc.t_plus_1
-            # P2-5 新增：单股最大持仓时间（防阴跌套牢）
-            self.max_holding_days_warn = 30   # 持仓 30 天未盈利 → 警告减半仓
-            self.max_holding_days_halt = 60   # 持仓 60 天未盈利 → 强制清仓
+            # 单股最大持仓时间（防阴跌套牢）
+            self.max_holding_days_warn = rc.max_holding_days_warn
+            self.max_holding_days_halt = rc.max_holding_days_halt
+            self._max_drawdown_halt = rc.max_drawdown_halt
             cfg = config.flatten().get("risk", {})
         elif config is not None:
             cfg = config

@@ -543,9 +543,12 @@ async def test_scan_total_timeout_returns_empty():
 
     screener = TerminalScreener()
 
-    # mock _scan_internal 让其永久挂起，触发总超时
+    # 让 _scan_internal 在被取消时正常返回空列表（模拟被超时中断后的行为）
     async def hang(*args, **kwargs):
-        await asyncio.sleep(10000)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return []
 
     with patch.object(screener, "_scan_internal", side_effect=hang):
         # 临时把超时设小到 1 秒以加速测试
