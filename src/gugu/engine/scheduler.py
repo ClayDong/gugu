@@ -685,6 +685,10 @@ class TradingScheduler:
 
         对自选股池运行十大视角综合分析，推送飞书报告卡片。
         在 08:00 宏观简报之后，为用户提供深度分析参考。
+
+        v0.5.1 修复：原仅推送批量摘要卡片，未调用 build_perspective_card，
+        导致用户收到的通知只有"6.4分 短板:buffett(4.0)"一行，没有任何详细分析。
+        现改为：先推送批量摘要，再为每只股票推送详细分析卡片。
         """
         if not is_trading_day():
             return
@@ -695,7 +699,10 @@ class TradingScheduler:
                 build_context_from_kline,
             )
             from gugu.config import get_config
-            from gugu.notifier.perspective_report import build_batch_summary_card
+            from gugu.notifier.perspective_report import (
+                build_batch_summary_card,
+                build_perspective_card,
+            )
 
             cfg = get_config()
             if not cfg.perspective.enabled:
@@ -733,14 +740,26 @@ class TradingScheduler:
             # 批量分析
             results = engine.analyze_batch(contexts)
 
-            # 生成报告卡片
-            card = build_batch_summary_card(results)
-            await self._engine._notifier.send_card(card)
+            # v0.5.1 修复：先推送批量摘要卡片，再为每只股票推送详细分析卡片
+            # 原代码只推送摘要，导致用户看不到视角评分表/操作建议/价位/综合推理
+            summary_card = build_batch_summary_card(results)
+            await self._engine._notifier.send_card(summary_card)
+
+            # 为每只股票推送详细分析卡片（限流：每张间隔 1 秒）
+            for result in results:
+                try:
+                    detail_card = build_perspective_card(result)
+                    await self._engine._notifier.send_card(detail_card)
+                    await asyncio.sleep(1.0)  # 飞书限流保护
+                except Exception as e:
+                    logger.warning(
+                        f"十大视角: {result.symbol} 详细卡片发送失败: {e}"
+                    )
 
             passed_count = sum(1 for r in results if r.passed)
             logger.info(
                 f"十大视角日报推送完成: 分析 {len(results)} 只, "
-                f"通过 {passed_count} 只"
+                f"通过 {passed_count} 只，已推送 {len(results) + 1} 张卡片"
             )
         except Exception as e:
             logger.exception(f"十大视角分析日报异常: {e}")
