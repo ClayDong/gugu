@@ -182,6 +182,24 @@ signal_strategies:
       验证结果：30 股 +3.11%/50 股 +3.90% 夏普0.03/100 股 +2.81% 夏普-0.02，收益稳定为正。
       依赖 MarketFilter 在熊市拦截，与 pullback_low 互补。
 
+  capital_flow_alert:
+    name: 资金流异动监控
+    module: gugu.strategies.capital_flow_alert
+    class: CapitalFlowAlertStrategy
+    source: 豆包AI「龙头股散户化」分析 + 实战派资金流监控
+    # v0.5.0 禁用：100股回测 -1.42%/夏普-0.47/胜率26.6%，未通过验证
+    # 策略代码保留作为卖出信号库，盘中 IntradayMonitor 独立运行不依赖此策略启用
+    enabled: false
+    summary: 4卖出特征识别主力出逃 + 3买入特征捕捉洗盘结束
+    params_entry: strategy_defaults.yaml
+    validation: v0.5.0 单元测试通过，待回测验证
+    notes: |
+      核心观点：资金出逃早于股价大跌，4 特征同时出现 = 主力撤离。
+      卖出：放量下跌 + 量价背离 + 跌破MA20 + 巨量滞涨
+      买入：缩量回踩不破MA20 + MA20向上 + 前期强势
+      第一性原理：策略只用 OHLCV 近似资金流特征，真正的资金流判断在
+      SignalPipeline 步骤 2 由 MoneyFlowFilter 完成（保持策略无外部 IO）。
+
 # ============================================================
 # 二、风控/择时型策略（analysis/ + engine/，SignalPipeline 直接实例化）
 # ============================================================

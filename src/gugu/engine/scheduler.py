@@ -61,6 +61,34 @@ class TradingScheduler:
         tz = cfg.scheduler.timezone
         self._scheduler = AsyncIOScheduler(timezone=tz)
         self._engine = TradingEngine()
+        # P0-2 修复：IntradayMonitor 单例化
+        # 原代码在 _safe_intraday_monitor 中每次创建新实例，
+        # 导致 _alert_history 字典永远为空，5 分钟告警去重完全失效
+        self._intraday_monitor = self._build_intraday_monitor()
+
+    def _build_intraday_monitor(self):
+        """构建 IntradayMonitor 单例（启动时构建一次，后续复用）。"""
+        try:
+            from gugu.engine.intraday_monitor import IntradayMonitor
+
+            cfg = get_config()
+            im_cfg = getattr(cfg, "intraday_monitor", None)
+            mode = getattr(im_cfg, "performance_mode", "auto") if im_cfg else "auto"
+            thresholds = (
+                getattr(im_cfg, "alert_thresholds", None) if im_cfg else None
+            )
+
+            # portfolio_symbols 留空，每次 run_cycle 前动态更新
+            return IntradayMonitor(
+                data_manager=self._engine._dm,
+                watchlist=self._engine._watchlist,
+                portfolio_symbols=[],
+                performance_mode=mode,
+                alert_thresholds=thresholds,
+            )
+        except Exception as e:
+            logger.warning(f"IntradayMonitor 构建失败，盘中监控禁用: {e}")
+            return None
 
     def setup(self) -> None:
         """配置定时任务（清除旧任务防重复）。"""
@@ -206,6 +234,26 @@ class TradingScheduler:
         # 资金流数据已合并到宏观卡片中（08:00/15:15），不再单独注册 flow 任务
         # 宏观调度器 register_macro_jobs 已处理 early(08:00) 和 close(15:15) 的资金流合并
 
+        # v0.5.0 盘中实时盯盘（按性能分级频率）
+        # 监控持仓+watchlist 的资金流异动，发现异常即时告警
+        from gugu.config import get_config as _get_cfg
+        try:
+            _cfg = _get_cfg()
+            _im_cfg = getattr(_cfg, "intraday_monitor", None)
+            _im_enabled = getattr(_im_cfg, "enabled", True) if _im_cfg else True
+        except Exception:
+            _im_enabled = True
+
+        if _im_enabled:
+            # 注册盘中监控任务，使用 cron 每分钟触发一次，
+            # IntradayMonitor 内部根据 mode / 交易时段决定是否真正执行
+            self._scheduler.add_job(
+                self._safe_intraday_monitor,
+                CronTrigger(minute="*"),  # 每分钟触发
+                id="intraday_monitor",
+                name="盘中实时盯盘",
+            )
+
         logger.info(f"调度器配置完成: {len(self._scheduler.get_jobs())} 个任务")
         for job in self._scheduler.get_jobs():
             logger.info(f"  {job.id}: {job.name} -> {job.trigger}")
@@ -219,6 +267,32 @@ class TradingScheduler:
             await self._engine.run_daily_cycle()
         except Exception as e:
             logger.exception(f"交易循环异常: {e}")
+
+    async def _safe_intraday_monitor(self) -> None:
+        """v0.5.0 盘中实时资金流异动监控。
+
+        按性能分级频率扫描持仓+watchlist 的资金流异动，
+        发现超大单异动、连续资金流、行业异动、持仓预警时推送告警。
+
+        P0-2 修复：复用 __init__ 中构建的 monitor 单例，
+        _alert_history 字典跨周期持久，5 分钟告警去重生效。
+        """
+        if self._intraday_monitor is None:
+            return
+
+        try:
+            # 动态更新持仓列表（持仓可能变化）
+            portfolio_symbols = (
+                list(self._engine._broker.positions.keys())
+                if hasattr(self._engine._broker, "positions") else []
+            )
+            self._intraday_monitor._portfolio_symbols = portfolio_symbols
+
+            alerts = await self._intraday_monitor.run_cycle()
+            if alerts:
+                await self._engine._notifier.notify_intraday_alert(alerts)
+        except Exception as e:
+            logger.exception(f"盘中盯盘异常: {e}")
 
     async def _safe_report(self, period: str) -> None:
         """安全执行信号汇总推送。"""
@@ -322,7 +396,7 @@ class TradingScheduler:
 
             # 仅在震荡市和熊市推送观察列表（牛市依赖盘中扫描推荐）
             if regime == "bull":
-                logger.debug(f"盘中观察: 牛市，跳过观察列表推送（依赖盘中扫描推荐）")
+                logger.debug("盘中观察: 牛市，跳过观察列表推送（依赖盘中扫描推荐）")
                 return
 
             # 扫描 watchlist + 自动选股候选中接近 MA20 的股票
@@ -338,21 +412,14 @@ class TradingScheduler:
 
     async def _scan_range_candidates(self) -> list[dict]:
         """扫描接近 MA20 支撑位的候选股（用于震荡市观察列表）。"""
-        import asyncio
-
-        import pandas as pd
-
-        from gugu.utils.calendar import last_trading_day
-
         candidates: list[dict] = []
         watchlist = self._engine._watchlist[:20]  # 最多扫描 20 只，避免耗时过长
 
         async def check_one(symbol: str) -> dict | None:
             try:
-                df = await self._engine._dm.fetch_stock_kline(
-                    symbol, end_date=last_trading_day().isoformat(), limit=60
-                )
-                if df is None or len(df) < 30:
+                from gugu.data.stock_names import lookup_stock_name
+                df = await self._engine._dm.fetch_stock_history(symbol, days=60)
+                if df is None or df.empty or len(df) < 30:
                     return None
                 price = float(df["close"].iloc[-1])
                 ma20 = float(df["close"].rolling(20).mean().iloc[-1])
@@ -364,7 +431,7 @@ class TradingScheduler:
                     return None
                 return {
                     "symbol": symbol,
-                    "name": self._engine._dm.get_stock_name(symbol) or symbol,
+                    "name": lookup_stock_name(symbol) or symbol,
                     "price": price,
                     "ma20": round(ma20, 2),
                     "distance_pct": round(distance_pct, 2),
@@ -491,7 +558,6 @@ class TradingScheduler:
         """
         try:
             import subprocess
-            from pathlib import Path
 
             from gugu.config import PROJECT_ROOT
 
@@ -623,12 +689,12 @@ class TradingScheduler:
         if not is_trading_day():
             return
         try:
-            from gugu.config import get_config
             from gugu.analysis.perspectives import (
                 PerspectiveEngine,
                 StockDataContext,
                 build_context_from_kline,
             )
+            from gugu.config import get_config
             from gugu.notifier.perspective_report import build_batch_summary_card
 
             cfg = get_config()

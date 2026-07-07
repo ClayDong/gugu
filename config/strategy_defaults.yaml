@@ -133,3 +133,18 @@ double_yin:
   take_profit_pct: 0.08              # 止盈位 8%（减半仓触发阈值 × 0.6 = 4.8%）
   max_upper_shadow_pct: 0.02        # 长上影阈值（高位滞涨判定）
   stagnation_vol_ratio: 2.5          # 巨量滞涨量比阈值（清仓信号）
+
+capital_flow_alert:
+  # 资金流异动监控策略：4卖出特征识别主力出逃 + 3买入特征捕捉洗盘结束
+  # 来源：豆包AI「龙头股散户化」分析 + 实战派资金流监控
+  # 第一性原理：策略只用 OHLCV 近似资金流特征，真正的资金流判断在
+  # SignalPipeline 步骤 2 由 MoneyFlowFilter 完成（保持策略无外部 IO）
+  ma20_window: 20                     # 趋势均线（MA20，支撑/跌破判定）
+  vol_ma_window: 5                    # 成交量均线窗口
+  shrink_ratio: 0.8                   # 缩量回踩量比上限（主力洗盘结束）
+  breakout_volume_ratio: 1.3          # 量价背离放量阈值
+  stagnation_volume_ratio: 2.0        # 高位巨量滞涨量比阈值（主力出货）
+  pullback_max_pct: -0.02             # 回踩涨幅下限 -2%
+  recent_strong_window: 5             # 前期强势表现回看窗口
+  recent_strong_threshold: 0.05       # 前期强势涨幅阈值 5%
+  confirm_days: 0                    # 不确认（放量/缩量本身即触发条件）

@@ -39,8 +39,10 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     # P2-8: 新增 weekly_review_2000（周日 20:00 周复盘推送）
     # v0.4.4: 新增 range_observe_1030 + range_observe_1305（震荡市盘中观察列表）
     # v0.5.0: 新增 perspective_report_0830（十大视角分析日报）
-    assert len(jobs) == 24
+    # v0.5.0: 新增 intraday_monitor（盘中实时盯盘，每分钟触发）
+    assert len(jobs) == 25
     job_ids = {j.id for j in jobs}
+    assert "intraday_monitor" in job_ids
     assert "scan_1" in job_ids
     assert "scan_2" in job_ids
     assert "scan_3" in job_ids

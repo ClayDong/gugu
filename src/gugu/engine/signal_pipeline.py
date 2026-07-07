@@ -46,6 +46,7 @@ from gugu.data.manager import DataManager
 from gugu.data.stock_names import lookup_stock_name
 from gugu.engine.signal_router import SignalRouter
 from gugu.filters.fundamental import FundamentalFilter
+from gugu.filters.holder_concentration import HolderConcentrationFilter
 from gugu.filters.industry_constraint import IndustryConstraint
 from gugu.filters.money_flow import MoneyFlowFilter
 from gugu.utils.log import get_logger
@@ -87,6 +88,19 @@ class SignalPipeline:
         self._position_controller = position_controller
         self._fundamental_filter = fundamental_filter or FundamentalFilter()
         self._money_flow_filter = money_flow_filter or MoneyFlowFilter()
+        # v0.5.0 筹码集中度过滤器（季度慢变量）
+        self._holder_concentration_filter: HolderConcentrationFilter | None = None
+        try:
+            cfg_hc = gugu_config.get_config()
+            # AppConfig 有 holder_concentration_filter 字段时才启用
+            if hasattr(cfg_hc, 'holder_concentration_filter'):
+                hc_cfg = cfg_hc.holder_concentration_filter
+                if hc_cfg.enabled:
+                    self._holder_concentration_filter = HolderConcentrationFilter()
+                    logger.info("筹码集中度过滤器已启用（季度阈值 %.1f%%）",
+                                hc_cfg.quarterly_change_pct_threshold)
+        except Exception as e:
+            logger.debug(f"筹码过滤器初始化跳过: {e}")
         self._industry_constraint = industry_constraint or IndustryConstraint()
         self._sector_rotation = sector_rotation or SectorRotation()
         self._hot_sectors_cache: dict[str, Any] | None = None
@@ -439,6 +453,40 @@ class SignalPipeline:
                         )
                 except Exception as e:
                     logger.debug(f"高低切换检查失败 {symbol}: {e}")
+
+            # 2.4 筹码集中度过滤（v0.5.0 新增，仅买入信号）
+            # 股东户数季度披露，作为慢变量过滤器：
+            # - 避雷针信号（户数增 > 30%）→ 拒绝买入
+            # - 潜伏者信号（户数降 > 20%）→ 置信度加成
+            if (
+                signal["direction"] == "buy"
+                and not signal.get("wisdom_filtered")
+                and self._holder_concentration_filter is not None
+            ):
+                try:
+                    hc_result = await self._holder_concentration_filter.check(symbol)
+                    signal["holder_concentration"] = hc_result
+                    if not hc_result.get("pass", True):
+                        logger.warning(
+                            f"{symbol} 筹码集中度过滤: {hc_result.get('label', '')} — "
+                            f"{', '.join(hc_result.get('reasons', []))}"
+                        )
+                        signal["wisdom_filtered"] = True
+                        signal["filter_reason"] = (
+                            f"筹码结构: {hc_result.get('label', '')} — "
+                            f"{', '.join(hc_result.get('reasons', []))}"
+                        )
+                    elif hc_result.get("label") == "潜伏者":
+                        # 潜伏者信号：置信度加成
+                        boost = 0.15
+                        signal["confidence"] = min(
+                            1.0, float(signal.get("confidence", 0.5)) + boost
+                        )
+                        logger.info(
+                            f"{symbol} 筹码潜伏者信号：置信度 +{boost:.2f}"
+                        )
+                except Exception as e:
+                    logger.debug(f"筹码集中度检查失败 {symbol}: {e}")
 
             # 2.5 向下摊平检查
             if (

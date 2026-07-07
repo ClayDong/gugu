@@ -48,6 +48,10 @@ strategy:
     # 50股 +3.90%/夏普0.03/胜率37%（3/4条件通过），依赖 MarketFilter 在熊市拦截
     # 1710股大样本 +2.65%/夏普0.01/胜率37.4%（v0.4.7 全市场验证，收益稳定正，夏普边际）
     - double_yin
+    # v0.5.0 capital_flow_alert 禁用：100股回测 -1.42%/夏普-0.47/胜率26.6%，未通过验证
+    # 策略代码保留作为卖出信号库（4 个卖出特征识别主力出逃仍有价值）
+    # 盘中实时盯盘 IntradayMonitor 独立运行，不依赖此策略启用
+    # - capital_flow_alert
     # v0.4.8 禁用：大样本回测不通过（v0.4.7 全市场 1710股 -0.46%/夏普-0.21/胜率38%）
     # 30股小样本 +5.82%/夏普0.24 通过是过拟合，100股/1710股均不通过
     # - pullback_low
@@ -81,6 +85,32 @@ strategy:
     turnover_min: 15.0            # 换手率下限（%）
     amount_min: 1000000000       # 成交额下限（元，10亿）
     circ_mv_min: 7000000000     # 流通市值下限（元，70亿）
+
+# ========== 筹码结构过滤 ==========
+holder_concentration_filter:
+  enabled: true
+  quarterly_change_pct_threshold: 30.0
+  monthly_change_pct_threshold: 15.0
+  avg_hold_change_threshold: -20.0
+  lurker_consecutive_quarters: 2
+  lurker_total_decline_threshold: 20.0
+
+# ========== 盘中实时盯盘 ==========
+intraday_monitor:
+  enabled: true
+  performance_mode: auto    # auto|high|medium|low|off
+  # 自定义监控范围（可选，留空则按性能模式自动决定）
+  custom_watchlist: []
+  # 告警阈值（单位：亿元 / %，与 DataManager 返回单位对齐）
+  # P0-1 修复：原按元单位配置（100_000_000），但数据源已 /1e8 转为亿元
+  alert_thresholds:
+    super_large_inflow: 1.0          # 单股超大单净流入 1 亿
+    super_large_outflow: 1.0         # 单股超大单净流出 1 亿
+    main_pct_threshold: 5.0         # 主力净占比 5%（百分比单位）
+    consecutive_days: 3              # 连续日数
+    consecutive_total: 3.0           # 连续累计 3 亿
+    industry_flow_threshold: 10.0    # 行业资金流 10 亿
+    position_outflow_warning: 0.5    # 持仓股主力净流出 0.5 亿告警
 
 # ========== 风控 ==========
 risk:

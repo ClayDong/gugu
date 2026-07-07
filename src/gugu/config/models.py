@@ -27,6 +27,9 @@ class RiskConfig(BaseModel):
     max_total_positions: int = Field(default=5, ge=1, description="最大持仓数")
     max_same_industry: int = Field(default=2, ge=1, description="同行业最大持仓数")
     t_plus_1: bool = Field(default=True, description="T+1 限制（系统默认开启）")
+    max_holding_days_warn: int = Field(default=30, ge=1, description="持仓 N 天未盈利 → 警告减半仓（防阴跌套牢）")
+    max_holding_days_halt: int = Field(default=60, ge=1, description="持仓 N 天未盈利 → 强制清仓（防阴跌套牢）")
+    max_drawdown_halt: float = Field(default=0.15, ge=0.0, le=1.0, description="组合最大回撤熔断阈值")
 
 
 class DataConfig(BaseModel):
@@ -70,7 +73,7 @@ class StrategyConfig(BaseModel):
     select_top_n: int = Field(default=50, ge=1, description="全市场资金流排序取前 N")
     select_max_candidates: int = Field(default=10, ge=1, description="最大选股数量")
     # v0.4.6: 豹哥三要素选股池过滤器（默认关闭，仅与突破策略配合时开启）
-    leopard_universe_filter: "LeopardUniverseConfig" = Field(
+    leopard_universe_filter: LeopardUniverseConfig = Field(
         default_factory=lambda: LeopardUniverseConfig(),
         description="豹哥三要素选股池过滤器配置",
     )
@@ -261,6 +264,61 @@ class PerspectiveConfig(BaseModel):
     top_n_report: int = Field(default=5, ge=1, description="报告展示前N只")
 
 
+class HolderConcentrationConfig(BaseModel):
+    """筹码集中度过滤器配置.
+
+    股东户数季度披露，作为慢变量过滤器，拒绝散户化股票入场。
+    来源：豆包AI「龙头股散户化」分析 + 6 案例回测验证。
+    """
+
+    enabled: bool = Field(default=True, description="是否启用筹码集中度过滤")
+    quarterly_change_pct_threshold: float = Field(
+        default=30.0, ge=0.0, description="季度户数增幅阈值(%)，超过即拒绝"
+    )
+    monthly_change_pct_threshold: float = Field(
+        default=15.0, ge=0.0, description="月度户数增幅阈值(%)，超过即拒绝"
+    )
+    avg_hold_change_threshold: float = Field(
+        default=-20.0, description="户均持股变化率阈值(%)，低于即拒绝"
+    )
+    lurker_consecutive_quarters: int = Field(
+        default=2, ge=1, description="潜伏者连续季度数"
+    )
+    lurker_total_decline_threshold: float = Field(
+        default=20.0, ge=0.0, description="潜伏者累计降幅阈值(%)"
+    )
+
+
+class IntradayMonitorConfig(BaseModel):
+    """盘中实时盯盘配置.
+
+    按性能分级频率扫描持仓+watchlist 的资金流异动，
+    发现超大单异动、连续资金流、行业异动、持仓预警时推送告警。
+    """
+
+    enabled: bool = Field(default=True, description="是否启用盘中实时盯盘")
+    performance_mode: str = Field(
+        default="auto", description="性能模式: auto|high|medium|low|off"
+    )
+    custom_watchlist: list[str] = Field(
+        default_factory=list, description="自定义监控范围（留空则按性能模式自动决定）"
+    )
+    alert_thresholds: dict[str, Any] = Field(
+        default_factory=lambda: {
+            # 单位：亿元 / %，与 DataManager 返回单位对齐
+            # P0-1 修复：原按元单位配置，但数据源已 /1e8 转为亿元
+            "super_large_inflow": 1.0,
+            "super_large_outflow": 1.0,
+            "main_pct_threshold": 5.0,
+            "consecutive_days": 3,
+            "consecutive_total": 3.0,
+            "industry_flow_threshold": 10.0,
+            "position_outflow_warning": 0.5,
+        },
+        description="告警阈值（单位：亿元 / %）",
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────
 #  Top-level application config
 # ──────────────────────────────────────────────────────────────────────
@@ -285,6 +343,14 @@ class AppConfig(BaseModel):
     fund: FundConfig = Field(default_factory=FundConfig)
     log: LogConfig = Field(default_factory=LogConfig)
     perspective: PerspectiveConfig = Field(default_factory=PerspectiveConfig)
+    holder_concentration_filter: HolderConcentrationConfig = Field(
+        default_factory=HolderConcentrationConfig,
+        description="筹码集中度过滤器配置",
+    )
+    intraday_monitor: IntradayMonitorConfig = Field(
+        default_factory=IntradayMonitorConfig,
+        description="盘中实时盯盘配置",
+    )
 
     # ── classmethod factory ──────────────────────────────────────────
 
@@ -361,6 +427,9 @@ def flatten_config(app_config: AppConfig) -> dict[str, Any]:
             "max_total_positions": app_config.risk.max_total_positions,
             "max_same_industry": app_config.risk.max_same_industry,
             "t_plus_1": app_config.risk.t_plus_1,
+            "max_holding_days_warn": app_config.risk.max_holding_days_warn,
+            "max_holding_days_halt": app_config.risk.max_holding_days_halt,
+            "max_drawdown_halt": app_config.risk.max_drawdown_halt,
         },
         "execution": {
             "mode": app_config.execution.mode,
@@ -430,5 +499,19 @@ def flatten_config(app_config: AppConfig) -> dict[str, Any]:
             "scan_with_perspectives": app_config.perspective.scan_with_perspectives,
             "report_time": app_config.perspective.report_time,
             "top_n_report": app_config.perspective.top_n_report,
+        },
+        "holder_concentration_filter": {
+            "enabled": app_config.holder_concentration_filter.enabled,
+            "quarterly_change_pct_threshold": app_config.holder_concentration_filter.quarterly_change_pct_threshold,
+            "monthly_change_pct_threshold": app_config.holder_concentration_filter.monthly_change_pct_threshold,
+            "avg_hold_change_threshold": app_config.holder_concentration_filter.avg_hold_change_threshold,
+            "lurker_consecutive_quarters": app_config.holder_concentration_filter.lurker_consecutive_quarters,
+            "lurker_total_decline_threshold": app_config.holder_concentration_filter.lurker_total_decline_threshold,
+        },
+        "intraday_monitor": {
+            "enabled": app_config.intraday_monitor.enabled,
+            "performance_mode": app_config.intraday_monitor.performance_mode,
+            "custom_watchlist": list(app_config.intraday_monitor.custom_watchlist),
+            "alert_thresholds": dict(app_config.intraday_monitor.alert_thresholds),
         },
     }

@@ -589,6 +589,86 @@ class FeishuNotifier:
         """Format and send a holdings sell signal alert."""
         return await self.send_card(format_holdings_sell_alert(stocks))
 
+    async def notify_intraday_alert(self, alerts: list) -> bool:
+        """推送盘中异动告警卡片。
+
+        v0.5.0 盘中实时盯盘：当 IntradayMonitor 发现资金流异动
+        （超大单、连续流入/流出、行业异动、持仓预警等）时，
+        调用本方法推送告警卡片到飞书群。
+
+        P0-3 修复：添加持久化去重，基于 (alert_type, symbol, date) 指纹，
+        避免重启后同一告警重发。参考 _notified_signals 机制。
+        违反 project_memory 硬约束："飞书通知必须实现持久化去重防止重复发送"
+
+        Args:
+            alerts: AlertItem 列表（来自 IntradayMonitor）
+
+        Returns:
+            是否发送成功
+        """
+        if not self._enabled or not self._signal_enabled:
+            logger.debug("飞书通知未启用，跳过盘中告警")
+            return False
+
+        if not alerts:
+            return False
+
+        # P0-3 持久化去重：基于 (alert_type, symbol, date) 过滤已通知的告警
+        from datetime import date as _date
+        from pathlib import Path as _Path
+
+        today_str = _date.today().isoformat()
+        dedup_path = self._queue_path.parent / "intraday_alert_dedup.json"
+
+        # 加载已通知记录
+        notified: dict[str, str] = {}
+        try:
+            if dedup_path.exists():
+                with dedup_path.open("r", encoding="utf-8") as f:
+                    notified = json.load(f)
+                # 清理过期记录（保留近 2 天）
+                from datetime import timedelta as _timedelta
+                cutoff = (_date.today() - _timedelta(days=2)).isoformat()
+                notified = {k: v for k, v in notified.items() if v >= cutoff}
+        except Exception as e:
+            logger.warning(f"加载盘中告警去重记录失败: {e}")
+            notified = {}
+
+        # 过滤已通知的告警
+        new_alerts = []
+        for alert in alerts:
+            key = f"{alert.alert_type}_{alert.symbol}_{today_str}"
+            if notified.get(key) == today_str:
+                logger.debug(
+                    f"盘中告警 {alert.alert_type} {alert.symbol} 当日已通知，跳过"
+                )
+                continue
+            new_alerts.append(alert)
+            notified[key] = today_str
+
+        if not new_alerts:
+            logger.debug("盘中告警全部已通知过，跳过发送")
+            return False
+
+        # 保存去重记录（原子写入）
+        try:
+            dedup_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = dedup_path.with_suffix(".tmp")
+            with tmp_path.open("w", encoding="utf-8") as f:
+                json.dump(notified, f, ensure_ascii=False)
+            tmp_path.replace(dedup_path)
+        except Exception as e:
+            logger.warning(f"保存盘中告警去重记录失败: {e}")
+
+        try:
+            from gugu.notifier.intraday_alert import build_intraday_alert_card
+
+            card = build_intraday_alert_card(new_alerts)
+            return await self.send_card(card)
+        except Exception as e:
+            logger.warning(f"盘中告警卡片发送失败: {e}")
+            return False
+
     async def notify_take_profit_alert(
         self,
         symbol: str,

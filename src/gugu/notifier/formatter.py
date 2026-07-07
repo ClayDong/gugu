@@ -326,6 +326,25 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     if decision_chain_text:
         sections.append(f"**决策链路**\n{decision_chain_text}")
 
+    # 筹码结构层（v0.5.0 新增：股东户数季度慢变量）
+    hc = signal.get("holder_concentration")
+    if hc:
+        hc_label = hc.get("label", "")
+        hc_icon = "🟢" if hc_label == "潜伏者" else "🔴" if hc_label == "避雷针" else "⚪"
+        hc_holder_num_pct = hc.get("holder_num_pct", 0) or 0
+        hc_avg_hold_change = hc.get("avg_hold_change", 0) or 0
+        hc_end_date = hc.get("end_date", "") or "--"
+        hc_reasons = hc.get("reasons", []) or []
+        hc_reasons_text = "；".join(hc_reasons) if hc_reasons else "无"
+        sections.append(
+            f"**筹码结构**\n"
+            f"{hc_icon} 筹码结构：{hc_label}\n"
+            f"• 户数变化率：{hc_holder_num_pct:+.2f}%\n"
+            f"• 户均持股变化：{hc_avg_hold_change:+.2f}%\n"
+            f"• 报告期：{hc_end_date}\n"
+            f"• 说明：{hc_reasons_text}"
+        )
+
     decision_text = _format_wisdom_decision(wisdom_decision)
     if decision_text:
         sections.append(f"**智慧决策**\n{decision_text}")

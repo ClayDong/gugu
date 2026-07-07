@@ -23,6 +23,8 @@ dependencies = [
     "jieba>=0.42.1",
     "python-docx>=1.1.0",
     "scipy>=1.17.1",
+    # v0.5.0 盘中实时盯盘：性能自适应检测 CPU 核数和内存
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]
