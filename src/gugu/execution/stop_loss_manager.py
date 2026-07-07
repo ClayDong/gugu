@@ -9,13 +9,15 @@
 from __future__ import annotations
 
 import contextlib
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from gugu.engine.event_engine import EventEngine
 
 import pandas as pd
 
-from gugu.analysis.trailing_stop import TrailingStopEngine, TrailingStopSignal
 from gugu.analysis.dynamic_take_profit import DynamicTakeProfitEngine
-from gugu.config import PROJECT_ROOT, get_config
+from gugu.analysis.trailing_stop import TrailingStopEngine, TrailingStopSignal
 from gugu.data.stock_names import lookup_stock_name
 from gugu.models import Position
 from gugu.utils.log import get_logger
@@ -70,7 +72,7 @@ class StopLossManager:
             卖出的股票数（清仓的持仓数量，非股数）。
         """
         # 局部导入避免循环依赖
-        from gugu.engine.event_engine import EVENT_STOP_LOSS, EventEngine
+        from gugu.engine.event_engine import EVENT_STOP_LOSS
 
         portfolio = broker.get_portfolio()
         symbols = list(portfolio.keys())

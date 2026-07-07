@@ -40,6 +40,38 @@ from gugu.utils.log import get_logger
 
 logger = get_logger()
 
+# ── 通用错误友好化 ─────────────────────────────────────────
+
+
+def _humanize_error_message(msg: str) -> str:
+    """将技术错误消息翻译为普通用户可理解的描述。
+
+    规则仅适用于已知可翻译的模式；无法识别的错误保持原样。
+    """
+    if not msg:
+        return ""
+
+    # HTTP / 网络连接类错误
+    for tech, human in (
+        ("ConnectionError", "数据源连接失败（网络中断）"),
+        ("ConnectError", "数据源连接失败（网络中断）"),
+        ("Timeout", "请求超时（数据源响应过慢）"),
+        ("HTTP 500", "数据源服务器错误（稍后自动恢复）"),
+        ("HTTP 502", "数据源网关错误（稍后自动恢复）"),
+        ("HTTP 503", "数据源服务暂不可用（稍后自动恢复）"),
+        ("HTTP 429", "请求过于频繁（已自动限速）"),
+        ("HTTP 404", "数据不存在（可能已退市或代码错误）"),
+        ("No such file", "文件不存在"),
+        ("Permission denied", "权限不足"),
+        ("Disk full", "磁盘空间不足"),
+        ("OutOfMemory", "内存不足（系统将自动重启）"),
+        ("asyncio.TimeoutError", "异步操作超时"),
+    ):
+        if tech in msg:
+            return f"⚠️ {human}。系统已开启自动重试机制，将自动恢复。"
+    return msg
+
+
 FEISHU_BASE = "https://open.feishu.cn/open-apis"
 TOKEN_URL = f"{FEISHU_BASE}/auth/v3/tenant_access_token/internal"
 MESSAGE_URL = f"{FEISHU_BASE}/im/v1/messages"
@@ -273,6 +305,23 @@ class FeishuNotifier:
 
         for item in pending:
             retry_count = item.get("retry_count", 0)
+
+            # 指数退避：根据重试次数决定是否跳过本次重试
+            # 调度器每2分钟触发一次 retry_queued，退避策略：
+            #   retry_count=0 → 立即重试（间隔0min）
+            #   retry_count=1 → 每2次触发一次（间隔~4min）
+            #   retry_count=2 → 每4次触发一次（间隔~8min）
+            #   retry_count=3 → 每8次触发一次（间隔~16min）
+            # 实现：2^retry_count 次触发中只重试1次
+            if retry_count > 0:
+                backoff_interval = 2 ** retry_count  # 2, 4, 8, 16...
+                # 使用 retry_count 作为种子，每 backoff_interval 次触发重试一次
+                # 用当前时间戳的分钟数 / backoff_interval 取模，确保不同条目独立退避
+                now_minute = int(time.time()) // 120  # 每2分钟一个周期
+                if (now_minute + retry_count) % backoff_interval != 0:
+                    still_failed.append(item)
+                    continue
+
             # 过期清理：超过 MAX_QUEUE_AGE_HOURS 的条目直接丢弃
             # （昨日信号今日已无意义，重发只会误导用户）
             item_ts = item.get("timestamp", "")
@@ -589,6 +638,11 @@ class FeishuNotifier:
         ):
             msg = re.sub(pattern, r"\1***REDACTED***", msg, flags=re.IGNORECASE)
         error = dict(error)
+
+        # 友好化：将技术错误翻译为易懂描述
+        friendly_msg = _humanize_error_message(msg)
+        if friendly_msg != msg:
+            error["suggestion"] = error.get("suggestion", "") or friendly_msg
         error["message"] = msg
         return await self.send_card(format_system_error(error))
 
@@ -636,7 +690,6 @@ class FeishuNotifier:
 
         # P0-3 持久化去重：基于 (alert_type, symbol, date) 过滤已通知的告警
         from datetime import date as _date
-        from pathlib import Path as _Path
 
         today_str = _date.today().isoformat()
         dedup_path = self._queue_path.parent / "intraday_alert_dedup.json"

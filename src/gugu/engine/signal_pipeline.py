@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -31,7 +32,6 @@ import pandas as pd
 from gugu import config as gugu_config
 from gugu.analysis.danger_signal import DangerSignalDetector
 from gugu.analysis.no_average_down import NoAverageDownChecker
-from gugu.analysis.perspectives.data_types import StockDataContext
 from gugu.analysis.perspectives.engine import PerspectiveEngine
 from gugu.analysis.perspectives.integrators import (
     attach_perspective_to_signal,
@@ -40,10 +40,10 @@ from gugu.analysis.perspectives.integrators import (
 from gugu.analysis.position_controller import PositionBudget, PositionController
 from gugu.analysis.regime_detector import MultiPeriodRegimeDetector
 from gugu.analysis.sector_rotation import SectorRotation
-from gugu.detectors.divergence_detector import DivergenceDetector
 from gugu.analysis.stage_detector import MarketStage, StageDetector
 from gugu.data.manager import DataManager
 from gugu.data.stock_names import lookup_stock_name
+from gugu.detectors.divergence_detector import DivergenceDetector
 from gugu.engine.signal_router import SignalRouter
 from gugu.filters.fundamental import FundamentalFilter
 from gugu.filters.holder_concentration import HolderConcentrationFilter
@@ -97,7 +97,7 @@ class SignalPipeline:
                 hc_cfg = cfg_hc.holder_concentration_filter
                 if hc_cfg.enabled:
                     self._holder_concentration_filter = HolderConcentrationFilter()
-                    logger.info("筹码集中度过滤器已启用（季度阈值 %.1f%%）",
+                    logger.info("筹码集中度过滤器已启用（季度阈值 {:.1f}%）",
                                 hc_cfg.quarterly_change_pct_threshold)
         except Exception as e:
             logger.debug(f"筹码过滤器初始化跳过: {e}")
@@ -564,7 +564,7 @@ class SignalPipeline:
                     if _k in wisdom_signal:
                         signal[_k] = wisdom_signal[_k]
                 signal["llm_pending"] = False
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     f"[wisdom] {symbol} LLM 决策超时(15s)，降级到硬编码 fallback"
                 )
@@ -695,16 +695,17 @@ def _rotate_jsonl(path: Path, max_lines: int = _SIGNAL_HISTORY_MAX_LINES) -> Non
 
 def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result: Any) -> None:
     try:
-        hb_dir = gugu_config.PROJECT_ROOT / "data"
-        hb_dir.mkdir(exist_ok=True)
-        path = hb_dir / "signals_history.jsonl"
-        _rotate_jsonl(path)
+        with _signal_history_lock:
+            hb_dir = gugu_config.PROJECT_ROOT / "data"
+            hb_dir.mkdir(exist_ok=True)
+            path = hb_dir / "signals_history.jsonl"
+            _rotate_jsonl(path)
 
-        decision_chain: list[dict] = []
+            decision_chain: list[dict] = []
 
-        stage_info = signal.get("stage", {})
-        if stage_info:
-            decision_chain.append({
+            stage_info = signal.get("stage", {})
+            if stage_info:
+                decision_chain.append({
                 "step": 0,
                 "name": "四阶段判断",
                 "result": stage_info.get("stage", "unknown"),
@@ -713,9 +714,9 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "passed": True,
             })
 
-        danger_info = signal.get("danger_signals", {})
-        if danger_info:
-            severity = danger_info.get("severity", "none")
+            danger_info = signal.get("danger_signals", {})
+            if danger_info:
+                severity = danger_info.get("severity", "none")
             decision_chain.append({
                 "step": 0.5,
                 "name": "危险信号检测",
@@ -725,9 +726,9 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "passed": severity not in ("medium", "high"),
             })
 
-        fund_info = signal.get("fundamental", {})
-        if fund_info:
-            decision_chain.append({
+            fund_info = signal.get("fundamental", {})
+            if fund_info:
+                decision_chain.append({
                 "step": 1,
                 "name": "基本面过滤",
                 "result": "pass" if fund_info.get("pass") else "fail",
@@ -735,9 +736,9 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "passed": fund_info.get("pass", True),
             })
 
-        flow_info = signal.get("money_flow", {})
-        if flow_info:
-            decision_chain.append({
+            flow_info = signal.get("money_flow", {})
+            if flow_info:
+                decision_chain.append({
                 "step": 2,
                 "name": "资金流过滤",
                 "result": "pass" if flow_info.get("pass") else "fail",
@@ -745,9 +746,9 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "passed": flow_info.get("pass", True),
             })
 
-        sector_info = signal.get("sector_check", {})
-        if sector_info and "is_hot" in sector_info:
-            decision_chain.append({
+            sector_info = signal.get("sector_check", {})
+            if sector_info and "is_hot" in sector_info:
+                decision_chain.append({
                 "step": 2.2,
                 "name": "板块轮动感知",
                 "result": "hot" if sector_info.get("is_hot") else ("cold" if sector_info.get("is_cold") else "neutral"),
@@ -755,9 +756,9 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "passed": True,
             })
 
-        avg_down_info = signal.get("avg_down_check", {})
-        if avg_down_info:
-            decision_chain.append({
+            avg_down_info = signal.get("avg_down_check", {})
+            if avg_down_info:
+                decision_chain.append({
                 "step": 2.5,
                 "name": "向下摊平检查",
                 "result": "allowed" if avg_down_info.get("allowed") else "blocked",
@@ -766,9 +767,9 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "passed": avg_down_info.get("allowed", True),
             })
 
-        ind_info = signal.get("industry_check", {})
-        if ind_info:
-            decision_chain.append({
+            ind_info = signal.get("industry_check", {})
+            if ind_info:
+                decision_chain.append({
                 "step": 3,
                 "name": "行业约束",
                 "result": "allowed" if ind_info.get("allowed") else "blocked",
@@ -776,9 +777,9 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "passed": ind_info.get("allowed", True),
             })
 
-        persp_info = signal.get("perspective_check", {})
-        if persp_info:
-            decision_chain.append({
+            persp_info = signal.get("perspective_check", {})
+            if persp_info:
+                decision_chain.append({
                 "step": 3.6,
                 "name": "十大视角质量门禁",
                 "result": f"综合{persp_info.get('composite_score', 0):.1f} "
@@ -790,9 +791,9 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "passed": persp_info.get("passed", True),
             })
 
-        wisdom_dec = signal.get("wisdom_decision", {})
-        if wisdom_dec:
-            decision_chain.append({
+            wisdom_dec = signal.get("wisdom_decision", {})
+            if wisdom_dec:
+                decision_chain.append({
                 "step": 5,
                 "name": "Wisdom决策",
                 "result": wisdom_dec.get("action", ""),
@@ -802,12 +803,12 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "passed": not signal.get("wisdom_filtered", False),
             })
 
-        _sym = signal.get("symbol", "")
-        _raw_name = signal.get("name", "") or ""
-        if not _raw_name or _raw_name == _sym:
-            _raw_name = lookup_stock_name(_sym) or _raw_name
+            _sym = signal.get("symbol", "")
+            _raw_name = signal.get("name", "") or ""
+            if not _raw_name or _raw_name == _sym:
+                _raw_name = lookup_stock_name(_sym) or _raw_name
 
-        record = {
+            record = {
             "timestamp": pd.Timestamp.now().isoformat(),
             "symbol": signal.get("symbol"),
             "name": _raw_name,
@@ -830,8 +831,8 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
             "order_quantity": getattr(order_result, "quantity", 0),
             "order_price": getattr(order_result, "price", 0),
             "order_commission": getattr(order_result, "commission", 0),
-        }
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+            }
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
     except Exception as e:
         logger.warning(f"记录信号历史失败: {e}")

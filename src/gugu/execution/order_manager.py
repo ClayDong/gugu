@@ -6,13 +6,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from gugu.engine.event_engine import EventEngine
 
 import pandas as pd
 
-from gugu.analysis.trailing_stop import TrailingStopEngine
 from gugu.analysis.dynamic_take_profit import DynamicTakeProfitEngine
 from gugu.analysis.signal_tracker import SignalTracker
+from gugu.analysis.trailing_stop import TrailingStopEngine
 from gugu.config import get_config
 from gugu.utils.log import get_logger
 

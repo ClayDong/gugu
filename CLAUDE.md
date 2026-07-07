@@ -308,15 +308,21 @@ gugu/
 ## 元数据
 
 - 创建日期：2026-07-06
-- 版本：v0.5.4
+- 版本：v0.5.5
 - 阶段：阶段三（信号监控）+ 十大视角分析系统 + 信号流融合 + 宏观增强
-- 测试：1168 passed（排除 test_kb_agent 4 个 LLM mock 失败）, 64% coverage
-- 最近审查：2026-07-06（第一性原理+10视角对抗性审查 — 详见 docs/AUDIT_REPORT_20260706.md）
+- 测试：1421 passed, 68% coverage
+- 最近审查：2026-07-07（第一性原理+多专家对抗性审查 — 架构/算法/业务/性能/体验）
+- v0.5.5 变更（2026-07-07 多专家审查修复）：
+  - 🔴 高优修复：组合回撤检查移到止损之后（step 2.5→step 3.5），避免虚高净值稀释回撤灵敏度
+  - 🔴 高优修复：`_require_confirmation` 添加 `is_backtest` 参数，消除回测模式下当日数据前瞻偏差
+  - 🟡 APScheduler 14:30 任务错开（扫描14:30 → 选股14:31 → 资金流14:32），避免并发竞争
+  - 🟡 通知重试队列改为 IntervalTrigger(minutes=2)，规避系统分钟边界耦合
+  - 🟡 `retry_queued` 修复：BaseException 下也清理 hb_task，防止异常吞噬
+  - 🟡 `IntradayMonitor._alert_history` 添加过期清理，防止字典无限增长
+  - 🟡 `reset_halt` 增加 `_clear_today_notified_signals`，补发熔断期间错过的信号
+  - 🟡 `record_signal_history` 添加 threading.Lock 防并发写入竞态
+  - 🟡 震荡市观察列表接入资金流筛选（主力净流出>1亿/占比<-5% 排除，按强度排序）
 - v0.5.4 变更：
-  - 飞书通知重试机制增强（send_card 即时重试 + retry_queued 强制刷新 token + 队列间隔 10min→2min）
-  - 资金流报告数据源容错（HTTP 重试+UA 池 + 降级条件修复 + 量价推算 fallback）
-  - 震荡市观察列表接入资金流筛选（主力净流出>1亿/占比<-5% 排除，按资金强度排序）
-  - 循环导入修复（order_manager/stop_loss_manager 延迟导入 engine 模块）
 
 ## 十一、十大视角分析系统（v0.5.0 新增）
 

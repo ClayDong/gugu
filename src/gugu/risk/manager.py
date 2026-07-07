@@ -112,11 +112,19 @@ class RiskManager:
 
         用于盘中人工解除熔断后恢复交易，但保留当日亏损累计，
         避免掩盖当日已发生的亏损（铁律：L2 熔断不可被绕过）。
+
+        注意：此方法会绕过熔断铁律，调用前应确保人工确认。
+        熔断状态解除后，当日亏损继续累计，若再次触发熔断将重新阻断交易。
         """
         if self._halted:
             self._logger.warning(
-                "L2 熔断状态人工解除（clear_halt_only），日初净值保留不变，当日亏损继续累计"
+                "⚠️ L2 熔断状态人工解除（clear_halt_only）—— "
+                "日初净值保留不变，当日亏损继续累计。"
+                "若当日亏损继续扩大至熔断阈值，将再次触发熔断。"
             )
+        else:
+            self._logger.info("clear_halt_only 调用但熔断未激活，无操作")
+            return
         self._halted = False
         self._save_halt_state()
 

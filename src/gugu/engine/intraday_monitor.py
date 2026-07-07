@@ -18,7 +18,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from gugu.data import data_manager
 from gugu.data.manager import DataManager
 from gugu.utils.calendar import is_trading_day, is_trading_time
 from gugu.utils.log import get_logger
@@ -92,6 +91,18 @@ class IntradayMonitor:
 
     ALERT_COOLDOWN_SEC = 300  # 同一信号 5 分钟内不重复推送
 
+    def _cleanup_alert_history(self) -> None:
+        """清理过期的告警冷却记录，防止 _alert_history 字典无限增长。"""
+        if not self._alert_history:
+            return
+        now = time.time()
+        stale_keys = [
+            k for k, ts in self._alert_history.items()
+            if now - ts >= self.ALERT_COOLDOWN_SEC * 2
+        ]
+        for k in stale_keys:
+            del self._alert_history[k]
+
     def __init__(
         self,
         data_manager: DataManager | None = None,
@@ -138,11 +149,11 @@ class IntradayMonitor:
         """判断是否应该执行扫描。"""
         if self._mode == "off":
             return False
+        # P2 修复：每次扫描前清理过期告警历史，防止字典无限增长
+        self._cleanup_alert_history()
         if not is_trading_day():
             return False
-        if not is_trading_time():
-            return False
-        return True
+        return is_trading_time()
 
     async def run_cycle(self) -> list[AlertItem]:
         """执行一次扫描周期，返回异动告警列表。"""
@@ -300,8 +311,7 @@ class IntradayMonitor:
             position_warning_threshold = float(
                 self._thresholds.get("position_outflow_warning", 0.5)
             )
-            if symbol in self._portfolio_symbols:
-                if main_net < -position_warning_threshold:
+            if symbol in self._portfolio_symbols and main_net < -position_warning_threshold:
                     alerts.append(AlertItem(
                         alert_type="position_warning",
                         symbol=symbol,

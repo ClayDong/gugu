@@ -189,7 +189,7 @@ class BacktestEngine:
         # 消除 rolling 窗口含当日收盘价引入的隐性前视偏差。
         # 即使策略内部使用 .shift(1)，移动平均类指标（SMA/布林带等）
         # 默认含当日值，shift(1) 信号列保证回测不"看到未来"。
-        signals_df = strategy.generate_signals(df)
+        signals_df = strategy.generate_signals(df, is_backtest=True)
         signals_df["signal"] = signals_df["signal"].shift(1).fillna(0)
         # P1 修复：验证信号值在 {-1, 0, 1} 范围内，非标准值强制截断到合法区间
         raw = signals_df["signal"]
@@ -569,7 +569,7 @@ def walk_forward_optimize(
     param_grid: dict[str, list] | None = None,
     train_ratio: float = 0.6,
     n_splits: int = 3,
-    param_constraints: "callable[[dict], bool] | None" = None,
+    param_constraints: callable[[dict], bool] | None = None,
 ) -> list[dict]:
     """Walk-forward 参数优化 + 滚动前向验证。
 
@@ -680,11 +680,11 @@ def walk_forward_optimize(
 
 def walk_forward_optimize_multi_stock(
     strategy_cls: type,
-    stock_dfs: dict[str, "pd.DataFrame"],
+    stock_dfs: dict[str, pd.DataFrame],
     param_grid: dict[str, list] | None = None,
     train_ratio: float = 0.6,
     n_splits: int = 3,
-    param_constraints: "callable[[dict], bool] | None" = None,
+    param_constraints: callable[[dict], bool] | None = None,
 ) -> list[dict]:
     """多股聚合 Walk-Forward 优化（解决单股过拟合问题）。
 

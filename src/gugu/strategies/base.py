@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from abc import ABC
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,9 +29,16 @@ class StrategyConfig:
 
 
 class Strategy(ABC):
-    """策略抽象基类。"""
+    """策略抽象基类。
+
+    子类必须实现 `_generate_signals_impl` 方法。
+    """
 
     name: str = "base"
+
+    @abstractmethod
+    def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
+        """子类实现：生成交易信号的核心逻辑。"""
 
     def __init__(self, params: dict[str, Any] | None = None) -> None:
         # 合并默认参数 + 传入参数
@@ -39,7 +46,7 @@ class Strategy(ABC):
         self.params = {**defaults, **(params or {})}
         self.validate_params()
 
-    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+    def generate_signals(self, df: pd.DataFrame, is_backtest: bool = False) -> pd.DataFrame:
         """生成交易信号（模板方法）。
 
         子类应实现 _generate_signals_impl 而非重写 generate_signals。
@@ -47,16 +54,19 @@ class Strategy(ABC):
 
         Args:
             df: 行情数据，含 date, open, high, low, close, volume, amount
+            is_backtest: 是否在回测模式（默认 False）。
+                          回测模式下跳过确认（回测引擎已通过 shift(1) 防前瞻）。
+                          见 _require_confirmation 的 is_backtest 参数说明。
 
         Returns:
             df 增加 signal 列（1=买, -1=卖, 0=持有）和 confidence 列（0-1）
         """
         df = self._generate_signals_impl(df)
-        return self._require_confirmation(df)
+        return self._require_confirmation(df, is_backtest=is_backtest)
 
     def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         """子类实现具体的信号生成逻辑。
-        
+
         如果子类覆盖了 generate_signals（不走模板方法），可以不实现此方法。
         """
         raise NotImplementedError(f"{self.__class__.__name__} 必须实现 _generate_signals_impl")
@@ -89,7 +99,8 @@ class Strategy(ABC):
         return tr.rolling(window=window, min_periods=1).mean()
 
     def _require_confirmation(
-        self, df: pd.DataFrame, signal_col: str = "signal", confirm_days: int | None = None
+        self, df: pd.DataFrame, signal_col: str = "signal", confirm_days: int | None = None,
+        is_backtest: bool = False,
     ) -> pd.DataFrame:
         """信号确认机制：检查后续 K 线是否维持信号方向。
 
@@ -100,10 +111,14 @@ class Strategy(ABC):
         confirm_days 默认从 self.params["confirm_days"] 读取，未配置时为 0（不确认）。
         可通过策略配置参数单独控制每个策略是否需要确认。
 
+        回测模式（is_backtest=True）：跳过确认，因为回测引擎已通过 shift(1) 保证信号不超前。
+        实盘模式下使用未来 K 线做自然确认。
+
         Args:
             df: 含 signal 列的 DataFrame
             signal_col: 信号列名，默认 "signal"
             confirm_days: 确认所需后续 K 线根数，None 时从 self.params 读取
+            is_backtest: 是否在回测模式（默认 False）
 
         Returns:
             确认后的 DataFrame（直接修改原 df）
@@ -112,6 +127,9 @@ class Strategy(ABC):
         if confirm_days is None:
             confirm_days = int(self.params.get("confirm_days", 0))
         if confirm_days <= 0:
+            return df
+
+        if is_backtest:
             return df
 
         df = df.copy()

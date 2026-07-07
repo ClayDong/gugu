@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import json
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -165,6 +166,9 @@ class TradingEngine:
         # P1 修复：_last_cycle_date 必须在 run_daily_cycle 使用前初始化
         self._last_cycle_date: date | None = None
 
+        # 当日被过滤信号摘要（解决沉默拒绝问题，收盘时推送）
+        self._filtered_signals_today: list[dict[str, Any]] = []
+
         # 信号过滤流水线
         self._pipeline = pipeline if pipeline is not None else SignalPipeline(
             data_manager=self._dm,
@@ -280,31 +284,15 @@ class TradingEngine:
                 # 2. 采集行情
                 await self._update_prices()
 
-                # 2.5 组合回撤检查（T+1 结算后、止损前）
-                # 先更新组合峰值，再检查回撤是否触发熔断
-                account_snapshot = self._broker.get_account()
-                self._risk.update_portfolio_peak(account_snapshot.total_value)
-                drawdown_result = self._risk.check_portfolio_drawdown(account_snapshot.total_value)
-                if drawdown_result.action == RiskAction.HALT:
-                    self._event_engine.put(EVENT_DAILY_LOSS_HALT, {"drawdown": True})
-                    logger.warning(f"组合回撤触发熔断: {drawdown_result.message}")
-                    await self._notifier.notify_risk_alert({
-                        "level": "halt",
-                        "message": drawdown_result.message,
-                        "suggestion": "组合回撤过大，已自动熔断，需人工 reset_halt 后恢复",
-                    })
-                    self._write_heartbeat("halted")
-                    return
-                elif drawdown_result.action == RiskAction.WARN:
-                    logger.warning(f"组合回撤预警: {drawdown_result.message}")
-
                 # 3. 持仓止损检查：先止损再扫描信号（A-05 修复）
                 # 止损卖出会改变持仓与资金，必须在信号扫描前执行，
                 # 确保后续信号基于最新持仓状态生成
                 await self._check_stop_loss()
 
                 # 3.5 止损后立即检查日亏 & 组合回撤（P1-d 修复）
-                # 止损可能造成大亏，若不先检查则后续买单会在已熔断状态下继续执行
+                # 组合回撤检查移至止损之后，避免止损前的虚高净值
+                # 稀释回撤灵敏度（应止损但未止损的持仓计入峰值后，止损后
+                # 净值下降但峰值已虚高，导致回撤检查结果失真）
                 await self._check_daily_loss()
                 if self._risk.is_halted:
                     logger.warning("止损后触发 L2 熔断，跳过本次信号扫描与下单")
@@ -486,24 +474,34 @@ class TradingEngine:
         max_concurrency = getattr(_get_config().execution, "scan_concurrency", 10)
         semaphore = asyncio.Semaphore(max_concurrency)
 
-        # P3 优化（2026-07）：批量预取所有股票的历史数据，减少竞争
-        # 先批量获取所有待扫描股票的历史数据，再并发处理
+        # 批量预取所有股票的历史数据（使用并发限制，避免串行等待）
+        # 原实现为串行 for 循环，N 只股票需 N 次串行 I/O
+        # 优化为 asyncio.gather 并发预取，大幅缩短预取时间
         if scan_list and len(scan_list) > 5:
-            logger.info(f"批量预取 {len(scan_list)} 只股票历史数据...")
+            logger.info(f"批量预取 {len(scan_list)} 只股票历史数据（并发 {max_concurrency}）...")
             batch_history = {}
-            for sym in scan_list:
+
+            async def _prefetch_one(sym: str) -> tuple[str, Any] | None:
                 try:
-                    # P0 修复：days=90 日历日≈63交易日 < StageDetector 要求的 MA_LONG+10=70
-                    # 导致 stage 永远返回"数据不足"，四阶段判断完全失效
-                    # 改为 days=120（≈84交易日）确保覆盖 StageDetector/TrailingStop 窗口
+                    # P0 修复：days=120（≈84交易日）确保覆盖 StageDetector/TrailingStop 窗口
                     df = await self._dm.fetch_stock_history(sym, days=120)
-                    if not df.empty:
-                        batch_history[sym] = df
+                    if df is not None and not df.empty:
+                        return sym, df
                 except Exception as e:
-                    # P1-1 修复：原静默 except Exception: continue 会让开发者无法发现问题
-                    # 改为 WARNING 级别记录，便于排查数据源故障
                     logger.warning(f"获取 {sym} 历史数据失败，跳过: {e}")
-                    continue
+                return None
+
+            # 使用 semaphore 限制并发数
+            async def _prefetch_with_sem(sym: str) -> tuple[str, Any] | None:
+                async with semaphore:
+                    return await _prefetch_one(sym)
+
+            prefetch_tasks = [_prefetch_with_sem(sym) for sym in scan_list]
+            prefetch_results = await asyncio.gather(*prefetch_tasks)
+            for r in prefetch_results:
+                if r is not None:
+                    sym, df = r
+                    batch_history[sym] = df
             logger.info(f"批量预取完成: {len(batch_history)}/{len(scan_list)}")
         else:
             batch_history = {}
@@ -560,12 +558,44 @@ class TradingEngine:
                     return None
 
         # 并发执行所有扫描任务
+        results: list[dict[str, Any] | None] = []
         if scan_list:
             tasks = [_scan_single(sym) for sym in scan_list]
             results = await asyncio.gather(*tasks)
             signals = [s for s in results if s is not None]
 
+        # 收集被过滤的信号摘要（用于收盘推送，解决沉默拒绝问题）
+        self._collect_filtered_signals(results, scan_list)
+
         return signals
+
+    def _collect_filtered_signals(
+        self, results: list[dict[str, Any] | None], scan_list: list[str],
+    ) -> None:
+        """收集被过滤的信号摘要，存入实例供收盘报告使用。
+
+        解决"沉默拒绝"问题：用户不知道哪些股票触发了信号但因过滤被拒。
+        """
+        filtered: list[dict[str, Any]] = []
+        for r in results:
+            if r is None:
+                continue
+            if r.get("wisdom_filtered"):
+                filtered.append({
+                    "symbol": r.get("symbol", ""),
+                    "name": r.get("name", ""),
+                    "direction": r.get("direction", ""),
+                    "strategy": r.get("strategy", ""),
+                    "filter_reason": r.get("filter_reason", "未知原因"),
+                    "confidence": r.get("confidence", 0),
+                    "price": r.get("price", 0),
+                })
+        self._filtered_signals_today = filtered
+        if filtered:
+            logger.info(
+                f"今日被过滤信号: {len(filtered)} 条 — "
+                + ", ".join(f"{s['symbol']}({s['filter_reason'][:20]})" for s in filtered[:5])
+            )
 
     def _load_notified_signals(self) -> dict[str, str]:
         """从文件加载已通知信号记录（持久化去重）。"""
@@ -619,6 +649,23 @@ class TradingEngine:
         except Exception as e:
             logger.warning(f"保存已通知信号记录失败: {e}")
 
+    def _clear_today_notified_signals(self) -> None:
+        """清除当日的信号去重记录，使下一轮扫描能重新触发信号并推送。
+
+        用于 reset_halt 后补发熔断期间错过的信号。
+        不清除非当日的记录，避免跨日重复。
+        """
+        today_str = date.today().isoformat()
+        keys_to_remove = [
+            k for k, v in self._notified_signals.items()
+            if v == today_str
+        ]
+        for k in keys_to_remove:
+            del self._notified_signals[k]
+        if keys_to_remove:
+            logger.info(f"已清除 {len(keys_to_remove)} 条当日信号去重记录，补发熔断期间信号")
+            self._save_notified_signals()
+
     def _mark_notified(self, signal: dict[str, Any]) -> None:
         """记录信号已通知，防止多轮扫描重复发送。"""
         symbol = signal["symbol"]
@@ -634,7 +681,7 @@ class TradingEngine:
         """处理单个信号：signal_only 模式只通知不下单，paper/live 模式走风控+下单+通知。"""
         symbol = signal["symbol"]
         direction = signal["direction"]
-        price = signal.get("price", 0)
+        _price = signal.get("price", 0)
 
         # 信号去重：同股同方向当日已通知的信号不重复发送（防止多轮扫描重复推送）
         if not hasattr(self, "_notified_signals"):
@@ -760,11 +807,14 @@ class TradingEngine:
 
     async def send_daily_report(self, period: str) -> None:
         """发送信号汇总报告。委托给 DailyReportManager。"""
+        # 收盘时传递当日被过滤信号摘要（解决沉默拒绝问题）
+        filtered = self._filtered_signals_today if period == "close" else []
         await self._report_manager.send_report(
             period=period,
             check_holdings_sell=self._check_holdings_sell_signals,
             engine_lock=self._lock,
             engine_running=self._running,
+            filtered_signals=filtered,
         )
 
     def _load_today_signals(self) -> list[dict[str, Any]]:
@@ -782,10 +832,16 @@ class TradingEngine:
         铁律：仅清除 _halted 标志，不重置日初净值，当日亏损继续累计。
         避免盘中熔断 reset 后"掩盖"当日已发生的亏损。
         若需跨日重置，应在新交易日由 run_daily_cycle 自动调用 _risk.reset()。
+
+        v0.5.4 增强：清除当日信号去重记录，使下一轮 run_daily_cycle
+        能重新触发熔断期间错过的信号并推送到飞书。
         """
         self._risk.clear_halt_only()
+        # 清除当日信号去重记录，让下一轮 run_daily_cycle 重新扫描并推送信号
+        self._clear_today_notified_signals()
         logger.warning(
-            "L2 熔断状态已手动解除（clear_halt_only），日初净值保留不变，当日亏损继续累计"
+            "L2 熔断状态已手动解除（clear_halt_only），已清除当日去重记录，"
+            "下一轮扫描将补发熔断期间错过的信号"
         )
 
     def _on_risk_alert(self, event: dict[str, Any]) -> None:

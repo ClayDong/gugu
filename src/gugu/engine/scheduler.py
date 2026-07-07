@@ -30,6 +30,7 @@ from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from gugu.config import get_config
 from gugu.engine.main import TradingEngine
@@ -90,6 +91,20 @@ class TradingScheduler:
             logger.warning(f"IntradayMonitor 构建失败，盘中监控禁用: {e}")
             return None
 
+    def _task_enabled(self, task_name: str) -> bool:
+        """检查调度任务是否启用（从 settings.yaml scheduler.tasks 读取）。
+
+        若配置中不存在该任务，默认启用（向后兼容）。
+        """
+        try:
+            cfg = get_config()
+            tasks = getattr(cfg.scheduler, "tasks", None)
+            if tasks is None:
+                return True
+            return getattr(tasks, task_name, True)
+        except Exception:
+            return True
+
     def setup(self) -> None:
         """配置定时任务（清除旧任务防重复）。"""
         # 清除所有旧 job，防止多次调用 setup 导致重复注册
@@ -107,34 +122,34 @@ class TradingScheduler:
                 name=f"盘中扫描-{h:02d}:{m:02d}",
             )
 
-        # 尾盘选股（14:30 独立任务，与扫描并存）
-        self._scheduler.add_job(
-            self._safe_screener,
-            CronTrigger(hour=14, minute=30, day_of_week="mon-fri"),
+        # 尾盘选股（14:31，错开 14:30 的盘中扫描 1 分钟，避免并发竞争 broker/data_manager）
+        if self._task_enabled("screener"):
+            self._scheduler.add_job(
+                self._safe_screener,
+            CronTrigger(hour=14, minute=31, day_of_week="mon-fri"),
             id="screener_1430",
             name="尾盘选股-14:30",
         )
 
-        # 盘后资金流决策报告（14:30，交易日）
-        # 采集资金流数据生成决策指导卡片，与尾盘扫描/选股并行（I/O 密集不阻塞 CPU 扫描）
-        self._scheduler.add_job(
-            self._safe_afternoon_flow,
-            CronTrigger(hour=14, minute=30, day_of_week="mon-fri"),
-            id="afternoon_flow_1430",
-            name="盘后资金流决策报告-14:30",
-        )
+        # 盘后资金流决策报告（14:32，错开 screener 1 分钟，避免三项任务并发竞争资源）
+        if self._task_enabled("flow_afternoon"):
+            self._scheduler.add_job(
+                self._safe_afternoon_flow,
+                CronTrigger(hour=14, minute=32, day_of_week="mon-fri"),
+                id="afternoon_flow_1430",
+                name="盘后资金流决策报告-14:30",
+            )
 
         # 尾盘选股次日验证（09:35，开盘价已更新）
-        self._scheduler.add_job(
-            self._safe_validate_screener,
-            CronTrigger(hour=9, minute=35, day_of_week="mon-fri"),
-            id="screener_validate_0935",
-            name="尾盘验证-09:35",
-        )
+        if self._task_enabled("screener"):
+            self._scheduler.add_job(
+                self._safe_validate_screener,
+                CronTrigger(hour=9, minute=35, day_of_week="mon-fri"),
+                id="screener_validate_0935",
+                name="尾盘验证-09:35",
+            )
 
         # P1-1: 震荡市盘中观察列表推送（10:30 / 13:05）
-        # 在震荡市下，盘中扫描不推荐买入，但推送接近 MA20 支撑的股票列表
-        # 让用户有心理准备，14:30 推送正式选股结果
         for h, m in [(10, 30), (13, 5)]:
             self._scheduler.add_job(
                 self._safe_range_watchlist,
@@ -145,22 +160,24 @@ class TradingScheduler:
 
         # 日报推送
         period_map = {"09:10": "morning", "11:35": "noon", "15:10": "close"}
+        task_map = {"morning": "signal_morning", "noon": "signal_noon", "close": "signal_close"}
         for t in report_times:
             h, m = t.split(":")
             period = period_map.get(t, "morning")
-            self._scheduler.add_job(
-                self._safe_report,
-                CronTrigger(hour=int(h), minute=int(m), day_of_week="mon-fri"),
-                args=[period],
-                id=f"report_{period}",
-                name=f"信号汇总-{period}",
-            )
+            if self._task_enabled(task_map.get(period, "signal_morning")):
+                self._scheduler.add_job(
+                    self._safe_report,
+                    CronTrigger(hour=int(h), minute=int(m), day_of_week="mon-fri"),
+                    args=[period],
+                    id=f"report_{period}",
+                    name=f"信号汇总-{period}",
+                )
 
-        # 通知重试队列：每 2 分钟重试失败的通知（原 10 分钟间隔太长，
-        # 飞书暂时性 400 错误会导致通知延迟 10 分钟才重发）
+        # 通知重试队列：每 2 分钟重试失败的通知（用 IntervalTrigger 而非 CronTrigger，
+        # 避免与系统分钟边界耦合，且默认 coalesce=True 防重入）
         self._scheduler.add_job(
             self._safe_retry_notify,
-            CronTrigger(minute="*/2"),
+            IntervalTrigger(minutes=2),
             id="retry_notify",
             name="通知重试队列",
         )
@@ -171,32 +188,33 @@ class TradingScheduler:
         register_macro_jobs(self._scheduler, broker=self._engine._broker)
 
         # 基金监控推送：15:35（交易日）
-        self._scheduler.add_job(
-            self._safe_fund_monitor,
-            CronTrigger(hour=15, minute=35, day_of_week="mon-fri"),
-            id="fund_monitor_1535",
-            name="基金监控-15:35",
-        )
+        if self._task_enabled("fund_monitor"):
+            self._scheduler.add_job(
+                self._safe_fund_monitor,
+                CronTrigger(hour=15, minute=35, day_of_week="mon-fri"),
+                id="fund_monitor_1535",
+                name="基金监控-15:35",
+            )
 
         # 小白学堂每日概念推送：20:00（交易日）
-        self._scheduler.add_job(
-            self._safe_concept_daily,
-            CronTrigger(hour=20, minute=0, day_of_week="mon-fri"),
-            id="concept_daily_2000",
-            name="每日概念-20:00",
-        )
+        if self._task_enabled("concept_daily"):
+            self._scheduler.add_job(
+                self._safe_concept_daily,
+                CronTrigger(hour=20, minute=0, day_of_week="mon-fri"),
+                id="concept_daily_2000",
+                name="每日概念-20:00",
+            )
 
-        # 舆情日报推送：20:30（交易日，收盘后分析新闻情感）
-        # 通过 SentimentSystem 采集东方财富新闻，金融情感词典分析，
-        # 生成舆情报告推送到飞书（含操作建议）
-        self._scheduler.add_job(
-            self._safe_sentiment_daily,
-            CronTrigger(hour=20, minute=30, day_of_week="mon-fri"),
-            id="sentiment_daily_2030",
-            name="舆情日报-20:30",
-        )
+        # 舆情日报推送：20:30（交易日）
+        if self._task_enabled("sentiment_daily"):
+            self._scheduler.add_job(
+                self._safe_sentiment_daily,
+                CronTrigger(hour=20, minute=30, day_of_week="mon-fri"),
+                id="sentiment_daily_2030",
+                name="舆情日报-20:30",
+            )
 
-        # Parquet 缓存定期清理：07:00（交易日，盘前清理过期缓存文件）
+        # Parquet 缓存定期清理：07:00
         self._scheduler.add_job(
             self._safe_cleanup_cache,
             CronTrigger(hour=7, minute=0, day_of_week="mon-fri"),
@@ -204,39 +222,36 @@ class TradingScheduler:
             name="缓存清理-07:00",
         )
 
-        # P1-7: 周参数优化（周日 03:00，避免交易日 + 凌晨低谷）
-        # 用多股聚合 Walk-Forward 寻找跨股鲁棒参数，写回需通过 4 项解锁条件
-        # 选 6 只行业代表股：白酒/养殖/电池/CXO/安防/金融
-        self._scheduler.add_job(
-            self._safe_optimize_params,
-            CronTrigger(hour=3, minute=0, day_of_week="sun"),
-            id="weekly_optimize_0300",
-            name="周参数优化-周日03:00",
-        )
+        # P1-7: 周参数优化（周日 03:00）
+        if self._task_enabled("weekly_optimize"):
+            self._scheduler.add_job(
+                self._safe_optimize_params,
+                CronTrigger(hour=3, minute=0, day_of_week="sun"),
+                id="weekly_optimize_0300",
+                name="周参数优化-周日03:00",
+            )
 
-        # P2-8: 周日复盘推送（20:00，避免交易日 + 周末有充足时间复盘）
-        # 汇总本周交易信号、实际成交、盈亏归因，推送飞书复盘卡片
-        # 陈江挺："炒股靠的是经验，经验来自复盘"
-        self._scheduler.add_job(
-            self._safe_weekly_review,
-            CronTrigger(hour=20, minute=0, day_of_week="sun"),
-            id="weekly_review_2000",
-            name="周复盘推送-周日20:00",
-        )
+        # P2-8: 周日复盘推送（20:00）
+        if self._task_enabled("weekly_review"):
+            self._scheduler.add_job(
+                self._safe_weekly_review,
+                CronTrigger(hour=20, minute=0, day_of_week="sun"),
+                id="weekly_review_2000",
+                name="周复盘推送-周日20:00",
+            )
 
-        # 十大视角分析日报：08:30（宏观简报08:00后，供用户深度分析自选股）
-        self._scheduler.add_job(
-            self._safe_perspective_report,
-            CronTrigger(hour=8, minute=30, day_of_week="mon-fri"),
-            id="perspective_report_0830",
-            name="十大视角日报-08:30",
-        )
+        # 十大视角分析日报：08:30
+        if self._task_enabled("perspective_daily"):
+            self._scheduler.add_job(
+                self._safe_perspective_report,
+                CronTrigger(hour=8, minute=30, day_of_week="mon-fri"),
+                id="perspective_report_0830",
+                name="十大视角日报-08:30",
+            )
 
         # 资金流数据已合并到宏观卡片中（08:00/15:15），不再单独注册 flow 任务
-        # 宏观调度器 register_macro_jobs 已处理 early(08:00) 和 close(15:15) 的资金流合并
 
-        # v0.5.0 盘中实时盯盘（按性能分级频率）
-        # 监控持仓+watchlist 的资金流异动，发现异常即时告警
+        # v0.5.0 盘中实时盯盘
         from gugu.config import get_config as _get_cfg
         try:
             _cfg = _get_cfg()
@@ -245,25 +260,53 @@ class TradingScheduler:
         except Exception:
             _im_enabled = True
 
-        if _im_enabled:
-            # 注册盘中监控任务，使用 cron 每分钟触发一次，
-            # IntradayMonitor 内部根据 mode / 交易时段决定是否真正执行
+        if _im_enabled and self._task_enabled("intraday_monitor"):
             self._scheduler.add_job(
                 self._safe_intraday_monitor,
-                CronTrigger(minute="*"),  # 每分钟触发
+                CronTrigger(minute="*"),
                 id="intraday_monitor",
                 name="盘中实时盯盘",
             )
+
+        # P2: 配置热加载检测（每 5 分钟检查 settings.yaml 是否被修改）
+        self._scheduler.add_job(
+            self._safe_check_config,
+            CronTrigger(minute="*/5"),
+            id="config_hot_reload",
+            name="配置热加载检测-每5分钟",
+        )
 
         logger.info(f"调度器配置完成: {len(self._scheduler.get_jobs())} 个任务")
         for job in self._scheduler.get_jobs():
             logger.info(f"  {job.id}: {job.name} -> {job.trigger}")
 
     async def _safe_run(self) -> None:
-        """安全执行交易循环（非交易日跳过）。"""
+        """安全执行交易循环（非交易日跳过，熊市/震荡市降低扫描频率）。"""
         if not is_trading_day():
             logger.info("非交易日，跳过交易循环")
             return
+
+        # P1 优化：根据市场状态动态调整扫描频率
+        # 熊市/暴跌市：仅执行 09:30 开盘扫描和 14:30 尾盘扫描，跳过盘中扫描
+        # 震荡市：正常执行所有扫描
+        # 牛市：正常执行所有扫描
+        try:
+            market_status = await self._engine._market_filter.check_market()
+            regime = market_status.get("regime", "unknown")
+            # 获取当前扫描时刻
+            from datetime import datetime as _dt
+            now = _dt.now()
+            current_hour_min = (now.hour, now.minute)
+
+            # 熊市/暴跌市：仅保留开盘和尾盘扫描
+            if regime in ("bear", "crash") and current_hour_min in [(10, 30), (13, 5)]:
+                logger.info(
+                    f"市场状态={regime}，跳过盘中扫描（仅保留开盘/尾盘扫描）"
+                )
+                return
+        except Exception:
+            pass  # 市场状态获取失败时正常执行
+
         try:
             await self._engine.run_daily_cycle()
         except Exception as e:
@@ -543,7 +586,8 @@ class TradingScheduler:
                 agent = get_kb_agent()
                 answer = await agent.ask(concept.get("kb_query", concept["name"]))
                 explanation = answer.answer
-                citations = [c.to_dict() if hasattr(c, "to_dict") else c for c in answer.citations]
+                from dataclasses import asdict
+                citations = [asdict(c) if not isinstance(c, dict) else c for c in answer.citations]
             except Exception as e:
                 logger.debug(f"KB Agent 检索概念解释失败: {e}")
 
@@ -560,9 +604,8 @@ class TradingScheduler:
             return
         try:
             from gugu.analysis.sentiment import SentimentSystem
-            from gugu.notifier import feishu_notifier
 
-            notifier = feishu_notifier()
+            notifier = self._engine._notifier
             system = SentimentSystem(stock_name="自选股池")
             await system.run_and_notify(notifier)
         except Exception as e:
@@ -578,6 +621,25 @@ class TradingScheduler:
                 logger.info(f"Parquet 缓存清理: 删除 {count} 个过期文件")
         except Exception as e:
             logger.debug(f"缓存清理异常: {e}")
+
+    async def _safe_check_config(self) -> None:
+        """P2: 配置热加载检测——检查 settings.yaml 是否被修改。
+
+        每 5 分钟执行一次，检测到文件变更后自动刷新配置缓存。
+        策略参数、调度任务开关等配置修改后无需重启 scheduler。
+        """
+        try:
+            from gugu.config import config_has_changed, refresh_config
+
+            if config_has_changed():
+                logger.info("检测到 settings.yaml 已修改，执行配置热加载...")
+                new_cfg = refresh_config()
+                logger.info(
+                    f"配置热加载完成: 策略={new_cfg.strategies.enabled}, "
+                    f"模式={new_cfg.execution.mode}"
+                )
+        except Exception as e:
+            logger.debug(f"配置热加载检测异常: {e}")
 
     async def _safe_optimize_params(self) -> None:
         """P1-7: 周参数优化（周日 03:00）。
@@ -822,10 +884,8 @@ class TradingScheduler:
         async def _heartbeat_loop() -> None:
             """每 60 秒写入心跳，独立于交易循环。"""
             while True:
-                try:
+                with contextlib.suppress(Exception):
                     self._engine._write_heartbeat("alive")
-                except Exception:
-                    pass
                 await asyncio.sleep(60)
 
         hb_task = asyncio.create_task(_heartbeat_loop())
@@ -838,6 +898,12 @@ class TradingScheduler:
             with contextlib.suppress(asyncio.CancelledError):
                 await hb_task
             await self.shutdown()
+        except BaseException:
+            # 捕获 KeyboardInterrupt/SystemExit 外的异常，确保清理 hb_task
+            hb_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await hb_task
+            raise
 
     async def shutdown(self) -> None:
         """停止调度器并释放资源。"""

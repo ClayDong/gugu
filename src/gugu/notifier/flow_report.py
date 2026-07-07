@@ -27,6 +27,11 @@ _EASTMONEY_CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 _EASTMONEY_FFLOW_URL = "https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get"
 _EASTMONEY_HSGT_URL = "https://push2.eastmoney.com/api/qt/kamt.rtmin/get"
 
+# 背离检测阈值（可配置，单位：亿元 / %）
+# 主力净流入绝对值超过此阈值且涨跌幅方向相反时触发背离预警
+DIVERGENCE_MAIN_THRESHOLD = 1.0  # 亿元
+DIVERGENCE_PRICE_THRESHOLD = 1.0  # 百分比
+
 # User-Agent 池：东方财富会对单一 UA 限流，轮换提升成功率
 _USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -73,7 +78,7 @@ def _http_get_json(url: str, params: dict[str, str], max_retries: int = 3) -> di
             if attempt < max_retries - 1:
                 import time
                 time.sleep(0.5 * (attempt + 1))  # 递增等待 0.5s, 1s
-    logger.warning(f"东方财富 HTTP API {max_retries} 次重试均失败: {last_err}")
+    logger.info(f"东方财富 HTTP API {max_retries} 次重试均失败: {last_err}")
     return None
 
 # ── 工具函数 ──────────────────────────────────────────────────
@@ -150,7 +155,7 @@ def _collect_market_flow_akshare() -> dict[str, Any] | None:
                 f"主力净流入={result['market']['main_net_inflow']:.2f}亿"
             )
     except Exception as e:
-        logger.warning(f"akshare 大盘资金流采集失败: {e}")
+        logger.info(f"akshare 大盘资金流采集失败: {e}")
 
     # 北向资金
     try:
@@ -184,7 +189,7 @@ def _collect_market_flow_akshare() -> dict[str, Any] | None:
             result["north_bound"] = {"date": "", "time": "", "total": None,
                                       "sh_connect": None, "sz_connect": None}
     except Exception as e:
-        logger.warning(f"akshare 北向资金采集失败: {e}")
+        logger.info(f"akshare 北向资金采集失败: {e}")
         result["north_bound"] = {"date": "", "time": "", "total": None,
                                   "sh_connect": None, "sz_connect": None}
 
@@ -224,17 +229,19 @@ def _collect_market_flow_http() -> dict[str, Any] | None:
                     f"主力净流入={result['market']['main_net_inflow']:.2f}亿"
                 )
     except Exception as e:
-        logger.warning(f"HTTP 大盘资金流采集失败: {e}")
+        logger.info(f"HTTP 大盘资金流采集失败: {e}")
 
     # 北向资金
     try:
         data = _http_get_json(_EASTMONEY_HSGT_URL, {"fields1": "f1,f2,f3,f4", "fields2": "f51,f52,f53,f54,f55,f56"})
         if data and data.get("data") and data["data"].get("s2n"):
-            # s2n 是无分割的字符串，尝试解析
-            s2n = data["data"].get("s2n", "")
-            if s2n:
+            # s2n 可能是字符串（逗号分隔）或列表，统一处理
+            raw = data["data"].get("s2n", "")
+            if isinstance(raw, list):
+                raw = ";".join(str(x) for x in raw)
+            if raw:
                 # 取最后一段数据
-                parts = s2n.split(";")
+                parts = raw.split(";")
                 if parts:
                     latest_parts = parts[-1].split(",")
                     if len(latest_parts) >= 4:
@@ -250,7 +257,7 @@ def _collect_market_flow_http() -> dict[str, Any] | None:
                         else:
                             logger.warning("HTTP 北向资金: 数据字段为空，标记为获取不到")
     except Exception as e:
-        logger.warning(f"HTTP 北向资金采集失败: {e}")
+        logger.info(f"HTTP 北向资金采集失败: {e}")
 
     return result if result else None
 
@@ -366,7 +373,7 @@ def _collect_sector_flow_akshare(sector_type: str = "行业资金流") -> list[d
             logger.info(f"akshare {sector_type}: {len(records)} 条")
             return records
     except Exception as e:
-        logger.warning(f"akshare {sector_type} 采集失败: {e}")
+        logger.info(f"akshare {sector_type} 采集失败: {e}")
     return None
 
 
@@ -457,7 +464,7 @@ def collect_stock_flow() -> list[dict[str, Any]] | None:
             logger.info(f"akshare 个股资金流排行: {len(records)} 只")
             return records
     except Exception as e:
-        logger.warning(f"akshare 个股资金流排行采集失败: {e}")
+        logger.info(f"akshare 个股资金流排行采集失败: {e}")
 
     # 通道2: HTTP 直连
     logger.info("akshare 个股资金流不可用，降级到 HTTP 直连...")
@@ -522,11 +529,13 @@ def analyze_sectors(sector_data: list[dict[str, Any]], top_n: int = 5) -> dict[s
         result["rotation_note"] = "市场普涨，无明显轮动"
 
     # 背离检测（单位：亿元）
+    # 阈值可配置：DIVERGENCE_MAIN_THRESHOLD 主力净流入绝对值阈值（亿）
+    #            DIVERGENCE_PRICE_THRESHOLD 涨跌幅绝对值阈值（%）
     for x in sector_data:
         main_in = _get_main_inflow(x)
         pct = _safe_float(x.get("涨跌幅", x.get("f3", 0)))
         name = _get_sector_name(x)
-        if main_in > 1 and pct < -1:
+        if main_in > DIVERGENCE_MAIN_THRESHOLD and pct < -DIVERGENCE_PRICE_THRESHOLD:
             result["divergence"].append(
                 {
                     "name": name,
@@ -535,7 +544,7 @@ def analyze_sectors(sector_data: list[dict[str, Any]], top_n: int = 5) -> dict[s
                     "action": "资金流入但下跌，可能是吸筹",
                 }
             )
-        elif main_in < -1 and pct > 1:
+        elif main_in < -DIVERGENCE_MAIN_THRESHOLD and pct > DIVERGENCE_PRICE_THRESHOLD:
             result["divergence"].append(
                 {
                     "name": name,
@@ -795,6 +804,10 @@ async def collect_all() -> dict[str, Any]:
             logger.info("实时数据不可用，使用缓存数据")
             cached["timestamp"] = _now_str()  # 更新时间戳但保留原始数据日期
             result = cached
+        else:
+            # 既无实时数据也无缓存 → 标记为不可用
+            result["sources_unavailable"] = True
+            logger.warning("资金流数据全链路不可用（akshare blocked + HTTP fallback 失败 + 无缓存），将发送状态通知")
 
     return result
 
@@ -863,6 +876,28 @@ def _format_key_industries_section(key_industries: list[dict[str, Any]]) -> str 
 def build_morning_card(data: dict[str, Any]) -> dict[str, Any]:
     """构建 08:00 盘前 — 昨日(T-1)资金流复盘卡片。"""
     from gugu.notifier.formatter import _card
+
+    # 数据源全链路不可用 → 发红色告警卡片（非灰色，确保用户注意）
+    if data.get("sources_unavailable"):
+        return _card(
+            "⚠️ 资金流复盘（数据源不可用）",
+            "red",
+            [
+                "**🚨 资金流数据源全链路不可用**",
+                "",
+                "东方财富资金流 API 当前不可用，HTTP 降级通道也无法获取数据。",
+                "今日所有资金流相关推送（行业TOP/背离预警/强流入个股）将为空。",
+                "",
+                "**⚙ 建议排查**：",
+                "1. 检查服务器网络环境是否变更",
+                "2. 确认 akshare/东方财富服务状态",
+                "3. 数据源恢复后系统会自动重试",
+                "",
+                "---",
+                "💡 此告警每日仅首次触发时推送，后续推送将静默跳过。"
+            ],
+            note="明策 · gugu · 资金流数据源告警 | 需人工排查"
+        )
 
     market = data.get("market", {})
     north = data.get("north_bound", {})
@@ -985,6 +1020,25 @@ def build_morning_card(data: dict[str, Any]) -> dict[str, Any]:
 def build_close_card(data: dict[str, Any]) -> dict[str, Any]:
     """构建 15:10 收盘 — 今日资金流日报卡片。"""
     from gugu.notifier.formatter import _card
+
+    # 数据源全链路不可用 → 发红色告警卡片
+    if data.get("sources_unavailable"):
+        return _card(
+            "⚠️ 今日资金流日报（数据源不可用）",
+            "red",
+            [
+                "**🚨 资金流数据源全链路不可用**",
+                "",
+                "东方财富资金流 API 当前不可用，HTTP 降级通道也无法获取数据。",
+                "今日所有资金流相关推送将为空。",
+                "",
+                "**⚙ 建议排查**：",
+                "1. 检查服务器网络环境是否变更",
+                "2. 确认 akshare/东方财富服务状态",
+                "3. 数据源恢复后系统会自动重试",
+            ],
+            note="明策 · gugu · 资金流数据源告警 | 需人工排查"
+        )
 
     market = data.get("market", {})
     north = data.get("north_bound", {})
@@ -1112,7 +1166,7 @@ def build_unavailable_card(report_name: str) -> dict[str, Any]:
     from gugu.notifier.formatter import _card
 
     content = (
-        f"当前资金流数据源（东方财富）暂时不可用，已跳过本次推送。\n\n"
+        "当前资金流数据源（东方财富）暂时不可用，已跳过本次推送。\n\n"
         "可能原因：\n"
         "- 东方财富 API 网络不通\n"
         "- 盘中数据尚未到位\n\n"
@@ -1359,6 +1413,12 @@ async def _collect_fallback_market_data() -> dict[str, Any] | None:
 
     使用 DataManager 获取指数和持仓股的行情数据，
     通过量价关系推算市场强弱，作为资金流的替代参考。
+
+    注意：此方法为应急降级方案，估算公式基于经验系数：
+    - 放量场景（量比>1.0）：涨跌幅 × 量比 × 3（资金驱动明显）
+    - 缩量场景（量比<0.8）：涨跌幅 × 量比 × 1.5（资金参与度低）
+    - 中性场景：涨跌幅 × 量比 × 2
+    这些系数是经验值，仅用于方向判断而非精确量化。
     """
     from gugu.data import data_manager as dm_factory
 
@@ -1378,10 +1438,11 @@ async def _collect_fallback_market_data() -> dict[str, Any] | None:
             sh_prev_vol = float(sh_df.iloc[-2].get("volume", 0)) if len(sh_df) >= 2 else 0
             vol_ratio = round(sh_vol / sh_prev_vol, 2) if sh_prev_vol > 0 else 1.0
 
-            # 量价关系推算资金方向
+            # 量价关系推算资金方向（经验公式，仅用于方向判断）
+            # 乘数含义：放量时资金驱动效应放大，缩量时效应缩小
             if sh_change > 0 and vol_ratio > 1.0:
                 flow_direction = "放量上涨（资金流入信号）"
-                flow_estimate = round(sh_change * vol_ratio * 3, 1)  # 粗略估算
+                flow_estimate = round(sh_change * vol_ratio * 3, 1)
             elif sh_change > 0 and vol_ratio < 0.8:
                 flow_direction = "缩量上涨（资金谨慎）"
                 flow_estimate = round(sh_change * vol_ratio * 1.5, 1)
@@ -1395,16 +1456,24 @@ async def _collect_fallback_market_data() -> dict[str, Any] | None:
                 flow_direction = "量价平衡（资金中性）"
                 flow_estimate = round(sh_change * vol_ratio * 2, 1)
 
+            # 安全计算深证涨跌幅（修复：除数为 prev_close 而非硬编码 1）
+            sz_close_val = None
+            sz_change_val = None
+            if sz_df is not None and not sz_df.empty and len(sz_df) >= 2:
+                sz_close_val = float(sz_df.iloc[-1].get("close", 0))
+                sz_prev_close = float(sz_df.iloc[-2].get("close", 0))
+                if sz_prev_close > 0:
+                    sz_change_val = round(
+                        (sz_close_val - sz_prev_close) / sz_prev_close * 100, 2
+                    )
+
             result["market"] = {
                 "date": str(sh_latest.get("date", _date_str())),
                 "sh_close": sh_close,
                 "sh_change": sh_change,
-                "sz_close": float(sz_df.iloc[-1].get("close", 0)) if sz_df is not None and not sz_df.empty else None,
-                "sz_change": round(
-                    (float(sz_df.iloc[-1].get("close", 0)) - float(sz_df.iloc[-2].get("close", 0)))
-                    / float(sz_df.iloc[-2].get("close", 1)) * 100, 2
-                ) if sz_df is not None and len(sz_df) >= 2 else None,
-                "main_net_inflow": flow_estimate,  # 估算值
+                "sz_close": sz_close_val,
+                "sz_change": sz_change_val,
+                "main_net_inflow": flow_estimate,
                 "main_net_ratio": None,
                 "vol_ratio": vol_ratio,
                 "flow_direction": flow_direction,
@@ -1414,11 +1483,8 @@ async def _collect_fallback_market_data() -> dict[str, Any] | None:
     except Exception as e:
         logger.warning(f"行情数据替代分析失败: {e}")
 
-    # 2. 获取北向资金（尝试 DataManager）
+    # 2. 获取北向资金（直接尝试 akshare）
     try:
-        from gugu.config import env
-        cfg = env()
-        # 如果 DataManager 有北向资金数据，使用它
         import akshare as ak
         df_n = ak.stock_hsgt_fund_min_em(symbol="北向资金")
         if df_n is not None and not df_n.empty:
