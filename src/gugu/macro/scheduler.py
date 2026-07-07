@@ -26,6 +26,64 @@ logger = get_logger()
 _FLOW_MERGE_VERSIONS = {"early", "close"}
 
 
+def _split_interpretation_to_elements(interpretation: str) -> list[dict]:
+    """将大师兄解读长文本按 ### 标题拆分为多个 div 元素。
+
+    v0.5.2 修复：
+    原代码将全部内容放在单个 div 的 lark_md 中，
+    飞书 lark_md 单 div 内容过长可能导致渲染截断。
+    按 ### 标题拆分为多个 div，用 hr 分隔，确保完整渲染。
+
+    Args:
+        interpretation: 大师兄解读文本（含 ### 标题分节）
+
+    Returns:
+        飞书卡片 elements 列表（多个 div + hr 分隔）
+    """
+    if not interpretation:
+        return [{"tag": "div", "text": {"tag": "lark_md", "content": "无解读内容"}}]
+
+    # 按 ### 标题拆分
+    sections: list[str] = []
+    current_section: list[str] = []
+
+    for line in interpretation.split("\n"):
+        if line.startswith("### "):
+            # 新节开始，保存上一节
+            if current_section:
+                sections.append("\n".join(current_section))
+                current_section = []
+        current_section.append(line)
+
+    # 最后一节
+    if current_section:
+        sections.append("\n".join(current_section))
+
+    # 如果没有 ### 标题，整段作为一个 div
+    if len(sections) <= 1:
+        return [
+            {"tag": "div", "text": {"tag": "lark_md", "content": interpretation}},
+        ]
+
+    # 构建多个 div + hr 分隔
+    elements: list[dict] = []
+    for i, section in enumerate(sections):
+        section_text = section.strip()
+        if not section_text:
+            continue
+        elements.append({
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": section_text},
+        })
+        # 节之间用 hr 分隔（最后一节不加 hr）
+        if i < len(sections) - 1:
+            elements.append({"tag": "hr"})
+
+    return elements if elements else [
+        {"tag": "div", "text": {"tag": "lark_md", "content": interpretation}},
+    ]
+
+
 async def _collect_flow_sections(version: str) -> list[str]:
     """采集资金流数据并返回卡片段落（仅 early/close 版本调用）。"""
     if version not in _FLOW_MERGE_VERSIONS:
@@ -199,6 +257,11 @@ async def _push_wisdom_interpretation(
     """后台异步生成并补发大师兄解读卡片。
 
     与主流程解耦：LLM 超时或失败不影响宏观日报已推送的数据。
+
+    v0.5.2 修复：
+    - timeout 从 30s 提高到 60s（max_tokens 提高到 2500 后生成时间变长）
+    - 将长文本按 ### 标题拆分为多个 div 元素，
+      避免飞书 lark_md 单 div 内容过长导致渲染截断
     """
     try:
         from gugu.wisdom.advisor import WisdomAdvisor
@@ -207,21 +270,23 @@ async def _push_wisdom_interpretation(
         summary = builder.build_text_summary(snapshot)
         interpretation = await asyncio.wait_for(
             wisdom.advise_macro_async(summary, portfolio_summary=portfolio_summary),
-            timeout=30.0,
+            timeout=60.0,  # v0.5.2: 30s → 60s，配合 max_tokens 2500
         )
         if not interpretation:
             logger.warning(f"[macro] {version} 大师兄解读为空，跳过补发")
             return
 
-        # 单独构建大师兄解读卡片补发
+        # v0.5.2 修复：按 ### 标题拆分为多个 div 元素
+        # 原代码将全部内容放在单个 div 的 lark_md 中，
+        # 飞书 lark_md 单 div 内容过长可能导致渲染截断
+        elements = _split_interpretation_to_elements(interpretation)
+
         card = {
             "header": {
                 "title": {"tag": "plain_text", "content": f"📖 大师兄解读 · {version}"},
                 "template": "blue",
             },
-            "elements": [
-                {"tag": "div", "text": {"tag": "lark_md", "content": interpretation}},
-            ],
+            "elements": elements,
         }
         ok = await notifier.send_card(card)
         if ok:
@@ -229,7 +294,7 @@ async def _push_wisdom_interpretation(
         else:
             logger.warning(f"[macro] {version} 大师兄解读补发失败（已入重试队列）")
     except asyncio.TimeoutError:
-        logger.warning(f"[macro] {version} 大师兄解读 LLM 超时(30s)，跳过补发")
+        logger.warning(f"[macro] {version} 大师兄解读 LLM 超时(60s)，跳过补发")
     except Exception as e:
         logger.warning(f"[macro] {version} 大师兄解读补发失败: {e}")
 

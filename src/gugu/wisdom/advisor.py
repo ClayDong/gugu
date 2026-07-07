@@ -664,13 +664,32 @@ class WisdomAdvisor:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    "max_tokens": 1200,
+                    # v0.5.2 修复：原 max_tokens=1200 不足以生成4节内容
+                    # （有持仓时第4节"对你持仓的影响"逐一点评持仓标的），
+                    # 导致 LLM 输出在生成中途被截断（finish_reason=length），
+                    # 用户收到的飞书通知内容不完整。
+                    # 1192 字中文 ≈ 1800 tokens，提高到 2500 确保完整输出
+                    "max_tokens": 2500,
                     "temperature": 0.3,
                 },
             )
             resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
-            logger.info(f"[wisdom-LLM] 大师兄宏观解读生成成功: {len(content)} 字")
+            resp_data = resp.json()
+            content = resp_data["choices"][0]["message"]["content"]
+
+            # v0.5.2 修复：检查 finish_reason，如果被截断则记录警告
+            finish_reason = resp_data["choices"][0].get("finish_reason", "unknown")
+            if finish_reason == "length":
+                logger.warning(
+                    f"[wisdom-LLM] 大师兄宏观解读被 max_tokens 截断 "
+                    f"(已生成 {len(content)} 字，finish_reason=length)，"
+                    f"内容可能不完整"
+                )
+            else:
+                logger.info(
+                    f"[wisdom-LLM] 大师兄宏观解读生成成功: {len(content)} 字 "
+                    f"(finish_reason={finish_reason})"
+                )
             return content.strip()
         except Exception as e:
             logger.warning(f"[wisdom-LLM] 大师兄宏观解读失败: {e}")
