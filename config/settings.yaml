@@ -4,6 +4,7 @@
 # 自选股列表（代码用字符串，前缀 0 容易被 YAML 解析为八进制，务必加引号）
 watchlist:
   # 真实持仓（必须纳入扫描与风控监控）
+  - "002460"   # 赣锋锂业
   - "002714"   # 牧原股份
   - "510310"   # 沪深300ETF易方达
   - "510500"   # 中证500ETF南方
@@ -186,9 +187,39 @@ wisdom:
 fund:
   enabled: true
   funds:
+    # v0.5.3: 根据用户最新持仓图片更新场外基金列表
+    # 场外基金成本价未在截图中提供，设为 null；系统按持有金额监控盈亏
+    - code: "017103"
+      name: "大摩数字经济混合C"
+      cost_price: null
+      base_investment: 1000
+    - code: "012922"
+      name: "易方达全球成长精选混合(QDII)C"
+      cost_price: null
+      base_investment: 1000
+    - code: "025500"
+      name: "东方阿尔法科技智选混合C"
+      cost_price: null
+      base_investment: 1000
+    - code: "017811"
+      name: "东方人工智能主题混合C"
+      cost_price: null
+      base_investment: 1000
     - code: "001480"
       name: "财通成长优选混合A"
-      cost_price: null    # 可选，配置后显示累计盈亏和止盈信号
+      cost_price: null
+      base_investment: 1000
+    - code: "011949"
+      name: "东吴多策略灵活配置混合C"
+      cost_price: null
+      base_investment: 1000
+    - code: "020899"
+      name: "天弘中证全指通信设备指数A"
+      cost_price: null
+      base_investment: 1000
+    - code: "008989"
+      name: "大成科技创新混合C"
+      cost_price: null
       base_investment: 1000
     - code: "026211"
       name: "平安科技精选混合C"
