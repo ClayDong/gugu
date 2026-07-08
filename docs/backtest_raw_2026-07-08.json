@@ -1,0 +1,1211 @@
+{
+  "date": "2026-07-08",
+  "n_stocks": 100,
+  "days": 500,
+  "elapsed_sec": 23.60856795310974,
+  "strategies": [
+    "breakout_rebound"
+  ],
+  "results": {
+    "000880": {
+      "breakout_rebound": {
+        "total_return": -0.06822916417199978,
+        "annual_return": -0.03499004625358859,
+        "sharpe": -0.1594908164205705,
+        "max_drawdown": 0.16407371583377517,
+        "win_rate": 0.16666666666666666,
+        "profit_factor": 0.734485793750713,
+        "total_trades": 19.0,
+        "avg_hold_days": 5.5
+      }
+    },
+    "000822": {
+      "breakout_rebound": {
+        "total_return": -0.013351639435999794,
+        "annual_return": -0.006751657734717531,
+        "sharpe": -0.5379702226327095,
+        "max_drawdown": 0.013531661025999928,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 4.0,
+        "avg_hold_days": 4.0
+      }
+    },
+    "000917": {
+      "breakout_rebound": {
+        "total_return": 0.013003228780500009,
+        "annual_return": 0.006532629100901133,
+        "sharpe": 0.6747912255015898,
+        "max_drawdown": 0.000673399111000006,
+        "win_rate": 1.0,
+        "profit_factor": Infinity,
+        "total_trades": 2.0,
+        "avg_hold_days": 8.0
+      }
+    },
+    "000881": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000823": {
+      "breakout_rebound": {
+        "total_return": 0.016371961613500026,
+        "annual_return": 0.008218236417444569,
+        "sharpe": 0.13004552909707062,
+        "max_drawdown": 0.14715319436971785,
+        "win_rate": 1.0,
+        "profit_factor": Infinity,
+        "total_trades": 3.0,
+        "avg_hold_days": 10.0
+      }
+    },
+    "000919": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000882": {
+      "breakout_rebound": {
+        "total_return": -0.13420746225799993,
+        "annual_return": -0.07005647577235807,
+        "sharpe": -1.5811478404868164,
+        "max_drawdown": 0.14281875917037126,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 5.0,
+        "avg_hold_days": 6.5
+      }
+    },
+    "000825": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000920": {
+      "breakout_rebound": {
+        "total_return": -0.06667559988300013,
+        "annual_return": -0.034179453010957817,
+        "sharpe": -1.0859453788615823,
+        "max_drawdown": 0.06782777506936429,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 5.0,
+        "avg_hold_days": 7.0
+      }
+    },
+    "000883": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000826": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000921": {
+      "breakout_rebound": {
+        "total_return": -0.027517279032499994,
+        "annual_return": -0.013964674093772667,
+        "sharpe": -0.6474101050230207,
+        "max_drawdown": 0.030592584430000045,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 2.0,
+        "avg_hold_days": 2.0
+      }
+    },
+    "000001": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000885": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000828": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000922": {
+      "breakout_rebound": {
+        "total_return": -0.0025408403679998593,
+        "annual_return": -0.0012813915015799093,
+        "sharpe": -0.15431426600230366,
+        "max_drawdown": 0.01020348410111392,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 2.0,
+        "avg_hold_days": 7.0
+      }
+    },
+    "000886": {
+      "breakout_rebound": {
+        "total_return": -0.041471318656499966,
+        "annual_return": -0.021121078774520408,
+        "sharpe": -0.559170566746704,
+        "max_drawdown": 0.06736163382679035,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 4.0,
+        "avg_hold_days": 7.0
+      }
+    },
+    "000829": {
+      "breakout_rebound": {
+        "total_return": -0.015432595323000103,
+        "annual_return": -0.007808028084251961,
+        "sharpe": -0.11403806844063413,
+        "max_drawdown": 0.07087996581780324,
+        "win_rate": 0.5,
+        "profit_factor": 0.5168944084874684,
+        "total_trades": 5.0,
+        "avg_hold_days": 6.5
+      }
+    },
+    "000923": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000002": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000887": {
+      "breakout_rebound": {
+        "total_return": 0.010804716045999899,
+        "annual_return": 0.005431063178846118,
+        "sharpe": 0.13371914491167528,
+        "max_drawdown": 0.07657648646705727,
+        "win_rate": 0.6666666666666666,
+        "profit_factor": 1.1328610614798296,
+        "total_trades": 7.0,
+        "avg_hold_days": 5.333333333333333
+      }
+    },
+    "000830": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000925": {
+      "breakout_rebound": {
+        "total_return": 0.0035689082415001467,
+        "annual_return": 0.0017971405444043853,
+        "sharpe": 0.07615830927147962,
+        "max_drawdown": 0.029831876829866877,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 2.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000063": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000888": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000831": {
+      "breakout_rebound": {
+        "total_return": -0.1301076889705,
+        "annual_return": -0.06783968858488165,
+        "sharpe": -0.9342656606155904,
+        "max_drawdown": 0.1301076889705,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 9.0,
+        "avg_hold_days": 5.333333333333333
+      }
+    },
+    "000926": {
+      "breakout_rebound": {
+        "total_return": -0.03292377694000001,
+        "annual_return": -0.016731343014741218,
+        "sharpe": -0.248175162256971,
+        "max_drawdown": 0.07903673090400011,
+        "win_rate": 0.5,
+        "profit_factor": 0.5099612475111561,
+        "total_trades": 6.0,
+        "avg_hold_days": 3.0
+      }
+    },
+    "000100": {
+      "breakout_rebound": {
+        "total_return": -0.08073715400550002,
+        "annual_return": -0.10063904011452796,
+        "sharpe": -0.7129101009783193,
+        "max_drawdown": 0.15233258420741844,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 5.0,
+        "avg_hold_days": 4.0
+      }
+    },
+    "000889": {
+      "breakout_rebound": {
+        "total_return": 0.01832949605700001,
+        "annual_return": 0.009196451897240498,
+        "sharpe": 0.17673231502370676,
+        "max_drawdown": 0.0681935298781146,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 1.5534733614275817,
+        "total_trades": 7.0,
+        "avg_hold_days": 5.333333333333333
+      }
+    },
+    "000833": {
+      "breakout_rebound": {
+        "total_return": -0.04391811199849995,
+        "annual_return": -0.022381242249909894,
+        "sharpe": -1.1003662972043318,
+        "max_drawdown": 0.04391811199849995,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 2.0,
+        "avg_hold_days": 7.0
+      }
+    },
+    "000927": {
+      "breakout_rebound": {
+        "total_return": -0.02518515570900007,
+        "annual_return": -0.01277361153559875,
+        "sharpe": -0.6794495423480168,
+        "max_drawdown": 0.03171972559499997,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 3.0,
+        "avg_hold_days": 4.0
+      }
+    },
+    "000157": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000890": {
+      "breakout_rebound": {
+        "total_return": 0.1507760062704999,
+        "annual_return": 0.07334506123627604,
+        "sharpe": 0.6554808598700482,
+        "max_drawdown": 0.1310346947547498,
+        "win_rate": 0.2,
+        "profit_factor": 1.859566311800604,
+        "total_trades": 14.0,
+        "avg_hold_days": 7.4
+      }
+    },
+    "000837": {
+      "breakout_rebound": {
+        "total_return": -0.06440530234499997,
+        "annual_return": -0.032996097104597166,
+        "sharpe": -1.1566642188677874,
+        "max_drawdown": 0.0789176649594799,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 5.0,
+        "avg_hold_days": 2.5
+      }
+    },
+    "000928": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000166": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000892": {
+      "breakout_rebound": {
+        "total_return": -0.09342749288549997,
+        "annual_return": -0.0482324747381675,
+        "sharpe": -0.4874145871330194,
+        "max_drawdown": 0.189586595773312,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 8.0,
+        "avg_hold_days": 7.666666666666667
+      }
+    },
+    "000915": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000838": {
+      "breakout_rebound": {
+        "total_return": -0.018998089500000002,
+        "annual_return": -0.009620582669059186,
+        "sharpe": -1.0775430058438729,
+        "max_drawdown": 0.01919863091249997,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 2.0,
+        "avg_hold_days": 7.0
+      }
+    },
+    "000929": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000301": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000893": {
+      "breakout_rebound": {
+        "total_return": -0.04457177691749996,
+        "annual_return": -0.022718167690514934,
+        "sharpe": -1.0889525083249554,
+        "max_drawdown": 0.05123662953406912,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 3.0,
+        "avg_hold_days": 3.0
+      }
+    },
+    "000839": {
+      "breakout_rebound": {
+        "total_return": -0.03651163538000011,
+        "annual_return": -0.018571595736788793,
+        "sharpe": -0.9832851631481088,
+        "max_drawdown": 0.03677802532313723,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 2.0,
+        "avg_hold_days": 6.0
+      }
+    },
+    "000930": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000333": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000895": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000848": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000931": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000338": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000897": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000850": {
+      "breakout_rebound": {
+        "total_return": 0.04297708008149988,
+        "annual_return": 0.021434403336834107,
+        "sharpe": 1.0144147985860652,
+        "max_drawdown": 0.009401648944490892,
+        "win_rate": 1.0,
+        "profit_factor": Infinity,
+        "total_trades": 4.0,
+        "avg_hold_days": 7.0
+      }
+    },
+    "000932": {
+      "breakout_rebound": {
+        "total_return": 0.014579511025500019,
+        "annual_return": 0.007321696411923151,
+        "sharpe": 0.4423206935808743,
+        "max_drawdown": 0.009423325598999286,
+        "win_rate": 1.0,
+        "profit_factor": Infinity,
+        "total_trades": 2.0,
+        "avg_hold_days": 7.0
+      }
+    },
+    "000408": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000898": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000852": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000933": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000425": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000899": {
+      "breakout_rebound": {
+        "total_return": -0.09595748919050011,
+        "annual_return": -0.049572088657361846,
+        "sharpe": -0.9076390914853587,
+        "max_drawdown": 0.1076087904462774,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 4.0,
+        "avg_hold_days": 3.0
+      }
+    },
+    "000856": {
+      "breakout_rebound": {
+        "total_return": 0.18290328347999998,
+        "annual_return": 0.08834457198079049,
+        "sharpe": 0.8688084601067527,
+        "max_drawdown": 0.06211348175335063,
+        "win_rate": 0.5,
+        "profit_factor": 4.613692181411857,
+        "total_trades": 5.0,
+        "avg_hold_days": 5.5
+      }
+    },
+    "000935": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000538": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000900": {
+      "breakout_rebound": {
+        "total_return": 0.004791071881500073,
+        "annual_return": 0.002411837949998663,
+        "sharpe": 0.18601920473876452,
+        "max_drawdown": 0.011184406235309466,
+        "win_rate": 1.0,
+        "profit_factor": Infinity,
+        "total_trades": 5.0,
+        "avg_hold_days": 5.0
+      }
+    },
+    "000858": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000936": {
+      "breakout_rebound": {
+        "total_return": -0.12223437047349987,
+        "annual_return": -0.06359699240483063,
+        "sharpe": -1.3790781219165706,
+        "max_drawdown": 0.12223437047349987,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 5.0,
+        "avg_hold_days": 4.5
+      }
+    },
+    "000568": {
+      "breakout_rebound": {
+        "total_return": -0.030696601685500004,
+        "annual_return": -0.03852218788568773,
+        "sharpe": -1.8317260343861685,
+        "max_drawdown": 0.030696601685500004,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 3.0,
+        "avg_hold_days": 4.0
+      }
+    },
+    "000901": {
+      "breakout_rebound": {
+        "total_return": -0.19374585479150025,
+        "annual_return": -0.10285659674253178,
+        "sharpe": -1.3114394459923882,
+        "max_drawdown": 0.19374585479150025,
+        "win_rate": 0.16666666666666666,
+        "profit_factor": 0.10153698074401925,
+        "total_trades": 13.0,
+        "avg_hold_days": 4.5
+      }
+    },
+    "000859": {
+      "breakout_rebound": {
+        "total_return": 0.0179757473855,
+        "annual_return": 0.009019746357380676,
+        "sharpe": 0.14014093383782997,
+        "max_drawdown": 0.12627083153900165,
+        "win_rate": 0.6666666666666666,
+        "profit_factor": 1.2552379345730496,
+        "total_trades": 15.0,
+        "avg_hold_days": 5.666666666666667
+      }
+    },
+    "000937": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000596": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000902": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000860": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000938": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000617": {
+      "breakout_rebound": {
+        "total_return": -0.03716911365399987,
+        "annual_return": -0.04660467743850849,
+        "sharpe": -1.006466350709284,
+        "max_drawdown": 0.042019026404941845,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 3.0,
+        "avg_hold_days": 7.0
+      }
+    },
+    "000903": {
+      "breakout_rebound": {
+        "total_return": -0.06805536370750004,
+        "annual_return": -0.03489933021842184,
+        "sharpe": -1.0175850924602512,
+        "max_drawdown": 0.08424040135884905,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 4.0,
+        "avg_hold_days": 8.5
+      }
+    },
+    "000862": {
+      "breakout_rebound": {
+        "total_return": -0.06615379875449988,
+        "annual_return": -0.03390734635312098,
+        "sharpe": -0.92669799426278,
+        "max_drawdown": 0.0759101994640674,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 7.0,
+        "avg_hold_days": 5.333333333333333
+      }
+    },
+    "000948": {
+      "breakout_rebound": {
+        "total_return": -0.07091441034150008,
+        "annual_return": -0.03639269216503116,
+        "sharpe": -1.3539816730560543,
+        "max_drawdown": 0.07091441034150008,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 4.0,
+        "avg_hold_days": 4.5
+      }
+    },
+    "000625": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000905": {
+      "breakout_rebound": {
+        "total_return": -0.004068002144499915,
+        "annual_return": -0.002052345735307215,
+        "sharpe": -0.06157407415730886,
+        "max_drawdown": 0.0323018260807262,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 2.0,
+        "avg_hold_days": 7.0
+      }
+    },
+    "000863": {
+      "breakout_rebound": {
+        "total_return": -0.05483682953549991,
+        "annual_return": -0.028024266545047083,
+        "sharpe": -0.6033428623977899,
+        "max_drawdown": 0.07039950980849984,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.07910015133296505,
+        "total_trades": 8.0,
+        "avg_hold_days": 6.333333333333333
+      }
+    },
+    "000906": {
+      "breakout_rebound": {
+        "total_return": -0.016986262863000156,
+        "annual_return": -0.008597449574651916,
+        "sharpe": -0.18220851008269512,
+        "max_drawdown": 0.037642144108650154,
+        "win_rate": 0.5,
+        "profit_factor": 0.06631897568703211,
+        "total_trades": 6.0,
+        "avg_hold_days": 7.5
+      }
+    },
+    "000630": {
+      "breakout_rebound": {
+        "total_return": -0.04982089428899996,
+        "annual_return": -0.062362647547190786,
+        "sharpe": -1.6301822320731665,
+        "max_drawdown": 0.059894816669662586,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 4.0,
+        "avg_hold_days": 4.0
+      }
+    },
+    "000868": {
+      "breakout_rebound": {
+        "total_return": -0.04760908905499987,
+        "annual_return": -0.02428522372009756,
+        "sharpe": -1.0067681390666945,
+        "max_drawdown": 0.05647889874901828,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 5.0,
+        "avg_hold_days": 7.0
+      }
+    },
+    "000651": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000908": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000869": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000657": {
+      "breakout_rebound": {
+        "total_return": -0.11342963688500005,
+        "annual_return": -0.1407517748630086,
+        "sharpe": -0.9670334071160331,
+        "max_drawdown": 0.1388838819660955,
+        "win_rate": 0.3333333333333333,
+        "profit_factor": 0.10594759348493314,
+        "total_trades": 16.0,
+        "avg_hold_days": 6.833333333333333
+      }
+    },
+    "000909": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000875": {
+      "breakout_rebound": {
+        "total_return": -0.019967337875999976,
+        "annual_return": -0.010113874388483879,
+        "sharpe": -1.2734792668026214,
+        "max_drawdown": 0.019967337875999976,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 2.0,
+        "avg_hold_days": 3.0
+      }
+    },
+    "000708": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000910": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000876": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000818": {
+      "breakout_rebound": {
+        "total_return": -0.10600628437949997,
+        "annual_return": -0.05491129938033201,
+        "sharpe": -0.6986144185801928,
+        "max_drawdown": 0.1785108011589015,
+        "win_rate": 0.25,
+        "profit_factor": 0.20923110909316633,
+        "total_trades": 10.0,
+        "avg_hold_days": 3.0
+      }
+    },
+    "000911": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000877": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000819": {
+      "breakout_rebound": {
+        "total_return": -0.0632904592540001,
+        "annual_return": -0.03241552458479369,
+        "sharpe": -0.7280654227348304,
+        "max_drawdown": 0.08875954838036794,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 6.0,
+        "avg_hold_days": 7.0
+      }
+    },
+    "000912": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000878": {
+      "breakout_rebound": {
+        "total_return": 0.0,
+        "annual_return": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": -0.0,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 0.0,
+        "avg_hold_days": 0.0
+      }
+    },
+    "000820": {
+      "breakout_rebound": {
+        "total_return": -0.06027157421500003,
+        "annual_return": -0.030845109857139397,
+        "sharpe": -0.9460762937042673,
+        "max_drawdown": 0.07431186481499998,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 5.0,
+        "avg_hold_days": 7.5
+      }
+    },
+    "000913": {
+      "breakout_rebound": {
+        "total_return": -0.012684862630000106,
+        "annual_return": -0.006413410930142471,
+        "sharpe": -0.6635813086698591,
+        "max_drawdown": 0.014137349600000074,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 2.0,
+        "avg_hold_days": 4.0
+      }
+    },
+    "000821": {
+      "breakout_rebound": {
+        "total_return": -0.012685202562000137,
+        "annual_return": -0.006413583344150653,
+        "sharpe": -0.7478378285940838,
+        "max_drawdown": 0.012709502634000032,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "total_trades": 2.0,
+        "avg_hold_days": 4.0
+      }
+    }
+  }
+}

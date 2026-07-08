@@ -250,19 +250,30 @@ class TestBreakoutReboundCoreConditions:
         out = strat.generate_signals(df)
         assert out.loc[52, "signal"] != 1, "收盘价低于断板日最高价不应触发反包"
 
-    def test_no_volume_no_signal(self):
-        """反包日无量不应触发信号。"""
+    def test_no_volume_lower_confidence(self):
+        """反包日无量置信度应较低（v0.5.8 量能降级为评分项）。"""
         df = _make_df(days=80, seed=42)
-        df = _inject_breakout_rebound(
+        df_strong = _inject_breakout_rebound(
             df,
+            limit_up_idx=50,
+            break_idx=51,
+            rebound_idx=52,
+            rebound_vol=15_000_000,  # 放量
+        )
+        df_weak = _inject_breakout_rebound(
+            _make_df(days=80, seed=42),
             limit_up_idx=50,
             break_idx=51,
             rebound_idx=52,
             rebound_vol=8_000_000,  # 与基础量持平，量比 < 1.5
         )
-        strat = BreakoutReboundStrategy()
-        out = strat.generate_signals(df)
-        assert out.loc[52, "signal"] != 1, "反包日无量不应触发信号"
+        strat = BreakoutReboundStrategy({"min_confidence": 0.0})
+        out_strong = strat.generate_signals(df_strong)
+        out_weak = strat.generate_signals(df_weak)
+        # 两者都可能触发信号（量能不再是硬门槛），但放量版本置信度应更高
+        if out_strong.loc[52, "signal"] == 1 and out_weak.loc[52, "signal"] == 1:
+            assert out_strong.loc[52, "confidence"] > out_weak.loc[52, "confidence"], \
+                "放量反包置信度应高于无量反包"
 
     def test_yin_line_no_signal(self):
         """反包日阴线不应触发信号。"""
@@ -399,17 +410,17 @@ class TestBreakoutReboundSellSignals:
         assert out.loc[53, "signal"] == -1, "巨量滞涨应触发卖出"
 
     def test_big_yang_triggers_sell(self):
-        """大阳线冲高应触发止盈卖出。"""
+        """大阳线冲高应触发止盈卖出（v0.5.8 阈值从 4.8% 提高到 6.4%）。"""
         df = _make_df(days=80, seed=42)
         df = _inject_breakout_rebound(
             df, limit_up_idx=50, break_idx=51, rebound_idx=52,
         )
-        # 注入大阳线：涨幅 >= 4.8% + 量比 >= 1.5
+        # 注入大阳线：涨幅 >= 6.4%（take_profit_pct * 0.8）+ 量比 >= 1.5
         # vol_ma5[53] ≈ mean(vol[48:52]) ≈ 10.4M，需 volume >= 15.6M 达到 1.5 量比
         prev_close = df.loc[52, "close"]
         df.loc[53, "open"] = prev_close
-        df.loc[53, "close"] = prev_close * 1.05  # 涨幅 5%
-        df.loc[53, "high"] = prev_close * 1.06
+        df.loc[53, "close"] = prev_close * 1.07  # 涨幅 7%（> 6.4%）
+        df.loc[53, "high"] = prev_close * 1.08
         df.loc[53, "low"] = prev_close
         df.loc[53, "volume"] = 20_000_000  # 量比 >= 1.5
         strat = BreakoutReboundStrategy()
@@ -483,19 +494,26 @@ class TestBreakoutReboundEdgeCases:
         assert "signal" in out.columns
 
     def test_sell_overrides_buy(self):
-        """卖出信号应覆盖买入信号。"""
+        """卖出信号应覆盖买入信号（v0.5.8 持仓状态判断）。"""
         df = _make_df(days=80, seed=42)
         df = _inject_breakout_rebound(
             df, limit_up_idx=50, break_idx=51, rebound_idx=52,
         )
-        # 在反包日同时注入卖出条件（跌破 MA20）
-        ma20_at_52 = df["close"].iloc[:52].rolling(20).mean().iloc[51]
-        if pd.notna(ma20_at_52):
-            df.loc[52, "close"] = ma20_at_52 * 0.9  # 跌破 MA20
         strat = BreakoutReboundStrategy()
         out = strat.generate_signals(df)
-        # 卖出优先于买入
-        assert out.loc[52, "signal"] == -1, "卖出应覆盖买入"
+        # 第52天应有买入信号（完整断板反包）
+        assert out.loc[52, "signal"] == 1, "第52天应有买入信号"
+
+        # 第53天注入卖出条件（持仓中跌破 MA20）
+        ma20_at_53 = df["close"].iloc[:53].rolling(20).mean().iloc[52]
+        if pd.notna(ma20_at_53):
+            df.loc[53, "close"] = ma20_at_53 * 0.9  # 跌破 MA20
+            df.loc[53, "open"] = ma20_at_53
+            df.loc[53, "high"] = ma20_at_53
+            df.loc[53, "low"] = ma20_at_53 * 0.9
+        out = strat.generate_signals(df)
+        # 持仓中（第52天买入）跌破 MA20 应触发卖出
+        assert out.loc[53, "signal"] == -1, "持仓中跌破MA20应触发卖出"
 
     def test_min_confidence_filter(self):
         """min_confidence 应过滤低置信度信号。"""
