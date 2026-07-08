@@ -7,6 +7,7 @@ from typing import Any
 
 from gugu.strategies.base import Strategy
 from gugu.strategies.breakout import BoxBreakoutStrategy, DualThrustStrategy
+from gugu.strategies.breakout_rebound import BreakoutReboundStrategy
 from gugu.strategies.capital_flow_alert import CapitalFlowAlertStrategy
 from gugu.strategies.chen_jiangting import ChenJiangtingStrategy
 from gugu.strategies.double_yin import DoubleYinMoneyBagStrategy
@@ -31,6 +32,7 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "leopard_three_factors": LeopardThreeFactorsStrategy,
     "pullback_low": PullbackLowStrategy,  # 震荡市专用低吸回踩策略
     "double_yin": DoubleYinMoneyBagStrategy,  # 双阴钱袋子策略（主力洗盘拐点）
+    "breakout_rebound": BreakoutReboundStrategy,  # 断板反包策略（短线主力行为）
     "capital_flow_alert": CapitalFlowAlertStrategy,  # 资金流异动监控
 }
 

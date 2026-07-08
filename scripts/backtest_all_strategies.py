@@ -148,8 +148,15 @@ async def run_batch_backtest(
     symbols: list[str],
     strategies: list[str],
     days: int,
+    strict_confirmation: bool = False,
 ) -> tuple[dict[str, list[dict]], dict[str, dict[str, dict]]]:
     """批量回测，返回 (per_strategy_metrics, per_symbol_metrics)。
+
+    Args:
+        symbols: 股票代码列表
+        strategies: 策略名列表
+        days: 回测历史天数
+        strict_confirmation: 严格模式（模拟生产环境次日确认机制）
 
     Returns:
         tuple:

@@ -148,3 +148,37 @@ capital_flow_alert:
   recent_strong_window: 5             # 前期强势表现回看窗口
   recent_strong_threshold: 0.05       # 前期强势涨幅阈值 5%
   confirm_days: 0                    # 不确认（放量/缩量本身即触发条件）
+
+breakout_rebound:
+  # 断板反包策略：涨停板断裂后主力反包介入的短线信号
+  # 来源：A股实战派「断板反包」战法（短线主力行为学）
+  # 第一性原理：涨停(主力介入) → 断板(洗盘) → 反包(再介入) 完整行为闭环
+  # 与 double_yin 互补：double_yin 是波段拐点，本策略是短线主力行为
+
+  # ── 均线参数 ──
+  ma_trend_window: 20                 # 趋势均线（MA20）
+  ma_long_window: 60                  # 长期均线（MA60，中期趋势过滤）
+  ma_slope_window: 5                  # MA20 斜率计算窗口（持续向上拐头判定）
+
+  # ── 涨停板识别 ──
+  limit_up_pct: 0.095                 # 涨停判定阈值 9.5%（A股10%涨停板留0.5%容差）
+  limit_up_lookback: 5                # 涨停板回看窗口（前N日内有涨停）
+
+  # ── 反包量能确认 ──
+  breakout_vol_ratio: 1.5             # 反包日量比下限（放量确认）
+
+  # ── 置信度过滤 ──
+  min_confidence: 0.0                 # 核心信号置信度下限（0=不过滤，用评分仅作置信度展示）
+
+  # ── 止损止盈 ──
+  stop_loss_pct: 0.03                 # 止损百分比（反包日最低价 × 0.97）
+  take_profit_pct: 0.08              # 止盈位 8%（减半仓触发阈值 × 0.6 = 4.8%）
+  max_upper_shadow_pct: 0.02        # 长上影阈值（高位滞涨判定）
+  stagnation_vol_ratio: 2.5          # 巨量滞涨量比阈值（清仓信号）
+
+  # ── 时间止损 ──
+  time_stop_window: 5                # 时间止损窗口（持仓 N 日）
+  time_stop_threshold: 0.03           # 时间止损阈值（涨幅 < 3% 减仓）
+
+  # ── 信号确认 ──
+  confirm_days: 0                    # 不确认（反包突破本身即触发条件）

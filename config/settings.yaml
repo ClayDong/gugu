@@ -46,6 +46,7 @@ strategy:
   enabled_by_regime:
     # 牛市：突破追势 + 创新高回踩（box_breakout 在牛市+31.20%/夏普0.30）
     # turtle 在牛市+3.36%（夏普负因靠极少数大牛股，但可作为趋势确认辅助）
+    # breakout_rebound 断板反包：待全市场回测验证后再启用
     bull:
       - box_breakout
       - double_yin
@@ -54,6 +55,7 @@ strategy:
       - box_breakout
       - double_yin
     # 震荡：拐点策略为主（double_yin 100股+2.81%/胜率37%）
+    # breakout_rebound 在震荡市需谨慎（主力可能伪装反包出货），暂不启用
     # bollinger 在震荡市夏普0.09边缘，暂不启用（待 v0.5.7 诊断后决定）
     sideways:
       - double_yin
