@@ -20,11 +20,12 @@ logger = get_logger()
 class StockRanker:
     """个股综合评分器。
 
-    评分维度：
-    1. 因子评分（30%）：26个Alpha因子的综合评分
-    2. 基本面评分（25%）：PE/PB/ROE/营收增长
+    评分维度（v0.6.0 调整权重）：
+    1. 因子评分（25%）：26个Alpha因子的综合评分
+    2. 基本面评分（20%）：PE/PB/ROE/营收增长
     3. 资金流评分（25%）：主力净流入/5日净流入
-    4. 板块强度（20%）：是否属于当前强势板块
+    4. 板块强度（15%）：是否属于当前强势板块
+    5. 筹码画像（15%）：户数变化+户均持股+机构持仓+流通市值
 
     输出：排序后的股票列表 + 评分详情
     """
@@ -34,6 +35,9 @@ class StockRanker:
         self._alpha = AlphaFactory()
         self._fundamental = FundamentalFilter()
         self._money_flow = MoneyFlowFilter()
+        # v0.6.0: 筹码画像评分（复用现有 HolderConcentrationFilter）
+        from gugu.filters.holder_concentration import HolderConcentrationFilter
+        self._holder_concentration = HolderConcentrationFilter()
 
     async def rank(
         self,
@@ -136,8 +140,24 @@ class StockRanker:
             if cat in hot_cats:
                 sector_score = 0.5
 
-        # 加权总分
-        total = factor_score * 0.30 + fund_score * 0.25 + flow_score * 0.25 + sector_score * 0.20
+        # 5. 筹码画像评分（15%权重）v0.6.0 新增
+        hc_result = await self._holder_concentration.check(symbol)
+        # 获取流通市值（从实时快照，降级为0）
+        circ_mv = 0.0
+        try:
+            rt = await self._dm.fetch_stock_realtime([symbol])
+            if not rt.empty:
+                # circ_mv 字段单位为元，转为亿元
+                circ_mv = float(rt.iloc[0].get("circ_mv", 0) or 0) / 1e8
+        except Exception:
+            pass
+        chip_score = self._compute_chip_score(hc_result, circ_mv=circ_mv)
+
+        # 加权总分 v0.6.0: 新增筹码画像15%，调整其他维度权重
+        total = (
+            factor_score * 0.25 + fund_score * 0.20 + flow_score * 0.25
+            + sector_score * 0.15 + chip_score * 0.15
+        )
 
         return {
             "symbol": symbol,
@@ -147,6 +167,7 @@ class StockRanker:
             "fundamental_score": round(fund_score, 4),
             "money_flow_score": round(flow_score, 4),
             "sector_score": round(sector_score, 4),
+            "chip_score": round(chip_score, 4),  # v0.6.0 新增
             "industry": industry,
             "price": round(float(df.iloc[-1]["close"]), 2),
             "pe": fund.get("pe"),
