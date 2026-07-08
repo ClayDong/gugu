@@ -316,11 +316,14 @@ gugu/
 - v0.5.6 变更（2026-07-08 博格市场温度计）：
   - 🆕 新增博格市场温度计模块 `analysis/market_temp.py`
     - 基于博格市场温度计方法：12个宽基指数PE的近10年百分位算术平均
-    - 数据源：乐咕乐股 stock_index_pe_lg（主）→ 东方财富 push2（备），三级冗余
+    - 多维度加权综合温度：PE(70%) + PB(20%) + 巴菲特指数=总市值/GDP(10%)
+    - 数据源：乐咕乐股 stock_index_pe_lg / stock_index_pb_lg / stock_buffett_index_lg（主）→ 东方财富 push2（备）
+    - 动态权重：PB/巴菲特获取失败时权重自动归零，PE 权重等比放大
     - 温度规则：<20°加倍买入 | <30°正常买入 | 30-50°定投 | >50°减仓 | >70°大幅减仓
-    - 08:25 盘前推送飞书卡片，包含温度总览+各指数PE百分位+最热最冷
-    - 30分钟缓存，asyncio并行获取12个指数，asyncio.to_thread避免阻塞
-    - 46个单元测试覆盖：calc_pe_percentile/fetch_index_temp/calc_market_temp/build_market_temp_card
+    - 08:25 盘前推送飞书卡片，含温度总览+各维度温度+各指数PE百分位+最热最冷
+    - ⚠️ 所有策略输出均为指导决策参考，非自动交易指令
+    - 30分钟缓存，asyncio并行获取15个数据点（12 PE + 2 PB + 1 Buffett），asyncio.to_thread避免阻塞
+    - 65个单元测试覆盖：calc_pe/pb/buffett_percentile + fetch_index/pb/buffett_temp + calc_market_temp + build_market_temp_card
     - 多专家审查通过（8视角：架构/算法/策略/体验/性能/股票/操盘手/业务）
   - 🆕 settings.yaml 添加 market_temp 任务开关（默认启用）
   - 🆕 scheduler.py 添加 _safe_market_temp 定时任务（08:25）
