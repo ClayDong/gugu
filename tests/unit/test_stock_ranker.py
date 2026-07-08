@@ -15,7 +15,20 @@ from gugu.filters.industry_constraint import IndustryConstraint
 
 @pytest.fixture
 def ranker() -> StockRanker:
-    return StockRanker()
+    r = StockRanker()
+    # v0.6.0: mock 筹码过滤器，避免真实 API 调用（返回数据缺失中性分0.5）
+    r._holder_concentration.check = AsyncMock(return_value={
+        "pass": True,
+        "label": "数据缺失",
+        "holder_num_pct": 0.0,
+        "avg_hold_change": 0.0,
+        "org_hold_pct": 0.0,
+        "data_missing": True,
+        "reasons": ["筹码数据不可用"],
+    })
+    # v0.6.0: mock 流通市值获取（返回空 DataFrame，circ_mv 降级为0）
+    r._dm.fetch_stock_realtime = AsyncMock(return_value=pd.DataFrame())
+    return r
 
 
 class TestStockRanker:

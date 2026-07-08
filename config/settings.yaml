@@ -95,6 +95,17 @@ holder_concentration_filter:
   lurker_consecutive_quarters: 2
   lurker_total_decline_threshold: 20.0
 
+# ========== 选股评分器配置（v0.6.0 新增）==========
+# StockRanker 5维度权重，总和必须=1.0（配置一致性测试会校验）
+# v0.6.0 调整：新增筹码画像15%，因子30→25%，基本面25→20%，板块20→15%，资金流25%不变
+stock_ranker:
+  factor_weight: 0.25        # 因子评分权重
+  fundamental_weight: 0.20  # 基本面评分权重
+  money_flow_weight: 0.25  # 资金流评分权重
+  sector_weight: 0.15      # 板块评分权重
+  chip_score_weight: 0.15  # 筹码画像评分权重
+  chip_score_neutral: 0.5  # 数据缺失时的中性评分
+
 # ========== 盘中实时盯盘 ==========
 intraday_monitor:
   enabled: true
