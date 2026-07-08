@@ -7,11 +7,20 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 from gugu.config import settings
 from gugu.data import data_manager
 from gugu.execution import PaperBroker
 from gugu.risk import RiskManager
+
+
+class OrderRequest(BaseModel):
+    """下单请求体校验模型。"""
+    symbol: str
+    direction: str = "buy"
+    quantity: int
+    price: float | None = None
 
 # P1 修复：全局单例 Broker/RiskManager，避免每次 HTTP 请求从磁盘重载状态
 _web_broker: Any = None
@@ -234,6 +243,8 @@ def create_app() -> FastAPI:
 
         返回系统运行状态：心跳、数据源、风控、资源使用。
         用于外部监控（supervisor/健康检查）或仪表盘状态显示。
+
+        P2 增强：添加数据源健康监控详情（各通道状态、延迟、错误率）。
         """
         import json
         import os
@@ -258,11 +269,45 @@ def create_app() -> FastAPI:
             is_halted = False
 
         # 数据源状态
+        is_degraded = False
+        data_sources = {
+            "primary": {"name": "sina", "status": "unknown", "error_count": 0},
+            "fallback": {"name": "eastmoney", "status": "unknown", "error_count": 0},
+            "secondary": {"name": "akshare", "status": "unknown", "error_count": 0},
+        }
         try:
             dm = data_manager()
             is_degraded = dm.is_degraded
+            # 尝试获取数据源统计信息
+            if hasattr(dm, "get_source_stats"):
+                stats = dm.get_source_stats()
+                for src, info in stats.items():
+                    if src in data_sources:
+                        data_sources[src].update(info)
+            # 根据降级状态推断
+            if is_degraded:
+                data_sources["primary"]["status"] = "degraded"
+                data_sources["fallback"]["status"] = "active"
+            else:
+                data_sources["primary"]["status"] = "active"
         except Exception:
-            is_degraded = False
+            pass
+
+        # 资金流数据源状态
+        flow_source_status = "unknown"
+        try:
+            from gugu.notifier.flow_report import _FLOW_CACHE_FILE
+            if _FLOW_CACHE_FILE.exists():
+                import json as _json
+                cached = _json.loads(_FLOW_CACHE_FILE.read_text(encoding="utf-8"))
+                if cached.get("sources_unavailable"):
+                    flow_source_status = "unavailable"
+                elif cached.get("market", {}).get("main_net_inflow") is not None:
+                    flow_source_status = "active"
+                else:
+                    flow_source_status = "partial"
+        except Exception:
+            pass
 
         return {
             "status": "ok",
@@ -270,6 +315,8 @@ def create_app() -> FastAPI:
             "last_cycle": hb_time,
             "halted": is_halted,
             "data_source": "degraded" if is_degraded else "primary",
+            "data_sources": data_sources,
+            "flow_source_status": flow_source_status,
             "mode": settings().get("execution", {}).get("mode", "unknown"),
             "pid": os.getpid(),
         }
@@ -319,6 +366,40 @@ def create_app() -> FastAPI:
         risk = _get_web_risk()
         risk.reset()
         return {"success": True, "message": "L2 熔断已手动解除"}
+
+    @app.post("/api/order")
+    async def place_order(req: OrderRequest) -> dict[str, Any]:
+        """通用下单接口（买入/卖出）。
+
+        使用 Web 单例 Broker 执行下单操作。
+        买入时通过风控检查，卖出时不限制。
+        """
+        broker = _get_web_broker()
+        risk = _get_web_risk()
+
+        if req.direction not in ("buy", "sell"):
+            return {"status": "error", "message": f"不支持的方向: {req.direction}"}
+
+        # 买入时做风控检查
+        if req.direction == "buy" and risk._halted:
+            return {"status": "error", "message": "系统已熔断，禁止新开仓"}
+
+        try:
+            result = broker.order(req.symbol, req.direction, req.quantity, price=req.price)
+            if result and result.success:
+                return {
+                    "status": "ok",
+                    "symbol": req.symbol,
+                    "direction": req.direction,
+                    "quantity": result.quantity,
+                    "price": round(result.price, 2) if result.price else None,
+                    "message": f"{'买入' if req.direction == 'buy' else '卖出'}成功",
+                }
+            reason = result.message if result else "下单返回空结果"
+            return {"status": "error", "symbol": req.symbol, "message": reason}
+        except Exception as e:
+            logger.exception(f"下单失败 {req.symbol}: {e}")
+            return {"status": "error", "message": str(e)[:200]}
 
     @app.post("/api/stop_loss/{symbol}")
     async def stop_loss(symbol: str) -> dict[str, Any]:

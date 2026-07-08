@@ -73,10 +73,37 @@ def list_strategies() -> list[str]:
 
 @lru_cache(maxsize=1)
 def get_enabled_strategies() -> list[Strategy]:
-    """获取配置中启用的策略实例列表（带缓存，全局共享同一批实例）。"""
+    """获取配置中启用的策略实例列表（带缓存，全局共享同一批实例）。
+
+    v0.5.6 优化1：优先使用 enabled_by_regime 的并集（向后兼容 enabled）
+    注：按 regime 过滤由 get_enabled_strategies_for_regime() 实现
+    """
     from gugu.config import get_config
 
-    enabled = get_config().strategy.enabled
+    cfg = get_config().strategy
+    # v0.5.6: 优先使用 enabled_by_regime 的并集
+    enabled = cfg.get_all_enabled_unique() if cfg.enabled_by_regime else cfg.enabled
+    return [get_strategy(name) for name in enabled if name in _REGISTRY]
+
+
+def get_enabled_strategies_for_regime(regime: str | None) -> list[Strategy]:
+    """获取指定市场状态启用的策略实例列表（v0.5.6 优化1 新增）。
+
+    Args:
+        regime: 市场状态（bull/sideways/bear/rally/crash），None 表示未知
+
+    Returns:
+        对应 regime 启用的策略实例列表
+
+    策略按市场状态启用，而非全局禁用：
+    - 牛市：突破追势策略（box_breakout）
+    - 震荡：拐点策略（double_yin）
+    - 熊市：空仓观察（返回空列表）
+    """
+    from gugu.config import get_config
+
+    cfg = get_config().strategy
+    enabled = cfg.get_enabled_for_regime(regime)
     return [get_strategy(name) for name in enabled if name in _REGISTRY]
 
 

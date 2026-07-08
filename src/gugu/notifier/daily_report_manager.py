@@ -6,10 +6,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-from gugu.config import PROJECT_ROOT, get_config
+from gugu.config import PROJECT_ROOT
 from gugu.data.stock_names import lookup_stock_name
 from gugu.notifier.feishu import FeishuNotifier
 from gugu.utils.log import get_logger
@@ -43,6 +42,7 @@ class DailyReportManager:
         check_holdings_sell: Any = None,
         engine_lock: Any = None,
         engine_running: Any = None,
+        filtered_signals: list[dict[str, Any]] | None = None,
     ) -> None:
         """发送信号汇总报告。
 
@@ -51,6 +51,7 @@ class DailyReportManager:
             check_holdings_sell: 收盘后检查持仓卖出信号的回调
             engine_lock: TradingEngine 的 asyncio.Lock
             engine_running: TradingEngine 的 _running 属性引用
+            filtered_signals: 当日被过滤的信号列表（解决沉默拒绝问题）
         """
         account = self._broker.get_account()
         today_signals = self._load_today_signals()
@@ -86,6 +87,7 @@ class DailyReportManager:
             "regime": regime_info,
             "risk": risk_info,
             "trailing_stops": trailing_stop_info,
+            "filtered_signals": filtered_signals or [],
         }
 
         await self._fill_portfolio_names(data)

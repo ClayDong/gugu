@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from pathlib import Path
@@ -165,7 +166,5 @@ class NewsFetcher:
         return None
 
     def _write_cache(self, path: Path, data: list[dict]) -> None:
-        try:
+        with contextlib.suppress(Exception):
             path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            pass

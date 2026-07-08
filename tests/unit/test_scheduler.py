@@ -40,7 +40,8 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     # v0.4.4: 新增 range_observe_1030 + range_observe_1305（震荡市盘中观察列表）
     # v0.5.0: 新增 perspective_report_0830（十大视角分析日报）
     # v0.5.0: 新增 intraday_monitor（盘中实时盯盘，每分钟触发）
-    assert len(jobs) == 25
+    # v0.6.0: 新增 config_hot_reload（配置热加载检测，每5分钟）
+    assert len(jobs) == 27  # v0.5.6 新增 market_temp_0825 市场温度计任务
     job_ids = {j.id for j in jobs}
     assert "intraday_monitor" in job_ids
     assert "scan_1" in job_ids

@@ -8,7 +8,7 @@
 核心公式：
   open_premium = (T+1开盘价 - T收盘价) / T收盘价
   high_premium = (T+1盘中最高价 - T收盘价) / T收盘价
-  
+
 数据持久化：
   data/screener_history.jsonl: 选股记录（T日写入）
   data/screener_validation.jsonl: 验证结果（T+1日写入）
@@ -16,15 +16,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any
 
 import httpx
-import pandas as pd
 
 from gugu.utils.calendar import last_trading_day
 from gugu.utils.log import get_logger
@@ -163,7 +160,7 @@ async def validate_yesterday_screener() -> list[ValidationResult]:
     results = await _fetch_today_prices(records)
 
     validated: list[ValidationResult] = []
-    for rec, today_data in zip(records, results):
+    for rec, today_data in zip(records, results, strict=True):
         if today_data is None:
             continue
         open_price, high_price, benchmark_open = today_data

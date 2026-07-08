@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 
 from gugu.config import PROJECT_ROOT
 from gugu.utils.log import get_logger

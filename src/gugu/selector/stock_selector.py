@@ -101,7 +101,7 @@ class StockSelector:
         # 三要素是选股池准入（换手率≥15% + 成交额≥10亿 + 流通市值≥70亿）
         # 不产生买卖信号，只缩小候选范围。默认关闭，仅与突破策略配合时开启。
         if self._leopard_filter is not None:
-            before = len(candidates)
+            _before = len(candidates)
             candidates = self._leopard_filter.filter(candidates)
             if candidates.empty:
                 logger.info("豹哥三要素预筛后无候选股，跳过本次选股")

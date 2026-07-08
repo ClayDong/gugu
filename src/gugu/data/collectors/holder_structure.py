@@ -198,7 +198,7 @@ class HolderStructureCollector:
                 )
             except AttributeError:
                 # 部分 akshare 版本无此函数
-                logger.debug(f"akshare 无 stock_zh_a_gdhs_detail_em，历史数据不可用")
+                logger.debug("akshare 无 stock_zh_a_gdhs_detail_em，历史数据不可用")
                 return None
 
             if raw is None or raw.empty:

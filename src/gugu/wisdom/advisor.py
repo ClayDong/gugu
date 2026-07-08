@@ -1286,7 +1286,7 @@ class WisdomAdvisor:
         divergence = signal.get("divergence", {})
         money_flow = signal.get("money_flow", {})
         fundamental = signal.get("fundamental", {})
-        multi_period = signal.get("multi_period", {})
+        _multi_period = signal.get("multi_period", {})
 
         if direction == "buy":
             # ── 入场建议 ──
@@ -1344,7 +1344,7 @@ class WisdomAdvisor:
                 else:
                     stop_parts.append("无 ATR 数据，使用默认 8% 止损")
             else:
-                stop_parts.append("建议止损价：¥{:.2f}（-8%）".format(price * 0.92) if price > 0 else "价格无效")
+                stop_parts.append(f"建议止损价：¥{price * 0.92:.2f}（-8%）" if price > 0 else "价格无效")
             stop_parts.append("原则：止损是铁律，不可违反，跌破立即执行")
             source = self._get_skill_source("stock-stop-loss-decision")
             stop_parts.append(f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》")

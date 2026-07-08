@@ -82,7 +82,7 @@ class CapitalFlowAlertStrategy(Strategy):
         ma20_window = int(self.params.get("ma20_window", 20))
         vol_ma_window = int(self.params.get("vol_ma_window", 5))
         shrink_ratio = float(self.params.get("shrink_ratio", 0.8))
-        breakout_volume_ratio = float(self.params.get("breakout_volume_ratio", 1.3))
+        _breakout_volume_ratio = float(self.params.get("breakout_volume_ratio", 1.3))
         stagnation_volume_ratio = float(self.params.get("stagnation_volume_ratio", 2.0))
         pullback_max_pct = float(self.params.get("pullback_max_pct", -0.02))
         recent_strong_window = int(self.params.get("recent_strong_window", 5))

@@ -45,7 +45,7 @@ from gugu.notifier.daily_report_manager import DailyReportManager
 from gugu.risk import RiskManager
 from gugu.risk.rules import RiskAction
 from gugu.selector import StockSelector
-from gugu.strategies.registry import get_enabled_strategies
+from gugu.strategies.registry import get_enabled_strategies, get_enabled_strategies_for_regime
 from gugu.utils.calendar import is_trading_day, is_trading_time
 from gugu.utils.log import get_logger
 from gugu.wisdom import WisdomAdvisor
@@ -100,6 +100,9 @@ class TradingEngine:
         self._notifier = notifier if notifier is not None else FeishuNotifier()
         self._risk = risk if risk is not None else RiskManager()
         self._wisdom = wisdom if wisdom is not None else WisdomAdvisor()
+        # v0.5.6 优化1：strategies 默认加载所有启用策略（向后兼容）
+        # 扫描时按 regime 动态过滤（_scan_signals 中实现）
+        # 显式传入时用于测试注入
         self._strategies = strategies if strategies is not None else get_enabled_strategies()
         self._router = router if router is not None else SignalRouter(self._strategies)
         self._selector = selector if selector is not None else StockSelector(
@@ -441,6 +444,28 @@ class TradingEngine:
         regime = await self._regime_detector.detect()
         logger.info(f"市场择时: {regime['reason']}")
 
+        # v0.5.6 优化1：按 regime 动态选择策略
+        # 核心思想：策略没有"好/坏"之分，只有"适用/不适用"之分
+        # 牛市启用突破追势，震荡启用拐点策略，熊市空仓观察
+        current_regime = regime.get("regime", "unknown")
+        # 按 regime 重建 SignalRouter（当配置了 enabled_by_regime 时）
+        try:
+            from gugu.config import get_config as _get_cfg
+            _cfg = _get_cfg().strategy
+            if _cfg.enabled_by_regime:
+                regime_strategies = get_enabled_strategies_for_regime(current_regime)
+                # 仅当策略列表变化时重建（避免无谓重建）
+                _new_names = {s.name for s in regime_strategies}
+                _old_names = {s.name for s in self._strategies} if self._strategies else set()
+                if _new_names != _old_names:
+                    self._router = SignalRouter(regime_strategies)
+                    logger.info(
+                        f"v0.5.6 按 regime={current_regime} 动态加载策略: "
+                        f"{sorted(_new_names)}"
+                    )
+        except Exception as _e:
+            logger.warning(f"v0.5.6 按 regime 加载策略失败，回退默认: {_e}")
+
         # 计算仓位预算
         budget = self._position_controller.calculate(
             regime=regime,
@@ -454,7 +479,7 @@ class TradingEngine:
         self._event_engine.put(
             EVENT_MARKET_REGIME,
             {
-                "regime": regime.get("regime", "unknown"),
+                "regime": current_regime,
                 "reason": regime.get("reason", ""),
                 "total_limit": budget.total_limit,
                 "single_limit": budget.single_limit,

@@ -207,7 +207,7 @@ class TestAllStrategiesGeneric:
 
     @pytest.mark.parametrize("strategy_name", [
         "turtle", "dual_ma", "bollinger", "rsi_reversal",
-        "box_breakout", "macd", "kdj",
+        "box_breakout", "macd", "kdj", "double_yin", "pullback_low",
     ])
     def test_every_strategy_produces_signal_columns(
         self, benchmark_df: pd.DataFrame, strategy_name: str,
@@ -231,6 +231,7 @@ class TestAllStrategiesGeneric:
 
     @pytest.mark.parametrize("strategy_name", [
         "turtle", "dual_ma", "bollinger", "rsi_reversal", "macd", "kdj",
+        "double_yin", "pullback_low",
     ])
     def test_every_strategy_produces_at_least_one_signal(
         self, benchmark_df: pd.DataFrame, strategy_name: str,

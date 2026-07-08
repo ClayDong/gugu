@@ -24,10 +24,10 @@ from typing import Any
 
 import httpx
 
-from gugu.config import env, get_config
+from gugu.config import env
 from gugu.models.user_profile import UserProfile, load_profile
 from gugu.utils.log import get_logger
-from gugu.wisdom.kb_indexer import INDEX_DIR, Chunk, load_index, tokenize_zh
+from gugu.wisdom.kb_indexer import Chunk, load_index, tokenize_zh
 
 logger = get_logger()
 

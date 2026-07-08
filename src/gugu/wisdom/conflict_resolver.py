@@ -16,11 +16,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections import defaultdict
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -30,7 +28,6 @@ from gugu.models.user_profile import UserProfile, load_profile
 from gugu.utils.log import get_logger
 from gugu.wisdom.book_router import (
     BOOK_CATEGORIES,
-    MAX_PERSPECTIVES_PER_SCENARIO,
     SCENARIO_MAPPING,
     BookPerspectiveRouter,
 )

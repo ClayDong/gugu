@@ -11,8 +11,8 @@ from __future__ import annotations
 from typing import Any
 
 from gugu.analysis.sentiment.fetcher import NewsFetcher
-from gugu.analysis.sentiment.report import SentimentReport
 from gugu.analysis.sentiment.impact import ImpactAnalyzer
+from gugu.analysis.sentiment.report import SentimentReport
 from gugu.utils.log import get_logger
 
 logger = get_logger()

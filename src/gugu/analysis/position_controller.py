@@ -101,8 +101,11 @@ class PositionController:
         available_budget = total_value * total_limit
 
         # 6. 单股上限（考虑剩余仓位槽位）
+        # 下限保护：单股上限不低于 5%，避免 remaining_slots 很大时单股上限过低
+        # 上限保护：不超过风控配置的 max_position_ratio
         if remaining_slots > 0:
             single_limit = min(self._max_single, total_limit / remaining_slots)
+            single_limit = max(single_limit, 0.05)  # 下限 5%
         else:
             single_limit = 0.0
 

@@ -1,10 +1,13 @@
 """技术指标工具函数单元测试。"""
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from gugu.analysis.technical import atr, sma, ema
+from gugu.analysis.technical import (
+    atr, bollinger, ema, macd, obv, rsi, sma,
+)
 
 
 def _make_df(prices: list[float]) -> pd.DataFrame:
@@ -84,3 +87,120 @@ class TestEMA:
         result = ema(s, 10)
         assert result.iloc[-1] < 20.0
         assert result.iloc[-1] > 10.0
+
+
+class TestRSI:
+    """RSI 计算测试。"""
+
+    def test_rsi_basic(self):
+        """基本 RSI 计算。"""
+        s = pd.Series([float(i) for i in range(1, 21)])  # 持续上升
+        result = rsi(s, period=14)
+        assert not result.empty
+        assert result.iloc[-1] >= 50  # 上升趋势 RSI >= 50
+
+    def test_rsi_overbought(self):
+        """持续大涨后 RSI 应进入超买区。"""
+        s = pd.Series([100.0 * (1.02 ** i) for i in range(30)])  # 持续大涨
+        result = rsi(s, period=14)
+        assert result.iloc[-1] > 70
+
+    def test_rsi_oversold(self):
+        """持续大跌后 RSI 应进入超卖区。"""
+        s = pd.Series([100.0 * (0.98 ** i) for i in range(30)])  # 持续大跌
+        result = rsi(s, period=14)
+        assert result.iloc[-1] < 30
+
+    def test_rsi_range(self):
+        """RSI 值应在 0-100 范围内。"""
+        s = pd.Series(np.random.randn(30) * 5 + 100)
+        result = rsi(s, period=14)
+        assert result.iloc[-1] >= 0
+        assert result.iloc[-1] <= 100
+
+    def test_rsi_returns_series(self):
+        """RSI 返回 pd.Series。"""
+        s = pd.Series([float(i) for i in range(30)])
+        result = rsi(s, period=14)
+        assert isinstance(result, pd.Series)
+
+
+class TestMACD:
+    """MACD 计算测试。"""
+
+    def test_macd_basic(self):
+        """基本 MACD 计算。"""
+        s = pd.Series([float(i) for i in range(1, 41)])
+        dif, dea, hist = macd(s)
+        assert not dif.empty
+        assert not dea.empty
+        assert not hist.empty
+
+    def test_macd_uptrend(self):
+        """上升趋势中 DIF > DEA。"""
+        s = pd.Series([100.0 + i * 0.5 for i in range(60)])
+        dif, dea, hist = macd(s)
+        assert dif.iloc[-1] > dea.iloc[-1]
+        assert hist.iloc[-1] > 0
+
+    def test_macd_downtrend(self):
+        """下降趋势中 DIF < DEA。"""
+        s = pd.Series([100.0 - i * 0.5 for i in range(60)])
+        dif, dea, hist = macd(s)
+        assert dif.iloc[-1] < dea.iloc[-1]
+        assert hist.iloc[-1] < 0
+
+    def test_macd_returns_tuple(self):
+        """MACD 返回三元组。"""
+        s = pd.Series([float(i) for i in range(40)])
+        result = macd(s)
+        assert len(result) == 3
+
+
+class TestBollinger:
+    """布林带计算测试。"""
+
+    def test_bollinger_basic(self):
+        """基本布林带计算。"""
+        s = pd.Series([100.0] * 30)
+        middle, upper, lower = bollinger(s)
+        assert middle.iloc[-1] == 100.0
+        assert upper.iloc[-1] >= middle.iloc[-1]
+        assert lower.iloc[-1] <= middle.iloc[-1]
+
+    def test_bollinger_volatile(self):
+        """波动行情布林带应更宽。"""
+        s = pd.Series([100.0 + np.random.randn() * 10 for _ in range(30)])
+        middle, upper, lower = bollinger(s)
+        assert upper.iloc[-1] > lower.iloc[-1]
+
+    def test_bollinger_price_within_bands(self):
+        """价格应在布林带范围内。"""
+        s = pd.Series([100.0 + i * 0.3 for i in range(30)])
+        middle, upper, lower = bollinger(s)
+        assert lower.iloc[-1] <= s.iloc[-1] <= upper.iloc[-1]
+
+
+class TestOBV:
+    """OBV 计算测试。"""
+
+    def test_obv_basic(self):
+        """基本 OBV 计算。"""
+        df = _make_df([100.0] * 20)
+        result = obv(df)
+        assert not result.empty
+        assert isinstance(result, pd.Series)
+
+    def test_obv_uptrend(self):
+        """上涨时 OBV 应上升。"""
+        prices = [100.0 * (1.01 ** i) for i in range(20)]
+        df = _make_df(prices)
+        result = obv(df)
+        assert result.iloc[-1] > result.iloc[0]
+
+    def test_obv_downtrend(self):
+        """下跌时 OBV 应下降。"""
+        prices = [100.0 * (0.99 ** i) for i in range(20)]
+        df = _make_df(prices)
+        result = obv(df)
+        assert result.iloc[-1] < result.iloc[0]

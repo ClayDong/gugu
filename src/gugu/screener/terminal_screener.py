@@ -79,6 +79,8 @@ class ScreeningResult:
     ma20: float = 0.0           # MA20 支撑位
     recent_high: float = 0.0    # 前 20 日最高价（止盈目标位）
     suggested_position: float = 0.10  # 建议仓位占比（默认 10%）
+    # P2: 十大视角评分（可选，通过筛选后附加）
+    perspective_score: float = 0.0   # 综合评分 0-10
 
     @property
     def pass_count(self) -> int:
@@ -166,11 +168,12 @@ class TerminalScreener:
         # 4. 并发获取K线 + 深度检查
         results = await self._concurrent_check(candidates, index_chg, start_time)
 
-        # 5. 排序：通过条件数降序 → 涨幅升序
+        # 5. 排序：通过条件数降序 → 视角评分降序 → 涨幅升序
         passed = [r for r in results if r.passed]
         partial = [r for r in results if not r.passed and len(r.failed_conditions) <= 3]
         partial.sort(key=lambda r: (-r.pass_count, r.change_pct))
-        passed.sort(key=lambda r: r.change_pct)
+        # P2 优化：通过股票按视角评分降序排列（评分高的优先）
+        passed.sort(key=lambda r: (-r.perspective_score, r.change_pct))
 
         top = (passed + partial)[:MAX_CANDIDATES]
         elapsed = time.time() - start_time
@@ -375,6 +378,36 @@ class TerminalScreener:
                 logger.debug(f"DataManager 获取大盘涨幅失败: {e}")
         return 0.0
 
+    async def _score_with_perspectives(
+        self, code: str, name: str, price: float,
+        ma20_val: float, ma60_val: float,
+    ) -> float | None:
+        """对候选股运行十大视角评分（轻量版，仅使用已有K线数据）。
+
+        Returns:
+            综合评分 0-10，或 None（评分失败）
+        """
+        try:
+            from gugu.analysis.perspectives import (
+                PerspectiveEngine,
+                build_context_from_kline,
+            )
+
+            df = await self._fetch_stock_kline(code)
+            if df is None or df.empty or len(df) < 30:
+                return None
+
+            ctx = build_context_from_kline(
+                symbol=code, name=name, kline_df=df,
+                price=price, ma20=ma20_val, ma60=ma60_val,
+            )
+            engine = PerspectiveEngine()
+            result = engine.analyze(ctx)
+            return result.composite_score
+        except Exception as e:
+            logger.debug(f"十大视角评分失败 {code}: {e}")
+            return None
+
     async def _check_stock(
         self,
         code: str,
@@ -481,6 +514,18 @@ class TerminalScreener:
                 ma20=ma20_val,
                 recent_high=recent_high_val,
             )
+
+            # P2 优化：对通过筛选的股票附加十大视角评分（用于排序和通知展示）
+            if result.passed:
+                try:
+                    perspective_score = await self._score_with_perspectives(
+                        code, name, price, ma20_val, ma60_val=float(ma60) if pd.notna(ma60) else 0,
+                    )
+                    if perspective_score is not None:
+                        result.perspective_score = perspective_score
+                except Exception:
+                    pass
+
             return result
 
         except Exception as e:

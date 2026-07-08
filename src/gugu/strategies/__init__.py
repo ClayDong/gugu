@@ -5,6 +5,7 @@ from gugu.strategies.breakout import BoxBreakoutStrategy, DualThrustStrategy
 from gugu.strategies.mean_revert import BollingerStrategy, KDJStrategy, RSIStrategy
 from gugu.strategies.registry import (
     get_enabled_strategies,
+    get_enabled_strategies_for_regime,
     get_strategy,
     list_strategies,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "StrategyConfig",
     "TurtleStrategy",
     "get_enabled_strategies",
+    "get_enabled_strategies_for_regime",
     "get_strategy",
     "list_strategies",
 ]

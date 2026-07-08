@@ -160,7 +160,7 @@ async def run_batch_backtest(
     all_results: dict[str, list[dict]] = {s: [] for s in strategies}
     # 每只股票每个策略的结果
     per_symbol_results: dict[str, dict[str, dict]] = {}
-    engine = BacktestEngine()
+    engine = BacktestEngine(strict_confirmation=strict_confirmation)
 
     sem = asyncio.Semaphore(_STOCK_CONCURRENCY)
 
@@ -349,7 +349,9 @@ async def main_async(args: argparse.Namespace) -> None:
 
     # 3. 批量回测
     logger.info(f"开始批量回测: {len(symbols)} 只股票 × {len(strategies)} 策略 × {args.days} 天")
-    all_results, per_symbol_results = await run_batch_backtest(symbols, strategies, args.days)
+    all_results, per_symbol_results = await run_batch_backtest(
+        symbols, strategies, args.days, strict_confirmation=args.strict
+    )
 
     # 4. 汇总
     all_summaries = {}
@@ -430,6 +432,7 @@ def main() -> None:
     parser.add_argument("--strategies", type=str, default=None, help="逗号分隔的策略名，空则用 settings.yaml")
     parser.add_argument("--output", type=str, default=None, help="输出 JSON 路径（默认: docs/backtest_results_YYYY-MM-DD.json）")
     parser.add_argument("--report", action="store_true", help="回测完成后自动生成 Markdown 对比报告到 docs/ 目录")
+    parser.add_argument("--strict", action="store_true", help="严格模式：模拟生产环境次日确认机制，回测结果与生产行为一致")
     args = parser.parse_args()
     asyncio.run(main_async(args))
 

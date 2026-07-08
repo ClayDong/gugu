@@ -53,16 +53,21 @@ __all__ = [
     "PERSPECTIVE_QIU_GUO_LU",
     "PERSPECTIVE_SOROS",
     "PERSPECTIVE_TECHNICAL",
+    # Scorer
+    "SCORERS",
+    "AggregatedPerspectiveResult",
+    "ConsensusResult",
     "PerspectiveAnalysisResult",
+    "PerspectiveEngine",
+    "PerspectiveScore",
     "PerspectiveScore",
     "StockDataContext",
     # Engine
-    "PerspectiveEngine",
+    "analyze_multiple",
+    "analyze_single",
     # Integrators
     "attach_perspective_to_signal",
     "build_context_from_kline",
     "build_context_from_signal",
     "filter_by_perspective",
-    # Scorer
-    "SCORERS",
 ]

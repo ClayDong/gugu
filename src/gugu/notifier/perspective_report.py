@@ -104,7 +104,7 @@ def build_perspective_card(result: PerspectiveAnalysisResult) -> dict[str, Any]:
     sorted_scores = sorted(result.scores, key=lambda x: x.score, reverse=True)
     for s in sorted_scores:
         name_cn = PERSPECTIVE_NAMES.get(s.perspective, s.perspective)
-        thought = PERSPECTIVE_THOUGHT.get(s.perspective, "")
+        _thought = PERSPECTIVE_THOUGHT.get(s.perspective, "")
         status = "✅" if s.passed else ("🔴" if s.is_fatal else "⚠️")
         bar = "█" * int(s.score) + "░" * (10 - int(s.score))
 

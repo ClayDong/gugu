@@ -117,12 +117,12 @@ class SignalRouter:
         # P0 修复：卖出硬否决（趋势破坏时不入场 — 《炒股的智慧》铁律）
         # 趋势类/突破类策略若发出 sell，说明趋势已破坏，禁止买入
         # 这些策略的 sell 信号覆盖任何 buy 信号
-        _TREND_BREAKDOWN_STRATEGIES = {
+        _trend_breakdown_strategies = {
             "turtle", "dual_ma", "chen_jiangting", "money_flow_follow",
             "box_breakout", "breakout", "leopard_three_factors",
         }
         sell_strategy_names = {n for n, _ in sell_votes}
-        trend_breakdown = sell_strategy_names & _TREND_BREAKDOWN_STRATEGIES
+        trend_breakdown = sell_strategy_names & _trend_breakdown_strategies
 
         direction = "hold"
         triggered = []

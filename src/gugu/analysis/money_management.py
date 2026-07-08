@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 from gugu.utils.log import get_logger
@@ -229,8 +228,16 @@ class KellyCalculator:
             return 0.5, 1.0  # 缺省值
 
         win_rate = win_count / total_trades
-        avg_profit = total_profit / win_count if win_count > 0 else 0
-        avg_loss = total_loss / loss_count if loss_count > 0 else 1
-        profit_loss_ratio = avg_profit / abs(avg_loss) if abs(avg_loss) > 0 else 1.0
+        avg_profit = total_profit / win_count if win_count > 0 else 0.0
+        avg_loss = abs(total_loss) / loss_count if loss_count > 0 else 0.0
+
+        # 边界保护：avg_loss 为 0 时盈亏比设为较大值（避免除零）
+        # 但限制上限为 10，防止单次异常数据导致 Kelly 仓位过大
+        if avg_loss > 0:
+            profit_loss_ratio = min(avg_profit / avg_loss, 10.0)
+        elif avg_profit > 0:
+            profit_loss_ratio = 10.0  # 无亏损记录，高盈亏比
+        else:
+            profit_loss_ratio = 1.0  # 无数据，默认值
 
         return win_rate, profit_loss_ratio

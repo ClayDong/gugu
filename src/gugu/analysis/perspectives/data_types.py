@@ -15,7 +15,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-
 # ── 视角名称常量 ──
 PERSPECTIVE_BUFFETT = "buffett"
 PERSPECTIVE_MUNGER = "munger"

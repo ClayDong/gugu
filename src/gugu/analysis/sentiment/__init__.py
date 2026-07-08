@@ -11,9 +11,9 @@ from gugu.analysis.sentiment.report import SentimentReport
 from gugu.analysis.sentiment.system import SentimentSystem
 
 __all__ = [
-    "SentimentAnalyzer",
-    "NewsFetcher",
     "ImpactAnalyzer",
+    "NewsFetcher",
+    "SentimentAnalyzer",
     "SentimentReport",
     "SentimentSystem",
 ]

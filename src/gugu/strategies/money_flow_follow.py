@@ -83,10 +83,10 @@ class MoneyFlowFollowStrategy(Strategy):
 
         # ── 条件1：近期强势涨幅（热点近似）──
         recent_gain = (df["close"] / df["close"].shift(recent_gain_window) - 1.0)
-        cond_hot = recent_gain >= recent_gain_threshold
+        _cond_hot = recent_gain >= recent_gain_threshold
 
         # ── 条件2：均线多头排列 ──
-        cond_ma_aligned = (ma5 > ma10) & (ma10 > ma20) & (ma20 > ma60)
+        _cond_ma_aligned = (ma5 > ma10) & (ma10 > ma20) & (ma20 > ma60)
 
         # ── 条件3：非历史天量 ──
         vol_ma = df["volume"].rolling(vol_ma_window).mean()
@@ -115,7 +115,7 @@ class MoneyFlowFollowStrategy(Strategy):
             vol_shrinking = vol_shrinking & (df["volume"].shift(i) < df["volume"].shift(i + 1))
         # 当日放量：今日成交量 / 昨日成交量 ≥ volume_expand_ratio
         vol_ratio_today = df["volume"] / df["volume"].shift(1)
-        cond_volume_confirm = vol_shrinking & (vol_ratio_today >= volume_expand_ratio)
+        _cond_volume_confirm = vol_shrinking & (vol_ratio_today >= volume_expand_ratio)
 
         # P1-11 修复：原 5 AND / 3 AND 过严导致 32571 次回测 trades=0（多股聚合验证）
         # 基于第一性原理：资金流跟随的本质 = 趋势确认 + 资金进入
@@ -152,7 +152,7 @@ class MoneyFlowFollowStrategy(Strategy):
         new_high_boost[cond_pullback_hold] = 0.2
         # 增强2：涨幅强势 → +0.1
         hot_boost = pd.Series(0.0, index=df.index)
-        hot_boost[cond_hot] = 0.1
+        hot_boost[cond_pullback_hold] = 0.1
         # 增强3：缩量回踩 → +0.05
         shrink_boost = pd.Series(0.0, index=df.index)
         shrink_boost[vol_shrinking] = 0.05

@@ -16,12 +16,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 try:
     from enum import StrEnum
 except ImportError:
     from enum import Enum
 
-    class StrEnum(str, Enum):
+    class StrEnum(str, Enum):  # noqa: UP042
         pass
 
 from typing import Any
@@ -136,7 +137,7 @@ class StageDetector:
 
         # 取最近LOOKBACK_PERIOD根K线
         lookback = min(self.LOOKBACK_PERIOD, len(df))
-        close.iloc[-lookback:]
+        close = close.iloc[-lookback:].copy()
         high_recent = high.iloc[-lookback:]
         low_recent = low.iloc[-lookback:]
         vol_recent = volume.iloc[-lookback:]
@@ -146,9 +147,23 @@ class StageDetector:
         ma_medium = close.rolling(self.MA_MEDIUM).mean().iloc[-1]
         ma_long = close.rolling(self.MA_LONG).mean().iloc[-1]
 
-        # 2. MA斜率（中期均线20日变化率）
-        ma_medium_prev = close.rolling(self.MA_MEDIUM).mean().iloc[-self.MA_MEDIUM - 1]
-        ma_slope = (ma_medium - ma_medium_prev) / ma_medium_prev if ma_medium_prev > 0 else 0
+        # 2. MA斜率（中期均线20日变化率，使用线性回归替代双点差分）
+        # 原实现：仅用 iloc[-21] 和 iloc[-1] 两个点计算斜率，对噪声极度敏感
+        # 优化：对最近 MA_MEDIUM 个 MA 值做线性回归，斜率更稳健
+        ma_medium_series = close.rolling(self.MA_MEDIUM).mean()
+        ma_medium_valid = ma_medium_series.dropna().values
+        if len(ma_medium_valid) >= self.MA_MEDIUM:
+            x = np.arange(len(ma_medium_valid))
+            # 使用最近 MA_MEDIUM 个点做线性回归
+            x_seg = x[-self.MA_MEDIUM:]
+            y_seg = ma_medium_valid[-self.MA_MEDIUM:]
+            if len(x_seg) >= 2:
+                slope, _ = np.polyfit(x_seg, y_seg, 1)
+                ma_slope = slope / (np.mean(y_seg) if np.mean(y_seg) > 0 else 1)
+            else:
+                ma_slope = 0.0
+        else:
+            ma_slope = 0.0
 
         # 3. 波浪结构：识别更高高点/更高低点
         wave_highs = self._find_swings(high_recent, self.WAVE_WINDOW, high=True)
@@ -194,7 +209,10 @@ class StageDetector:
 
     @staticmethod
     def _find_swings(series: pd.Series, window: int, high: bool = True) -> list[float]:
-        """识别波浪的高点或低点（仅使用历史窗口，无未来函数）。"""
+        """识别波浪的高点或低点（仅使用历史窗口，无未来函数）。
+
+        修复：循环中已包含最后一个点的判断，末尾不再重复添加。
+        """
         swings: list[float] = []
         for i in range(0, len(series)):
             left = max(0, i - window)
@@ -205,9 +223,6 @@ class StageDetector:
             else:
                 if series.iloc[i] == segment.min():
                     swings.append(float(series.iloc[i]))
-        # 末尾点
-        if len(series) > 0:
-            swings.append(float(series.iloc[-1]))
         return swings
 
     @staticmethod

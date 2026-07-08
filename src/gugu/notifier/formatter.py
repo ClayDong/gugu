@@ -284,13 +284,12 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
 
     title = f"{action}信号 · {name}({symbol})"
     show_price = isinstance(price, (int, float)) and price > 1.0
-    if data_incomplete:
-        title = f"{strength} {title}"
-    elif strength and not wisdom_decision.get("entry_filtered"):
+    if data_incomplete or (strength and not wisdom_decision.get("entry_filtered")):
         title = f"{strength} {title}"
     subtitle = f"💰 ￥{price:.2f} | {summary_line}" if show_price else summary_line
 
-    # 数据异常时 section 中显示具体缺失字段
+    # ===== 30秒决策摘要优先 =====
+    # 优化：最重要的信息放在最前面，次要信息往后排
     if data_incomplete:
         sections = [
             f"**股票**：{name}({symbol})\n**方向**：{action}\n**当前价**：{price}\n**信号强度**：{strength}",
@@ -303,7 +302,40 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
             f"**触发策略**：{strategy}\n**建议仓位**：{position or '未提供'}\n**触发理由**：{reason}",
         ]
 
-    # if the signal has an order result, display actual fill details (U-01 fix)
+    # 止损止盈（30秒决策核心信息，紧跟在策略之后）
+    sl_tp_lines = []
+    if stop_loss and stop_loss > 0:
+        sl_pct = (price - stop_loss) / price * 100 if price > 0 else 0
+        sl_tp_lines.append(f"🛑 止损 ￥{stop_loss:.2f}（-{sl_pct:.1f}%）")
+    if take_profit:
+        tp_pct = take_profit.get("target_1_pct", 0)
+        if tp_pct:
+            sl_tp_lines.append(
+                f"🎯 止盈 +{tp_pct:.0%}（￥{take_profit.get('target_1', 0):.2f}）"
+            )
+    if sl_tp_lines:
+        sections.append("**止损止盈**\n" + "\n".join(sl_tp_lines))
+
+    # 信号绩效摘要（历史胜率/平均收益）
+    perf = signal.get("performance_summary")
+    if perf:
+        perf_lines = [
+            f"📈 **同类信号历史表现（{perf.get('sample_count', 0)} 条）**",
+            f"胜率：{perf.get('win_rate', 0):.0%}",
+            f"5日平均收益：{perf.get('avg_return_5d', 0):.1%}",
+        ]
+        if perf.get("best_return") is not None:
+            perf_lines.append(f"最佳：{perf['best_return']:.1%}")
+        if perf.get("worst_return") is not None:
+            perf_lines.append(f"最差：{perf['worst_return']:.1%}")
+        sections.append("\n".join(perf_lines))
+
+    # 决策链路摘要
+    decision_chain_text = _format_decision_chain(signal.get("decision_chain", []))
+    if decision_chain_text:
+        sections.append(f"**决策链路**\n{decision_chain_text}")
+
+    # 实际下单结果（如有）
     order_result = signal.get("order_result")
     if order_result:
         success = order_result.get("success", False)
@@ -321,12 +353,7 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
             f"**备注**：{order_result.get('message', '')}"
         )
 
-    # 决策链路摘要（A-06 修复：从 decision_chain 渲染每一层）
-    decision_chain_text = _format_decision_chain(signal.get("decision_chain", []))
-    if decision_chain_text:
-        sections.append(f"**决策链路**\n{decision_chain_text}")
-
-    # 筹码结构层（v0.5.0 新增：股东户数季度慢变量）
+    # 筹码结构层
     hc = signal.get("holder_concentration")
     if hc:
         hc_label = hc.get("label", "")
@@ -353,22 +380,8 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     if wisdom_text:
         sections.append(f"**交易智慧参考**\n{wisdom_text}")
 
-    # 信号绩效摘要（历史胜率/平均收益，帮助 30 秒决策）
-    perf = signal.get("performance_summary")
-    if perf:
-        perf_lines = [
-            f"📈 **同类信号历史表现（{perf.get('sample_count', 0)} 条）**",
-            f"胜率：{perf.get('win_rate', 0):.0%}",
-            f"5日平均收益：{perf.get('avg_return_5d', 0):.1%}",
-        ]
-        if perf.get("best_return") is not None:
-            perf_lines.append(f"最佳：{perf['best_return']:.1%}")
-        if perf.get("worst_return") is not None:
-            perf_lines.append(f"最差：{perf['worst_return']:.1%}")
-        sections.append("\n".join(perf_lines))
-
-    # 止盈方案
-    if take_profit:
+    # 止盈方案详情（如果未在摘要中展示）
+    if take_profit and not sl_tp_lines:
         tp_lines = ["🎯 **止盈方案**"]
         if take_profit.get("target_1_pct"):
             tp_lines.append(
@@ -384,10 +397,17 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
             tp_lines.append(f"💡 {take_profit['note']}")
         sections.append("\n".join(tp_lines))
 
-    # 导师视角栏（来自冲突裁决器的多视角建议）
+    # 导师视角栏
     mentor_text = _format_mentor_perspectives(signal.get("mentor_perspectives", []))
     if mentor_text:
         sections.append(mentor_text)
+
+    # signal_only 模式免责声明
+    if signal.get("llm_pending") is False and signal.get("wisdom_decision", {}).get("source") != "llm":
+        sections.append(
+            "---\n⚠️ **仅通知模式**：此信号仅供参考，不构成交易建议。"
+            "系统不会自动执行任何交易操作，请自行判断决策。"
+        )
 
     return _card(title, template, sections, note="明策 · gugu · 信号通知", subtitle=subtitle)
 
@@ -540,7 +560,13 @@ def format_concept_card(
     if citations:
         cite_lines = ["📚 **出处**"]
         for c in citations[:3]:
-            cite_lines.append(f"• 《{c.get('book', '')}》：{c.get('snippet', '')[:60]}")
+            if isinstance(c, dict):
+                book = c.get("book", "")
+                snippet = c.get("snippet", "")
+            else:
+                book = getattr(c, "book", "")
+                snippet = getattr(c, "snippet", "")
+            cite_lines.append(f"• 《{book}》：{snippet[:60]}")
         sections.append("\n".join(cite_lines))
 
     return _card(
@@ -560,25 +586,6 @@ def _format_market_summary(summary: dict[str, Any]) -> str:
     cash = summary.get("cash", 0)
     positions_count = summary.get("positions_count", 0)
     return f"总资产: ￥{total_value:,.0f} | 现金: ￥{cash:,.0f} | 持仓: {positions_count} 只"
-
-
-def _format_sector_top(sector_top: list[dict[str, Any]]) -> str:
-    """Format sector flow list into readable markdown lines."""
-    if not sector_top:
-        return ""
-    lines: list[str] = []
-    for item in sector_top:
-        sector = item.get("sector", "")
-        main_net = item.get("main_net", 0)
-        main_pct = item.get("main_pct", 0)
-        try:
-            net_val = float(main_net or 0)
-            pct_val = float(main_pct or 0)
-        except (TypeError, ValueError):
-            net_val = 0.0
-            pct_val = 0.0
-        lines.append(f"- {sector}: 主力净流入 ￥{net_val / 1e8:,.2f}亿 ({pct_val:+.2%})")
-    return "\n".join(lines) if lines else ""
 
 
 def _format_portfolio_summary(portfolio: dict[str, Any]) -> str:
@@ -604,6 +611,32 @@ def _format_portfolio_summary(portfolio: dict[str, Any]) -> str:
     return "\n".join(lines) if lines else ""
 
 
+def _format_filtered_signals(filtered: list[dict[str, Any]]) -> str:
+    """格式化被过滤信号摘要。
+
+    解决"沉默拒绝"问题：让用户知道哪些信号因何被过滤。
+
+    Args:
+        filtered: [{symbol, name, direction, strategy, filter_reason, confidence, price}, ...]
+
+    Returns:
+        格式化的 markdown 文本
+    """
+    if not filtered:
+        return ""
+    lines = [f"**被过滤信号**（{len(filtered)} 条，仅收盘展示）"]
+    for s in filtered[:8]:  # 最多展示8条
+        symbol = s.get("symbol", "")
+        name = s.get("name", "") or lookup_stock_name(symbol) or symbol
+        direction = "买入" if s.get("direction") == "buy" else "卖出"
+        reason = s.get("filter_reason", "未知原因")[:40]
+        _strategy = s.get("strategy", "")
+        lines.append(f"• {name}({symbol}) {direction} — {reason}")
+    if len(filtered) > 8:
+        lines.append(f"  ... 及其他 {len(filtered) - 8} 条")
+    return "\n".join(lines)
+
+
 def format_daily_report(period: str, data: dict[str, Any]) -> dict[str, Any]:
     """Format a daily report into a Feishu card.
 
@@ -612,7 +645,7 @@ def format_daily_report(period: str, data: dict[str, Any]) -> dict[str, Any]:
     Args:
         period: "morning" / "noon" / "close".
         data: Dict with keys market_summary, signals, portfolio_summary,
-              performance, regime, risk, trailing_stops.
+              performance, regime, risk, trailing_stops, filtered_signals.
 
     Returns:
         Feishu interactive card message dict.
@@ -631,6 +664,7 @@ def format_daily_report(period: str, data: dict[str, Any]) -> dict[str, Any]:
     regime = data.get("regime")
     risk = data.get("risk")
     trailing_stops = data.get("trailing_stops")
+    filtered_signals = data.get("filtered_signals", [])
 
     sections: list[str] = []
     if market_summary:
@@ -669,6 +703,12 @@ def format_daily_report(period: str, data: dict[str, Any]) -> dict[str, Any]:
         perf_text = _format_performance(performance)
         if perf_text:
             sections.append(f"**信号绩效验证**\n{perf_text}")
+
+    # 收盘报告增加被过滤信号摘要（解决沉默拒绝问题）
+    if period == "close" and filtered_signals:
+        filtered_text = _format_filtered_signals(filtered_signals)
+        if filtered_text:
+            sections.append(filtered_text)
 
     if not sections:
         sections.append("暂无数据")

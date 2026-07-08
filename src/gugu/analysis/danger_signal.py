@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 import pandas as pd
 
@@ -259,7 +258,7 @@ class DangerSignalDetector:
         使用自选股第一只股票作为舆情分析代表。
         """
         try:
-            from gugu.analysis.sentiment import SentimentAnalyzer, NewsFetcher
+            from gugu.analysis.sentiment import NewsFetcher, SentimentAnalyzer
 
             fetcher = NewsFetcher()
             # 从配置获取自选股第一只作为舆情分析代表
@@ -361,15 +360,12 @@ class DangerSignalDetector:
             return True
 
         # 今日跌破 MA10 且昨日在 MA10 之上（更短期跌破）
-        if (
+        return bool(
             ma10.iloc[-2] is not None and not pd.isna(ma10.iloc[-2])
             and close.iloc[-1] < ma10.iloc[-1]
             and close.iloc[-2] >= ma10.iloc[-2]
             and ma10.iloc[-1] < ma20.iloc[-1]  # MA10 在 MA20 下方（非盘整）
-        ):
-            return True
-
-        return False
+        )
 
     @staticmethod
     def _assess_severity(signals: list[str]) -> str:

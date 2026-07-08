@@ -210,25 +210,22 @@ class DynamicTakeProfitEngine:
 
         # ===== 第4步：大跌减半（最高优先级，保命优先）=====
         # 单日跌幅 = (current - prev_close) / prev_close
-        if prev_close > 0:
+        if prev_close > 0 and (current_price - prev_close) / prev_close <= BIG_DROP_THRESHOLD and state.last_big_drop_date != today:
             daily_change = (current_price - prev_close) / prev_close
-            if daily_change <= BIG_DROP_THRESHOLD:
-                # 防同日重复触发
-                if state.last_big_drop_date != today:
-                    reduce_ratio = BIG_DROP_REDUCE_RATIO
-                    # 若尚未首减，大跌时直接减半（比 1/3 更狠）
-                    if not state.first_reduced:
-                        reduce_ratio = max(reduce_ratio, FIRST_REDUCE_RATIO)
-                    return TakeProfitSignal(
-                        action="reduce",
-                        reason=(
-                            f"单日大跌 {daily_change:.1%}（≤{BIG_DROP_THRESHOLD:.0%}），"
-                            f"触发第4步减半保命"
-                        ),
-                        reduce_ratio=reduce_ratio,
-                        trigger_step=4,
-                        current_profit_pct=profit_pct,
-                    )
+            reduce_ratio = BIG_DROP_REDUCE_RATIO
+            # 若尚未首减，大跌时直接减半（比 1/3 更狠）
+            if not state.first_reduced:
+                reduce_ratio = max(reduce_ratio, FIRST_REDUCE_RATIO)
+            return TakeProfitSignal(
+                action="reduce",
+                reason=(
+                    f"单日大跌 {daily_change:.1%}（≤{BIG_DROP_THRESHOLD:.0%}），"
+                    f"触发第4步减半保命"
+                ),
+                reduce_ratio=reduce_ratio,
+                trigger_step=4,
+                current_profit_pct=profit_pct,
+            )
 
         # ===== 第1步：首次止盈（+30% 减 1/3）=====
         if not state.first_reduced and profit_pct >= FIRST_TAKE_PROFIT_THRESHOLD:

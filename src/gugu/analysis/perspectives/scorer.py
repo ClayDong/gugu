@@ -12,10 +12,8 @@
 from __future__ import annotations
 
 import math
-from typing import Any
 
 from gugu.analysis.perspectives.data_types import (
-    PASS_THRESHOLD,
     PERSPECTIVE_BUFFETT,
     PERSPECTIVE_CHEN_JIANG_TING,
     PERSPECTIVE_DASHIXIONG,
@@ -80,7 +78,7 @@ def score_buffett(ctx: StockDataContext) -> PerspectiveScore:
         risks.append(f"ROE={ctx.roe:.0f}% 偏低")
     else:
         score -= 1.0
-        risks.append(f"ROE为负 资本配置差")
+        risks.append("ROE为负 资本配置差")
 
     # ── 安全边际：PE 评估（-1.5 ~ +1.5分）──
     pe = ctx.pe_dynamic if ctx.pe_dynamic > 0 else ctx.pe_static
@@ -559,16 +557,23 @@ def score_qiu_guo_lu(ctx: StockDataContext) -> PerspectiveScore:
 
     # ── 性价比 = 质量/价格 ──
     quality_score = 0
-    if ctx.roe > 15: quality_score += 1
-    if ctx.profit_growth > 15: quality_score += 1
-    if ctx.is_monopoly: quality_score += 1
-    if ctx.operating_cash_flow > 0: quality_score += 1
+    if ctx.roe > 15:
+        quality_score += 1
+    if ctx.profit_growth > 15:
+        quality_score += 1
+    if ctx.is_monopoly:
+        quality_score += 1
+    if ctx.operating_cash_flow > 0:
+        quality_score += 1
 
     price_score = 0
     pe = ctx.pe_dynamic if ctx.pe_dynamic > 0 else ctx.pe_static
-    if 0 < pe < 20: price_score += 2
-    elif pe < 30: price_score += 1
-    elif pe > 50: price_score -= 1
+    if 0 < pe < 20:
+        price_score += 2
+    elif pe < 30:
+        price_score += 1
+    elif pe > 50:
+        price_score -= 1
 
     value_score = quality_score + price_score
     if value_score >= 4:
@@ -944,16 +949,24 @@ def _calc_ma_trend(ctx: StockDataContext) -> float:
     """计算均线趋势得分 (-2.0 ~ +2.0)。"""
     score = 0.0
     if ctx.price > 0 and ctx.ma5 > 0 and ctx.ma10 > 0 and ctx.ma20 > 0 and ctx.ma60 > 0:
-        if ctx.price > ctx.ma5: score += 0.4
-        if ctx.ma5 > ctx.ma10: score += 0.4
-        if ctx.ma10 > ctx.ma20: score += 0.4
-        if ctx.ma20 > ctx.ma60: score += 0.8  # 中期趋势权重最高
-        if ctx.ma60 > ctx.ma120 > 0: score += 0.4
-        if ctx.ma120 > ctx.ma250 > 0: score += 0.2
+        if ctx.price > ctx.ma5:
+            score += 0.4
+        if ctx.ma5 > ctx.ma10:
+            score += 0.4
+        if ctx.ma10 > ctx.ma20:
+            score += 0.4
+        if ctx.ma20 > ctx.ma60:
+            score += 0.8  # 中期趋势权重最高
+        if ctx.ma60 > ctx.ma120 > 0:
+            score += 0.4
+        if ctx.ma120 > ctx.ma250 > 0:
+            score += 0.2
     elif ctx.price > 0 and ctx.ma20 > 0 and ctx.ma60 > 0:
         # 降级：只有 MA20/MA60
-        if ctx.price > ctx.ma20: score += 0.5
-        if ctx.ma20 > ctx.ma60: score += 1.0
+        if ctx.price > ctx.ma20:
+            score += 0.5
+        if ctx.ma20 > ctx.ma60:
+            score += 1.0
     return max(-2.0, min(2.0, score))
 
 

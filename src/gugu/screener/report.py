@@ -334,7 +334,7 @@ def format_screener_validation(results: list[ValidationResult]) -> dict[str, Any
             f"{weekly_section}{lesson_section}"
         ),
         # 个股明细
-        f"**个股表现（按开盘溢价排序，最多8只）**\n" + "\n".join(detail_lines),
+        "**个股表现（按开盘溢价排序，最多8只）**\n" + "\n".join(detail_lines),
         # 验证日期
         f"选股日期：{results[0].screener_date} | 验证日期：{results[0].validation_date}",
     ]

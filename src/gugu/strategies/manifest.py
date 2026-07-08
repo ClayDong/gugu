@@ -193,7 +193,7 @@ class StrategyManifest:
         """
         s = self.stats()
         lines = [
-            f"**策略注册中心 · 全景看板**",
+            "**策略注册中心 · 全景看板**",
             "",
             f"总计 **{s['total']}** 个策略 | "
             f"启用 🟢 **{s['enabled']}** | "

@@ -51,20 +51,30 @@ class StockRanker:
         Returns:
             list[dict]: 排名结果，每项包含 symbol/name/total_score/维度得分
         """
-        results = []
+        if not symbols:
+            return []
 
-        for symbol in symbols:
-            try:
-                # 单只股票评分超时10秒，避免整体卡住
-                score_detail = await asyncio.wait_for(
-                    self._score_one(symbol, hot_sectors or []), timeout=10.0
-                )
-                if score_detail:
-                    results.append(score_detail)
-            except TimeoutError:
-                logger.debug(f"评分超时 {symbol}")
-            except Exception as e:
-                logger.debug(f"评分失败 {symbol}: {e}")
+        hot_sectors = hot_sectors or []
+
+        # 并发评分：原实现为串行 for 循环，N 只股票需 N 次串行 I/O
+        # 优化为 asyncio.gather 并发评分，大幅缩短评分时间
+        sem = asyncio.Semaphore(10)  # 限制并发数
+
+        async def _score_with_sem(symbol: str) -> dict[str, Any] | None:
+            async with sem:
+                try:
+                    return await asyncio.wait_for(
+                        self._score_one(symbol, hot_sectors), timeout=10.0
+                    )
+                except TimeoutError:
+                    logger.debug(f"评分超时 {symbol}")
+                except Exception as e:
+                    logger.debug(f"评分失败 {symbol}: {e}")
+                return None
+
+        tasks = [_score_with_sem(sym) for sym in symbols]
+        results_list = await asyncio.gather(*tasks)
+        results = [r for r in results_list if r is not None]
 
         # 按总分排序
         results.sort(key=lambda x: x["total_score"], reverse=True)

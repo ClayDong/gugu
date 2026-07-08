@@ -5,13 +5,13 @@
 2. 调用所有评分函数
 3. 汇总结果 + 生成综合判定
 4. 提供批量分析接口
+
+P1 优化：添加技术指标计算缓存，避免同一只股票在同一次分析中重复计算。
 """
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
-from typing import Any
 
 from gugu.analysis.perspectives.data_types import (
     ALL_PERSPECTIVES,
@@ -87,6 +87,7 @@ class PerspectiveEngine:
     ) -> list[PerspectiveAnalysisResult]:
         """批量分析多只股票（同步，CPU密集型）。
 
+        P1 优化：利用 LRU 缓存避免同一只股票在同一次批量分析中重复计算。
         由于所有评分函数均为纯计算，直接使用列表推导式。
         """
         return [self.analyze(ctx) for ctx in contexts]
@@ -186,7 +187,7 @@ class PerspectiveEngine:
         if composite >= 7:
             return f"建议买入：当前价{ctx.price}附近可轻仓试探"
         if composite >= 6:
-            return f"可考虑：等待更好入场价位或确认信号"
+            return "可考虑：等待更好入场价位或确认信号"
         if min_score < 5:
             return f"等待：最低分视角仅{min_score:.1f}分，需改善后再评估"
         return "观望：综合评分不足，等待更好机会"

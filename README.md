@@ -1,46 +1,76 @@
 # gugu
 
-**自动化 A 股交易系统** — 基于规则引擎、多策略信号融合、三级风控和交易智慧决策层。
+**自动化 A 股信号监控系统** — 基于多视角分析、规则引擎、三级风控和交易智慧决策层。
 
 [![CI](https://github.com/dong4j/gugu/actions/workflows/ci.yml/badge.svg)](https://github.com/dong4j/gugu/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Coverage](https://img.shields.io/badge/coverage-67%25-brightgreen.svg)]()
 
 ---
 
 ## 核心特性
 
-- **十大视角分析系统** — 10 位投资大师视角（巴菲特/芒格/索罗斯/林奇/利弗莫尔/邱国鹭/陈江挺/技术分析/投资习惯/大师兄）量化为可计算评分，接入信号过滤流水线
-- **宏观数据增强** — MacroRegimeEnhancer 将金/油/汇/债/G 数据注入市场状态判断，动态调整仓位上限
+### 🧠 认知引擎
+- **十大视角分析系统** — 10 位投资大师视角（巴菲特/芒格/索罗斯/林奇/利弗莫尔/邱国鹭/陈江挺/技术分析/投资习惯/大师兄）量化为可计算评分（0-10），加权综合+木桶效应判定，08:30 飞书日报推送
+- **四阶段判断器** — 基于《炒股的智慧》牛皮/升势/疯狂/最后四阶段识别，MA 斜率使用线性回归（替代双点差分），抗噪声能力更强
+- **五大危险信号检测** — 放量下跌/高位十字星/衰竭缺口/天量天价/连续背离
+- **向下摊平检查** — 禁止在亏损仓位上加仓
+- **多周期趋势确认** — 周线/日线趋势一致性检查，防止逆势操作
+
+### 📊 策略体系
 - **多策略信号融合** — 8 个内置策略（趋势/均值回归/突破），支持 weighted/majority/any 融合模式
-- **策略注册中心** — 26 个策略（信号生成/风控择时/止盈止损/Skill/动态生成器）统一登记到 `strategy_manifest.yaml`，支持清单/校验/看板/出处/参数查询
-- **财叔动态止盈减仓** — +30% 减 1/3 → 每 +15% 减 10% → 大跌减半，与移动止损互补（止损保本金、止盈锁利润），飞书卡片标注出处
-- **信号去重机制** — 持久化已通知信号记录（按交易日自动清理7天过期），引擎重启后自动恢复，避免重复推送
-- **信号告警疲劳控制** — 可配置同股最小通知间隔/单股每日信号上限/同方向批量聚合
-- **三级风控体系** — L1 单股仓位上限、L2 日亏熔断（持久化）、L3 涨跌停+停牌+T+1
-- **移动止损引擎** — 基于《炒股的智慧》浪谷递进算法，ATR 自适应初始止损
-- **交易智慧决策层** — 28 本书籍视角多维度决策支持，LLM 增强或硬编码规则 fallback
-- **认知引擎** — 四阶段判断、五大危险信号检测、向下摊平检查、多周期趋势确认
+- **策略注册中心** — 26 个策略统一登记到 `strategy_manifest.yaml`，支持清单/校验/看板/出处/参数查询
 - **Walk-Forward 参数优化** — 滚动窗口网格搜索 + 多股聚合训练，4 项解锁条件门控自动写回
 - **自优化调度闭环** — 周日 03:00 自动跑多股聚合 Walk-Forward，6 只行业代表股，失败不污染生产参数
-- **三级缓存** — Parquet 持久化缓存 + 内存 LRU 缓存 + API 实时请求
-- **数据源三级冗余** — sina（主）+ akshare（降级）+ eastmoney（兜底，httpx 直连 push2），主源失败自动并发降级，双源失败抛异常触发降级
-- **大市数据三通道** — akshare → 新浪K线 JSON → 东方财富 push2，逐级降级确保选股可用
-- **飞书通知** — 信号卡片、日报、风控告警、回测报告、基金监控、宏观简报（含大师兄解读）、动态止盈减仓、策略全景看板
-- **Web 仪表盘** — FastAPI + 持仓/信号/风险/净值历史可视化
-- **盈亏归因分析** — 消费 signals_history.jsonl，生成按过滤步骤/策略/Wisdom 决策的归因报告
-- **状态原子写入** — heartbeat / take_profit_state 改用 atomic_write_text，防崩溃截断
-- **测试隔离** — 4 个 monkeypatch 重定向到 tmp_path，防污染生产文件
-- **缩量回踩低吸选股** — 尾盘选股器从"涨幅追涨"改为"缩量回踩 MA20+前 5 日强势"低吸逻辑
-- **移动止损抗诱多** — 去掉递减逻辑，仅创新高重置跌破计数，放量跌破浪谷直接 EXIT
-- **双均线假信号过滤** — 金叉需量比 ≥1.5 + MA20>MA60 + MA20 斜率 >0（可配置关闭）
-- **资金流默认拒绝** — 数据缺失时 paper/live 模式默认拒绝，仅 signal_only 放行
+
+### 🛡️ 风控体系
+- **三级风控** — L1 单股仓位上限（≤30%）、L2 日亏熔断（3%预警/5%熔断，持久化到磁盘）、L3 涨跌停+停牌+T+1
+- **组合回撤熔断** — 从高点回撤 ≥15% 自动熔断，仅允许减仓
 - **持仓时间风控** — 30 天未盈利警告减半仓，60 天未盈利强制清仓
-- **多指数大市过滤** — 沪深 300 + 中证 500 + 创业板指三重验证，防止中小盘误判
-- **周复盘推送** — 周日 20:00 汇总本周信号统计推送飞书
-- **行业景气度评分** — 基于涨跌幅+主力净流入+换手率+量比四维评分（0-100），<10 硬拦截行业衰退，<30 软警告
-- **十大视角分析系统** — 10位投资大师认知框架量化评分（巴菲特/芒格/索罗斯/林奇/利弗莫尔/邱国鹭/陈江挺/技术分析/投资习惯/大师兄），加权综合+木桶效应判定，08:30 飞书日报推送
-- **配置一致性** — settings.yaml 与 manifest.yaml CI 自动校验，防止策略清单分裂
+- **持仓相关性监控** — 检查持仓间高相关性风险（阈值 0.85）
+- **熔断状态持久化** — 进程重启后自动恢复熔断状态，防止绕过铁律
+
+### 📈 信号处理
+- **信号过滤流水线** — 8 步过滤链（四阶段→危险信号→量价背离→基本面→资金流→板块轮动→行业约束→向下摊平→四阶段入场过滤→Wisdom 决策）
+- **被过滤信号摘要** — 收盘报告展示当日被过滤的信号及原因，解决"沉默拒绝"问题
+- **信号去重机制** — 持久化已通知信号记录（7 天窗口），引擎重启后自动恢复
+- **信号告警疲劳控制** — 可配置同股最小通知间隔/单股每日信号上限/同方向批量聚合
+- **信号绩效追踪** — 追踪信号产生后 1/3/5/10 日实际收益，按策略分组统计胜率
+
+### 💰 资金流分析
+- **双通道冗余采集** — akshare（主）+ 东方财富 push API 直连（降级），UA 池轮换防限流
+- **大盘/行业/个股三级分析** — 主力净流入、北向资金、行业轮动强度、背离预警
+- **量价推算 fallback** — 资金流 API 不可用时用量价关系推算市场方向
+- **背离检测** — 主力流入+下跌（底背离）/ 主力流出+上涨（顶背离），阈值可配置
+
+### 📡 数据层
+- **三级数据源冗余** — sina（主）+ akshare（降级）+ eastmoney（兜底），主源失败自动并发降级
+- **三级缓存** — Parquet 持久化缓存 + 内存 LRU 缓存 + API 实时请求
+- **数据质量校验** — 实时价格校验、单位转换、字段名统一、异常值过滤
+
+### 🔔 通知系统
+- **飞书卡片消息** — 信号通知、日报、风控告警、回测报告、基金监控、宏观简报、资金流日报
+- **通知重试队列** — 持久化到 JSONL，指数退避重试（1min→2min→4min→8min），防飞书限流
+- **signal_only 免责声明** — 仅通知模式卡片标注"不构成交易建议"
+
+### 📚 知识库
+- **28 本经典股书蒸馏视角** — 利弗莫尔/格雷厄姆/芒格/索罗斯等大师认知框架
+- **KB Agent** — BM25 + jieba 检索，33 本书 22353 个文本块
+- **冲突裁决器** — 多视角矛盾时加权融合算法给出可解释决策
+- **小白学堂** — 50 个核心概念，每日 20:00 飞书推送
+
+### 🔧 技术优化
+- **并发预取** — 批量预取股票历史数据使用 `asyncio.gather` 并发，大幅缩短扫描时间
+- **StockRanker 并发评分** — 多只股票评分使用 Semaphore 限制并发，避免串行 I/O 阻塞
+- **技术指标统一计算** — `technical.py` 集中提供 ATR/RSI/MACD/布林带/OBV，消除重复实现
+- **Kelly 资金管理** — 基于历史胜率+盈亏比的最优仓位计算，含金字塔加仓策略
+- **仓位总控** — 综合市场状态+账户风险+持仓集中度动态计算仓位预算
+- **状态原子写入** — heartbeat / take_profit_state / risk_state 使用原子写入防崩溃截断
+- **策略参数热加载** — 修改 `settings.yaml` 后无需重启，scheduler 每 5 分钟自动检测并重载配置
+- **数据源健康监控** — Web 仪表盘 `/api/health` 端点返回三通道数据源状态 + 资金流状态
+- **调度任务可配置** — `settings.yaml` 中可单独关闭不需要的推送（宏观/视角/信号/基金等 20 个开关）
+- **盘中扫描频率自适应** — 熊市/暴跌市自动跳过盘中扫描，仅保留开盘和尾盘
 
 ## 快速开始
 
@@ -85,6 +115,12 @@ python scripts/verify_strategies.py check       # 代码与清单一致性校验
 python scripts/verify_strategies.py dashboard   # 推送策略看板到飞书
 python scripts/verify_strategies.py source "炒股的智慧"  # 按出处查询
 python scripts/verify_strategies.py params trailing_stop  # 查看策略参数
+
+# 已启用策略回测验证
+python scripts/verify_enabled_strategies.py                    # 验证 box_breakout + double_yin
+python scripts/verify_enabled_strategies.py --max-stocks 50    # 限制测试股票数
+python scripts/verify_enabled_strategies.py --days 200         # 自定义回测天数
+python scripts/verify_enabled_strategies.py --output result.json  # 输出到 JSON
 ```
 
 ## 系统架构
@@ -149,7 +185,7 @@ python scripts/build_kb_index.py --force
 
 ## 测试
 
-981 测试，64% 覆盖率。
+**1326 测试，67% 覆盖率**（较 v0.5.4 新增 345 个测试用例，覆盖率提升 3%）。
 
 ```bash
 # 运行全部测试
@@ -160,6 +196,14 @@ uv run pytest tests/unit/ -v
 
 # 运行集成测试
 uv run pytest tests/integration/ -v
+
+# 运行特定模块测试
+uv run pytest tests/unit/test_signal_pipeline.py -v   # 信号过滤流水线
+uv run pytest tests/unit/test_perspectives.py -v       # 十大视角评分
+uv run pytest tests/unit/test_money_management.py -v   # Kelly 资金管理
+uv run pytest tests/unit/test_position_controller.py -v # 仓位总控
+uv run pytest tests/unit/test_technical.py -v          # 技术指标
+uv run pytest tests/unit/test_scheduler.py -v          # 调度器
 ```
 
 ## 环境要求

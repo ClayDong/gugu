@@ -117,7 +117,7 @@ class ParquetPersistentCache:
             # 检查 freshness：最后一条数据日期
             if "date" in df.columns:
                 last_date = pd.to_datetime(df["date"].iloc[-1])
-                from datetime import datetime, timedelta
+                from datetime import datetime
 
                 calendar_days = (datetime.now() - last_date.to_pydatetime()).days
                 # 允许最长 7 天的缓存老化（覆盖长假场景如春节/国庆 5 个交易日）

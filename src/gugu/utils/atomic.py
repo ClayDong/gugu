@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
@@ -33,10 +34,8 @@ def atomic_write_text(path: str | Path, content: str) -> None:
         os.replace(tmp_path, path)
     except Exception:
         # 异常时清理临时文件
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
         raise
 
 

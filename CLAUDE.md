@@ -310,10 +310,10 @@ gugu/
 
 - 创建日期：2026-07-06
 - 版本：v0.5.6
-- 阶段：阶段三（信号监控）+ 十大视角分析系统 + 信号流融合 + 宏观增强 + 博格市场温度计
-- 测试：1467 passed, 68% coverage
-- 最近审查：2026-07-08（博格市场温度计+多专家对抗性审查 — 架构/算法/策略/性能/体验/股票/业务）
-- v0.5.6 变更（2026-07-08 博格市场温度计）：
+- 阶段：阶段三（信号监控）+ 十大视角分析系统 + 信号流融合 + 宏观增强 + 博格市场温度计 + 策略全链路优化
+- 测试：1523 passed, 5 skipped
+- 最近审查：2026-07-08（博格市场温度计+多专家对抗性审查+策略全链路优化）
+- v0.5.6 变更（2026-07-08 博格市场温度计 + 策略全链路优化）：
   - 🆕 新增博格市场温度计模块 `analysis/market_temp.py`
     - 基于博格市场温度计方法：12个宽基指数PE的近10年百分位算术平均
     - 多维度加权综合温度：PE(70%) + PB(20%) + 巴菲特指数=总市值/GDP(10%)
@@ -322,6 +322,33 @@ gugu/
     - 温度规则：<20°加倍买入 | <30°正常买入 | 30-50°定投 | >50°减仓 | >70°大幅减仓
     - 08:25 盘前推送飞书卡片，含温度总览+各维度温度+各指数PE百分位+最热最冷
     - ⚠️ 所有策略输出均为指导决策参考，非自动交易指令
+  - 🔄 策略全链路优化（解决"改了又改"根因）：
+    - 🔴 优化1：策略按市场状态启用（enabled_by_regime），替代全局 enabled/disabled
+      - settings.yaml 新增 enabled_by_regime 配置：bull/rally 启用突破追势，sideways 启用拐点，bear/crash 空仓
+      - StrategyConfig 新增 get_enabled_for_regime() / get_all_enabled_unique() 方法
+      - registry.py 新增 get_enabled_strategies_for_regime() 函数
+      - main.py 扫描时按 regime 动态重建 SignalRouter
+      - 核心思想：策略没有"好/坏"之分，只有"适用/不适用"之分
+    - 🔴 修复缺陷A：配置一致性 CI 测试
+      - 新增 tests/unit/test_config_consistency.py（5个测试用例）
+      - 校验 manifest enabled 与 settings.yaml enabled_by_regime/enabled 一致
+      - 校验所有启用策略在 _REGISTRY 中注册
+    - 🔴 修复缺陷B：回测与生产环境行为一致性
+      - BacktestEngine 新增 strict_confirmation 参数
+      - strict=True 时使用 is_backtest=False，模拟生产环境次日确认机制
+      - backtest_all_strategies.py 新增 --strict CLI 参数
+    - 🔴 修复缺陷C：参数优化闭环
+      - optimize_params.py 新增 write_optimization_report() 输出优化报告 JSON
+      - 新增 apply_optimization_result() 更新 manifest validation 字段
+      - 不自动禁用策略（避免误伤），仅标记状态供人工决策
+      - 使用原子写入（atomic_write_text / atomic_write_json）
+    - 🟡 优化2：策略诊断脚本
+      - 新增 scripts/diagnose_strategy.py
+      - 分阶段回测（牛/熊/震荡）+ 信号分布分析 + 失败trade归因 + 诊断报告
+      - CLI: `uv run python scripts/diagnose_strategy.py --strategy turtle --stocks 600519,002714`
+    - 🟡 manifest 配置同步修复
+      - turtle/dual_ma/bollinger/rsi_reversal/money_flow_follow/chen_jiangting 的 enabled: true → false
+      - 与 settings.yaml 实际启用状态对齐，validation 字段记录禁用原因
     - 30分钟缓存，asyncio并行获取15个数据点（12 PE + 2 PB + 1 Buffett），asyncio.to_thread避免阻塞
     - 65个单元测试覆盖：calc_pe/pb/buffett_percentile + fetch_index/pb/buffett_temp + calc_market_temp + build_market_temp_card
     - 多专家审查通过（8视角：架构/算法/策略/体验/性能/股票/操盘手/业务）

@@ -63,7 +63,14 @@ class StrategyConfig(BaseModel):
 
     enabled: list[str] = Field(
         default_factory=lambda: ["box_breakout", "turtle", "dual_ma"],
-        description="启用的策略列表",
+        description="启用的策略列表（向后兼容；如配置 enabled_by_regime 则被其覆盖）",
+    )
+    # v0.5.6 优化1：按市场状态启用策略（替代全局 enabled）
+    # 核心思想：策略没有"好/坏"之分，只有"适用/不适用"之分
+    # 当 enabled_by_regime 非空时，覆盖 enabled 列表
+    enabled_by_regime: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="按市场状态启用的策略映射，键为 bull/sideways/bear/rally/crash",
     )
     signal_fusion: str = Field(
         default="majority", description="信号融合规则: unanimous / majority / any"
@@ -82,6 +89,41 @@ class StrategyConfig(BaseModel):
     @property
     def fusion_mode(self) -> str:
         return self.signal_fusion
+
+    def get_enabled_for_regime(self, regime: str | None = None) -> list[str]:
+        """获取指定市场状态下启用的策略列表。
+
+        v0.5.6 优化1：策略按市场状态启用，而非全局禁用。
+        - 若 enabled_by_regime 非空且 regime 存在：返回对应 regime 的策略列表
+        - 若 enabled_by_regime 非空但 regime 不存在：返回所有 regime 的并集（保守降级）
+        - 若 enabled_by_regime 为空：向后兼容返回 enabled 列表
+
+        Args:
+            regime: 市场状态（bull/sideways/bear/rally/crash），None 表示未知
+
+        Returns:
+            启用的策略名称列表
+        """
+        if not self.enabled_by_regime:
+            return list(self.enabled)
+
+        if regime and regime in self.enabled_by_regime:
+            return list(self.enabled_by_regime[regime])
+
+        # regime 未知或未配置：返回所有 regime 的并集（保守降级，宁可多扫描再过滤）
+        all_strategies: set[str] = set()
+        for strategies in self.enabled_by_regime.values():
+            all_strategies.update(strategies)
+        return sorted(all_strategies)
+
+    def get_all_enabled_unique(self) -> list[str]:
+        """获取所有 regime 中出现过的策略（去重），用于回测全量验证。"""
+        if not self.enabled_by_regime:
+            return list(self.enabled)
+        all_strategies: set[str] = set()
+        for strategies in self.enabled_by_regime.values():
+            all_strategies.update(strategies)
+        return sorted(all_strategies)
 
 
 class LeopardUniverseConfig(BaseModel):
@@ -169,6 +211,31 @@ class FeishuConfig(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class SchedulerTasksConfig(BaseModel):
+    """调度任务开关配置."""
+
+    macro_morning: bool = Field(default=True, description="08:00 早间全球简报")
+    perspective_daily: bool = Field(default=True, description="08:30 十大视角日报")
+    signal_morning: bool = Field(default=True, description="09:10 盘前信号汇总")
+    macro_preamarket: bool = Field(default=True, description="09:15 盘前宏观简报")
+    scan_open: bool = Field(default=True, description="09:30 开盘扫描")
+    scan_mid_morning: bool = Field(default=True, description="10:30 盘中扫描")
+    signal_noon: bool = Field(default=True, description="11:35 午盘信号汇总")
+    macro_noon: bool = Field(default=True, description="11:40 午间宏观简报")
+    scan_afternoon: bool = Field(default=True, description="13:05 午盘扫描")
+    scan_close: bool = Field(default=True, description="14:30 尾盘扫描")
+    screener: bool = Field(default=True, description="14:30 尾盘选股")
+    flow_afternoon: bool = Field(default=True, description="14:30 盘后资金流决策报告")
+    signal_close: bool = Field(default=True, description="15:10 收盘信号汇总")
+    macro_close: bool = Field(default=True, description="15:15 收盘宏观简报")
+    fund_monitor: bool = Field(default=True, description="15:35 基金监控")
+    concept_daily: bool = Field(default=True, description="20:00 每日概念")
+    sentiment_daily: bool = Field(default=True, description="20:30 舆情日报")
+    weekly_optimize: bool = Field(default=True, description="周日 03:00 周参数优化")
+    weekly_review: bool = Field(default=True, description="周日 20:00 周复盘")
+    intraday_monitor: bool = Field(default=True, description="每分钟 盘中实时盯盘")
+
+
 class SchedulerConfig(BaseModel):
     """调度器配置."""
 
@@ -177,6 +244,10 @@ class SchedulerConfig(BaseModel):
     scan_times: list[str] = Field(
         default_factory=lambda: ["09:30", "10:30", "13:05", "14:30"],
         description="盘中扫描时刻",
+    )
+    tasks: SchedulerTasksConfig = Field(
+        default_factory=SchedulerTasksConfig,
+        description="调度任务开关",
     )
 
 

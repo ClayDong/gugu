@@ -226,7 +226,7 @@ class SinaCollector(BaseCollector):
             match = re.search(r'hq_str_(\w{2})(\d{6})="(.+)"', line)
             if not match:
                 continue
-            exchange = match.group(1)
+            _exchange = match.group(1)
             code = match.group(2)
             fields = match.group(3).split(",")
             if len(fields) < 32:

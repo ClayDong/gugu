@@ -241,7 +241,7 @@ class HolderConcentrationFilter:
                 "holder_num_pct": holder_num_pct,
                 "avg_hold_change": avg_hold_change,
                 "end_date": end_date,
-                "reasons": lurker_reasons + ["confidence_boost=+0.15"],
+                "reasons": [*lurker_reasons, "confidence_boost=+0.15"],
                 "data_missing": False,
             }
             self._set_cached(symbol, result)

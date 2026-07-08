@@ -1,6 +1,9 @@
-"""gugu 交易系统配置加载。
+"""gugu 交易系统配置加载（已弃用，保留向后兼容）。
 
 从 .env 加载敏感信息，从 config/*.yaml 加载业务配置。
+
+⚠️ 已弃用：新代码请通过 ``from gugu.config import get_config`` 使用强类型配置。
+此模块保留仅用于向后兼容，未来版本将移除。
 """
 
 from __future__ import annotations

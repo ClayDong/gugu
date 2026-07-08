@@ -33,6 +33,7 @@ import argparse
 import asyncio
 import sys
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -423,6 +424,25 @@ async def run_optimization(
             print(f"  2. 增加数据量（--days 1000+）")
             print(f"  3. 紧急情况可用 --force 强制写回（需 PR 评审说明理由）")
 
+        # 闭环修复：输出优化报告 + 更新 manifest validation 字段
+        report_path = write_optimization_report(
+            strategy_name=strategy_name,
+            unlock_report=unlock_report,
+            avg_sharpe=avg_sharpe,
+            avg_return=avg_return,
+            avg_max_dd=avg_max_dd,
+            param_votes=param_votes,
+            best_params=best_params,
+            n_windows=len(results),
+        )
+        print(f"\n📋 优化报告: {report_path}")
+        failed_reason = "; ".join(unlock_report["failed_checks"]) if unlock_report["failed_checks"] else ""
+        apply_optimization_result(
+            strategy_name=strategy_name,
+            passed=unlock_report["unlocked"],
+            reason=failed_reason,
+        )
+
     return {
         "strategy": strategy_name,
         "best_params": best_params,
@@ -519,6 +539,161 @@ def _check_unlock_conditions(
         "checks": checks,
         "failed_checks": failed,
     }
+
+
+def write_optimization_report(
+    strategy_name: str,
+    unlock_report: dict,
+    avg_sharpe: float,
+    avg_return: float,
+    avg_max_dd: float,
+    param_votes: dict[str, dict],
+    best_params: dict,
+    n_windows: int,
+) -> Path:
+    """输出优化结果到 data/optimization_report_{strategy}_{date}.json。
+
+    闭环修复：优化结果不再仅打印到控制台，同时落盘为结构化 JSON，
+    供后续审计/对比/仪表盘消费。包含：
+    - 策略名、4 项解锁条件结果
+    - 样本外 Sharpe、参数稳定性
+    - 是否通过、建议动作
+    """
+    from gugu.utils.atomic import atomic_write_json
+
+    now = datetime.now()
+    date_str = now.strftime("%Y%m%d")
+    date_display = now.strftime("%Y-%m-%d")
+
+    # 计算参数稳定性（每个参数在多窗口中被选中的最高一致性比例）
+    param_stability: dict[str, dict] = {}
+    for param_name, votes in param_votes.items():
+        if votes and n_windows > 0:
+            max_votes = max(votes.values())
+            param_stability[param_name] = {
+                "stability_ratio": round(max_votes / n_windows, 4),
+                "votes": votes,
+            }
+
+    passed = unlock_report["unlocked"]
+
+    # 建议动作：通过 → 重跑全市场回测；未通过 → 扩大样本/数据量
+    if passed:
+        recommended_action = "参数已通过 Walk-Forward 验证，建议重跑全市场回测验证新参数"
+    else:
+        recommended_action = (
+            f"未通过 {len(unlock_report['failed_checks'])} 项解锁条件"
+            f"（{'; '.join(unlock_report['failed_checks'])}），"
+            "建议扩大样本/增加数据量，或紧急情况用 --force 强制写回（需 PR 评审说明理由）"
+        )
+
+    report = {
+        "strategy": strategy_name,
+        "date": date_display,
+        "passed": passed,
+        "unlock_conditions": unlock_report["checks"],
+        "oos_sharpe": round(avg_sharpe, 4),
+        "avg_return": round(avg_return, 4),
+        "avg_max_dd": round(avg_max_dd, 4),
+        "param_stability": param_stability,
+        "best_params": best_params,
+        "recommended_action": recommended_action,
+    }
+
+    output_path = PROJECT_ROOT / "data" / f"optimization_report_{strategy_name}_{date_str}.json"
+    atomic_write_json(output_path, report, ensure_ascii=False, indent=2)
+    logger.info(f"优化报告已写入: {output_path}")
+    return output_path
+
+
+def apply_optimization_result(strategy_name: str, passed: bool, reason: str) -> None:
+    """更新 strategy_manifest.yaml 的 validation 字段。
+
+    闭环修复：优化结果不再仅写 strategy_defaults.yaml，同步更新 manifest
+    的 validation 字段，使策略注册中心感知到最新的 Walk-Forward 状态。
+
+    - 通过：标记 "Walk-Forward 通过 {date}"
+    - 未通过：标记 "Walk-Forward 未通过 {date} - {reason}"
+    - 不自动禁用策略（避免误伤），仅标记状态供人工决策
+    """
+    from gugu.utils.atomic import atomic_write_text
+
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    if passed:
+        new_validation = f"Walk-Forward 通过 {date_str}"
+    else:
+        new_validation = f"Walk-Forward 未通过 {date_str} - {reason}"
+
+    path = PROJECT_ROOT / "config" / "strategy_manifest.yaml"
+    if not path.exists():
+        logger.warning(f"策略清单文件不存在: {path}，跳过 validation 更新")
+        return
+
+    content = path.read_text(encoding="utf-8")
+    new_content, updated = _replace_manifest_validation(content, strategy_name, new_validation)
+
+    if not updated:
+        logger.warning(f"策略 {strategy_name} 未在 manifest 中找到，跳过 validation 更新")
+        return
+
+    # 原子写入（同目录 tmp → fsync → os.replace），防止崩溃导致文件截断
+    atomic_write_text(path, new_content)
+    logger.info(f"策略 {strategy_name} validation 已更新: {new_validation}")
+
+
+def _replace_manifest_validation(
+    content: str,
+    strategy_name: str,
+    new_validation: str,
+) -> tuple[str, bool]:
+    """行级替换 manifest 中的 validation 字段，保留注释结构。
+
+    manifest 结构：signal_strategies: → {strategy_name}: → validation: value
+    策略键位于 2 空格缩进，validation 字段位于 4 空格缩进。
+
+    Returns:
+        (new_content, updated) — updated=False 表示未找到目标策略的 validation 行
+    """
+    lines = content.split("\n")
+    new_lines: list[str] = []
+    current_strategy: str | None = None
+    updated = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        if stripped and not stripped.startswith("#"):
+            indent_len = len(line) - len(line.lstrip())
+
+            # 策略键位于 2 空格缩进（如 "  turtle:"）
+            if indent_len == 2:
+                if stripped == f"{strategy_name}:":
+                    current_strategy = strategy_name
+                else:
+                    current_strategy = None
+            elif indent_len == 0:
+                # 新分类（signal_strategies: / risk_strategies: 等）
+                current_strategy = None
+
+        # 在目标策略段内匹配 validation 行
+        if (
+            current_strategy == strategy_name
+            and not updated
+            and stripped.startswith("validation:")
+        ):
+            indent = line[: len(line) - len(line.lstrip())]
+            # 保留行尾注释
+            comment = ""
+            if "#" in line:
+                comment = "  #" + line.split("#", 1)[1]
+            new_lines.append(f"{indent}validation: {new_validation}{comment}")
+            updated = True
+            current_strategy = None  # 已替换，避免重复匹配
+            continue
+
+        new_lines.append(line)
+
+    return "\n".join(new_lines), updated
 
 
 async def run_multi_stock_optimization(
@@ -670,6 +845,25 @@ async def run_multi_stock_optimization(
             print(f"  1. 扩大样本（当前 {len(stock_dfs)} 只，建议 10+ 只不同行业代表股）")
             print(f"  2. 增加数据量（--days 1000+）")
             print(f"  3. 紧急情况可用 --force 强制写回（需 PR 评审说明理由）")
+
+        # 闭环修复：输出优化报告 + 更新 manifest validation 字段
+        report_path = write_optimization_report(
+            strategy_name=strategy_name,
+            unlock_report=unlock_report,
+            avg_sharpe=avg_sharpe,
+            avg_return=avg_return,
+            avg_max_dd=avg_max_dd,
+            param_votes=param_votes,
+            best_params=best_params,
+            n_windows=len(results),
+        )
+        print(f"\n📋 优化报告: {report_path}")
+        failed_reason = "; ".join(unlock_report["failed_checks"]) if unlock_report["failed_checks"] else ""
+        apply_optimization_result(
+            strategy_name=strategy_name,
+            passed=unlock_report["unlocked"],
+            reason=failed_reason,
+        )
 
     return {
         "strategy": strategy_name,

@@ -918,3 +918,303 @@ class TestEdgeCases:
         ctx.mcap_billion = 100000.0
         result = score_lynch(ctx)
         assert 0.0 <= result.score <= 10.0
+
+
+# =========================================================================
+# 新增：各视角详细评分逻辑测试
+# =========================================================================
+
+
+class TestMungerScorerDetail:
+    """芒格视角评分详细测试。"""
+
+    def test_high_profit_growth(self):
+        """高净利增长应加分。"""
+        from gugu.analysis.perspectives.scorer import score_munger
+        ctx = make_excellent_context()
+        ctx.profit_growth = 50.0
+        result = score_munger(ctx)
+        assert result.score >= 7.0
+
+    def test_negative_cash_flow_penalty(self):
+        """负经营现金流应扣分。"""
+        from gugu.analysis.perspectives.scorer import score_munger
+        ctx = make_excellent_context()
+        ctx.operating_cash_flow = -100.0
+        result = score_munger(ctx)
+        assert "现金流" in " ".join(result.risk_flags)
+
+    def test_high_peg_penalty(self):
+        """高PEG应扣分。"""
+        from gugu.analysis.perspectives.scorer import score_munger
+        ctx = make_excellent_context()
+        ctx.pe_dynamic = 100.0
+        ctx.profit_growth = 10.0  # PEG=10
+        result = score_munger(ctx)
+        assert "PEG" in " ".join(result.risk_flags)
+
+
+class TestLivermoreScorerDetail:
+    """利弗莫尔视角评分详细测试。"""
+
+    def test_near_52w_high_bonus(self):
+        """接近52周高点应加分（突破新高）。"""
+        from gugu.analysis.perspectives.scorer import score_livermore
+        ctx = make_excellent_context()
+        ctx.distance_from_52w_high = -2.0  # 距高点仅2%
+        result = score_livermore(ctx)
+        assert "突破新高" in " ".join(result.key_factors)
+
+    def test_strong_downtrend_penalty(self):
+        """强下降趋势应扣分。"""
+        from gugu.analysis.perspectives.scorer import score_livermore
+        ctx = make_excellent_context()
+        # 构造空头排列
+        ctx.price = 50
+        ctx.ma5 = 55
+        ctx.ma10 = 60
+        ctx.ma20 = 65
+        ctx.ma60 = 70
+        result = score_livermore(ctx)
+        assert result.score < 5.0
+
+    def test_volume_breakout_bonus(self):
+        """放量突破应加分。"""
+        from gugu.analysis.perspectives.scorer import score_livermore
+        ctx = make_excellent_context()
+        ctx.volume_ratio = 2.0
+        ctx.change_pct = 3.0
+        result = score_livermore(ctx)
+        assert "放量突破" in " ".join(result.key_factors)
+
+
+class TestQiuGuoLuScorerDetail:
+    """邱国鹭视角评分详细测试。"""
+
+    def test_monopoly_bonus(self):
+        """行业龙头应加分。"""
+        from gugu.analysis.perspectives.scorer import score_qiu_guo_lu
+        ctx = make_excellent_context()
+        ctx.is_monopoly = True
+        result = score_qiu_guo_lu(ctx)
+        assert "龙头" in " ".join(result.key_factors)
+
+    def test_pe_below_industry(self):
+        """PE低于行业均值应加分。"""
+        from gugu.analysis.perspectives.scorer import score_qiu_guo_lu
+        ctx = make_excellent_context()
+        ctx.pe_static = 20.0
+        ctx.industry_pe_avg = 40.0
+        result = score_qiu_guo_lu(ctx)
+        assert "相对低估" in " ".join(result.key_factors)
+
+    def test_pe_above_industry_penalty(self):
+        """PE高于行业均值应扣分。"""
+        from gugu.analysis.perspectives.scorer import score_qiu_guo_lu
+        ctx = make_excellent_context()
+        ctx.pe_static = 60.0
+        ctx.industry_pe_avg = 30.0
+        result = score_qiu_guo_lu(ctx)
+        assert "相对高估" in " ".join(result.risk_flags)
+
+
+class TestChenJiangTingScorerDetail:
+    """陈江挺视角评分详细测试。"""
+
+    def test_reasonable_stop_distance(self):
+        """合理止损距离应加分。"""
+        from gugu.analysis.perspectives.scorer import score_chen_jiang_ting
+        ctx = make_excellent_context()
+        ctx.price = 100
+        ctx.ma20 = 95
+        result = score_chen_jiang_ting(ctx)
+        assert result.score >= 5.0
+
+    def test_high_turnover_penalty(self):
+        """高换手率应扣分。"""
+        from gugu.analysis.perspectives.scorer import score_chen_jiang_ting
+        ctx = make_excellent_context()
+        ctx.turnover_pct = 20.0
+        result = score_chen_jiang_ting(ctx)
+        assert "换手率" in " ".join(result.risk_flags)
+
+
+class TestTechnicalScorerDetail:
+    """技术分析视角评分详细测试。"""
+
+    def test_rsi_oversold_bonus(self):
+        """RSI超卖应加分。"""
+        from gugu.analysis.perspectives.scorer import score_technical
+        ctx = make_excellent_context()
+        ctx.rsi14 = 30.0
+        result = score_technical(ctx)
+        assert "超卖" in " ".join(result.key_factors)
+
+    def test_rsi_overbought_penalty(self):
+        """RSI超买应扣分。"""
+        from gugu.analysis.perspectives.scorer import score_technical
+        ctx = make_excellent_context()
+        ctx.rsi14 = 85.0
+        result = score_technical(ctx)
+        assert "超买" in " ".join(result.risk_flags)
+
+    def test_macd_bullish(self):
+        """MACD多头应加分。"""
+        from gugu.analysis.perspectives.scorer import score_technical
+        ctx = make_excellent_context()
+        ctx.macd_hist = 2.0
+        ctx.macd_dif = 5.0
+        ctx.macd_dea = 3.0
+        result = score_technical(ctx)
+        assert "MACD" in " ".join(result.key_factors)
+
+    def test_macd_bearish(self):
+        """MACD空头应扣分。"""
+        from gugu.analysis.perspectives.scorer import score_technical
+        ctx = make_excellent_context()
+        ctx.macd_hist = -2.0
+        ctx.macd_dif = -5.0
+        ctx.macd_dea = -3.0
+        result = score_technical(ctx)
+        assert "MACD" in " ".join(result.risk_flags)
+
+
+class TestInvestingHabitsScorerDetail:
+    """投资习惯视角评分详细测试。"""
+
+    def test_insider_selling_penalty(self):
+        """内部人减持应扣分。"""
+        from gugu.analysis.perspectives.scorer import score_investing_habits
+        ctx = make_excellent_context()
+        ctx.insider_selling = True
+        result = score_investing_habits(ctx)
+        assert "内部人减持" in " ".join(result.risk_flags)
+
+    def test_high_volatility_penalty(self):
+        """高波动率应扣分。"""
+        from gugu.analysis.perspectives.scorer import score_investing_habits
+        ctx = make_excellent_context()
+        ctx.atr14 = 20.0
+        ctx.price = 100.0  # ATR=20%
+        result = score_investing_habits(ctx)
+        assert "波动" in " ".join(result.risk_flags)
+
+
+class TestDashixiongScorerDetail:
+    """大师兄视角评分详细测试。"""
+
+    def test_bull_market_bonus(self):
+        """牛市应加分。"""
+        from gugu.analysis.perspectives.scorer import score_dashixiong
+        ctx = make_excellent_context()
+        ctx.market_stage = "bull"
+        result = score_dashixiong(ctx)
+        assert "牛市" in " ".join(result.key_factors)
+
+    def test_crash_market_penalty(self):
+        """崩盘应大幅扣分。"""
+        from gugu.analysis.perspectives.scorer import score_dashixiong
+        ctx = make_excellent_context()
+        ctx.market_stage = "crash"
+        result = score_dashixiong(ctx)
+        assert "崩盘" in " ".join(result.risk_flags)
+
+    def test_high_usd_cny_penalty(self):
+        """人民币贬值应扣分。"""
+        from gugu.analysis.perspectives.scorer import score_dashixiong
+        ctx = make_excellent_context()
+        ctx.usd_cny = 7.5
+        result = score_dashixiong(ctx)
+        assert "贬值" in " ".join(result.risk_flags)
+
+    def test_high_us10y_penalty(self):
+        """高美债收益率应扣分。"""
+        from gugu.analysis.perspectives.scorer import score_dashixiong
+        ctx = make_excellent_context()
+        ctx.us10y_yield = 5.0
+        result = score_dashixiong(ctx)
+        assert "高利率" in " ".join(result.risk_flags)
+
+
+class TestSorosScorerDetail:
+    """索罗斯视角评分详细测试。"""
+
+    def test_main_inflow_bonus(self):
+        """主力流入应加分。"""
+        from gugu.analysis.perspectives.scorer import score_soros
+        ctx = make_excellent_context()
+        ctx.main_net_inflow_5d = 20.0
+        result = score_soros(ctx)
+        assert "主力流入" in " ".join(result.key_factors)
+
+    def test_main_outflow_penalty(self):
+        """主力流出应扣分。"""
+        from gugu.analysis.perspectives.scorer import score_soros
+        ctx = make_excellent_context()
+        ctx.main_net_inflow_5d = -20.0
+        result = score_soros(ctx)
+        assert "主力流出" in " ".join(result.risk_flags)
+
+    def test_hot_sector_bonus(self):
+        """热门板块应加分。"""
+        from gugu.analysis.perspectives.scorer import score_soros
+        ctx = make_excellent_context()
+        ctx.hot_sector = True
+        result = score_soros(ctx)
+        assert "热门板块" in " ".join(result.key_factors)
+
+
+class TestBuffettScorerDetail:
+    """巴菲特视角评分详细测试。"""
+
+    def test_low_pe_bonus(self):
+        """低PE应加分。"""
+        from gugu.analysis.perspectives.scorer import score_buffett
+        ctx = make_excellent_context()
+        ctx.pe_dynamic = 10.0
+        result = score_buffett(ctx)
+        assert "安全边际" in " ".join(result.key_factors)
+
+    def test_high_debt_penalty(self):
+        """高负债率应扣分。"""
+        from gugu.analysis.perspectives.scorer import score_buffett
+        ctx = make_excellent_context()
+        ctx.debt_ratio = 80.0
+        result = score_buffett(ctx)
+        assert "负债率" in " ".join(result.risk_flags)
+
+    def test_dividend_bonus(self):
+        """高股息率应加分。"""
+        from gugu.analysis.perspectives.scorer import score_buffett
+        ctx = make_excellent_context()
+        ctx.dividend_yield = 4.0
+        result = score_buffett(ctx)
+        assert "股息率" in " ".join(result.key_factors)
+
+
+class TestLynchScorerDetail:
+    """林奇视角评分详细测试。"""
+
+    def test_small_mcap_bonus(self):
+        """中小市值应加分（Tenbagger潜力）。"""
+        from gugu.analysis.perspectives.scorer import score_lynch
+        ctx = make_excellent_context()
+        ctx.mcap_billion = 50.0
+        result = score_lynch(ctx)
+        assert "中小市值" in " ".join(result.key_factors)
+
+    def test_low_institutional_holding_bonus(self):
+        """低机构持仓应加分（潜在黑马）。"""
+        from gugu.analysis.perspectives.scorer import score_lynch
+        ctx = make_excellent_context()
+        ctx.institutional_holding = 10.0
+        result = score_lynch(ctx)
+        assert "潜在黑马" in " ".join(result.key_factors)
+
+    def test_negative_growth_penalty(self):
+        """负增长应扣分。"""
+        from gugu.analysis.perspectives.scorer import score_lynch
+        ctx = make_excellent_context()
+        ctx.profit_growth = -30.0
+        result = score_lynch(ctx)
+        assert "增长衰退" in " ".join(result.risk_flags)

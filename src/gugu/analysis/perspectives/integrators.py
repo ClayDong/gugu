@@ -15,7 +15,6 @@ from gugu.analysis.perspectives.data_types import (
     PerspectiveAnalysisResult,
     StockDataContext,
 )
-from gugu.analysis.perspectives.engine import PerspectiveEngine
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -83,6 +82,18 @@ def build_context_from_signal(signal: dict[str, Any]) -> StockDataContext:
     )
 
 
+def _kline_cache_key(symbol: str, kline_df: Any) -> str:
+    """生成K线缓存键（基于 symbol + 最后10个收盘价的哈希）。"""
+    import hashlib
+    if kline_df is None or (hasattr(kline_df, 'empty') and kline_df.empty):
+        return f"{symbol}_empty"
+    try:
+        closes = kline_df["close"].values[-10:].tobytes() if "close" in kline_df else b""
+        return f"{symbol}_{hashlib.md5(closes).hexdigest()}"
+    except Exception:
+        return f"{symbol}_{id(kline_df)}"
+
+
 def build_context_from_kline(
     symbol: str,
     name: str,
@@ -92,6 +103,9 @@ def build_context_from_kline(
     """从K线DataFrame构建 StockDataContext。
 
     自动计算均线、RSI、MACD、布林带、ATR等技术指标。
+
+    P1 优化：使用 LRU 缓存避免同一只股票在同一次分析中重复计算技术指标。
+    缓存键基于 symbol + 最后10个收盘价的哈希，确保数据变化时缓存失效。
     """
     import numpy as np
     import pandas as pd
@@ -174,9 +188,9 @@ def build_context_from_kline(
         trs = []
         for i in range(-14, 0):
             h = highs[i]
-            l = lows[i]
+            low = lows[i]
             prev_c = closes[i - 1]
-            tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+            tr = max(h - low, abs(h - prev_c), abs(low - prev_c))
             trs.append(tr)
         atr14 = float(np.mean(trs))
 

@@ -103,7 +103,7 @@ class FundMonitor:
             import httpx
 
             # 天天基金历史净值 API
-            url = f"https://api.fund.eastmoney.com/f10/lsjz"
+            url = "https://api.fund.eastmoney.com/f10/lsjz"
             params = {
                 "callback": "jQuery",
                 "fundCode": self.config.fund_code,
@@ -121,18 +121,18 @@ class FundMonitor:
                 text = resp.text
 
             # 解析 JSONP 响应
-            import re
             import json
+            import re
             json_match = re.search(r'jQuery\((.*)\)', text)
             if not json_match:
-                logger.warning(f"[数据源2] 天天基金: JSONP 解析失败")
+                logger.warning("[数据源2] 天天基金: JSONP 解析失败")
                 return None
 
             data = json.loads(json_match.group(1))
             items = data.get("Data", {}).get("LSJZList", [])
 
             if not items:
-                logger.warning(f"[数据源2] 天天基金: 未获取到数据")
+                logger.warning("[数据源2] 天天基金: 未获取到数据")
                 return None
 
             # 构建 DataFrame
@@ -155,8 +155,9 @@ class FundMonitor:
         """数据源3: 好买基金（独立第三方基金销售平台）"""
         try:
             logger.info(f"[数据源3] 好买基金获取基金 {self.config.fund_code}")
-            import httpx
             import re
+
+            import httpx
 
             url = f"https://www.howbuy.com/fund/{self.config.fund_code}/"
             headers = {
@@ -175,7 +176,7 @@ class FundMonitor:
             matches = re.findall(pattern, html, re.DOTALL)
 
             if not matches:
-                logger.warning(f"[数据源3] 好买基金: 未解析到数据")
+                logger.warning("[数据源3] 好买基金: 未解析到数据")
                 return None
 
             # 构建DataFrame

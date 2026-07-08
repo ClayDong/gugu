@@ -98,6 +98,7 @@ class BacktestEngine:
         position_ratio: float | None = None,
         enable_wisdom: bool = False,
         enable_cognitive_engine: bool = False,
+        strict_confirmation: bool = False,
     ) -> None:
         self.initial_capital = initial_capital
         self.commission_rate = commission_rate
@@ -110,6 +111,9 @@ class BacktestEngine:
         # P1-m 修复：回测接入 L3 风控（涨跌停检查），与模拟盘行为一致
         self._risk = RiskManager()
         self._logger = get_logger()
+        # 缺陷B 修复：strict_confirmation=True 时回测使用 is_backtest=False，
+        # 模拟生产环境的次日确认机制，消除回测与生产行为不一致
+        self.strict_confirmation = strict_confirmation
 
         # BIZ-02 修复：回测引擎可选接入 wisdom 决策层
         self.enable_wisdom = enable_wisdom
@@ -189,7 +193,10 @@ class BacktestEngine:
         # 消除 rolling 窗口含当日收盘价引入的隐性前视偏差。
         # 即使策略内部使用 .shift(1)，移动平均类指标（SMA/布林带等）
         # 默认含当日值，shift(1) 信号列保证回测不"看到未来"。
-        signals_df = strategy.generate_signals(df, is_backtest=True)
+        # 缺陷B 修复：strict_confirmation=True 时用 is_backtest=False，
+        # 让回测走生产环境的次日确认流程，保证回测与生产行为一致
+        is_bt = not self.strict_confirmation
+        signals_df = strategy.generate_signals(df, is_backtest=is_bt)
         signals_df["signal"] = signals_df["signal"].shift(1).fillna(0)
         # P1 修复：验证信号值在 {-1, 0, 1} 范围内，非标准值强制截断到合法区间
         raw = signals_df["signal"]

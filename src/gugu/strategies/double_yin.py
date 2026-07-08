@@ -84,8 +84,8 @@ class DoubleYinMoneyBagStrategy(Strategy):
         ma_trend_window = int(self.params.get("ma_trend_window", 20))
         ma_long_window = int(self.params.get("ma_long_window", 60))
         ma_slope_window = int(self.params.get("ma_slope_window", 5))
-        first_yin_vol_max = float(self.params.get("first_yin_vol_ratio_max", 0.9))
-        second_yin_vol_max = float(self.params.get("second_yin_vol_ratio_max", 0.6))
+        _first_yin_vol_max = float(self.params.get("first_yin_vol_ratio_max", 0.9))
+        _second_yin_vol_max = float(self.params.get("second_yin_vol_ratio_max", 0.6))
         breakout_vol_min = float(self.params.get("breakout_vol_ratio_min", 2.0))
         stop_loss_pct = float(self.params.get("stop_loss_pct", 0.0))  # 跌破MA20即止损
         take_profit_pct = float(self.params.get("take_profit_pct", 0.08))

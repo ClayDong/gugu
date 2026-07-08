@@ -48,11 +48,10 @@ def _split_interpretation_to_elements(interpretation: str) -> list[dict]:
     current_section: list[str] = []
 
     for line in interpretation.split("\n"):
-        if line.startswith("### "):
+        if line.startswith("### ") and current_section:
             # 新节开始，保存上一节
-            if current_section:
-                sections.append("\n".join(current_section))
-                current_section = []
+            sections.append("\n".join(current_section))
+            current_section = []
         current_section.append(line)
 
     # 最后一节
@@ -90,11 +89,11 @@ async def _collect_flow_sections(version: str) -> list[str]:
         return []
     try:
         from gugu.notifier.flow_report import (
-            collect_all,
-            _format_key_industries_section,
-            _fmt_flow,
             _fmt,
+            _fmt_flow,
+            _format_key_industries_section,
             _rotation_label,
+            collect_all,
         )
 
         data = await collect_all()
@@ -242,9 +241,10 @@ async def _push_macro_report(
     # ── 后台异步补发大师兄解读（不阻塞主流程）──
     # LLM 超时或失败不影响宏观数据推送，解读为锦上添花
     portfolio_summary = _build_portfolio_summary(broker)
-    asyncio.create_task(
+    _wisdom_task = asyncio.create_task(
         _push_wisdom_interpretation(version, snapshot, builder, notifier, portfolio_summary)
     )
+    _wisdom_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
 
 async def _push_wisdom_interpretation(
@@ -293,7 +293,7 @@ async def _push_wisdom_interpretation(
             logger.info(f"[macro] {version} 大师兄解读补发成功")
         else:
             logger.warning(f"[macro] {version} 大师兄解读补发失败（已入重试队列）")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning(f"[macro] {version} 大师兄解读 LLM 超时(60s)，跳过补发")
     except Exception as e:
         logger.warning(f"[macro] {version} 大师兄解读补发失败: {e}")
