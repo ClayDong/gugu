@@ -153,3 +153,84 @@ class StockRanker:
             "pb": fund.get("pb"),
             "roe": fund.get("roe"),
         }
+
+    def _compute_chip_score(self, hc_result: dict, circ_mv: float = 0.0) -> float:
+        """计算筹码画像评分（0-1）。
+
+        评分维度（满分1.0）：
+        - 户数变化（0.4）：连续下降>20% → 0.4；单季下降>5% → 0.3；
+          稳定±5% → 0.2；单季上升>5% → 0.1；连续上升>20% → 0.0
+        - 户均持股变化（0.3）：上升>15% → 0.3；上升5-15% → 0.2；
+          稳定±5% → 0.15；下降>5% → 0.05；下降>20% → 0.0
+        - 机构持仓（0.2）：>40% → 0.2；20-40% → 0.15；10-20% → 0.1；
+          <10% → 0.05；数据缺失 → 0.1（中性）
+        - 流通市值（0.1）：50-500亿 → 0.1；500-2000亿 → 0.05；其他 → 0.03
+
+        特殊处理：
+        - 避雷针 → 0.0（主力派发，直接拒绝）
+        - 数据缺失 → 0.5（中性默认分，不惩罚也不奖励）
+
+        Args:
+            hc_result: HolderConcentrationFilter.check() 返回的字典
+            circ_mv: 流通市值（亿元），0 表示数据不可用
+
+        Returns:
+            筹码画像评分（0.0-1.0）
+        """
+        # 避雷针 → 0.0
+        if hc_result.get("label") == "避雷针":
+            return 0.0
+
+        # 数据缺失 → 0.5（中性）
+        if hc_result.get("data_missing"):
+            return 0.5
+
+        holder_num_pct = float(hc_result.get("holder_num_pct", 0.0) or 0.0)
+        avg_hold_change = float(hc_result.get("avg_hold_change", 0.0) or 0.0)
+        org_hold_pct = float(hc_result.get("org_hold_pct", 0.0) or 0.0)
+
+        # 1. 户数变化评分（0.4满分）
+        if holder_num_pct < -20:
+            score_holder = 0.4  # 连续下降>20%
+        elif holder_num_pct < -5:
+            score_holder = 0.3  # 单季下降>5%
+        elif abs(holder_num_pct) <= 5:
+            score_holder = 0.2  # 稳定
+        elif holder_num_pct < 20:
+            score_holder = 0.1  # 单季上升>5%
+        else:
+            score_holder = 0.0  # 连续上升>20%
+
+        # 2. 户均持股变化评分（0.3满分）
+        if avg_hold_change > 15:
+            score_avg = 0.3
+        elif avg_hold_change > 5:
+            score_avg = 0.2
+        elif abs(avg_hold_change) <= 5:
+            score_avg = 0.15
+        elif avg_hold_change > -20:
+            score_avg = 0.05
+        else:
+            score_avg = 0.0
+
+        # 3. 机构持仓评分（0.2满分）— 数据缺失时中性0.1
+        if org_hold_pct > 40:
+            score_org = 0.2
+        elif org_hold_pct > 20:
+            score_org = 0.15
+        elif org_hold_pct > 10:
+            score_org = 0.1
+        elif org_hold_pct > 0:
+            score_org = 0.05
+        else:
+            score_org = 0.1  # 数据缺失（org_hold_pct=0），中性
+
+        # 4. 流通市值评分（0.1满分）
+        if 50 <= circ_mv <= 500:
+            score_mv = 0.1
+        elif 500 < circ_mv <= 2000:
+            score_mv = 0.05
+        else:
+            score_mv = 0.03
+
+        return round(score_holder + score_avg + score_org + score_mv, 4)
