@@ -77,7 +77,7 @@ class TestManifestQueries:
         info = manifest.get_strategy("turtle")
         assert info is not None
         assert info.get("name") == "海龟交易法则"
-        assert info.get("enabled") is True
+        assert info.get("enabled") is False  # v0.4.2 禁用
 
     def test_get_strategy_not_exists(self, manifest):
         """查询不存在的策略应返回 None。"""

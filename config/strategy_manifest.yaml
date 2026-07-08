@@ -29,40 +29,40 @@ signal_strategies:
     module: gugu.strategies.trend
     class: TurtleStrategy
     source: 《海龟交易法则》唐奇安通道
-    enabled: true
+    enabled: false
     summary: 通道突破买入，跌破 exit_low 卖出，ATR 动态止损 + 量比确认
     params_entry: strategy_defaults.yaml
-    validation: 生产运行
+    validation: v0.4.2 禁用（分阶段回测夏普均为负）
 
   dual_ma:
     name: 双均线交叉
     module: gugu.strategies.trend
     class: DualMAStrategy
     source: 经典技术分析
-    enabled: true
+    enabled: false
     summary: 短均线上穿长均线买入、下穿卖出
     params_entry: strategy_defaults.yaml
-    validation: 生产运行
+    validation: v0.4.2 禁用（全市场回测收益+0.53%/夏普-0.12）
 
   bollinger:
     name: 布林带均值回归
     module: gugu.strategies.mean_revert
     class: BollingerStrategy
     source: 约翰·布林格《布林带》
-    enabled: true
+    enabled: false
     summary: 触及下轨买入、触及上轨卖出
     params_entry: strategy_defaults.yaml
-    validation: 生产运行
+    validation: v0.4.2 禁用（全市场回测无效）
 
   rsi_reversal:
     name: RSI 均值回归
     module: gugu.strategies.mean_revert
     class: RSIStrategy
     source: 威尔斯·威尔德 RSI 指标
-    enabled: true
+    enabled: false
     summary: RSI 离开超卖区买入、离开超买区卖出
     params_entry: strategy_defaults.yaml
-    validation: 生产运行
+    validation: v0.4.2 禁用（全市场回测无效）
 
   macd:
     name: MACD 金叉死叉
@@ -101,10 +101,10 @@ signal_strategies:
     module: gugu.strategies.money_flow_follow
     class: MoneyFlowFollowStrategy
     source: 实战笔记（跟随资金强度 + 创新高回踩 + 放量确认）
-    enabled: true
+    enabled: false
     summary: 5步复盘流程：热点涨幅 + 均线多头排列 + 非天量 + 创新高回踩不破MA20 + 缩量后放量确认
     params_entry: strategy_defaults.yaml
-    validation: 单元测试通过，2026-07-03
+    validation: v0.4.2 禁用（全市场回测收益+0.98%/夏普-0.23/中位-4.55%）
     notes: |
       核心观点：板块行情中跟随资金强度，拒绝滞涨股补涨幻想。
       买点选择创历史新高（主力消化套牢盘），缩量回踩后放量确认入场。
@@ -115,10 +115,10 @@ signal_strategies:
     module: gugu.strategies.chen_jiangting
     class: ChenJiangtingStrategy
     source: 《炒股的智慧》陈江挺
-    enabled: true
+    enabled: false
     summary: 阻力突破 + 量能确认 + 阶段过滤（不追疯狂段），与 money_flow_follow 互补
     params_entry: strategy_defaults.yaml
-    validation: 单元测试通过，2026-07-03
+    validation: v0.4.2 禁用（全市场回测收益+0.60%/夏普-0.11/中位-1.13%）
     notes: |
       核心观点：股价突破前期阻力 + 成交量放大 = 主力愿意消化套牢盘。
       不要求回踩（与 money_flow_follow 区别），直接突破即进场。
