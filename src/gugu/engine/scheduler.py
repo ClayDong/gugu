@@ -249,6 +249,15 @@ class TradingScheduler:
                 name="十大视角日报-08:30",
             )
 
+        # 市场温度计：08:25（盘前估值温度，在08:00宏观简报之后推送）
+        if self._task_enabled("market_temp"):
+            self._scheduler.add_job(
+                self._safe_market_temp,
+                CronTrigger(hour=8, minute=25, day_of_week="mon-fri"),
+                id="market_temp_0825",
+                name="市场温度计-08:25",
+            )
+
         # 资金流数据已合并到宏观卡片中（08:00/15:15），不再单独注册 flow 任务
 
         # v0.5.0 盘中实时盯盘
@@ -861,6 +870,32 @@ class TradingScheduler:
             )
         except Exception as e:
             logger.exception(f"十大视角分析日报异常: {e}")
+
+    async def _safe_market_temp(self) -> None:
+        """市场温度计推送（08:25，非交易日跳过）。
+
+        基于博格市场温度计方法：采集12个宽基指数的近10年PE百分位，
+        算术平均得到全市场估值温度（0°-100°）。
+        温度规则：<20°加倍买入 | <30°正常买入 | 30-50°定投 | >50°减仓。
+        """
+        if not is_trading_day():
+            return
+        try:
+            from gugu.analysis.market_temp import build_market_temp_card, calc_market_temp
+
+            result = await calc_market_temp(use_cache=False)
+            if result.temperature is None:
+                logger.warning("市场温度计数据获取失败，跳过推送")
+                return
+
+            card = build_market_temp_card(result)
+            await self._engine._notifier.send_card(card)
+            logger.info(
+                f"市场温度计推送完成: {result.temperature}° ({result.zone}), "
+                f"有效 {result.success_count}/{result.total_indexes}"
+            )
+        except Exception as e:
+            logger.exception(f"市场温度计推送异常: {e}")
 
     async def start(self) -> None:
         """启动调度器。启动后立即执行一次盘中扫描（如果是交易日）。"""
