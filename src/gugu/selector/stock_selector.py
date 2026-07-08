@@ -181,6 +181,7 @@ class StockSelector:
                     sig["fundamental_score"] = r["fundamental_score"]
                     sig["money_flow_score"] = r["money_flow_score"]
                     sig["sector_score"] = r["sector_score"]
+                    sig["chip_score"] = r.get("chip_score", 0.0)  # v0.6.0 新增
             # 按综合评分排序
             signal_stocks.sort(key=lambda x: x.get("total_score", 0), reverse=True)
 
