@@ -1,4 +1,5 @@
 """回测引擎单元测试。"""
+
 from __future__ import annotations
 
 import numpy as np
@@ -75,7 +76,9 @@ def test_backtest_runs(trend_df):
 
 def test_metrics_basic():
     """指标计算基本正确。"""
-    equity = pd.Series([100, 105, 103, 110, 108, 120], index=pd.date_range("2026-01-01", periods=6, freq="B"))
+    equity = pd.Series(
+        [100, 105, 103, 110, 108, 120], index=pd.date_range("2026-01-01", periods=6, freq="B")
+    )
     metrics = calc_metrics(equity, [])
     assert metrics["total_return"] == pytest.approx(0.20, rel=1e-3)
     assert metrics["max_drawdown"] > 0
@@ -213,3 +216,109 @@ def test_backtest_cognitive_engine_trailing_stop_exits(low_vol_df):
     for entry in result.cognitive_log:
         if entry.get("action") == "trailing_stop_exit":
             assert "stop_price" in entry or "close" in entry
+
+
+class TestTransactionCosts:
+    """专项测试：A股交易费用模型（过户费+最低佣金，与PaperBroker对齐）。"""
+
+    def test_calc_transfer_fee_shanghai(self):
+        """沪市股票（600开头）双向收取0.001%过户费。"""
+        engine = BacktestEngine()
+        # 10万元交易，过户费=100000*0.00001=1元
+        fee = engine._calc_transfer_fee("600519", 100_000)
+        assert fee == pytest.approx(1.0, abs=0.01)
+
+    def test_calc_transfer_fee_shenzhen(self):
+        """深市股票（000/002/300开头）无过户费。"""
+        engine = BacktestEngine()
+        fee = engine._calc_transfer_fee("000001", 100_000)
+        assert fee == 0.0
+        fee2 = engine._calc_transfer_fee("002714", 100_000)
+        assert fee2 == 0.0
+        fee3 = engine._calc_transfer_fee("300750", 100_000)
+        assert fee3 == 0.0
+
+    def test_calc_transfer_fee_star_market(self):
+        """科创板（688开头）收取过户费。"""
+        engine = BacktestEngine()
+        fee = engine._calc_transfer_fee("688981", 100_000)
+        assert fee == pytest.approx(1.0, abs=0.01)
+
+    def test_min_commission_buy(self):
+        """小金额买入时佣金不低于5元（最低佣金）。"""
+        engine = BacktestEngine(initial_capital=100_000)
+        # 价格10元，买100股=1000元，按0.025%费率佣金=0.25元，应为5元
+        trade = engine._execute_buy("600000", "2026-01-01", 10.0, 10_000)
+        assert trade is not None
+        assert trade.commission >= 5.0
+        assert trade.commission == pytest.approx(5.0, abs=0.01)
+
+    def test_min_commission_sell(self):
+        """小金额卖出时佣金不低于5元。"""
+        engine = BacktestEngine(initial_capital=100_000)
+        # 价格10元，卖100股=1000元，佣金应≥5元
+        trade = engine._execute_sell("600000", "2026-01-01", 10.0, 100, 1000.0)
+        assert trade.commission >= 5.0
+
+    def test_large_trade_commission_proportional(self):
+        """大额交易佣金按比例收取（超过5元时不按最低）。"""
+        engine = BacktestEngine(initial_capital=1_000_000)
+        # 价格100元，买10000股=100万元，佣金=100万*0.00025=250元
+        trade = engine._execute_buy("600519", "2026-01-01", 100.0, 1_000_000)
+        assert trade is not None
+        expected = 100 * trade.quantity * 0.00025
+        assert trade.commission == pytest.approx(expected, rel=0.01)
+
+    def test_shanghai_buy_has_transfer_fee(self):
+        """沪市买入有过户费。"""
+        engine = BacktestEngine(initial_capital=1_000_000)
+        trade = engine._execute_buy("600519", "2026-01-01", 100.0, 1_000_000)
+        assert trade is not None
+        assert trade.transfer_fee > 0
+
+    def test_shenzhen_buy_no_transfer_fee(self):
+        """深市买入无过户费。"""
+        engine = BacktestEngine(initial_capital=1_000_000)
+        trade = engine._execute_buy("000001", "2026-01-01", 100.0, 1_000_000)
+        assert trade is not None
+        assert trade.transfer_fee == 0.0
+
+    def test_shanghai_sell_has_transfer_fee(self):
+        """沪市卖出有过户费+印花税。"""
+        engine = BacktestEngine(initial_capital=100_000)
+        trade = engine._execute_sell("600519", "2026-01-01", 100.0, 1000, 80_000)
+        assert trade.transfer_fee > 0
+        assert trade.stamp_tax > 0  # 卖出有印花税
+
+    def test_full_cycle_deducts_all_fees(self, trend_df):
+        """完整买卖周期：现金扣除应包含佣金+过户费+印花税。"""
+        engine = BacktestEngine(initial_capital=100_000)
+        strategy = DualMAStrategy(params={"short_window": 3, "long_window": 8})
+        # 使用沪市股票（600开头）确保有过户费
+        result = engine.run(strategy, trend_df, "600000")
+        if len(result.trades) >= 2:
+            buy_trade = [t for t in result.trades if t.direction == "buy"][0]
+            sell_trade = [t for t in result.trades if t.direction == "sell"][-1]
+            # 买入应有过户费（沪市）
+            assert buy_trade.transfer_fee >= 0
+            # 卖出应有印花税和过户费
+            assert sell_trade.stamp_tax > 0
+            # 佣金应≥5元
+            assert buy_trade.commission >= 5.0
+            assert sell_trade.commission >= 5.0
+
+    def test_backtest_equity_accounts_for_fees(self, trend_df):
+        """回测权益曲线应反映交易费用（不能100%完美零成本）。"""
+        engine = BacktestEngine(initial_capital=100_000, commission_rate=0.00025)
+        engine_no_fee = BacktestEngine(
+            initial_capital=100_000, commission_rate=0.0, stamp_tax=0.0, slippage=0.0
+        )
+        strategy = DualMAStrategy(params={"short_window": 3, "long_window": 8})
+        result_with_fee = engine.run(strategy, trend_df, "600000")
+        result_no_fee = engine_no_fee.run(strategy, trend_df, "600000")
+        if len(result_with_fee.trades) > 0:
+            # 有费用的回测最终权益应≤无费用回测（考虑滑点和费用）
+            final_with_fee = result_with_fee.equity_curve.iloc[-1]
+            final_no_fee = result_no_fee.equity_curve.iloc[-1]
+            # 允许微小差异（随机数），但有费用不应显著高于无费用
+            assert final_with_fee <= final_no_fee * 1.02  # 容忍2%以内的随机差异

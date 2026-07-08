@@ -31,15 +31,15 @@ STATE_FILE = PROJECT_ROOT / "data" / "paper_broker_state.json"
 # 格式：(threshold_market_value_billions, slippage_bps, partial_fill_probability)
 # 市值越小，滑点越大，部分成交概率越高
 LIQUIDITY_TIERS = [
-    (100, 5, 0.02),   # 超大市值（>1000亿）：滑点0.05%，部分成交概率2%
-    (30, 10, 0.05),   # 大市值（300-1000亿）：滑点0.1%，部分成交概率5%
-    (10, 20, 0.10),   # 中市值（100-300亿）：滑点0.2%，部分成交概率10%
-    (3, 40, 0.20),    # 小市值（30-100亿）：滑点0.4%，部分成交概率20%
-    (1, 60, 0.30),    # 微小市值（10-30亿）：滑点0.6%，部分成交概率30%
+    (100, 5, 0.02),  # 超大市值（>1000亿）：滑点0.05%，部分成交概率2%
+    (30, 10, 0.05),  # 大市值（300-1000亿）：滑点0.1%，部分成交概率5%
+    (10, 20, 0.10),  # 中市值（100-300亿）：滑点0.2%，部分成交概率10%
+    (3, 40, 0.20),  # 小市值（30-100亿）：滑点0.4%，部分成交概率20%
+    (1, 60, 0.30),  # 微小市值（10-30亿）：滑点0.6%，部分成交概率30%
 ]
 
 # 涨跌停附近成交概率
-LIMIT_UP_FILL_PROB = 0.3   # 涨停时买入成交概率 30%
+LIMIT_UP_FILL_PROB = 0.3  # 涨停时买入成交概率 30%
 LIMIT_DOWN_FILL_PROB = 0.3  # 跌停时卖出成交概率 30%
 
 
@@ -114,8 +114,7 @@ class PaperBroker(BaseBroker):
             return 0, fill_price
 
         logger.info(
-            f"[模拟盘] 部分成交: 请求{quantity}股 → 实际{partial_qty}股 "
-            f"(比例={fill_ratio:.0%})"
+            f"[模拟盘] 部分成交: 请求{quantity}股 → 实际{partial_qty}股 (比例={fill_ratio:.0%})"
         )
         return partial_qty, fill_price
 
@@ -221,14 +220,21 @@ class PaperBroker(BaseBroker):
 
         # BUG-04 价格合理性防护：拒绝明显错误的价格
         if cur_price < 0.5:
-            return OrderResult(False, symbol, direction, 0, 0, 0, message=f"价格异常低 ({cur_price:.2f})，拒绝下单")
+            return OrderResult(
+                False, symbol, direction, 0, 0, 0, message=f"价格异常低 ({cur_price:.2f})，拒绝下单"
+            )
         if direction == "buy":
             pos = self._positions.get(symbol)
             if pos and pos.avg_cost > 0:
                 deviation = max(cur_price, pos.avg_cost) / min(cur_price, pos.avg_cost)
                 if deviation > 10.0:
                     return OrderResult(
-                        False, symbol, direction, 0, 0, 0,
+                        False,
+                        symbol,
+                        direction,
+                        0,
+                        0,
+                        0,
                         message=f"价格偏离持仓成本 {deviation:.1f}x (现价{cur_price:.2f} vs 成本{pos.avg_cost:.2f})，拒绝下单",
                     )
 
@@ -268,12 +274,26 @@ class PaperBroker(BaseBroker):
             if total_cost > self._cash:
                 # 如果是部分成交导致的资金不足，尝试进一步缩小数量
                 if actual_quantity < quantity:
-                    affordable = int(math.floor(self._cash / (fill_price * (1 + self._commission_rate)) / 100) * 100)
+                    affordable = int(
+                        math.floor(self._cash / (fill_price * (1 + self._commission_rate)) / 100)
+                        * 100
+                    )
                     if affordable >= 100:
                         actual_quantity = affordable
-                        total_cost = fill_price * actual_quantity + fill_price * actual_quantity * self._commission_rate
+                        total_cost = (
+                            fill_price * actual_quantity
+                            + fill_price * actual_quantity * self._commission_rate
+                        )
                     else:
-                        return OrderResult(False, symbol, direction, 0, 0, 0, message="资金不足（部分成交调整后仍不足）")
+                        return OrderResult(
+                            False,
+                            symbol,
+                            direction,
+                            0,
+                            0,
+                            0,
+                            message="资金不足（部分成交调整后仍不足）",
+                        )
                 else:
                     return OrderResult(False, symbol, direction, 0, 0, 0, message="资金不足")
 
@@ -281,7 +301,9 @@ class PaperBroker(BaseBroker):
             pos = self._positions.get(symbol)
             if pos:
                 new_qty = pos.quantity + actual_quantity
-                pos.avg_cost = (pos.avg_cost * pos.quantity + fill_price * actual_quantity) / new_qty
+                pos.avg_cost = (
+                    pos.avg_cost * pos.quantity + fill_price * actual_quantity
+                ) / new_qty
                 pos.quantity = new_qty
                 # 加仓后同步更新现价，避免止损检查用旧价
                 pos.current_price = cur_price
@@ -296,12 +318,19 @@ class PaperBroker(BaseBroker):
                 )
 
             result = OrderResult(
-                True, symbol, direction, fill_price, actual_quantity, commission, 0,
+                True,
+                symbol,
+                direction,
+                fill_price,
+                actual_quantity,
+                commission,
+                0,
+                transfer_fee,
                 f"买入成功{'（部分成交）' if actual_quantity < quantity else ''}",
             )
             logger.info(
                 f"[模拟盘] 买入 {symbol} {actual_quantity}股 @ {fill_price:.2f} "
-                f"佣金 {commission:.2f} 滑点={effective_slippage:.4f}"
+                f"佣金 {commission:.2f} 过户费 {transfer_fee:.2f} 滑点={effective_slippage:.4f}"
                 f"{'（部分成交）' if actual_quantity < quantity else ''}"
             )
 
@@ -346,11 +375,12 @@ class PaperBroker(BaseBroker):
                 actual_quantity,
                 commission,
                 stamp_tax,
+                transfer_fee,
                 f"卖出成功{'（部分成交）' if actual_quantity < quantity else ''}",
             )
             logger.info(
                 f"[模拟盘] 卖出 {symbol} {actual_quantity}股 @ {fill_price:.2f} "
-                f"佣金 {commission:.2f} 印花税 {stamp_tax:.2f}"
+                f"佣金 {commission:.2f} 印花税 {stamp_tax:.2f} 过户费 {transfer_fee:.2f}"
                 f"{'（部分成交）' if actual_quantity < quantity else ''}"
             )
         else:
@@ -365,6 +395,7 @@ class PaperBroker(BaseBroker):
                 "quantity": result.quantity,
                 "commission": result.commission,
                 "stamp_tax": result.stamp_tax,
+                "transfer_fee": result.transfer_fee,
             }
         )
         self._save_state()
@@ -576,9 +607,7 @@ class PaperBroker(BaseBroker):
             # 主文件损坏 → 尝试 .bak 回退
             bak = STATE_FILE.with_suffix(STATE_FILE.suffix + ".bak")
             if bak.exists():
-                logger.error(
-                    f"主状态文件损坏({e})，尝试从 .bak 备份恢复: {bak}"
-                )
+                logger.error(f"主状态文件损坏({e})，尝试从 .bak 备份恢复: {bak}")
                 try:
                     self._load_from_path(bak)
                     logger.warning("已从 .bak 恢复，建议人工核查持仓准确性")

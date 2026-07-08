@@ -55,7 +55,6 @@ class RiskManager:
             self.daily_loss_halt = rc.daily_loss_halt
             self.max_total_positions = rc.max_total_positions
             self.t_plus_1 = rc.t_plus_1
-            # 单股最大持仓时间（防阴跌套牢）
             self.max_holding_days_warn = rc.max_holding_days_warn
             self.max_holding_days_halt = rc.max_holding_days_halt
             self._max_drawdown_halt = rc.max_drawdown_halt
@@ -67,9 +66,9 @@ class RiskManager:
             self.daily_loss_halt = float(cfg.get("daily_loss_halt", 0.05))
             self.max_total_positions = int(cfg.get("max_total_positions", 5))
             self.t_plus_1 = bool(cfg.get("t_plus_1", True))
-            # P2-5 新增
             self.max_holding_days_warn = int(cfg.get("max_holding_days_warn", 30))
             self.max_holding_days_halt = int(cfg.get("max_holding_days_halt", 60))
+            self._max_drawdown_halt = float(cfg.get("max_drawdown_halt", 0.15))
         else:
             rc = get_config().risk
             self.max_position_ratio = rc.max_position_ratio
@@ -77,16 +76,15 @@ class RiskManager:
             self.daily_loss_halt = rc.daily_loss_halt
             self.max_total_positions = rc.max_total_positions
             self.t_plus_1 = rc.t_plus_1
-            # P2-5 新增
-            self.max_holding_days_warn = 30
-            self.max_holding_days_halt = 60
+            self.max_holding_days_warn = rc.max_holding_days_warn
+            self.max_holding_days_halt = rc.max_holding_days_halt
+            self._max_drawdown_halt = rc.max_drawdown_halt
             cfg = get_config().flatten().get("risk", {})
         self._logger = get_logger()
         self._halted: bool = False
         self._last_reset_date: str = ""
         # 组合级风控（实例级别，避免跨实例共享）
         self._portfolio_peak: float = 0.0
-        self._max_drawdown_halt: float = 0.15
         # 行业分散约束
         self._industry_constraint = IndustryConstraint(config=cfg)
         # P0-2 修复：启动时从磁盘加载熔断状态

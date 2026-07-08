@@ -309,10 +309,28 @@ gugu/
 ## 元数据
 
 - 创建日期：2026-07-06
-- 版本：v0.5.6
-- 阶段：阶段三（信号监控）+ 十大视角分析系统 + 信号流融合 + 宏观增强 + 博格市场温度计 + 策略全链路优化
-- 测试：1523 passed, 5 skipped
-- 最近审查：2026-07-08（博格市场温度计+多专家对抗性审查+策略全链路优化）
+- 版本：v0.5.7
+- 阶段：阶段三（信号监控）+ 十大视角分析系统 + 信号流融合 + 宏观增强 + 博格市场温度计 + 策略全链路优化 + A股费用模型对齐
+- 测试：1584 passed, 5 skipped
+- 最近审查：2026-07-09（A股交易费用模型对齐+多专家审查）
+- v0.5.7 变更（2026-07-09 A股交易费用模型对齐 + 数据完整性修复）：
+  - 🔴 P0修复：回测引擎费用模型对齐PaperBroker（真实A股交易成本）
+    - 新增 `_calc_transfer_fee()` 方法：沪市（600/601/603/605/688/689/9开头）双向收取0.001%过户费，深市/创业板无
+    - 买入/卖出均实现最低佣金5元规则（佣金=max(成交金额×费率, 5.0)）
+    - Trade类新增transfer_fee字段，完整记录每笔交易过户费
+    - 解决回测虚高问题：之前缺少过户费和最低佣金，高频/小单策略回测收益偏高
+  - 🔴 P0修复：OrderResult数据结构扩展
+    - [execution/base.py](file:///Users/dong/workspace/gugu/src/gugu/execution/base.py) OrderResult添加transfer_fee字段
+    - [execution/paper.py](file:///Users/dong/workspace/gugu/src/gugu/execution/paper.py) PaperBroker买卖单均传入transfer_fee
+  - 🔴 P0修复：信号历史记录完整性
+    - [engine/signal_pipeline.py](file:///Users/dong/workspace/gugu/src/gugu/engine/signal_pipeline.py) record_signal_history缩进规范化
+    - 新增order_stamp_tax和order_transfer_fee字段记录，完整记录交易三费
+  - 🧪 测试增强：新增11个费用专项测试
+    - 覆盖：沪/深/科创板过户费差异、最低5元佣金、大额按比例计费、买卖印花税、完整周期费用扣减、权益曲线反映成本
+    - 回测测试总计25个通过
+  - 费用模型与实盘完全一致：
+    - 买入：佣金（≥5元）+ 过户费（仅沪市）+ 滑点+0.1%
+    - 卖出：佣金（≥5元）+ 印花税0.05% + 过户费（仅沪市）+ 滑点-0.1%
 - v0.5.6 变更（2026-07-08 博格市场温度计 + 策略全链路优化）：
   - 🆕 新增博格市场温度计模块 `analysis/market_temp.py`
     - 基于博格市场温度计方法：12个宽基指数PE的近10年百分位算术平均

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -93,12 +94,14 @@ class SignalPipeline:
         try:
             cfg_hc = gugu_config.get_config()
             # AppConfig 有 holder_concentration_filter 字段时才启用
-            if hasattr(cfg_hc, 'holder_concentration_filter'):
+            if hasattr(cfg_hc, "holder_concentration_filter"):
                 hc_cfg = cfg_hc.holder_concentration_filter
                 if hc_cfg.enabled:
                     self._holder_concentration_filter = HolderConcentrationFilter()
-                    logger.info("筹码集中度过滤器已启用（季度阈值 {:.1f}%）",
-                                hc_cfg.quarterly_change_pct_threshold)
+                    logger.info(
+                        "筹码集中度过滤器已启用（季度阈值 {:.1f}%）",
+                        hc_cfg.quarterly_change_pct_threshold,
+                    )
         except Exception as e:
             logger.debug(f"筹码过滤器初始化跳过: {e}")
         self._industry_constraint = industry_constraint or IndustryConstraint()
@@ -127,8 +130,11 @@ class SignalPipeline:
                 self._scan_with_perspectives = True
                 self._perspective_min_composite = cfg.perspective.pass_threshold
                 self._perspective_min_single = cfg.perspective.min_perspective_score
-                logger.info("十大视角过滤已启用 (综合≥%.1f, 单项≥%.1f)",
-                            self._perspective_min_composite, self._perspective_min_single)
+                logger.info(
+                    "十大视角过滤已启用 (综合≥%.1f, 单项≥%.1f)",
+                    self._perspective_min_composite,
+                    self._perspective_min_single,
+                )
         except Exception as e:
             logger.debug(f"十大视角引擎初始化跳过: {e}")
 
@@ -149,9 +155,7 @@ class SignalPipeline:
             if not signal:
                 return None
 
-            signal["prev_close"] = (
-                float(df.iloc[-2]["close"]) if len(df) >= 2 else None
-            )
+            signal["prev_close"] = float(df.iloc[-2]["close"]) if len(df) >= 2 else None
             signal["is_st"] = bool(meta.get("is_st", False))
             signal["is_suspended"] = bool(meta.get("is_suspended", False))
             # 保留 name：API 有效就用 API 的，API 脤数据（等于代码）就留给 formatter 的 fallback 表解析
@@ -258,9 +262,7 @@ class SignalPipeline:
                 div_result = self._divergence_detector.detect(df)
                 signal["divergence"] = div_result
                 if div_result["signals"]:
-                    logger.warning(
-                        f"{symbol} 量价背离检测: {', '.join(div_result['signals'])}"
-                    )
+                    logger.warning(f"{symbol} 量价背离检测: {', '.join(div_result['signals'])}")
                     if signal["direction"] == "buy":
                         # 量价背离说明上涨乏力，拦截买入
                         signal["wisdom_filtered"] = True
@@ -270,13 +272,9 @@ class SignalPipeline:
                             )
                     elif signal["direction"] == "sell":
                         # 量价背离增强卖出信号置信度
-                        signal["confidence"] = min(
-                            1.0, float(signal.get("confidence", 0.5)) + 0.15
-                        )
+                        signal["confidence"] = min(1.0, float(signal.get("confidence", 0.5)) + 0.15)
                         if signal.get("reason"):
-                            signal["reason"] += (
-                                f"；量价背离({', '.join(div_result['signals'])})"
-                            )
+                            signal["reason"] += f"；量价背离({', '.join(div_result['signals'])})"
             except Exception as e:
                 logger.warning(f"量价背离检测失败 {symbol}: {e}")
                 signal["divergence"] = {"error": str(e)}
@@ -324,9 +322,15 @@ class SignalPipeline:
                 try:
                     fallback = self._wisdom._advise_fallback(signal)
                     _wisdom_keys = (
-                        "wisdom_decision", "wisdom", "wisdom_filtered", "filter_reason",
-                        "suggested_position_ratio", "stop_loss_price", "take_profit",
-                        "conflict_resolution", "mentor_perspectives",
+                        "wisdom_decision",
+                        "wisdom",
+                        "wisdom_filtered",
+                        "filter_reason",
+                        "suggested_position_ratio",
+                        "stop_loss_price",
+                        "take_profit",
+                        "conflict_resolution",
+                        "mentor_perspectives",
                     )
                     for _k in _wisdom_keys:
                         if _k in fallback:
@@ -441,9 +445,7 @@ class SignalPipeline:
                     hl_check = await self._sector_rotation.check_high_low_filter(symbol)
                     signal["high_low_check"] = hl_check
                     if not hl_check.get("allow_buy", True):
-                        logger.warning(
-                            f"{symbol} 高低切换拦截: {hl_check.get('reason', '')}"
-                        )
+                        logger.warning(f"{symbol} 高低切换拦截: {hl_check.get('reason', '')}")
                         signal["wisdom_filtered"] = True
                         signal["filter_reason"] = f"高低切换: {hl_check.get('reason', '')}"
                     elif hl_check.get("is_undervalued"):
@@ -482,9 +484,7 @@ class SignalPipeline:
                         signal["confidence"] = min(
                             1.0, float(signal.get("confidence", 0.5)) + boost
                         )
-                        logger.info(
-                            f"{symbol} 筹码潜伏者信号：置信度 +{boost:.2f}"
-                        )
+                        logger.info(f"{symbol} 筹码潜伏者信号：置信度 +{boost:.2f}")
                 except Exception as e:
                     logger.debug(f"筹码集中度检查失败 {symbol}: {e}")
 
@@ -536,9 +536,8 @@ class SignalPipeline:
             if (
                 signal["direction"] == "buy"
                 and not signal.get("wisdom_filtered")
-                and stage_result.stage in (
-                    MarketStage.FRENZY, MarketStage.FINAL, MarketStage.DOWNTREND
-                )
+                and stage_result.stage
+                in (MarketStage.FRENZY, MarketStage.FINAL, MarketStage.DOWNTREND)
             ):
                 logger.warning(f"{symbol} 阶段过滤: {stage_result.stage.value}，不建议入场")
                 signal["wisdom_filtered"] = True
@@ -552,9 +551,15 @@ class SignalPipeline:
             # 此处仅加超时保护防止 LLM 长时间阻塞；超时则降级到硬编码 fallback。
             # advise_async 返回浅拷贝，需把 Wisdom 决策字段合并回原 signal。
             _wisdom_keys = (
-                "wisdom_decision", "wisdom", "wisdom_filtered", "filter_reason",
-                "suggested_position_ratio", "stop_loss_price", "take_profit",
-                "conflict_resolution", "mentor_perspectives",
+                "wisdom_decision",
+                "wisdom",
+                "wisdom_filtered",
+                "filter_reason",
+                "suggested_position_ratio",
+                "stop_loss_price",
+                "take_profit",
+                "conflict_resolution",
+                "mentor_perspectives",
             )
             try:
                 wisdom_signal = await asyncio.wait_for(
@@ -565,18 +570,14 @@ class SignalPipeline:
                         signal[_k] = wisdom_signal[_k]
                 signal["llm_pending"] = False
             except TimeoutError:
-                logger.warning(
-                    f"[wisdom] {symbol} LLM 决策超时(15s)，降级到硬编码 fallback"
-                )
+                logger.warning(f"[wisdom] {symbol} LLM 决策超时(15s)，降级到硬编码 fallback")
                 fallback = self._wisdom._advise_fallback(signal)
                 for _k in _wisdom_keys:
                     if _k in fallback:
                         signal[_k] = fallback[_k]
                 signal["llm_pending"] = False
             except Exception as e:
-                logger.warning(
-                    f"[wisdom] {symbol} Wisdom 决策异常: {e}，降级到硬编码 fallback"
-                )
+                logger.warning(f"[wisdom] {symbol} Wisdom 决策异常: {e}，降级到硬编码 fallback")
                 fallback = self._wisdom._advise_fallback(signal)
                 for _k in _wisdom_keys:
                     if _k in fallback:
@@ -693,6 +694,9 @@ def _rotate_jsonl(path: Path, max_lines: int = _SIGNAL_HISTORY_MAX_LINES) -> Non
         logger.warning(f"历史文件轮转失败: {e}")
 
 
+_signal_history_lock = threading.Lock()
+
+
 def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result: Any) -> None:
     try:
         with _signal_history_lock:
@@ -705,103 +709,135 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
 
             stage_info = signal.get("stage", {})
             if stage_info:
-                decision_chain.append({
-                "step": 0,
-                "name": "四阶段判断",
-                "result": stage_info.get("stage", "unknown"),
-                "confidence": stage_info.get("confidence", 0),
-                "description": stage_info.get("description", ""),
-                "passed": True,
-            })
+                decision_chain.append(
+                    {
+                        "step": 0,
+                        "name": "四阶段判断",
+                        "result": stage_info.get("stage", "unknown"),
+                        "confidence": stage_info.get("confidence", 0),
+                        "description": stage_info.get("description", ""),
+                        "passed": True,
+                    }
+                )
 
             danger_info = signal.get("danger_signals", {})
             if danger_info:
                 severity = danger_info.get("severity", "none")
-            decision_chain.append({
-                "step": 0.5,
-                "name": "危险信号检测",
-                "result": severity,
-                "signals": danger_info.get("signals", []),
-                "description": danger_info.get("description", ""),
-                "passed": severity not in ("medium", "high"),
-            })
+                decision_chain.append(
+                    {
+                        "step": 0.5,
+                        "name": "危险信号检测",
+                        "result": severity,
+                        "signals": danger_info.get("signals", []),
+                        "description": danger_info.get("description", ""),
+                        "passed": severity not in ("medium", "high"),
+                    }
+                )
 
             fund_info = signal.get("fundamental", {})
             if fund_info:
-                decision_chain.append({
-                "step": 1,
-                "name": "基本面过滤",
-                "result": "pass" if fund_info.get("pass") else "fail",
-                "reasons": fund_info.get("reasons", []),
-                "passed": fund_info.get("pass", True),
-            })
+                decision_chain.append(
+                    {
+                        "step": 1,
+                        "name": "基本面过滤",
+                        "result": "pass" if fund_info.get("pass") else "fail",
+                        "reasons": fund_info.get("reasons", []),
+                        "passed": fund_info.get("pass", True),
+                    }
+                )
 
             flow_info = signal.get("money_flow", {})
             if flow_info:
-                decision_chain.append({
-                "step": 2,
-                "name": "资金流过滤",
-                "result": "pass" if flow_info.get("pass") else "fail",
-                "reasons": flow_info.get("reasons", []),
-                "passed": flow_info.get("pass", True),
-            })
+                decision_chain.append(
+                    {
+                        "step": 2,
+                        "name": "资金流过滤",
+                        "result": "pass" if flow_info.get("pass") else "fail",
+                        "reasons": flow_info.get("reasons", []),
+                        "passed": flow_info.get("pass", True),
+                    }
+                )
 
             sector_info = signal.get("sector_check", {})
             if sector_info and "is_hot" in sector_info:
-                decision_chain.append({
-                "step": 2.2,
-                "name": "板块轮动感知",
-                "result": "hot" if sector_info.get("is_hot") else ("cold" if sector_info.get("is_cold") else "neutral"),
-                "industry": sector_info.get("industry", ""),
-                "passed": True,
-            })
+                decision_chain.append(
+                    {
+                        "step": 2.2,
+                        "name": "板块轮动感知",
+                        "result": "hot"
+                        if sector_info.get("is_hot")
+                        else ("cold" if sector_info.get("is_cold") else "neutral"),
+                        "industry": sector_info.get("industry", ""),
+                        "passed": True,
+                    }
+                )
+
+            chip_info = signal.get("chip_check", {})
+            if chip_info:
+                decision_chain.append(
+                    {
+                        "step": 2.4,
+                        "name": "筹码结构过滤",
+                        "result": chip_info.get("label", "unknown"),
+                        "chip_score": chip_info.get("chip_score", 0.5),
+                        "passed": chip_info.get("label") != "避雷针",
+                    }
+                )
 
             avg_down_info = signal.get("avg_down_check", {})
             if avg_down_info:
-                decision_chain.append({
-                "step": 2.5,
-                "name": "向下摊平检查",
-                "result": "allowed" if avg_down_info.get("allowed") else "blocked",
-                "reason": avg_down_info.get("reason", ""),
-                "profit_pct": avg_down_info.get("profit_pct", 0),
-                "passed": avg_down_info.get("allowed", True),
-            })
+                decision_chain.append(
+                    {
+                        "step": 2.5,
+                        "name": "向下摊平检查",
+                        "result": "allowed" if avg_down_info.get("allowed") else "blocked",
+                        "reason": avg_down_info.get("reason", ""),
+                        "profit_pct": avg_down_info.get("profit_pct", 0),
+                        "passed": avg_down_info.get("allowed", True),
+                    }
+                )
 
             ind_info = signal.get("industry_check", {})
             if ind_info:
-                decision_chain.append({
-                "step": 3,
-                "name": "行业约束",
-                "result": "allowed" if ind_info.get("allowed") else "blocked",
-                "reason": ind_info.get("reason", ""),
-                "passed": ind_info.get("allowed", True),
-            })
+                decision_chain.append(
+                    {
+                        "step": 3,
+                        "name": "行业约束",
+                        "result": "allowed" if ind_info.get("allowed") else "blocked",
+                        "reason": ind_info.get("reason", ""),
+                        "passed": ind_info.get("allowed", True),
+                    }
+                )
 
             persp_info = signal.get("perspective_check", {})
             if persp_info:
-                decision_chain.append({
-                "step": 3.6,
-                "name": "十大视角质量门禁",
-                "result": f"综合{persp_info.get('composite_score', 0):.1f} "
-                         f"最低{persp_info.get('min_score', 0):.1f}",
-                "composite_score": persp_info.get("composite_score", 0),
-                "min_score": persp_info.get("min_score", 0),
-                "fatal_count": persp_info.get("fatal_count", 0),
-                "verdict": persp_info.get("verdict", ""),
-                "passed": persp_info.get("passed", True),
-            })
+                decision_chain.append(
+                    {
+                        "step": 3.6,
+                        "name": "十大视角质量门禁",
+                        "result": f"综合{persp_info.get('composite_score', 0):.1f} "
+                        f"最低{persp_info.get('min_score', 0):.1f}",
+                        "composite_score": persp_info.get("composite_score", 0),
+                        "min_score": persp_info.get("min_score", 0),
+                        "fatal_count": persp_info.get("fatal_count", 0),
+                        "verdict": persp_info.get("verdict", ""),
+                        "passed": persp_info.get("passed", True),
+                    }
+                )
 
             wisdom_dec = signal.get("wisdom_decision", {})
             if wisdom_dec:
-                decision_chain.append({
-                "step": 5,
-                "name": "Wisdom决策",
-                "result": wisdom_dec.get("action", ""),
-                "position_ratio": wisdom_dec.get("position_ratio", 0),
-                "stop_loss_price": wisdom_dec.get("stop_loss_price", 0),
-                "reason": wisdom_dec.get("reason", ""),
-                "passed": not signal.get("wisdom_filtered", False),
-            })
+                decision_chain.append(
+                    {
+                        "step": 5,
+                        "name": "Wisdom决策",
+                        "result": wisdom_dec.get("action", ""),
+                        "position_ratio": wisdom_dec.get("position_ratio", 0),
+                        "stop_loss_price": wisdom_dec.get("stop_loss_price", 0),
+                        "reason": wisdom_dec.get("reason", ""),
+                        "passed": not signal.get("wisdom_filtered", False),
+                    }
+                )
 
             _sym = signal.get("symbol", "")
             _raw_name = signal.get("name", "") or ""
@@ -809,28 +845,33 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 _raw_name = lookup_stock_name(_sym) or _raw_name
 
             record = {
-            "timestamp": pd.Timestamp.now().isoformat(),
-            "symbol": signal.get("symbol"),
-            "name": _raw_name,
-            "direction": signal.get("direction"),
-            "price": signal.get("price"),
-            "confidence": signal.get("confidence"),
-            "strategy": signal.get("strategy"),
-            "strategies": signal.get("strategies"),
-            "wisdom_filtered": signal.get("wisdom_filtered", False),
-            "filter_reason": signal.get("filter_reason", ""),
-            "wisdom_decision": wisdom_dec,
-            "suggested_position_ratio": signal.get("suggested_position_ratio"),
-            "stop_loss_price": signal.get("stop_loss_price"),
-            "stage": stage_info,
-            "danger_signals": danger_info,
-            "decision_chain": decision_chain,
-            "risk_allowed": getattr(risk_result, "allowed", None),
-            "risk_message": getattr(risk_result, "message", ""),
-            "order_success": getattr(order_result, "success", None),
-            "order_quantity": getattr(order_result, "quantity", 0),
-            "order_price": getattr(order_result, "price", 0),
-            "order_commission": getattr(order_result, "commission", 0),
+                "timestamp": pd.Timestamp.now().isoformat(),
+                "symbol": signal.get("symbol"),
+                "name": _raw_name,
+                "direction": signal.get("direction"),
+                "price": signal.get("price"),
+                "confidence": signal.get("confidence"),
+                "strategy": signal.get("strategy"),
+                "strategies": signal.get("strategies"),
+                "rank_score": signal.get("rank_score"),
+                "factor_score": signal.get("factor_score"),
+                "chip_score": signal.get("chip_score"),
+                "wisdom_filtered": signal.get("wisdom_filtered", False),
+                "filter_reason": signal.get("filter_reason", ""),
+                "wisdom_decision": wisdom_dec,
+                "suggested_position_ratio": signal.get("suggested_position_ratio"),
+                "stop_loss_price": signal.get("stop_loss_price"),
+                "stage": stage_info,
+                "danger_signals": danger_info,
+                "decision_chain": decision_chain,
+                "risk_allowed": getattr(risk_result, "allowed", None),
+                "risk_message": getattr(risk_result, "message", ""),
+                "order_success": getattr(order_result, "success", None),
+                "order_quantity": getattr(order_result, "quantity", 0),
+                "order_price": getattr(order_result, "price", 0),
+                "order_commission": getattr(order_result, "commission", 0),
+                "order_stamp_tax": getattr(order_result, "stamp_tax", 0),
+                "order_transfer_fee": getattr(order_result, "transfer_fee", 0),
             }
             with path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")

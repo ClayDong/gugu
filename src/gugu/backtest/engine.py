@@ -1,8 +1,8 @@
 """Backtest engine with realistic A-share transaction costs.
 
-Transaction cost model:
-- Buy:  commission_rate (default 0.025%) + slippage (default 0.2%)
-- Sell: commission_rate + stamp_tax (default 0.05%) + slippage
+Transaction cost model (aligned with PaperBroker):
+- Buy:  commission_rate (default 0.025%, min 5 CNY) + transfer_fee (Shanghai 0.001%) + slippage (default 0.2%)
+- Sell: commission_rate + stamp_tax (default 0.05%) + transfer_fee (Shanghai 0.001%) + slippage
 
 Position management respects the L1 single-position ratio from risk config.
 P1-m: L3 price limit checks (涨跌停) integrated via RiskManager.is_tradable().
@@ -41,9 +41,10 @@ class Trade:
         direction: "buy" or "sell".
         price: Execution price after slippage.
         quantity: Number of shares traded.
-        commission: Brokerage commission.
+        commission: Brokerage commission (>=5 CNY minimum).
         profit: Realized profit (only for sells, 0.0 for buys).
         stamp_tax: Stamp tax (only for sells, 0.0 for buys).
+        transfer_fee: Transfer fee (Shanghai stocks only, 0.001% both ways).
     """
 
     date: Any
@@ -53,6 +54,7 @@ class Trade:
     commission: float
     profit: float = 0.0
     stamp_tax: float = 0.0
+    transfer_fee: float = 0.0
 
 
 @dataclass
@@ -232,11 +234,7 @@ class BacktestEngine:
             # 从预计算的 numpy 数组中读取第 i 行信号
             signal = int(signal_arr[i])
             # P0-5 修复：从信号 DataFrame 读取真实置信度，而非硬编码 1.0
-            confidence = (
-                float(confidence_arr[i])
-                if confidence_arr is not None
-                else 1.0
-            )
+            confidence = float(confidence_arr[i]) if confidence_arr is not None else 1.0
 
             # P0-3/P0-4/P1-j/P1-k 修复：支持加仓，正确传递 has_position/current_position_ratio
             # ===== 认知引擎：移动止损检查（每日）=====
@@ -286,7 +284,10 @@ class BacktestEngine:
                             )
                             trades.append(trade)
                             proceeds = (
-                                trade.price * trade.quantity - trade.commission - trade.stamp_tax
+                                trade.price * trade.quantity
+                                - trade.commission
+                                - trade.stamp_tax
+                                - trade.transfer_fee
                             )
                             cash += proceeds
                             position_qty = 0
@@ -417,15 +418,16 @@ class BacktestEngine:
                     )
                     if trade is not None:
                         trades.append(trade)
-                        cash -= trade.price * trade.quantity + trade.commission
+                        total_cost = (
+                            trade.price * trade.quantity + trade.commission + trade.transfer_fee
+                        )
+                        cash -= total_cost
                         # P1-k 修复：支持加仓，正确更新 avg_cost 和 position_qty
                         if position_qty > 0:
                             # 加仓：更新加权平均成本
-                            position_cost = (
-                                position_cost + trade.price * trade.quantity + trade.commission
-                            )
+                            position_cost = position_cost + total_cost
                         else:
-                            position_cost = trade.price * trade.quantity + trade.commission
+                            position_cost = total_cost
                             buy_date = pd.Timestamp(current_date)
                             # 认知引擎：初始化移动止损
                             if (
@@ -452,7 +454,12 @@ class BacktestEngine:
                         symbol, current_date, close, position_qty, position_cost
                     )
                     trades.append(trade)
-                    proceeds = trade.price * trade.quantity - trade.commission - trade.stamp_tax
+                    proceeds = (
+                        trade.price * trade.quantity
+                        - trade.commission
+                        - trade.stamp_tax
+                        - trade.transfer_fee
+                    )
                     cash += proceeds
                     position_qty = 0
                     position_cost = 0.0
@@ -484,6 +491,20 @@ class BacktestEngine:
             cognitive_log=cognitive_log,
         )
 
+    @staticmethod
+    def _calc_transfer_fee(symbol: str, trade_value: float) -> float:
+        """Calculate transfer fee (Shanghai stocks: 0.001% both ways, Shenzhen: 0).
+
+        Aligned with PaperBroker._calc_transfer_fee for backtest/live consistency.
+        Shanghai prefixes: 600/601/603/605/688/689/9xx (BSE).
+        """
+        if not symbol or trade_value <= 0:
+            return 0.0
+        code = symbol.strip().zfill(6)
+        if code.startswith(("600", "601", "603", "605", "688", "689", "9")):
+            return round(trade_value * 0.00001, 2)
+        return 0.0
+
     def _execute_buy(
         self,
         symbol: str,
@@ -493,7 +514,7 @@ class BacktestEngine:
         *,
         current_equity: float | None = None,
     ) -> Trade | None:
-        """Execute a buy order with slippage and commission.
+        """Execute a buy order with slippage, commission (min 5 CNY), and transfer fee.
 
         Buy price = close * (1 + slippage)
         Quantity is rounded down to the nearest board lot (100 shares).
@@ -507,13 +528,17 @@ class BacktestEngine:
         Returns None if not enough cash for even one lot.
         """
         buy_price = close * (1 + self.slippage)
-        cost_per_share = buy_price * (1 + self.commission_rate)
+        transfer_fee_rate = (
+            0.00001
+            if symbol.strip().zfill(6).startswith(("600", "601", "603", "605", "688", "689", "9"))
+            else 0.0
+        )
+        cost_per_share = buy_price * (1 + self.commission_rate + transfer_fee_rate)
         ref = current_equity if current_equity is not None else self.initial_capital
         max_value = min(cash, ref * self.position_ratio)
         max_qty = int(max_value / cost_per_share)
         quantity = (max_qty // _BOARD_LOT) * _BOARD_LOT
         if quantity <= 0:
-            # 保底：常规计算为 0 但现金够买 100 股时，买入 100 股
             if cash >= buy_price * _BOARD_LOT:
                 quantity = _BOARD_LOT
                 self._logger.debug(
@@ -525,14 +550,21 @@ class BacktestEngine:
                 )
                 return None
 
-        commission = buy_price * quantity * self.commission_rate
-        self._logger.debug(f"BUY {symbol} {quantity}@{buy_price:.2f} commission={commission:.2f}")
+        trade_value = buy_price * quantity
+        commission = trade_value * self.commission_rate
+        commission = max(commission, 5.0)
+        transfer_fee = self._calc_transfer_fee(symbol, trade_value)
+        self._logger.debug(
+            f"BUY {symbol} {quantity}@{buy_price:.2f} "
+            f"commission={commission:.2f} transfer={transfer_fee:.2f}"
+        )
         return Trade(
             date=date,
             direction="buy",
             price=buy_price,
             quantity=quantity,
             commission=commission,
+            transfer_fee=transfer_fee,
         )
 
     def _execute_sell(
@@ -543,20 +575,25 @@ class BacktestEngine:
         quantity: int,
         cost_basis: float,
     ) -> Trade:
-        """Execute a sell order with slippage, commission, and stamp tax.
+        """Execute a sell order with slippage, commission (min 5 CNY), stamp tax, and transfer fee.
 
         Sell price = close * (1 - slippage)
         Stamp tax is only applied to sells (A-share rule).
+        Transfer fee is applied to sells for Shanghai stocks.
         """
         sell_price = close * (1 - self.slippage)
-        commission = sell_price * quantity * self.commission_rate
-        stamp_tax = sell_price * quantity * self.stamp_tax
-        proceeds = sell_price * quantity - commission - stamp_tax
+        trade_value = sell_price * quantity
+        commission = trade_value * self.commission_rate
+        commission = max(commission, 5.0)
+        stamp_tax = trade_value * self.stamp_tax
+        transfer_fee = self._calc_transfer_fee(symbol, trade_value)
+        proceeds = trade_value - commission - stamp_tax - transfer_fee
         profit = proceeds - cost_basis
 
         self._logger.debug(
             f"SELL {symbol} {quantity}@{sell_price:.2f} "
-            f"commission={commission:.2f} tax={stamp_tax:.2f} profit={profit:.2f}"
+            f"commission={commission:.2f} tax={stamp_tax:.2f} "
+            f"transfer={transfer_fee:.2f} profit={profit:.2f}"
         )
         return Trade(
             date=date,
@@ -566,6 +603,7 @@ class BacktestEngine:
             commission=commission,
             profit=profit,
             stamp_tax=stamp_tax,
+            transfer_fee=transfer_fee,
         )
 
 
@@ -815,29 +853,33 @@ def walk_forward_optimize_multi_stock(
                 test_returns.append(ret)
                 test_max_dds.append(max_dd)
                 test_win_rates.append(win_rate)
-                test_details.append({
-                    "symbol": sym,
-                    "test_sharpe": round(sharpe, 4),
-                    "test_return": round(ret, 4),
-                    "test_max_dd": round(max_dd, 4),
-                    "test_win_rate": round(win_rate, 4),
-                    "trades": len(test_result.trades),
-                })
+                test_details.append(
+                    {
+                        "symbol": sym,
+                        "test_sharpe": round(sharpe, 4),
+                        "test_return": round(ret, 4),
+                        "test_max_dd": round(max_dd, 4),
+                        "test_win_rate": round(win_rate, 4),
+                        "trades": len(test_result.trades),
+                    }
+                )
             except Exception as e:
                 logger.debug(f"多股测试 {sym} 失败: {e}")
 
         n = max(len(test_sharpes), 1)
-        results.append({
-            "window": w + 1,
-            "best_params": best_params,
-            "train_avg_sharpe": round(best_avg_sharpe, 4),
-            "test_avg_sharpe": round(sum(test_sharpes) / n, 4),
-            "test_avg_return": round(sum(test_returns) / n, 4),
-            "test_avg_max_dd": round(sum(test_max_dds) / n, 4),
-            "test_avg_win_rate": round(sum(test_win_rates) / n, 4),
-            "test_stock_count": len(test_details),
-            "test_details": test_details,
-        })
+        results.append(
+            {
+                "window": w + 1,
+                "best_params": best_params,
+                "train_avg_sharpe": round(best_avg_sharpe, 4),
+                "test_avg_sharpe": round(sum(test_sharpes) / n, 4),
+                "test_avg_return": round(sum(test_returns) / n, 4),
+                "test_avg_max_dd": round(sum(test_max_dds) / n, 4),
+                "test_avg_win_rate": round(sum(test_win_rates) / n, 4),
+                "test_stock_count": len(test_details),
+                "test_details": test_details,
+            }
+        )
 
     logger.info(
         f"多股 Walk-forward 完成: {len(results)} 窗口 × {n_stocks} 股, "

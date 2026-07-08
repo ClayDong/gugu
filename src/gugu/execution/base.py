@@ -25,6 +25,7 @@ class OrderResult:
     quantity: int
     commission: float
     stamp_tax: float = 0.0
+    transfer_fee: float = 0.0
     message: str = ""
 
 
