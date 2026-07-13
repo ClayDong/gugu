@@ -1,12 +1,13 @@
-"""ML 多因子策略：用 LightGBM 预测分数生成买卖信号（v2）。
+"""ML 多因子策略：用 LightGBM 预测分数生成买卖信号（v3）。
 
-v2 优化：
-- 信号冷却期：连续买入信号间隔 ≥ cooldown_days（默认 5 天）
+v3 优化：
+- 市场状态过滤：熊市/暴跌不产生买入信号
+- 动态阈值：根据波动率调整买卖阈值
+- 信号冷却期：连续买入信号间隔 ≥ cooldown_days
 - 阈值收紧：buy=0.62, sell=0.38, min_confidence=0.58
-- 置信度衰减：冷却期内信号置信度降低
 
 策略逻辑：
-- 买入信号：ML 预测分数 > buy_threshold 且不在冷却期内
+- 买入信号：ML 预测分数 > buy_threshold 且不在冷却期内 且市场状态允许
 - 卖出信号：ML 预测分数 < sell_threshold
 - 置信度：ML 预测分数本身
 """
@@ -23,7 +24,7 @@ logger = get_logger()
 
 
 class MLFactorStrategy(Strategy):
-    """LightGBM 多因子策略（v2）。"""
+    """LightGBM 多因子策略（v3）。"""
 
     name = "ml_factor"
 
@@ -89,19 +90,51 @@ class MLFactorStrategy(Strategy):
 
         scores_arr = np.array(scores)
 
+        # 动态阈值：根据 20 日波动率调整
+        close = df["close"].values
+        if len(close) >= 21:
+            returns = np.diff(np.log(close[-21:]))
+            vol = float(np.std(returns) * np.sqrt(252))
+            # 高波动(>0.3)收紧买入阈值，低波动(<0.15)放宽
+            if vol > 0.3:
+                dyn_buy = buy_threshold + 0.03
+                dyn_sell = sell_threshold - 0.02
+            elif vol < 0.15:
+                dyn_buy = buy_threshold - 0.02
+                dyn_sell = sell_threshold + 0.02
+            else:
+                dyn_buy = buy_threshold
+                dyn_sell = sell_threshold
+        else:
+            dyn_buy = buy_threshold
+            dyn_sell = sell_threshold
+
+        # 市场状态过滤：用 MA20/MA60 判断趋势
+        if len(close) >= 60:
+            ma20 = float(np.mean(close[-20:]))
+            ma60 = float(np.mean(close[-60:]))
+            # 熊市：MA20 < MA60 且价格 < MA60
+            is_bear_market = ma20 < ma60 and close[-1] < ma60
+        else:
+            is_bear_market = False
+
         # 生成原始信号
         raw_signal = np.where(
-            scores_arr > buy_threshold, 1,
-            np.where(scores_arr < sell_threshold, -1, 0),
+            scores_arr > dyn_buy, 1,
+            np.where(scores_arr < dyn_sell, -1, 0),
         )
+
+        # 市场状态过滤：熊市不产生买入信号
+        if is_bear_market:
+            raw_signal = np.where(raw_signal == 1, 0, raw_signal)
 
         # 信号冷却期控制：连续买入信号间隔 ≥ cooldown_days
         signal = raw_signal.copy()
-        last_buy_idx = -cooldown_days  # 初始化为负数，允许第一个信号
+        last_buy_idx = -cooldown_days
         for i in range(len(signal)):
             if signal[i] == 1:
                 if i - last_buy_idx < cooldown_days:
-                    signal[i] = 0  # 冷却期内，取消买入信号
+                    signal[i] = 0
                 else:
                     last_buy_idx = i
 
@@ -119,9 +152,11 @@ class MLFactorStrategy(Strategy):
         buy_count = int(np.sum(signal == 1))
         sell_count = int(np.sum(signal == -1))
         suppressed = int(np.sum((raw_signal == 1) & (signal == 0)))
+        bear_blocked = int(np.sum((raw_signal == 1) & (signal == 0) & (np.arange(len(signal)) > 0)))
         logger.info(
-            f"ML 策略 v2 生成信号: {buy_count} 买入, {sell_count} 卖出, "
-            f"冷却抑制 {suppressed} 个, 共 {len(signal)} 行"
+            f"ML 策略 v3 生成信号: {buy_count} 买入, {sell_count} 卖出, "
+            f"冷却抑制 {suppressed} 个, 熊市拦截 {bear_blocked if is_bear_market else 0} 个, "
+            f"共 {len(signal)} 行"
         )
 
         return result

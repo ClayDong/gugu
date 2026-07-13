@@ -53,8 +53,13 @@ async def fetch_stock_list(max_stocks: int) -> list[str]:
         spot["代码"] = spot["代码"].astype(str)
         mask = ~spot["代码"].str.startswith(("bj", "43", "83", "87", "88", "4", "8"))
         mask &= ~spot["名称"].str.contains("ST|退|N|^C", na=False, regex=True)
+        # 股票池过滤：排除低流动性（成交额 < 5 亿）和高波动（换手率 > 30%）
+        if "成交额" in spot.columns:
+            mask &= spot["成交额"].astype(float, errors="ignore") > 500_000_000
+        if "换手率" in spot.columns:
+            mask &= spot["换手率"].astype(float, errors="ignore") < 30.0
         candidates = spot[mask]["代码"].tolist()
-        logger.info(f"akshare 获取候选股票: {len(candidates)} 只")
+        logger.info(f"akshare 获取候选股票（过滤后）: {len(candidates)} 只")
     except Exception as e:
         logger.warning(f"akshare 股票列表获取失败: {e}")
 

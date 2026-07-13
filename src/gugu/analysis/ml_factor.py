@@ -121,7 +121,7 @@ def _compute_factor_ic(
 
 
 def _add_feature_engineering(factor_df: pd.DataFrame, factor_columns: list[str]) -> pd.DataFrame:
-    """特征工程：加入因子一阶差分 + 5 日滚动均值。"""
+    """特征工程：加入因子一阶差分 + 5 日滚动均值 + Top5 因子交互特征。"""
     enhanced = factor_df.copy()
     for col in factor_columns:
         if col not in enhanced.columns:
@@ -130,6 +130,16 @@ def _add_feature_engineering(factor_df: pd.DataFrame, factor_columns: list[str])
         enhanced[f"{col}_diff"] = enhanced[col].diff().fillna(0)
         # 5 日滚动均值（因子平滑）
         enhanced[f"{col}_ma5"] = enhanced[col].rolling(5, min_periods=1).mean().fillna(0)
+
+    # 因子交互特征：Top 5 IC 因子的两两乘积
+    # 只对 IC 最高的前 5 个因子做交叉，避免特征爆炸
+    top5_candidates = ["obv_divergence", "ma_deviation_60", "ma_deviation_20", "di_cross", "momentum_20d"]
+    available_top5 = [c for c in top5_candidates if c in enhanced.columns]
+    for i in range(len(available_top5)):
+        for j in range(i + 1, len(available_top5)):
+            a, b = available_top5[i], available_top5[j]
+            enhanced[f"{a}_x_{b}"] = enhanced[a] * enhanced[b]
+
     return enhanced
 
 
