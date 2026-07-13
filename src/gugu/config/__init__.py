@@ -20,7 +20,7 @@ from typing import Any
 
 # ── Re-export legacy loader functions for backward compatibility ─────
 # 已弃用：新代码请使用 get_config() 强类型接口
-from gugu._legacy_config import (  # noqa: F401  # fmt: skip
+from gugu._legacy_config import (  # fmt: skip
     CONFIG_DIR,
     PROJECT_ROOT,
     EnvSettings,
@@ -30,7 +30,7 @@ from gugu._legacy_config import (  # noqa: F401  # fmt: skip
 )
 
 # ── New strong-typed models ──────────────────────────────────────────
-from gugu.config.models import (  # noqa: F401  # fmt: skip
+from gugu.config.models import (  # fmt: skip
     AppConfig,
     DataConfig,
     ExecutionConfig,
@@ -106,3 +106,34 @@ def settings() -> dict[str, Any]:
         stacklevel=2,
     )
     return get_config().flatten()
+
+
+__all__ = [
+    # Legacy
+    "CONFIG_DIR",
+    "PROJECT_ROOT",
+    # Models
+    "AppConfig",
+    "DataConfig",
+    "EnvSettings",
+    "ExecutionConfig",
+    "FeishuConfig",
+    "FundamentalConfig",
+    "LeopardUniverseConfig",
+    "LiveConfig",
+    "LogConfig",
+    "PaperConfig",
+    "RiskConfig",
+    "SchedulerConfig",
+    "StrategyConfig",
+    "WisdomConfig",
+    "config_has_changed",
+    "env",
+    "flatten_config",
+    # Functions
+    "get_config",
+    "load_yaml",
+    "refresh_config",
+    "settings",
+    "strategy_defaults",
+]

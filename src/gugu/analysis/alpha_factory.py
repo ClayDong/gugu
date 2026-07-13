@@ -748,10 +748,14 @@ class AlphaFactory:
             plus_dm_s[i] = plus_dm_s[i - 1] - plus_dm_s[i - 1] / period + plus_dm[i]
             minus_dm_s[i] = minus_dm_s[i - 1] - minus_dm_s[i - 1] / period + minus_dm[i]
 
-        plus_di = np.where(atr > 0, 100 * plus_dm_s / atr, 0)
-        minus_di = np.where(atr > 0, 100 * minus_dm_s / atr, 0)
+        plus_di = np.zeros(len(tr))
+        minus_di = np.zeros(len(tr))
+        np.divide(100 * plus_dm_s, atr, out=plus_di, where=atr > 0)
+        np.divide(100 * minus_dm_s, atr, out=minus_di, where=atr > 0)
 
-        dx = np.where((plus_di + minus_di) > 0, 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di), 0)
+        di_sum = plus_di + minus_di
+        dx = np.zeros(len(tr))
+        np.divide(100 * np.abs(plus_di - minus_di), di_sum, out=dx, where=di_sum > 0)
 
         if len(dx) >= period * 2:
             adx = float(np.mean(dx[-period:]))
