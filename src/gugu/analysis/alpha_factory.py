@@ -120,7 +120,7 @@ class AlphaFactory:
             mas = {}
             for w in [5, 10, 20, 60]:
                 mas[w] = pd.Series(close).rolling(w).mean().iloc[-1]
-            alignment_score = 0
+            alignment_score: float = 0.0
             if mas[5] > mas[10] > mas[20] > mas[60]:
                 alignment_score = 1.0  # 完美多头排列
             elif mas[5] < mas[10] < mas[20] < mas[60]:
@@ -327,6 +327,248 @@ class AlphaFactory:
                 description="量价配合度",
             )
 
+        # === 补全：CCI（商品通道指数）===
+        if len(close) >= 20:
+            tp = (high + low + close) / 3.0
+            tp_series = pd.Series(tp)
+            tp_ma = tp_series.rolling(20).mean().iloc[-1]
+            mean_dev = tp_series.rolling(20).apply(lambda x: np.mean(np.abs(x - x.mean())), raw=True).iloc[-1]
+            if mean_dev > 0:
+                cci = (tp[-1] - tp_ma) / (0.015 * mean_dev)
+                cci_signal = float(np.clip(cci / 200, -1, 1))
+                factors["cci"] = AlphaFactor(
+                    name="cci",
+                    category="momentum",
+                    direction="neutral",
+                    value=round(float(cci), 2),
+                    normalized=round(float((cci + 200) / 400), 4),
+                    signal=round(cci_signal, 4),
+                    description="商品通道指数",
+                )
+
+        # === 补全：MFI（资金流量指标）===
+        if len(close) >= 14 and "volume" in df.columns:
+            tp = (high + low + close) / 3.0
+            mf = tp * volume
+            pos_mf = np.where(tp[1:] > tp[:-1], mf[1:], 0)
+            neg_mf = np.where(tp[1:] < tp[:-1], mf[1:], 0)
+            if len(pos_mf) >= 14:
+                pos_sum = float(np.sum(pos_mf[-14:]))
+                neg_sum = float(np.sum(neg_mf[-14:]))
+                if neg_sum > 0:
+                    mfi = 100 - 100 / (1 + pos_sum / neg_sum)
+                else:
+                    mfi = 100.0
+                mfi_signal = float(np.clip((mfi - 50) / 25, -1, 1))
+                factors["mfi"] = AlphaFactor(
+                    name="mfi",
+                    category="momentum",
+                    direction="positive",
+                    value=round(mfi, 2),
+                    normalized=round(mfi / 100, 4),
+                    signal=round(mfi_signal, 4),
+                    description="资金流量指标",
+                )
+
+        # === 补全：OBV 背离 ===
+        if len(close) >= 10 and "volume" in df.columns:
+            obv = np.zeros(len(close))
+            for i in range(1, len(close)):
+                if close[i] > close[i - 1]:
+                    obv[i] = obv[i - 1] + volume[i]
+                elif close[i] < close[i - 1]:
+                    obv[i] = obv[i - 1] - volume[i]
+                else:
+                    obv[i] = obv[i - 1]
+            # 检测背离：价格5日趋势 vs OBV 5日趋势
+            price_slope = close[-1] - close[-5]
+            obv_slope = obv[-1] - obv[-5]
+            if price_slope > 0 and obv_slope > 0:
+                obv_signal = 1.0  # 正向背离
+            elif price_slope > 0 and obv_slope < 0:
+                obv_signal = -0.8  # 顶背离
+            elif price_slope < 0 and obv_slope < 0:
+                obv_signal = -1.0  # 同向下跌
+            elif price_slope < 0 and obv_slope > 0:
+                obv_signal = 0.8  # 底背离
+            else:
+                obv_signal = 0.0
+            factors["obv_divergence"] = AlphaFactor(
+                name="obv_divergence",
+                category="volume",
+                direction="positive",
+                value=round(float(obv[-1]), 2),
+                normalized=round((obv_signal + 1) / 2, 4),
+                signal=round(obv_signal, 4),
+                description="OBV背离",
+            )
+
+        # === 补全：VWAP 偏离 ===
+        if len(close) >= 5 and "amount" in df.columns:
+            amount = df["amount"].values
+            cum_amount = np.sum(amount[-5:])
+            cum_vol = np.sum(volume[-5:])
+            if cum_vol > 0:
+                vwap = cum_amount / cum_vol
+                vwap_dev = (close[-1] - vwap) / vwap if vwap > 0 else 0.0
+                vwap_signal = float(np.clip(vwap_dev * 20, -1, 1))
+                factors["vwap_deviation"] = AlphaFactor(
+                    name="vwap_deviation",
+                    category="volume",
+                    direction="positive",
+                    value=round(float(vwap_dev), 4),
+                    normalized=round(float(self._sigmoid(vwap_dev * 20)), 4),
+                    signal=round(vwap_signal, 4),
+                    description="价格相对VWAP偏离",
+                )
+            elif len(close) >= 5:
+                # 无 amount 列时用 close*volume 近似
+                pseudo_amount = close * volume
+                cum_amount = np.sum(pseudo_amount[-5:])
+                cum_vol = np.sum(volume[-5:])
+                if cum_vol > 0:
+                    vwap = cum_amount / cum_vol
+                    vwap_dev = (close[-1] - vwap) / vwap if vwap > 0 else 0.0
+                    vwap_signal = float(np.clip(vwap_dev * 20, -1, 1))
+                    factors["vwap_deviation"] = AlphaFactor(
+                        name="vwap_deviation",
+                        category="volume",
+                        direction="positive",
+                        value=round(float(vwap_dev), 4),
+                        normalized=round(float(self._sigmoid(vwap_dev * 20)), 4),
+                        signal=round(vwap_signal, 4),
+                        description="价格相对VWAP偏离(近似)",
+                    )
+
+        # === 补全：布林带宽度 ===
+        if len(close) >= 20:
+            bb_ma = pd.Series(close).rolling(20).mean().iloc[-1]
+            bb_std = pd.Series(close).rolling(20).std().iloc[-1]
+            if bb_ma > 0 and bb_std is not None:
+                bb_width = (2 * bb_std) / bb_ma
+                factors["bollinger_width"] = AlphaFactor(
+                    name="bollinger_width",
+                    category="volatility",
+                    direction="neutral",
+                    value=round(float(bb_width), 4),
+                    normalized=round(min(float(bb_width * 10), 1.0), 4),
+                    signal=0.0,
+                    description="布林带宽度",
+                )
+
+        # === 补全：20日历史波动率 ===
+        if len(close) >= 21:
+            rets = np.diff(np.log(close[-21:]))
+            hv = float(np.std(rets) * np.sqrt(250))
+            factors["volatility_20d"] = AlphaFactor(
+                name="volatility_20d",
+                category="volatility",
+                direction="neutral",
+                value=round(hv, 4),
+                normalized=round(min(hv * 5, 1.0), 4),
+                signal=0.0,
+                description="20日历史波动率",
+            )
+
+        # === 补全：ADX 和 DI 交叉 ===
+        if len(close) >= 28:
+            adx_val, di_plus, di_minus = self._adx_di(high, low, close, 14)
+            factors["adx"] = AlphaFactor(
+                name="adx",
+                category="trend",
+                direction="positive",
+                value=round(float(adx_val), 2),
+                normalized=round(min(float(adx_val) / 50, 1.0), 4),
+                signal=round(float(np.clip((adx_val - 25) / 25, -1, 1)), 4),
+                description="平均趋向指数",
+            )
+            if di_plus > di_minus:
+                di_signal = float(np.clip((di_plus - di_minus) / 20, 0, 1))
+            else:
+                di_signal = float(np.clip(-(di_minus - di_plus) / 20, -1, 0))
+            factors["di_cross"] = AlphaFactor(
+                name="di_cross",
+                category="trend",
+                direction="positive",
+                value=round(float(di_plus - di_minus), 2),
+                normalized=round((di_signal + 1) / 2, 4),
+                signal=round(di_signal, 4),
+                description="+DI/-DI交叉信号",
+            )
+
+        # === 补全：形态类因子 ===
+        if len(close) >= 3 and "open" in df.columns:
+            open_arr = df["open"].values
+
+            # 跳空缺口
+            gap = open_arr[-1] - close[-2] if len(close) >= 2 else 0.0
+            if close[-1] > 0:
+                gap_pct = gap / close[-1]
+                gap_signal = float(np.clip(gap_pct * 50, -1, 1))
+                factors["gap"] = AlphaFactor(
+                    name="gap",
+                    category="pattern",
+                    direction="positive",
+                    value=round(float(gap_pct), 4),
+                    normalized=round(float(self._sigmoid(gap_pct * 50)), 4),
+                    signal=round(gap_signal, 4),
+                    description="跳空缺口",
+                )
+
+            # 十字星
+            body = abs(close[-1] - open_arr[-1])
+            hl_range = high[-1] - low[-1]
+            if hl_range > 0:
+                doji_ratio = body / hl_range
+                is_doji = 1.0 if doji_ratio < 0.1 else 0.0
+                factors["doji"] = AlphaFactor(
+                    name="doji",
+                    category="pattern",
+                    direction="neutral",
+                    value=round(float(doji_ratio), 4),
+                    normalized=round(float(1 - doji_ratio), 4),
+                    signal=round(float(is_doji * 0.5 if close[-1] > close[-2] else -is_doji * 0.5), 4),
+                    description="十字星",
+                )
+
+            # 锤子线
+            if hl_range > 0:
+                lower_shadow = min(open_arr[-1], close[-1]) - low[-1]
+                upper_shadow = high[-1] - max(open_arr[-1], close[-1])
+                body2 = abs(close[-1] - open_arr[-1])
+                if body2 > 0:
+                    is_hammer = 1.0 if (lower_shadow > 2 * body2 and upper_shadow < body2 * 0.5) else 0.0
+                    hammer_signal = float(is_hammer * 0.8 if close[-1] > close[-2] else -is_hammer * 0.8)
+                    factors["hammer"] = AlphaFactor(
+                        name="hammer",
+                        category="pattern",
+                        direction="positive",
+                        value=round(float(lower_shadow / body2 if body2 > 0 else 0), 4),
+                        normalized=round(float(is_hammer), 4),
+                        signal=round(hammer_signal, 4),
+                        description="锤子线/倒锤子",
+                    )
+
+            # 三连阳/三连阴
+            if len(close) >= 4:
+                up3 = all(close[i] > close[i - 1] for i in range(-3, 0))
+                down3 = all(close[i] < close[i - 1] for i in range(-3, 0))
+                if up3:
+                    tc_signal = 1.0
+                elif down3:
+                    tc_signal = -1.0
+                else:
+                    tc_signal = 0.0
+                factors["three_consecutive"] = AlphaFactor(
+                    name="three_consecutive",
+                    category="pattern",
+                    direction="positive",
+                    value=round(float(tc_signal), 4),
+                    normalized=round((tc_signal + 1) / 2, 4),
+                    signal=round(float(tc_signal), 4),
+                    description="三连阳/三连阴",
+                )
+
         return factors
 
     def composite_score(
@@ -459,6 +701,64 @@ class AlphaFactory:
         prev_close[0] = close[0]
         tr = np.maximum(high - low, np.maximum(abs(high - prev_close), abs(low - prev_close)))
         return float(np.mean(tr[-period:]))
+
+    def _adx_di(
+        self,
+        high: np.ndarray,
+        low: np.ndarray,
+        close: np.ndarray,
+        period: int = 14,
+    ) -> tuple[float, float, float]:
+        """计算 ADX 和 +DI/-DI。
+
+        Returns:
+            (adx, +DI, -DI)
+        """
+        if len(close) < period * 2:
+            return 25.0, 25.0, 25.0
+
+        prev_high = np.roll(high, 1)
+        prev_low = np.roll(low, 1)
+        prev_high[0] = high[0]
+        prev_low[0] = low[0]
+
+        up_move = high - prev_high
+        down_move = prev_low - low
+
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+
+        prev_close = np.roll(close, 1)
+        prev_close[0] = close[0]
+        tr = np.maximum(
+            high - low,
+            np.maximum(abs(high - prev_close), abs(low - prev_close)),
+        )
+
+        # Wilder smoothing
+        atr = np.zeros(len(tr))
+        atr[period - 1] = np.sum(tr[:period])
+        plus_dm_s = np.zeros(len(tr))
+        minus_dm_s = np.zeros(len(tr))
+        plus_dm_s[period - 1] = np.sum(plus_dm[:period])
+        minus_dm_s[period - 1] = np.sum(minus_dm[:period])
+
+        for i in range(period, len(tr)):
+            atr[i] = atr[i - 1] - atr[i - 1] / period + tr[i]
+            plus_dm_s[i] = plus_dm_s[i - 1] - plus_dm_s[i - 1] / period + plus_dm[i]
+            minus_dm_s[i] = minus_dm_s[i - 1] - minus_dm_s[i - 1] / period + minus_dm[i]
+
+        plus_di = np.where(atr > 0, 100 * plus_dm_s / atr, 0)
+        minus_di = np.where(atr > 0, 100 * minus_dm_s / atr, 0)
+
+        dx = np.where((plus_di + minus_di) > 0, 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di), 0)
+
+        if len(dx) >= period * 2:
+            adx = float(np.mean(dx[-period:]))
+        else:
+            adx = 25.0
+
+        return adx, float(plus_di[-1]), float(minus_di[-1])
 
     def _sigmoid(self, x: float) -> float:
         """Sigmoid归一化"""

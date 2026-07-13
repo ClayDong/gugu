@@ -188,8 +188,8 @@ class TestRegimeMultipliers:
         assert set(REGIME_MULTIPLIERS.keys()) == expected_regimes
 
     def test_all_regimes_have_all_categories(self):
-        """所有市场状态都应有三类策略的乘数。"""
-        expected_categories = {"trend", "mean_revert", "breakout"}
+        """所有市场状态都应有四类策略的乘数。"""
+        expected_categories = {"trend", "mean_revert", "breakout", "main_force"}
         for regime, multipliers in REGIME_MULTIPLIERS.items():
             assert set(multipliers.keys()) == expected_categories, (
                 f"regime={regime} missing categories"

@@ -5,7 +5,7 @@
 [![CI](https://github.com/dong4j/gugu/actions/workflows/ci.yml/badge.svg)](https://github.com/dong4j/gugu/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Coverage](https://img.shields.io/badge/coverage-67%25-brightgreen.svg)]()
+[![Coverage](https://img.shields.io/badge/coverage-69%25-brightgreen.svg)]()
 
 ---
 
@@ -23,6 +23,7 @@
 - **当前启用策略** — `box_breakout`（箱体突破）+ `double_yin`（双阴钱袋子），按市场状态分流启用
 - **策略准入门禁** — `scripts/validate_strategy_gate.py` 统一 9 项门槛（交易数/收益/夏普/回撤/盈利比/参数稳定性/paper 信号/paper 收益），结构化判断是否可启用
 - **策略注册中心** — 26 个策略统一登记到 `strategy_manifest.yaml`，启用策略必须包含 `validation_gate` 结构化验证记录
+- **市场状态自适应** — 4 类策略分类（趋势/均值回归/突破/主力行为），5 种市场状态动态调整权重乘数
 - **Walk-Forward 参数优化** — 滚动窗口网格搜索 + 多股聚合训练，4 项解锁条件门控自动写回
 - **自优化调度闭环** — 周日 03:00 自动跑多股聚合 Walk-Forward，6 只行业代表股，失败不污染生产参数
 
@@ -66,6 +67,7 @@
 - **并发预取** — 批量预取股票历史数据使用 `asyncio.gather` 并发，大幅缩短扫描时间
 - **StockRanker 并发评分** — 多只股票评分使用 Semaphore 限制并发，避免串行 I/O 阻塞
 - **技术指标统一计算** — `technical.py` 集中提供 ATR/RSI/MACD/布林带/OBV，消除重复实现
+- **AlphaFactory 26 因子全覆盖** — 趋势(7)+动量(7)+波动(4)+成交量(4)+形态(4) 共 26 个技术因子，含 CCI/MFI/OBV 背离/VWAP 偏离/ADX/DI 交叉/跳空缺口/十字星/锤子线/三连阳阴，综合评分直接接入 StockRanker
 - **Kelly 资金管理** — 基于历史胜率+盈亏比的最优仓位计算，含金字塔加仓策略
 - **仓位总控** — 综合市场状态+账户风险+持仓集中度动态计算仓位预算
 - **状态原子写入** — heartbeat / take_profit_state / risk_state 使用原子写入防崩溃截断
@@ -191,7 +193,7 @@ python scripts/build_kb_index.py --force
 
 ## 测试
 
-**1521 测试通过，5 跳过，69% 覆盖率**（当前本机 Python 3.14 验证结果）。
+**1521 测试通过，5 跳过，69% 覆盖率**（当前本机 Python 3.12 验证结果）。
 
 ```bash
 # 运行全部测试

@@ -4,9 +4,10 @@
 解决策略同质化问题，使不同市场环境下优势策略获得更高权重。
 
 策略分类：
-- 趋势跟踪（turtle, dual_ma, macd, sar）：牛市有效
+- 趋势跟踪（turtle, dual_ma, macd, chen_jiangting）：牛市有效
 - 均值回归（rsi_reversal, bollinger, kdj）：震荡市有效
-- 突破（box_breakout, dual_thrust）：反弹/突破时有效
+- 突破（box_breakout, dual_thrust, money_flow_follow, pullback_low）：反弹/突破时有效
+- 主力行为（double_yin, breakout_rebound, capital_flow_alert）：主力洗盘/反包/资金异动
 
 核心优化：从固定权重乘数升级为平滑连续调整，并引入策略历史胜率自适应。
 """
@@ -23,10 +24,12 @@ logger = get_logger()
 
 # 策略分类映射
 # P0 修复：移除不存在的 sar 策略（文档声称但代码从未实现），添加 chen_jiangting
+# P1 修复：补全所有注册策略的分类，消除 "unknown" 返回
 STRATEGY_CATEGORIES: dict[str, list[str]] = {
     "trend": ["turtle", "dual_ma", "macd", "chen_jiangting"],
     "mean_revert": ["rsi_reversal", "bollinger", "kdj"],
-    "breakout": ["box_breakout", "dual_thrust", "money_flow_follow"],
+    "breakout": ["box_breakout", "dual_thrust", "money_flow_follow", "pullback_low"],
+    "main_force": ["double_yin", "breakout_rebound", "capital_flow_alert", "leopard_three_factors"],
 }
 
 # 市场状态下的策略权重乘数
@@ -36,26 +39,31 @@ REGIME_MULTIPLIERS: dict[str, dict[str, float]] = {
         "trend": 1.5,
         "mean_revert": 0.7,
         "breakout": 1.2,
+        "main_force": 1.3,
     },
     "bear": {
         "trend": 0.5,
         "mean_revert": 1.3,
         "breakout": 0.6,
+        "main_force": 0.8,
     },
     "sideways": {
         "trend": 0.5,
         "mean_revert": 1.5,
         "breakout": 0.8,
+        "main_force": 1.0,
     },
     "crash": {
         "trend": 0.2,
         "mean_revert": 0.3,
         "breakout": 0.1,
+        "main_force": 0.3,
     },
     "rally": {
         "trend": 1.3,
         "mean_revert": 0.8,
         "breakout": 1.5,
+        "main_force": 1.4,
     },
 }
 

@@ -764,7 +764,7 @@ class TestStopLossManagerE2E:
         # 验证持仓已清
         remaining = broker.get_position("000858")
         if remaining is not None:
-            assert remaining.available == 0 or remaining.current_quantity == 0
+            assert remaining.available == 0 or remaining.quantity == 0
 
         # 验证事件触发
         assert len(stop_events) >= 1

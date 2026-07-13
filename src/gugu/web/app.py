@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from gugu.config import settings
 from gugu.data import data_manager
+from gugu.data.stock_names import lookup_stock_name
 from gugu.execution import PaperBroker
 from gugu.execution.base import Direction
 from gugu.risk import RiskManager
@@ -90,6 +91,7 @@ def create_app() -> FastAPI:
             positions.append(
                 {
                     "symbol": sym,
+                    "name": lookup_stock_name(sym),
                     "quantity": pos.quantity,
                     "available": pos.available,
                     "avg_cost": round(pos.avg_cost, 2),
@@ -106,6 +108,9 @@ def create_app() -> FastAPI:
         """获取交易记录。"""
         broker = _get_web_broker()
         trades = broker.trades
+        for t in trades:
+            if "name" not in t:
+                t["name"] = lookup_stock_name(t.get("symbol", ""))
         return {"trades": trades, "count": len(trades)}
 
     @app.get("/api/risk")
@@ -494,6 +499,7 @@ def create_app() -> FastAPI:
         for sym, pos in portfolio.items():
             pos_data = {
                 "symbol": sym,
+                "name": lookup_stock_name(sym),
                 "quantity": pos.quantity,
                 "available": pos.available,
                 "avg_cost": round(pos.avg_cost, 2),
