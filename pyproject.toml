@@ -25,6 +25,9 @@ dependencies = [
     "scipy>=1.17.1",
     # v0.5.0 盘中实时盯盘：性能自适应检测 CPU 核数和内存
     "psutil>=5.9",
+    # v0.7.0 Alpha 生成：因子 IC 分析 + LightGBM 多因子模型
+    "scikit-learn>=1.5",
+    "lightgbm>=4.3",
 ]
 
 [project.optional-dependencies]
@@ -62,6 +65,7 @@ ignore = ["E501", "SIM108", "SIM115", "RUF001", "RUF002", "RUF003", "RUF012", "R
 "src/gugu/notifier/flow_report.py" = ["E402"]  # 运行时惰性导入，避免循环导入
 "src/gugu/strategies/registry.py" = ["F821"]  # Any type arg, pre-existing
 "src/gugu/web/app.py" = ["E402"]  # FastAPI startup import pattern
+"src/gugu/analysis/ml_factor.py" = ["N806"]  # ML 惯例：X/y 大写
 
 [tool.mypy]
 python_version = "3.11"

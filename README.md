@@ -19,8 +19,10 @@
 - **多周期趋势确认** — 周线/日线趋势一致性检查，防止逆势操作
 
 ### 📊 策略体系
-- **多策略信号融合** — 15 个注册策略（趋势/均值回归/突破/主力行为），支持 weighted/majority/any 融合模式
+- **多策略信号融合** — 16 个注册策略（趋势/均值回归/突破/主力行为/ML 多因子），支持 weighted/majority/any 融合模式
 - **当前启用策略** — `box_breakout`（箱体突破）+ `double_yin`（双阴钱袋子），按市场状态分流启用
+- **ML 多因子策略** — `ml_factor`：LightGBM + PCA 正交化，用 26 个 Alpha 因子预测涨跌方向，Walk-Forward 训练避免前视偏差
+- **因子 IC 分析** — `FactorICAnalyzer` 计算因子 IC/IR，筛选 |IC|>0.03 且 |IR|>0.3 的有效因子
 - **策略准入门禁** — `scripts/validate_strategy_gate.py` 统一 9 项门槛（交易数/收益/夏普/回撤/盈利比/参数稳定性/paper 信号/paper 收益），结构化判断是否可启用
 - **策略注册中心** — 26 个策略统一登记到 `strategy_manifest.yaml`，启用策略必须包含 `validation_gate` 结构化验证记录
 - **市场状态自适应** — 4 类策略分类（趋势/均值回归/突破/主力行为），5 种市场状态动态调整权重乘数
@@ -193,7 +195,7 @@ python scripts/build_kb_index.py --force
 
 ## 测试
 
-**1521 测试通过，5 跳过，69% 覆盖率**（当前本机 Python 3.12 验证结果）。
+**1537 测试通过，5 跳过，69% 覆盖率**（当前本机 Python 3.14 验证结果）。
 
 ```bash
 # 运行全部测试
