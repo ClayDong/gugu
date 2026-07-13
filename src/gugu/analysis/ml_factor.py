@@ -163,7 +163,6 @@ class MLFactorModel:
 
         self.feature_names = factor_columns
 
-        # 准备特征和标签
         feature_df = factor_df[factor_columns].copy()
         labels = self._prepare_labels(close)
 

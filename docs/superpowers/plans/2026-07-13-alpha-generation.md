@@ -74,3 +74,58 @@
 - 不引入 PyTorch/TensorFlow
 - ML 策略必须通过准入门禁才能启用
 - 不修改现有策略代码，只新增
+
+## 完成状态（2026-07-14）
+
+### Task 1-7 全部完成
+
+| Task | 状态 | 产出 |
+|------|------|------|
+| 1. 安装依赖 | ✅ | scikit-learn 1.9.0 + lightgbm 4.6.0 |
+| 2. 因子 IC 分析 | ✅ | `analysis/factor_ic.py` |
+| 3. 因子正交化 | ✅ | `analysis/ml_factor.py` FactorOrthogonalizer |
+| 4. LightGBM 模型 | ✅ | `analysis/ml_factor.py` MLFactorModel |
+| 5. ML 策略接入 | ✅ | `strategies/ml_factor.py` + registry 注册 |
+| 6. 全量测试 | ✅ | 1538 passed, 5 skipped, ruff/mypy 通过 |
+| 7. 文档+提交 | ✅ | README + manifest + git commit |
+
+### 因子 IC 分析结果（10 股 × 300 天真实数据）
+
+- 26 个因子中 **15 个有效**（|IC|>0.03 且 |IR|>0.3）
+- Top 5 因子：
+  1. `obv_divergence`: IC=-0.48, IR=-1.44
+  2. `ma_deviation_60`: IC=-0.43, IR=-1.38
+  3. `ma_deviation_20`: IC=-0.42, IR=-1.38
+  4. `di_cross`: IC=-0.42, IR=-1.47
+  5. `momentum_20d`: IC=-0.38, IR=-1.11
+- 11 个无效因子：macd_cross, kdj_cross, atr_ratio, volume_trend, vwap_deviation, bollinger_width, volatility_20d, adx, gap, doji, hammer
+
+### 小样本回测结果（10 股 × 300 天）
+
+| 指标 | 调优前 | 调优后（回退） |
+|------|--------|---------------|
+| 总交易数 | 81 | 304 |
+| 平均收益 | -3.20% | -3.09% |
+| 中位收益 | +0.46% | -11.33% |
+| 平均夏普 | 0.27 | -0.48 |
+| 最大回撤 | 53.13% | 47.78% |
+| 胜率 | 57.86% | 29.85% |
+| 盈利比 | 50% | 30% |
+
+### 准入门禁评估
+
+**未通过**。5/6 项失败。
+
+### 下一步优化方向
+
+1. **因子方向处理**：Top 5 因子 IC 均为负值，说明因子方向需要反转。但简单反转会导致模型训练混乱，需要更精细的方向处理
+2. **信号频率控制**：当前 200 天数据产生 98 个买入信号，过于频繁。需要增加信号过滤或提高阈值
+3. **更大样本验证**：10 股样本太小，需要至少 100 股 × 500 天
+4. **特征工程**：考虑加入因子的一阶差分和滚动均值作为额外特征
+5. **标签优化**：当前用 5 日收益 > 0 作为标签，可以尝试 3 日或 10 日，或用收益分位数分类
+6. **模型调参**：尝试不同的 learning_rate、n_estimators、max_leaves 组合
+7. **Walk-Forward 真正落地**：当前是 80/20 静态分割，需要改为滚动窗口
+
+### 结论
+
+ML 多因子模型框架已搭建完成，IC 分析证明因子有预测力（15/26 有效），但当前 ML 策略尚未通过准入门禁。需要继续调优才能产生真正的 alpha。策略保持 `enabled: false`，不会影响生产环境。
