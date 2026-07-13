@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -12,33 +12,41 @@ from pydantic import BaseModel
 from gugu.config import settings
 from gugu.data import data_manager
 from gugu.execution import PaperBroker
+from gugu.execution.base import Direction
 from gugu.risk import RiskManager
 
 
 class OrderRequest(BaseModel):
     """下单请求体校验模型。"""
+
     symbol: str
     direction: str = "buy"
     quantity: int
     price: float | None = None
+
+
+def _execution_mode() -> str:
+    """读取当前执行模式。Web 下单仅允许 paper 模拟盘。"""
+    return str(settings().get("execution", {}).get("mode", "signal_only")).lower().strip()
+
 
 # P1 修复：全局单例 Broker/RiskManager，避免每次 HTTP 请求从磁盘重载状态
 _web_broker: Any = None
 _web_risk: Any = None
 
 
-def _get_web_broker():
+def _get_web_broker() -> PaperBroker:
     global _web_broker
     if _web_broker is None:
         _web_broker = PaperBroker()
-    return _web_broker
+    return cast(PaperBroker, _web_broker)
 
 
-def _get_web_risk():
+def _get_web_risk() -> RiskManager:
     global _web_risk
     if _web_risk is None:
         _web_risk = RiskManager()
-    return _web_risk
+    return cast(RiskManager, _web_risk)
 
 
 from gugu.utils.log import get_logger
@@ -124,7 +132,7 @@ def create_app() -> FastAPI:
             import json
 
             try:
-                return json.loads(hb_path.read_text(encoding="utf-8"))
+                return cast(dict[str, Any], json.loads(hb_path.read_text(encoding="utf-8")))
             except Exception:
                 pass
         return {"status": "unknown", "timestamp": None}
@@ -297,8 +305,10 @@ def create_app() -> FastAPI:
         flow_source_status = "unknown"
         try:
             from gugu.notifier.flow_report import _FLOW_CACHE_FILE
+
             if _FLOW_CACHE_FILE.exists():
                 import json as _json
+
                 cached = _json.loads(_FLOW_CACHE_FILE.read_text(encoding="utf-8"))
                 if cached.get("sources_unavailable"):
                     flow_source_status = "unavailable"
@@ -369,36 +379,68 @@ def create_app() -> FastAPI:
 
     @app.post("/api/order")
     async def place_order(req: OrderRequest) -> dict[str, Any]:
-        """通用下单接口（买入/卖出）。
+        """通用模拟盘下单接口（买入/卖出）。
 
-        使用 Web 单例 Broker 执行下单操作。
-        买入时通过风控检查，卖出时不限制。
+        仅在 paper 模式可用；真实 live/QMT 不通过 Web 下单。
+        下单前统一经过 RiskManager.check_order()。
         """
+        mode = _execution_mode()
+        if mode != "paper":
+            return {
+                "status": "error",
+                "message": f"当前模式为 {mode}，Web 下单仅允许 paper 模拟盘模式",
+            }
+
+        symbol = req.symbol.strip().zfill(6)
+        raw_direction = req.direction.lower().strip()
+        if raw_direction not in ("buy", "sell"):
+            return {"status": "error", "message": f"不支持的方向: {req.direction}"}
+        direction: Direction = cast(Direction, raw_direction)
+        if req.quantity <= 0:
+            return {"status": "error", "message": f"下单数量必须为正数: {req.quantity}"}
+        if req.price is not None and req.price <= 0:
+            return {"status": "error", "message": f"下单价格必须为正数: {req.price}"}
+
         broker = _get_web_broker()
         risk = _get_web_risk()
+        account = broker.get_account()
+        portfolio = broker.get_portfolio()
+        position = portfolio.get(symbol)
+        risk_price = req.price or (position.current_price if position else 0.0)
+        if risk_price <= 0:
+            return {"status": "error", "symbol": symbol, "message": "缺少有效价格，无法进行风控检查"}
 
-        if req.direction not in ("buy", "sell"):
-            return {"status": "error", "message": f"不支持的方向: {req.direction}"}
-
-        # 买入时做风控检查
-        if req.direction == "buy" and risk._halted:
-            return {"status": "error", "message": "系统已熔断，禁止新开仓"}
+        risk_result = risk.check_order(
+            symbol,
+            direction,
+            req.quantity,
+            risk_price,
+            portfolio,
+            cash=account.cash,
+            prev_close=position.prev_close if position else None,
+        )
+        if not risk_result.allowed:
+            return {
+                "status": "error",
+                "symbol": symbol,
+                "message": f"风控拒绝: {risk_result.message}",
+            }
 
         try:
-            result = broker.order(req.symbol, req.direction, req.quantity, price=req.price)
+            result = broker.order(symbol, direction, req.quantity, price=req.price)
             if result and result.success:
                 return {
                     "status": "ok",
-                    "symbol": req.symbol,
-                    "direction": req.direction,
+                    "symbol": symbol,
+                    "direction": direction,
                     "quantity": result.quantity,
                     "price": round(result.price, 2) if result.price else None,
-                    "message": f"{'买入' if req.direction == 'buy' else '卖出'}成功",
+                    "message": f"模拟盘{'买入' if direction == 'buy' else '卖出'}成功",
                 }
             reason = result.message if result else "下单返回空结果"
-            return {"status": "error", "symbol": req.symbol, "message": reason}
+            return {"status": "error", "symbol": symbol, "message": reason}
         except Exception as e:
-            logger.exception(f"下单失败 {req.symbol}: {e}")
+            logger.exception(f"模拟盘下单失败 {symbol}: {e}")
             return {"status": "error", "message": str(e)[:200]}
 
     @app.post("/api/stop_loss/{symbol}")

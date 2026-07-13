@@ -1,4 +1,5 @@
 """盘中异动告警飞书卡片构建器。"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -49,33 +50,39 @@ def build_intraday_alert_card(alerts: list[AlertItem]) -> dict[str, Any]:
 
     # 严重告警
     if critical:
-        sections.append({
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": "**🔴 严重告警**\n" + "\n".join(a.message for a in critical),
-            },
-        })
+        sections.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": "**🔴 严重告警**\n" + "\n".join(a.message for a in critical),
+                },
+            }
+        )
 
     # 警告
     if warning:
-        sections.append({
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": "**🟡 预警**\n" + "\n".join(a.message for a in warning),
-            },
-        })
+        sections.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": "**🟡 预警**\n" + "\n".join(a.message for a in warning),
+                },
+            }
+        )
 
     # 信息
     if info:
-        sections.append({
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": "**🟢 资金流入**\n" + "\n".join(a.message for a in info),
-            },
-        })
+        sections.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": "**🟢 资金流入**\n" + "\n".join(a.message for a in info),
+                },
+            }
+        )
 
     # 决策建议
     buy_count = sum(1 for a in alerts if a.direction == "buy")
@@ -89,21 +96,25 @@ def build_intraday_alert_card(alerts: list[AlertItem]) -> dict[str, Any]:
     else:
         suggestion += f"资金流向均衡（{buy_count} 流入 vs {sell_count} 流出）"
 
-    sections.append({
-        "tag": "div",
-        "text": {"tag": "lark_md", "content": suggestion},
-    })
+    sections.append(
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": suggestion},
+        }
+    )
 
     # 时间戳
-    sections.append({
-        "tag": "note",
-        "elements": [
-            {
-                "tag": "plain_text",
-                "content": f"扫描时间 {alerts[0].timestamp} · 冷却 5 分钟",
-            }
-        ],
-    })
+    sections.append(
+        {
+            "tag": "note",
+            "elements": [
+                {
+                    "tag": "plain_text",
+                    "content": f"扫描时间 {alerts[0].timestamp} · 冷却 5 分钟",
+                }
+            ],
+        }
+    )
 
     return {
         "header": {

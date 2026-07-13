@@ -322,9 +322,7 @@ class MultiPeriodRegimeDetector:
         return "；".join(parts)
 
     @staticmethod
-    def _determine_regime_from_score(
-        score: float, volatility: float, recent_return: float
-    ) -> str:
+    def _determine_regime_from_score(score: float, volatility: float, recent_return: float) -> str:
         """根据评分、波动率和收益率确定市场状态。"""
         if recent_return < -0.50 and volatility > 0.40:
             return "crash"

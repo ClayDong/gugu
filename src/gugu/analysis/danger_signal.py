@@ -170,9 +170,8 @@ class DangerSignalDetector:
         vol_ratio = vol_short / vol_long
 
         # 价格近5日涨幅
-        price_change = (close.iloc[-1] - close.iloc[-self.VOLUME_MA_SHORT]) / close.iloc[
-            -self.VOLUME_MA_SHORT
-        ]
+        _ref_price = close.iloc[-self.VOLUME_MA_SHORT]
+        price_change = (close.iloc[-1] - _ref_price) / _ref_price if _ref_price != 0 else 0.0
 
         # 量增（>1.5倍）+ 价不涨（<2%）
         return (
@@ -263,6 +262,7 @@ class DangerSignalDetector:
             fetcher = NewsFetcher()
             # 从配置获取自选股第一只作为舆情分析代表
             from gugu.config import get_config
+
             watchlist = get_config().watchlist
             symbol = watchlist[0] if watchlist else "600519"
             news_list = fetcher.fetch_stock_news(symbol, max_news=5)
@@ -353,7 +353,8 @@ class DangerSignalDetector:
 
         # 今日跌破 MA20 且昨日在 MA20 之上（新跌破，非持续下方）
         if (
-            ma20.iloc[-2] is not None and not pd.isna(ma20.iloc[-2])
+            ma20.iloc[-2] is not None
+            and not pd.isna(ma20.iloc[-2])
             and close.iloc[-1] < ma20.iloc[-1]
             and close.iloc[-2] >= ma20.iloc[-2]
         ):
@@ -361,7 +362,8 @@ class DangerSignalDetector:
 
         # 今日跌破 MA10 且昨日在 MA10 之上（更短期跌破）
         return bool(
-            ma10.iloc[-2] is not None and not pd.isna(ma10.iloc[-2])
+            ma10.iloc[-2] is not None
+            and not pd.isna(ma10.iloc[-2])
             and close.iloc[-1] < ma10.iloc[-1]
             and close.iloc[-2] >= ma10.iloc[-2]
             and ma10.iloc[-1] < ma20.iloc[-1]  # MA10 在 MA20 下方（非盘整）

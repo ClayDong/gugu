@@ -4,6 +4,7 @@
 支持在 settings.yaml 中配置为 primary_source: sina。
 失败时可降级到 akshare（东方财富）。
 """
+
 from __future__ import annotations
 
 import json
@@ -81,9 +82,7 @@ class SinaCollector(BaseCollector):
         # 导致 DataManager 无法感知"两源均失败"→ _on_failure_locked 永不触发
         # → 主源不会被切换到 eastmoney/akshare 兜底
         # 改为抛异常，让外层 _call_with_fallback 进入 except 分支计数并降级
-        raise RuntimeError(
-            f"SinaCollector 双源均不可用: {code} (网易 502 + 新浪 K 线失败)"
-        )
+        raise RuntimeError(f"SinaCollector 双源均不可用: {code} (网易 502 + 新浪 K 线失败)")
 
     def _try_netease_history(self, code: str, sina_code: str, days: int) -> pd.DataFrame | None:
         """尝试网易财经历史 CSV 接口。失败返回 None。"""
@@ -94,10 +93,13 @@ class SinaCollector(BaseCollector):
         )
         try:
             client = self._get_client()
-            resp = client.get(url, headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-                "Referer": "https://quotes.money.163.com/",
-            })
+            resp = client.get(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+                    "Referer": "https://quotes.money.163.com/",
+                },
+            )
             resp.raise_for_status()
         except Exception as e:
             logger.warning(f"网易财经历史行情 {code} 不可用: {e}")
@@ -128,10 +130,13 @@ class SinaCollector(BaseCollector):
         url = SINA_KLINE_URL.format(exch_code=exch_code, datalen=datalen)
         try:
             client = self._get_client()
-            resp = client.get(url, headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-                "Referer": "https://finance.sina.com.cn/",
-            })
+            resp = client.get(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+                    "Referer": "https://finance.sina.com.cn/",
+                },
+            )
             resp.raise_for_status()
         except Exception as e:
             logger.warning(f"新浪 K 线 {code} 不可用: {e}")
@@ -153,15 +158,17 @@ class SinaCollector(BaseCollector):
         rows = []
         for item in data:
             try:
-                rows.append({
-                    "date": item["day"],
-                    "open": float(item["open"]),
-                    "high": float(item["high"]),
-                    "low": float(item["low"]),
-                    "close": float(item["close"]),
-                    "volume": float(item.get("volume", 0)),
-                    "amount": float(item.get("amount", 0)) if item.get("amount") else 0.0,
-                })
+                rows.append(
+                    {
+                        "date": item["day"],
+                        "open": float(item["open"]),
+                        "high": float(item["high"]),
+                        "low": float(item["low"]),
+                        "close": float(item["close"]),
+                        "volume": float(item.get("volume", 0)),
+                        "amount": float(item.get("amount", 0)) if item.get("amount") else 0.0,
+                    }
+                )
             except (KeyError, ValueError, TypeError):
                 continue
 
@@ -174,9 +181,13 @@ class SinaCollector(BaseCollector):
     def _normalize_history(self, df: pd.DataFrame, code: str, days: int) -> pd.DataFrame:
         """统一标准化历史行情 DataFrame。"""
         col_map = {
-            "日期": "date", "股票代码": "code",
-            "开盘价": "open", "最高价": "high", "最低价": "low",
-            "收盘价": "close", "成交数量": "volume",
+            "日期": "date",
+            "股票代码": "code",
+            "开盘价": "open",
+            "最高价": "high",
+            "最低价": "low",
+            "收盘价": "close",
+            "成交数量": "volume",
         }
         df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
 
@@ -243,16 +254,18 @@ class SinaCollector(BaseCollector):
             except (ValueError, IndexError):
                 continue
 
-            rows.append({
-                "symbol": code,
-                "name": name,
-                "price": price,
-                "open": open_price,
-                "prev_close": prev_close,
-                "change_pct": round(change_pct, 2),
-                "volume": volume,
-                "amount": amount,
-            })
+            rows.append(
+                {
+                    "symbol": code,
+                    "name": name,
+                    "price": price,
+                    "open": open_price,
+                    "prev_close": prev_close,
+                    "change_pct": round(change_pct, 2),
+                    "volume": volume,
+                    "amount": amount,
+                }
+            )
 
         return pd.DataFrame(rows) if rows else pd.DataFrame()
 

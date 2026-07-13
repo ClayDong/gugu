@@ -70,17 +70,23 @@ def _split_interpretation_to_elements(interpretation: str) -> list[dict]:
         section_text = section.strip()
         if not section_text:
             continue
-        elements.append({
-            "tag": "div",
-            "text": {"tag": "lark_md", "content": section_text},
-        })
+        elements.append(
+            {
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": section_text},
+            }
+        )
         # 节之间用 hr 分隔（最后一节不加 hr）
         if i < len(sections) - 1:
             elements.append({"tag": "hr"})
 
-    return elements if elements else [
-        {"tag": "div", "text": {"tag": "lark_md", "content": interpretation}},
-    ]
+    return (
+        elements
+        if elements
+        else [
+            {"tag": "div", "text": {"tag": "lark_md", "content": interpretation}},
+        ]
+    )
 
 
 async def _collect_flow_sections(version: str) -> list[str]:
@@ -320,8 +326,8 @@ def register_macro_jobs(scheduler: AsyncIOScheduler, broker: Any = None) -> None
     jobs = [
         ("macro_early", "早间全球简报", 8, 0),
         ("macro_morning", "A股盘前简报", 9, 15),  # signal report 09:10 → macro 09:15
-        ("macro_noon", "午间盘面简报", 11, 40),    # signal report 11:35 → macro 11:40
-        ("macro_close", "收盘全球概览", 15, 15),   # signal report 15:10 → macro 15:15
+        ("macro_noon", "午间盘面简报", 11, 40),  # signal report 11:35 → macro 11:40
+        ("macro_close", "收盘全球概览", 15, 15),  # signal report 15:10 → macro 15:15
     ]
     for job_id, name, hour, minute in jobs:
         scheduler.add_job(

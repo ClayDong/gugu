@@ -95,9 +95,9 @@ class TradingEngine:
             self._app_config = get_config()
 
         # ---- 依赖注入：若传入则用传入的，否则创建默认实现 ----
+        self._notifier = notifier if notifier is not None else FeishuNotifier()
         self._dm = data_mgr if data_mgr is not None else data_manager()
         self._broker = broker if broker is not None else PaperBroker()
-        self._notifier = notifier if notifier is not None else FeishuNotifier()
         self._risk = risk if risk is not None else RiskManager()
         self._wisdom = wisdom if wisdom is not None else WisdomAdvisor()
         # v0.5.6 优化1：strategies 默认加载所有启用策略（向后兼容）
@@ -105,10 +105,14 @@ class TradingEngine:
         # 显式传入时用于测试注入
         self._strategies = strategies if strategies is not None else get_enabled_strategies()
         self._router = router if router is not None else SignalRouter(self._strategies)
-        self._selector = selector if selector is not None else StockSelector(
-            self._dm,
-            top_n=get_config().strategy.select_top_n,
-            max_candidates=get_config().strategy.select_max_candidates,
+        self._selector = (
+            selector
+            if selector is not None
+            else StockSelector(
+                self._dm,
+                top_n=get_config().strategy.select_top_n,
+                max_candidates=get_config().strategy.select_max_candidates,
+            )
         )
         self._regime_detector = (
             regime_detector if regime_detector is not None else MultiPeriodRegimeDetector()
@@ -123,13 +127,21 @@ class TradingEngine:
         self._take_profit_engine = (
             take_profit_engine if take_profit_engine is not None else DynamicTakeProfitEngine()
         )
-        self._order_manager = order_manager if order_manager is not None else OrderManager(
-            trailing_stop_engine=self._trailing_stop_engine,
-            take_profit_engine=self._take_profit_engine,
+        self._order_manager = (
+            order_manager
+            if order_manager is not None
+            else OrderManager(
+                trailing_stop_engine=self._trailing_stop_engine,
+                take_profit_engine=self._take_profit_engine,
+            )
         )
-        self._stop_loss_manager = stop_loss_manager if stop_loss_manager is not None else StopLossManager(
-            trailing_stop_engine=self._trailing_stop_engine,
-            take_profit_engine=self._take_profit_engine,
+        self._stop_loss_manager = (
+            stop_loss_manager
+            if stop_loss_manager is not None
+            else StopLossManager(
+                trailing_stop_engine=self._trailing_stop_engine,
+                take_profit_engine=self._take_profit_engine,
+            )
         )
         # 日报管理器（从 TradingEngine 提取的 send_daily_report / _load_today_signals）
         self._report_manager = DailyReportManager(
@@ -173,16 +185,20 @@ class TradingEngine:
         self._filtered_signals_today: list[dict[str, Any]] = []
 
         # 信号过滤流水线
-        self._pipeline = pipeline if pipeline is not None else SignalPipeline(
-            data_manager=self._dm,
-            signal_router=self._router,
-            wisdom_advisor=self._wisdom,
-            regime_detector=self._regime_detector,
-            position_controller=self._position_controller,
-            fundamental_filter=self._fundamental_filter,
-            money_flow_filter=self._money_flow_filter,
-            industry_constraint=self._industry_constraint,
-            exec_mode=self._exec_mode,
+        self._pipeline = (
+            pipeline
+            if pipeline is not None
+            else SignalPipeline(
+                data_manager=self._dm,
+                signal_router=self._router,
+                wisdom_advisor=self._wisdom,
+                regime_detector=self._regime_detector,
+                position_controller=self._position_controller,
+                fundamental_filter=self._fundamental_filter,
+                money_flow_filter=self._money_flow_filter,
+                industry_constraint=self._industry_constraint,
+                exec_mode=self._exec_mode,
+            )
         )
 
         # 注册事件处理器
@@ -218,7 +234,9 @@ class TradingEngine:
         # P0 修复：L2 熔断状态下仍需执行止损检查（卖出豁免），仅跳过买入相关流程
         # 防止熔断后无法止损导致亏损从15%扩大到30%+
         if self._risk.is_halted:
-            logger.warning("L2 熔断状态激活中，跳过买入流程但仍执行止损检查（需人工 reset_halt 后恢复买入）")
+            logger.warning(
+                "L2 熔断状态激活中，跳过买入流程但仍执行止损检查（需人工 reset_halt 后恢复买入）"
+            )
             if not is_trading_day():
                 logger.info("非交易日，跳过")
                 return
@@ -308,11 +326,13 @@ class TradingEngine:
                 if dd_after_stop.action == RiskAction.HALT:
                     self._event_engine.put(EVENT_DAILY_LOSS_HALT, {"drawdown": True})
                     logger.warning(f"止损后组合回撤触发熔断: {dd_after_stop.message}")
-                    await self._notifier.notify_risk_alert({
-                        "level": "halt",
-                        "message": dd_after_stop.message,
-                        "suggestion": "组合回撤过大，已自动熔断，需人工 reset_halt 后恢复",
-                    })
+                    await self._notifier.notify_risk_alert(
+                        {
+                            "level": "halt",
+                            "message": dd_after_stop.message,
+                            "suggestion": "组合回撤过大，已自动熔断，需人工 reset_halt 后恢复",
+                        }
+                    )
                     self._write_heartbeat("halted")
                     return
                 elif dd_after_stop.action == RiskAction.WARN:
@@ -357,11 +377,13 @@ class TradingEngine:
                 if dd_result.action == RiskAction.HALT:
                     self._event_engine.put(EVENT_DAILY_LOSS_HALT, {"drawdown": True})
                     logger.warning(f"信号处理后组合回撤触发熔断: {dd_result.message}")
-                    await self._notifier.notify_risk_alert({
-                        "level": "halt",
-                        "message": dd_result.message,
-                        "suggestion": "组合回撤过大，已自动熔断，需人工 reset_halt 后恢复",
-                    })
+                    await self._notifier.notify_risk_alert(
+                        {
+                            "level": "halt",
+                            "message": dd_result.message,
+                            "suggestion": "组合回撤过大，已自动熔断，需人工 reset_halt 后恢复",
+                        }
+                    )
                 elif dd_result.action == RiskAction.WARN:
                     logger.warning(f"信号处理后组合回撤预警: {dd_result.message}")
 
@@ -451,6 +473,7 @@ class TradingEngine:
         # 按 regime 重建 SignalRouter（当配置了 enabled_by_regime 时）
         try:
             from gugu.config import get_config as _get_cfg
+
             _cfg = _get_cfg().strategy
             if _cfg.enabled_by_regime:
                 regime_strategies = get_enabled_strategies_for_regime(current_regime)
@@ -460,8 +483,7 @@ class TradingEngine:
                 if _new_names != _old_names:
                     self._router = SignalRouter(regime_strategies)
                     logger.info(
-                        f"v0.5.6 按 regime={current_regime} 动态加载策略: "
-                        f"{sorted(_new_names)}"
+                        f"v0.5.6 按 regime={current_regime} 动态加载策略: {sorted(_new_names)}"
                     )
         except Exception as _e:
             logger.warning(f"v0.5.6 按 regime 加载策略失败，回退默认: {_e}")
@@ -595,7 +617,9 @@ class TradingEngine:
         return signals
 
     def _collect_filtered_signals(
-        self, results: list[dict[str, Any] | None], scan_list: list[str],
+        self,
+        results: list[dict[str, Any] | None],
+        scan_list: list[str],
     ) -> None:
         """收集被过滤的信号摘要，存入实例供收盘报告使用。
 
@@ -606,15 +630,17 @@ class TradingEngine:
             if r is None:
                 continue
             if r.get("wisdom_filtered"):
-                filtered.append({
-                    "symbol": r.get("symbol", ""),
-                    "name": r.get("name", ""),
-                    "direction": r.get("direction", ""),
-                    "strategy": r.get("strategy", ""),
-                    "filter_reason": r.get("filter_reason", "未知原因"),
-                    "confidence": r.get("confidence", 0),
-                    "price": r.get("price", 0),
-                })
+                filtered.append(
+                    {
+                        "symbol": r.get("symbol", ""),
+                        "name": r.get("name", ""),
+                        "direction": r.get("direction", ""),
+                        "strategy": r.get("strategy", ""),
+                        "filter_reason": r.get("filter_reason", "未知原因"),
+                        "confidence": r.get("confidence", 0),
+                        "price": r.get("price", 0),
+                    }
+                )
         self._filtered_signals_today = filtered
         if filtered:
             logger.info(
@@ -634,19 +660,15 @@ class TradingEngine:
                 # 7 天窗口覆盖跨周末的持仓信号场景，且不会无限增长
                 from datetime import date as _date
                 from datetime import timedelta as _timedelta
+
                 today = _date.today()
                 cutoff_date = (today - _timedelta(days=7)).isoformat()
                 # P0 修复：清理旧格式 key（含 strategy_key 后缀的 3 段下划线格式）
                 # 旧格式如 "600519_sell_money_flow_follow" 会导致新代码用
                 # "{symbol}_{direction}" 查不到记录，去重失效
-                cleaned = {
-                    k: v for k, v in data.items()
-                    if v >= cutoff_date and k.count("_") <= 1
-                }
+                cleaned = {k: v for k, v in data.items() if v >= cutoff_date and k.count("_") <= 1}
                 if len(cleaned) != len(data):
-                    logger.info(
-                        f"清理过期/旧格式去重 key: {len(data)} → {len(cleaned)} 条"
-                    )
+                    logger.info(f"清理过期/旧格式去重 key: {len(data)} → {len(cleaned)} 条")
                 return cleaned
         except Exception as e:
             logger.warning(f"加载已通知信号记录失败: {e}")
@@ -662,10 +684,12 @@ class TradingEngine:
             today = _date.today()
             cutoff_date = (today - _timedelta(days=7)).isoformat()
             self._notified_signals = {
-                k: v for k, v in self._notified_signals.items()
+                k: v
+                for k, v in self._notified_signals.items()
                 if v >= cutoff_date and k.count("_") <= 1
             }
             from gugu.utils.atomic import atomic_write_json
+
             atomic_write_json(
                 self._notified_signals_file,
                 self._notified_signals,
@@ -681,10 +705,7 @@ class TradingEngine:
         不清除非当日的记录，避免跨日重复。
         """
         today_str = date.today().isoformat()
-        keys_to_remove = [
-            k for k, v in self._notified_signals.items()
-            if v == today_str
-        ]
+        keys_to_remove = [k for k, v in self._notified_signals.items() if v == today_str]
         for k in keys_to_remove:
             del self._notified_signals[k]
         if keys_to_remove:
@@ -715,9 +736,7 @@ class TradingEngine:
         dedup_key = f"{symbol}_{direction}"
         today_str = date.today().isoformat()
         if self._notified_signals.get(dedup_key) == today_str:
-            logger.info(
-                f"{symbol} {direction} 信号已通知过，跳过重复发送"
-            )
+            logger.info(f"{symbol} {direction} 信号已通知过，跳过重复发送")
             return
 
         # signal_only 模式：只发信号通知，不下单（监控验证用）
@@ -725,18 +744,28 @@ class TradingEngine:
             logger.info(f"{symbol} {direction} 信号（signal_only 模式，仅通知不下单）")
             # 前置硬校验：避免脏数据进入通知和历史记录
             try:
-                sig_price = float(signal.get("price", 0)) if signal.get("price") is not None else 0.0
+                sig_price = (
+                    float(signal.get("price", 0)) if signal.get("price") is not None else 0.0
+                )
             except (TypeError, ValueError):
                 sig_price = 0.0
             sig_confidence = signal.get("confidence")
             sig_strategies = signal.get("strategies", [])
             if sig_price <= 1.0:
-                logger.error(f"{symbol} signal_only 模式价格异常 price={sig_price}，拒绝通知并跳过历史记录")
+                logger.error(
+                    f"{symbol} signal_only 模式价格异常 price={sig_price}，拒绝通知并跳过历史记录"
+                )
                 return
-            if sig_confidence is None or (isinstance(sig_confidence, (int, float)) and sig_confidence <= 0):
-                logger.error(f"{symbol} signal_only 模式置信度异常 confidence={sig_confidence}，拒绝通知并跳过历史记录")
+            if sig_confidence is None or (
+                isinstance(sig_confidence, (int, float)) and sig_confidence <= 0
+            ):
+                logger.error(
+                    f"{symbol} signal_only 模式置信度异常 confidence={sig_confidence}，拒绝通知并跳过历史记录"
+                )
                 return
-            if not sig_strategies or (isinstance(sig_strategies, list) and len(sig_strategies) == 0):
+            if not sig_strategies or (
+                isinstance(sig_strategies, list) and len(sig_strategies) == 0
+            ):
                 logger.error(f"{symbol} signal_only 模式策略为空，拒绝通知并跳过历史记录")
                 return
 
@@ -929,6 +958,7 @@ class TradingEngine:
             # P1-5 修复：原 path.write_text 在写入中途崩溃会导致文件截断
             # 改用 atomic_write_text（同目录 tmp → fsync → os.replace 原子替换）
             from gugu.utils.atomic import atomic_write_text
+
             atomic_write_text(path, json.dumps(payload, ensure_ascii=False))
             # 历史记录追加写入（每行一个 JSON，append 模式天然原子）
             with history_path.open("a", encoding="utf-8") as f:

@@ -161,7 +161,7 @@ def _format_stock_detail(r: ScreeningResult, is_top: bool = False) -> str:
         f"   ┌ 🎯 入场: ¥{r.entry_low:.2f} ~ ¥{r.entry_high:.2f}（MA20附近）\n"
         f"   ├ 🛑 止损: ¥{r.stop_loss_price:.2f}（破MA20×0.97）\n"
         f"   ├ 💰 目标: ¥{r.take_profit_price:.2f}（前高压力）\n"
-        f"   └ 💼 仓位: {r.suggested_position*100:.0f}%（单股上限）"
+        f"   └ 💼 仓位: {r.suggested_position * 100:.0f}%（单股上限）"
     )
 
 
@@ -325,8 +325,8 @@ def format_screener_validation(results: list[ValidationResult]) -> dict[str, Any
         # 汇总统计
         (
             f"**📈 汇总（{n} 只）**\n"
-            f"高开率：{win_open}/{n}（{win_open/n*100:.0f}%）\n"
-            f"日内冲高率：{win_high}/{n}（{win_high/n*100:.0f}%）\n"
+            f"高开率：{win_open}/{n}（{win_open / n * 100:.0f}%）\n"
+            f"日内冲高率：{win_high}/{n}（{win_high / n * 100:.0f}%）\n"
             f"平均开盘溢价：{avg_open:+.2f}%\n"
             f"平均日内最高溢价：{avg_high:+.2f}%\n"
             f"沪深300基准开盘：{benchmark_open:+.2f}%\n"
@@ -421,7 +421,9 @@ def _generate_lesson(results: list, weekly_stats: dict) -> str:
     avg_open = sum(v.open_premium for v in results) / n if n > 0 else 0
 
     # 连续亏损（当日胜率 < 30% 且本周胜率 < 40%）
-    weekly_win_rate = weekly_stats["wins"] / weekly_stats["total"] if weekly_stats["total"] > 0 else 0
+    weekly_win_rate = (
+        weekly_stats["wins"] / weekly_stats["total"] if weekly_stats["total"] > 0 else 0
+    )
 
     if win_rate < 0.3 and weekly_win_rate < 0.4:
         return (

@@ -34,7 +34,6 @@ from gugu.notifier.formatter import (
     format_signal,
     format_system_error,
 )
-from gugu.notifier.fund_monitor import build_fund_monitor_card
 from gugu.screener.report import format_screener_report
 from gugu.utils.log import get_logger
 
@@ -94,6 +93,7 @@ class FeishuNotifier:
 
     def __init__(self) -> None:
         from gugu.config import get_config
+
         cfg = env()
         self._app_id: str = cfg.feishu_app_id
         self._app_secret: str = cfg.feishu_app_secret
@@ -110,8 +110,10 @@ class FeishuNotifier:
         # 防止测试中的失败通知污染生产数据文件 data/notify_queue.jsonl
         # 不再使用 "pytest" in sys.modules 检测（避免生产代码依赖测试框架）
         import os
+
         if os.environ.get("GUGU_TEST_MODE"):
             import tempfile
+
             self._queue_path: Path = Path(tempfile.gettempdir()) / "gugu_test_notify_queue.jsonl"
         else:
             self._queue_path: Path = PROJECT_ROOT / "data" / "notify_queue.jsonl"
@@ -314,7 +316,7 @@ class FeishuNotifier:
             #   retry_count=3 → 每8次触发一次（间隔~16min）
             # 实现：2^retry_count 次触发中只重试1次
             if retry_count > 0:
-                backoff_interval = 2 ** retry_count  # 2, 4, 8, 16...
+                backoff_interval = 2**retry_count  # 2, 4, 8, 16...
                 # 使用 retry_count 作为种子，每 backoff_interval 次触发重试一次
                 # 用当前时间戳的分钟数 / backoff_interval 取模，确保不同条目独立退避
                 now_minute = int(time.time()) // 120  # 每2分钟一个周期
@@ -327,8 +329,7 @@ class FeishuNotifier:
             item_ts = item.get("timestamp", "")
             if self._is_expired(item_ts):
                 logger.warning(
-                    f"通知队列条目过期(>{MAX_QUEUE_AGE_HOURS}h)，自动清理: "
-                    f"timestamp={item_ts}"
+                    f"通知队列条目过期(>{MAX_QUEUE_AGE_HOURS}h)，自动清理: timestamp={item_ts}"
                 )
                 continue
             if retry_count >= MAX_RETRY_COUNT:
@@ -343,9 +344,18 @@ class FeishuNotifier:
                         alert_card = {
                             "msg_type": "interactive",
                             "card": {
-                                "header": {"title": {"tag": "plain_text", "content": "⚠️ 通知重试超限告警"}, "template": "red"},
+                                "header": {
+                                    "title": {"tag": "plain_text", "content": "⚠️ 通知重试超限告警"},
+                                    "template": "red",
+                                },
                                 "elements": [
-                                    {"tag": "div", "text": {"tag": "lark_md", "content": f"通知已重试 {retry_count} 次仍未成功，已永久丢弃。\n卡片摘要: {json.dumps(item.get('card', {}), ensure_ascii=False)[:200]}"}},
+                                    {
+                                        "tag": "div",
+                                        "text": {
+                                            "tag": "lark_md",
+                                            "content": f"通知已重试 {retry_count} 次仍未成功，已永久丢弃。\n卡片摘要: {json.dumps(item.get('card', {}), ensure_ascii=False)[:200]}",
+                                        },
+                                    },
                                 ],
                             },
                         }
@@ -473,6 +483,7 @@ class FeishuNotifier:
             # 茅台真实价格约1000-2000区间，但1500.0是测试用的固定mock值
             # 通过正则提取价格，检查是否为已知的mock价格
             import re
+
             price_match = re.search(r"[￥¥]([0-9]+\.?[0-9]*)", combined)
             if price_match:
                 price = float(price_match.group(1))
@@ -646,10 +657,6 @@ class FeishuNotifier:
         error["message"] = msg
         return await self.send_card(format_system_error(error))
 
-    async def notify_fund_monitor(self, result: dict[str, Any]) -> bool:
-        """Format and send a fund monitor report."""
-        return await self.send_card(build_fund_monitor_card(result))
-
     async def notify_flow_report(self, period: str, data: dict[str, Any]) -> bool:
         """Format and send a capital flow report.
 
@@ -702,6 +709,7 @@ class FeishuNotifier:
                     notified = json.load(f)
                 # 清理过期记录（保留近 2 天）
                 from datetime import timedelta as _timedelta
+
                 cutoff = (_date.today() - _timedelta(days=2)).isoformat()
                 notified = {k: v for k, v in notified.items() if v >= cutoff}
         except Exception as e:
@@ -713,9 +721,7 @@ class FeishuNotifier:
         for alert in alerts:
             key = f"{alert.alert_type}_{alert.symbol}_{today_str}"
             if notified.get(key) == today_str:
-                logger.debug(
-                    f"盘中告警 {alert.alert_type} {alert.symbol} 当日已通知，跳过"
-                )
+                logger.debug(f"盘中告警 {alert.alert_type} {alert.symbol} 当日已通知，跳过")
                 continue
             new_alerts.append(alert)
             notified[key] = today_str
@@ -760,9 +766,7 @@ class FeishuNotifier:
         """
         from gugu.notifier.formatter import format_take_profit_alert
 
-        return await self.send_card(
-            format_take_profit_alert(symbol, name, signal, state)
-        )
+        return await self.send_card(format_take_profit_alert(symbol, name, signal, state))
 
     async def notify_strategy_dashboard(self) -> bool:
         """发送策略注册中心全景看板卡片。"""
@@ -793,7 +797,6 @@ class FeishuNotifier:
             ],
         }
         return await self.send_card(card)
-
 
     async def notify_conflict(self, symbol: str, name: str, resolution: dict[str, Any]) -> bool:
         """发送多视角冲突研讨卡片。"""

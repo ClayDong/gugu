@@ -11,6 +11,7 @@
 - dynamic_strategies（LLM 生成器）不参与运行时策略调度
 以上三类不在 _REGISTRY 中注册，也不纳入一致性校验。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -70,6 +71,31 @@ def registry_keys() -> set[str]:
     return set(_REGISTRY.keys())
 
 
+class TestWatchlistMonitoringConfig:
+    """自选监控列表配置测试。"""
+
+    def test_default_watchlist_matches_current_targets(self):
+        """默认监控恒瑞医药、豪威集团、双环传动、机器人ETF华夏。"""
+        from gugu.config import refresh_config
+
+        cfg = refresh_config()
+        assert cfg.watchlist == ["600276", "603501", "002472", "562500"]
+
+    def test_intraday_custom_watchlist_matches_default_watchlist(self):
+        """盘中实时盯盘范围与默认自选列表保持一致。"""
+        from gugu.config import refresh_config
+
+        cfg = refresh_config()
+        assert cfg.intraday_monitor.custom_watchlist == cfg.watchlist
+
+    def test_execution_mode_is_paper_for_simulation(self):
+        """默认使用模拟盘记录，不启用实盘。"""
+        from gugu.config import refresh_config
+
+        cfg = refresh_config()
+        assert cfg.execution.mode == "paper"
+
+
 class TestManifestSettingsConsistency:
     """校验 strategy_manifest.yaml 与 settings.yaml 的启用状态一致性。
 
@@ -87,7 +113,8 @@ class TestManifestSettingsConsistency:
         启用列表 = enabled_by_regime 各 regime 并集 ∪ enabled 列表。
         """
         manifest_enabled = {
-            key for key, info in signal_strategies.items()
+            key
+            for key, info in signal_strategies.items()
             if isinstance(info, dict) and info.get("enabled", False)
         }
         missing_in_settings = manifest_enabled - settings_enabled_set
@@ -102,7 +129,8 @@ class TestManifestSettingsConsistency:
     ):
         """2b: manifest 中 enabled=false 的信号策略，不应出现在 settings.yaml 任何启用列表中。"""
         manifest_disabled = {
-            key for key, info in signal_strategies.items()
+            key
+            for key, info in signal_strategies.items()
             if isinstance(info, dict) and not info.get("enabled", False)
         }
         wrongly_enabled = manifest_disabled & settings_enabled_set
@@ -131,7 +159,8 @@ class TestManifestSettingsConsistency:
 
         # 检查 manifest 中 enabled=true
         not_enabled_in_manifest = {
-            key for key in regime_strategies
+            key
+            for key in regime_strategies
             if key in signal_strategies
             and isinstance(signal_strategies[key], dict)
             and not signal_strategies[key].get("enabled", False)

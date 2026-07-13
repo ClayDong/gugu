@@ -116,6 +116,7 @@ class DailyReportManager:
     async def _get_performance_report(self) -> dict[str, Any] | None:
         try:
             from gugu.analysis.signal_tracker import SignalTracker
+
             tracker = SignalTracker()
             return await tracker.generate_report(days=30)
         except Exception as e:
@@ -156,12 +157,14 @@ class DailyReportManager:
             for sym, pos in portfolio.items():
                 trailing_state = getattr(pos, "trailing_stop", None)
                 if trailing_state:
-                    stops.append({
-                        "symbol": sym,
-                        "current_stop": trailing_state.get("current_stop_price", 0),
-                        "highest": trailing_state.get("highest_price", 0),
-                        "signal": trailing_state.get("last_signal", "hold"),
-                    })
+                    stops.append(
+                        {
+                            "symbol": sym,
+                            "current_stop": trailing_state.get("current_stop_price", 0),
+                            "highest": trailing_state.get("highest_price", 0),
+                            "signal": trailing_state.get("last_signal", "hold"),
+                        }
+                    )
             return stops
         except Exception as e:
             logger.debug(f"获取移动止损状态失败: {e}")

@@ -3,6 +3,7 @@
 使用 tests/fixtures/benchmark_600519.csv 作为输入数据，
 验证各策略在已知市场形态下产生预期信号。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -42,8 +43,7 @@ class TestTurtleStrategyBenchmark:
         uptrend_signals = signals.iloc[49:56]
         buy_count = (uptrend_signals["signal"] == 1).sum()
         assert buy_count >= 1, (
-            f"Expected buy signal in days 49-55 (uptrend), "
-            f"got {buy_count} buy signals"
+            f"Expected buy signal in days 49-55 (uptrend), got {buy_count} buy signals"
         )
 
     def test_no_false_signals_in_consolidation(self, benchmark_df: pd.DataFrame) -> None:
@@ -58,8 +58,7 @@ class TestTurtleStrategyBenchmark:
         consol_signals = signals.iloc[151:160]
         buy_count = (consol_signals["signal"] == 1).sum()
         assert buy_count == 0, (
-            f"Expected no buy signals inside consolidation (days 151-160), "
-            f"got {buy_count}"
+            f"Expected no buy signals inside consolidation (days 151-160), got {buy_count}"
         )
 
     def test_confidence_values(self, benchmark_df: pd.DataFrame) -> None:
@@ -108,10 +107,13 @@ class TestDualMABenchmark:
         P2-3: 关闭成交量/趋势过滤以测试基础金叉/死叉逻辑。
         生产环境默认开启过滤。
         """
-        strategy = get_strategy("dual_ma", {
-            "volume_confirm": False,
-            "trend_filter": False,
-        })
+        strategy = get_strategy(
+            "dual_ma",
+            {
+                "volume_confirm": False,
+                "trend_filter": False,
+            },
+        )
         signals = strategy.generate_signals(benchmark_df)
         non_hold = signals[signals["signal"] != 0]
         if len(non_hold) >= 2:
@@ -154,8 +156,7 @@ class TestBollingerBenchmark:
         early_signals = signals.iloc[35:45]
         buy_count = (early_signals["signal"] == 1).sum()
         assert buy_count >= 1, (
-            f"Expected buy signals from bollinger around days 35-45, "
-            f"got {buy_count}"
+            f"Expected buy signals from bollinger around days 35-45, got {buy_count}"
         )
 
     def test_signal_values(self, benchmark_df: pd.DataFrame) -> None:
@@ -205,12 +206,24 @@ class TestRSIBenchmark:
 class TestAllStrategiesGeneric:
     """所有策略的通用行为约束。"""
 
-    @pytest.mark.parametrize("strategy_name", [
-        "turtle", "dual_ma", "bollinger", "rsi_reversal",
-        "box_breakout", "macd", "kdj", "double_yin", "pullback_low",
-    ])
+    @pytest.mark.parametrize(
+        "strategy_name",
+        [
+            "turtle",
+            "dual_ma",
+            "bollinger",
+            "rsi_reversal",
+            "box_breakout",
+            "macd",
+            "kdj",
+            "double_yin",
+            "pullback_low",
+        ],
+    )
     def test_every_strategy_produces_signal_columns(
-        self, benchmark_df: pd.DataFrame, strategy_name: str,
+        self,
+        benchmark_df: pd.DataFrame,
+        strategy_name: str,
     ) -> None:
         """Every strategy must produce valid signal and confidence columns."""
         strategy = get_strategy(strategy_name)
@@ -225,16 +238,25 @@ class TestAllStrategiesGeneric:
             f"{strategy_name}: invalid signal values {set(signals['signal'].unique())}"
         )
         conf = signals["confidence"].dropna()
-        assert (conf >= 0).all() and (conf <= 1).all(), (
-            f"{strategy_name}: confidence out of range"
-        )
+        assert (conf >= 0).all() and (conf <= 1).all(), f"{strategy_name}: confidence out of range"
 
-    @pytest.mark.parametrize("strategy_name", [
-        "turtle", "dual_ma", "bollinger", "rsi_reversal", "macd", "kdj",
-        "double_yin", "pullback_low",
-    ])
+    @pytest.mark.parametrize(
+        "strategy_name",
+        [
+            "turtle",
+            "dual_ma",
+            "bollinger",
+            "rsi_reversal",
+            "macd",
+            "kdj",
+            "double_yin",
+            "pullback_low",
+        ],
+    )
     def test_every_strategy_produces_at_least_one_signal(
-        self, benchmark_df: pd.DataFrame, strategy_name: str,
+        self,
+        benchmark_df: pd.DataFrame,
+        strategy_name: str,
     ) -> None:
         """All strategies except box_breakout should produce at least one signal."""
         strategy = get_strategy(strategy_name)

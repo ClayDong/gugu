@@ -280,10 +280,10 @@ class PaperBroker(BaseBroker):
                     )
                     if affordable >= 100:
                         actual_quantity = affordable
-                        total_cost = (
-                            fill_price * actual_quantity
-                            + fill_price * actual_quantity * self._commission_rate
-                        )
+                        # P0修复：重新计算费用时包含过户费和最低佣金
+                        transfer_fee = self._calc_transfer_fee(symbol, fill_price * actual_quantity)
+                        commission = max(fill_price * actual_quantity * self._commission_rate, 5.0)
+                        total_cost = fill_price * actual_quantity + commission + transfer_fee
                     else:
                         return OrderResult(
                             False,
@@ -493,8 +493,9 @@ class PaperBroker(BaseBroker):
 
         # 同步更新当前价
         pos.current_price = new_price
-        # 更新前收盘价为调整前价格，便于次日涨跌停检查
-        pos.prev_close = new_price
+        # P1修复：除权除息日 prev_close 应设为除权前价格(old_price)，
+        # 这样涨跌停检查基准正确（涨停价=old_price*1.1，而非new_price*1.1）
+        pos.prev_close = old_price
 
         # 标记已调整
         pos.dividend_adjusted = True

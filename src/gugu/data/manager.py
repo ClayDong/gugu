@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from functools import partial
 from typing import Any
@@ -135,6 +136,9 @@ class DataManager:
         """在锁内读取降级状态（DA-05 修复：与 fail_count 修改在同一锁内）。"""
         return time.time() < self._degraded_until
 
+    # 主源（sina）不支持的方法——直接走降级源，不浪费请求+避免无效失败计数
+    _UNSUPPORTED_BY_PRIMARY: frozenset[str] = frozenset({"fetch_stock_flow", "fetch_sector_flow"})
+
     # 方法名 → 质量校验函数的映射
     _VALIDATORS: dict[str, Any] = {
         "fetch_stock_history": validate_stock_history,
@@ -159,13 +163,13 @@ class DataManager:
         # 稳定缓存键（列表参数排序处理）
         cache_key = _stable_cache_key(method, *args)
 
-        # 全市场快照请求：sina 不支持空列表，直接跳到降级源
-        is_market_snapshot = (
+        # 直接跳过主源的场景：sina不支持的方法直接走降级源，避免无效失败计数
+        skip_primary = (
             method == "fetch_stock_realtime"
             and len(args) >= 1
             and isinstance(args[0], list)
             and len(args[0]) == 0
-        )
+        ) or method in self._UNSUPPORTED_BY_PRIMARY
 
         # 1. 持久化缓存：仅对历史数据请求
         if method == "fetch_stock_history" and len(args) >= 1:
@@ -186,11 +190,11 @@ class DataManager:
         async with self._lock:
             is_degraded = await self._is_degraded_locked()
 
-        if not is_degraded and not is_market_snapshot:
+        if not is_degraded and not skip_primary:
             # 非全市场快照请求，正常走主源
             try:
                 _fn = partial(getattr(self._primary, method), *args, **kwargs)
-                df = await asyncio.to_thread(_fn)
+                df = await asyncio.wait_for(asyncio.to_thread(_fn), timeout=20.0)
                 async with self._lock:
                     await self._on_success_locked()
                 df = self._validate(method, df, args)
@@ -199,7 +203,9 @@ class DataManager:
                     cache().set(cache_key, df)
                     # 持久化缓存：仅对历史数据
                     if method == "fetch_stock_history" and len(args) >= 1:
-                        self._parquet_cache.set(str(args[0]), int(args[1]) if len(args) > 1 else 60, df)
+                        self._parquet_cache.set(
+                            str(args[0]), int(args[1]) if len(args) > 1 else 60, df
+                        )
                 return df
             except Exception as e:
                 logger.error(f"主源 {method} 异常: {e}")
@@ -213,7 +219,7 @@ class DataManager:
                 fb: asyncio.create_task(
                     asyncio.wait_for(
                         asyncio.to_thread(lambda fb=fb: getattr(fb, method)(*args, **kwargs)),
-                        timeout=30.0,
+                        timeout=45.0,
                     )
                 )
                 for fb in self._fallbacks
@@ -238,7 +244,7 @@ class DataManager:
             except Exception as e:
                 logger.warning(f"降级源完成结果异常: {e}")
         if pending:
-            all_done, _ = await asyncio.wait(pending, timeout=30.0)
+            all_done, _ = await asyncio.wait(pending, timeout=45.0)
             for t in all_done:
                 try:
                     df = t.result()
@@ -255,7 +261,15 @@ class DataManager:
                 except Exception:
                     continue
 
-        logger.error(f"所有数据源 {method} 均失败，返回空 DataFrame")
+        logger.warning(f"所有数据源 {method} 均失败，尝试缓存兜底")
+        # 自恢复：返回过期缓存兜底（即使TTL过期也比空df好，保证业务不中断）
+        stale_cached = cache().get(cache_key, ignore_ttl=True)
+        if stale_cached is not None and not stale_cached.empty:
+            logger.info(f"{method} 使用过期缓存兜底，下次请求自动重试")
+            return stale_cached
+        # 自恢复：清理缓存避免脏数据持续影响
+        with contextlib.suppress(Exception):
+            cache().clear()
         return pd.DataFrame()
 
     def _validate(self, method: str, df: pd.DataFrame, args: tuple) -> pd.DataFrame:

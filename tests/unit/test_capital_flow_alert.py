@@ -9,6 +9,7 @@
 - 买入信号（缩量回踩不破MA20）
 - 卖出优先于买入
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -82,9 +83,7 @@ class TestCapitalFlowParams:
     def test_validate_params_rejects_shrink_ge_breakout(self):
         """shrink_ratio >= breakout_volume_ratio 应抛 ValueError。"""
         with pytest.raises(ValueError, match="shrink_ratio"):
-            CapitalFlowAlertStrategy(
-                {"shrink_ratio": 1.5, "breakout_volume_ratio": 1.3}
-            )
+            CapitalFlowAlertStrategy({"shrink_ratio": 1.5, "breakout_volume_ratio": 1.3})
 
     def test_default_params_loaded(self):
         """默认参数应正确加载。"""

@@ -1,4 +1,5 @@
 """尾盘选股验证模块测试。"""
+
 from __future__ import annotations
 
 import json
@@ -22,10 +23,13 @@ from gugu.utils.calendar import last_trading_day
 
 class _MockResponse:
     """模拟 httpx.Response。"""
+
     def __init__(self, json_data):
         self._json = json_data
+
     def raise_for_status(self):
         pass
+
     def json(self):
         return self._json
 
@@ -36,13 +40,17 @@ class _MockAsyncClient:
     P0 修复后 validator 改用 ulist.np/get 批量接口（非日K线），
     mock 数据格式同步更新为 {data: {diff: [{f12, f14, f15, f17, f18}]}}。
     """
+
     def __init__(self, stock_data, hs300_data):
         self._stock = stock_data
         self._hs300 = hs300_data
+
     async def __aenter__(self):
         return self
+
     async def __aexit__(self, *args):
         return None
+
     async def get(self, url, params=None, **kwargs):
         # 东财批量接口: secids=0.600519,1.603190,...
         secids = params.get("secids", "") if params else ""
@@ -119,9 +127,39 @@ class TestSaveAndLoadRecords:
     def test_load_by_date(self):
         filepath = os.path.join(self.tmpdir, "test_load.jsonl")
         rows = [
-            {"symbol": "600519", "name": "茅台", "close_price": 1520, "change_pct": 3, "volume_ratio": 1, "screener_date": "2026-06-29", "passed": True, "failed_conditions": [], "created_at": ""},
-            {"symbol": "000858", "name": "五粮液", "close_price": 148, "change_pct": 2, "volume_ratio": 1, "screener_date": "2026-06-28", "passed": True, "failed_conditions": [], "created_at": ""},
-            {"symbol": "300750", "name": "宁德", "close_price": 245, "change_pct": 4, "volume_ratio": 2, "screener_date": "2026-06-29", "passed": False, "failed_conditions": ["量比不足"], "created_at": ""},
+            {
+                "symbol": "600519",
+                "name": "茅台",
+                "close_price": 1520,
+                "change_pct": 3,
+                "volume_ratio": 1,
+                "screener_date": "2026-06-29",
+                "passed": True,
+                "failed_conditions": [],
+                "created_at": "",
+            },
+            {
+                "symbol": "000858",
+                "name": "五粮液",
+                "close_price": 148,
+                "change_pct": 2,
+                "volume_ratio": 1,
+                "screener_date": "2026-06-28",
+                "passed": True,
+                "failed_conditions": [],
+                "created_at": "",
+            },
+            {
+                "symbol": "300750",
+                "name": "宁德",
+                "close_price": 245,
+                "change_pct": 4,
+                "volume_ratio": 2,
+                "screener_date": "2026-06-29",
+                "passed": False,
+                "failed_conditions": ["量比不足"],
+                "created_at": "",
+            },
         ]
         with open(filepath, "w", encoding="utf-8") as f:
             for row in rows:
@@ -360,24 +398,29 @@ class TestGetMarket:
 
     def test_shanghai(self):
         from gugu.screener.validator import _get_market
+
         assert _get_market("600519") == 1
         assert _get_market("601318") == 1
         assert _get_market("603259") == 1
 
     def test_shenzhen(self):
         from gugu.screener.validator import _get_market
+
         assert _get_market("000858") == 0
         assert _get_market("000333") == 0
 
     def test_chinext(self):
         from gugu.screener.validator import _get_market
+
         assert _get_market("300750") == 0
         assert _get_market("300059") == 0
 
     def test_star(self):
         from gugu.screener.validator import _get_market
+
         assert _get_market("688396") == 1
 
     def test_unknown_prefix(self):
         from gugu.screener.validator import _get_market
+
         assert _get_market("999999") == 1  # 默认沪市

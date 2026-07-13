@@ -5,6 +5,7 @@ _update_prices、send_daily_report、reset_halt、心跳写入。
 用 mock 替换 DataManager、FeishuNotifier、PaperBroker、RiskManager、
 StockSelector、WisdomAdvisor，确保测试不依赖网络。
 """
+
 from __future__ import annotations
 
 from unittest import mock
@@ -28,30 +29,34 @@ def _mock_record_signal_history():
 def mock_data_manager() -> mock.MagicMock:
     """Mock DataManager：返回可控的行情数据。"""
     dm = mock.MagicMock()
-    dm.fetch_stock_history = mock.AsyncMock(return_value=pd.DataFrame(
-        {
-            "date": pd.date_range("2024-01-01", periods=60, freq="D"),
-            "open": [10.0] * 60,
-            "high": [11.0] * 60,
-            "low": [9.0] * 60,
-            "close": [10.0] * 60,
-            "volume": [1_000_000] * 60,
-            "amount": [10_000_000] * 60,
+    dm.fetch_stock_history = mock.AsyncMock(
+        return_value=pd.DataFrame(
+            {
+                "date": pd.date_range("2024-01-01", periods=60, freq="D"),
+                "open": [10.0] * 60,
+                "high": [11.0] * 60,
+                "low": [9.0] * 60,
+                "close": [10.0] * 60,
+                "volume": [1_000_000] * 60,
+                "amount": [10_000_000] * 60,
+            }
+        )
+    )
+    dm.fetch_stock_realtime = mock.AsyncMock(
+        return_value=pd.DataFrame({"symbol": ["600519"], "name": ["茅台"], "price": [10.0]})
+    )
+    dm.fetch_stock_meta = mock.AsyncMock(
+        return_value={
+            "symbol": "600519",
+            "name": "茅台",
+            "prev_close": 10.0,
+            "is_st": False,
+            "is_suspended": False,
         }
-    ))
-    dm.fetch_stock_realtime = mock.AsyncMock(return_value=pd.DataFrame(
-        {"symbol": ["600519"], "name": ["茅台"], "price": [10.0]}
-    ))
-    dm.fetch_stock_meta = mock.AsyncMock(return_value={
-        "symbol": "600519",
-        "name": "茅台",
-        "prev_close": 10.0,
-        "is_st": False,
-        "is_suspended": False,
-    })
-    dm.fetch_sector_flow = mock.AsyncMock(return_value=pd.DataFrame(
-        {"sector": ["白酒"], "main_net": [1e9], "main_pct": [0.1]}
-    ))
+    )
+    dm.fetch_sector_flow = mock.AsyncMock(
+        return_value=pd.DataFrame({"sector": ["白酒"], "main_net": [1e9], "main_pct": [0.1]})
+    )
     return dm
 
 
@@ -78,9 +83,7 @@ def mock_broker() -> mock.MagicMock:
 def mock_risk() -> mock.MagicMock:
     risk = mock.MagicMock()
     risk.is_halted = False
-    risk.check_order.return_value = RiskCheckResult(
-        RiskLevel.L1_POSITION, RiskAction.ALLOW, "ok"
-    )
+    risk.check_order.return_value = RiskCheckResult(RiskLevel.L1_POSITION, RiskAction.ALLOW, "ok")
     risk.check_daily_loss.return_value = RiskCheckResult(
         RiskLevel.L2_DAILY_LOSS, RiskAction.ALLOW, "within limits"
     )
@@ -121,9 +124,7 @@ def engine(
         # take_profit_state.json（_process_signal → register 会写文件）
         from gugu.analysis.dynamic_take_profit import DynamicTakeProfitEngine
 
-        eng._take_profit_engine = DynamicTakeProfitEngine(
-            state_path=tmp_path / "tp_state.json"
-        )
+        eng._take_profit_engine = DynamicTakeProfitEngine(state_path=tmp_path / "tp_state.json")
     return eng
 
 
@@ -225,9 +226,7 @@ async def test_check_daily_loss_halt(
 
 
 @pytest.mark.asyncio
-async def test_send_daily_report(
-    engine: TradingEngine, mock_notifier: mock.AsyncMock
-) -> None:
+async def test_send_daily_report(engine: TradingEngine, mock_notifier: mock.AsyncMock) -> None:
     """日报发送应调用 notifier。"""
     await engine.send_daily_report("close")
     mock_notifier.notify_daily_report.assert_called_once()
@@ -251,7 +250,9 @@ async def test_update_prices_exception(
     engine: TradingEngine, mock_data_manager: mock.MagicMock
 ) -> None:
     """更新现价失败不应抛异常。"""
-    mock_data_manager.fetch_stock_realtime = mock.AsyncMock(side_effect=RuntimeError("network error"))
+    mock_data_manager.fetch_stock_realtime = mock.AsyncMock(
+        side_effect=RuntimeError("network error")
+    )
     # 不应抛异常
     await engine._update_prices()
 
@@ -272,9 +273,7 @@ def test_reset_halt(engine: TradingEngine, mock_risk: mock.MagicMock) -> None:
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_written(
-    engine: TradingEngine, mock_broker: mock.MagicMock
-) -> None:
+async def test_heartbeat_written(engine: TradingEngine, mock_broker: mock.MagicMock) -> None:
     """心跳文件应被写入。"""
     # 验证 _write_heartbeat 不抛异常即可（PROJECT_ROOT 已在 main.py 中定义）
     engine._write_heartbeat("ok")
@@ -396,9 +395,27 @@ async def test_process_signal_signal_only_rejects_invalid_signal(
     """signal_only 模式下，异常信号（价格<=1.0/置信度异常/空策略）应直接返回，不通知不下单。"""
     engine._exec_mode = "signal_only"
     invalid_signals = [
-        {"symbol": "600519", "direction": "buy", "price": 1.0, "confidence": 0.85, "strategies": ["turtle"]},
-        {"symbol": "600519", "direction": "buy", "price": 1500.0, "confidence": None, "strategies": ["turtle"]},
-        {"symbol": "600519", "direction": "buy", "price": 1500.0, "confidence": 0.85, "strategies": []},
+        {
+            "symbol": "600519",
+            "direction": "buy",
+            "price": 1.0,
+            "confidence": 0.85,
+            "strategies": ["turtle"],
+        },
+        {
+            "symbol": "600519",
+            "direction": "buy",
+            "price": 1500.0,
+            "confidence": None,
+            "strategies": ["turtle"],
+        },
+        {
+            "symbol": "600519",
+            "direction": "buy",
+            "price": 1500.0,
+            "confidence": 0.85,
+            "strategies": [],
+        },
     ]
     for signal in invalid_signals:
         mock_notifier.notify_signal.reset_mock()

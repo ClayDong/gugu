@@ -31,14 +31,16 @@ def _make_df(n: int = 60, seed: int = 42) -> pd.DataFrame:
     for _ in range(1, n):
         prices.append(prices[-1] * (1 + np.random.uniform(-0.01, 0.01)))
     prices = np.array(prices)
-    return pd.DataFrame({
-        "date": dates,
-        "open": prices * 0.997,
-        "high": prices * 1.007,
-        "low": prices * 0.993,
-        "close": prices,
-        "volume": np.random.uniform(1000, 2000, n),
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": prices * 0.997,
+            "high": prices * 1.007,
+            "low": prices * 0.993,
+            "close": prices,
+            "volume": np.random.uniform(1000, 2000, n),
+        }
+    )
 
 
 def _make_uptrend_df(n: int = 60) -> pd.DataFrame:
@@ -51,14 +53,16 @@ def _make_uptrend_df(n: int = 60) -> pd.DataFrame:
         prices.append(prices[-1] * (1 + change))
     prices = np.array(prices)
     lows = prices * np.random.uniform(0.97, 0.99, n)
-    return pd.DataFrame({
-        "date": dates,
-        "open": prices * 0.99,
-        "high": prices * 1.01,
-        "low": lows,
-        "close": prices,
-        "volume": np.random.uniform(1000, 2000, n),
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": prices * 0.99,
+            "high": prices * 1.01,
+            "low": lows,
+            "close": prices,
+            "volume": np.random.uniform(1000, 2000, n),
+        }
+    )
 
 
 class TestInitStop:
@@ -135,14 +139,16 @@ class TestWaveValleysOrdering:
         for i in range(50, n):
             prices[i] = prices[i - 1] * 1.005
 
-        df = pd.DataFrame({
-            "date": dates,
-            "open": prices * 0.99,
-            "high": prices * 1.01,
-            "low": prices * 0.98,
-            "close": prices,
-            "volume": np.random.uniform(1000, 2000, n),
-        })
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": prices * 0.99,
+                "high": prices * 1.01,
+                "low": prices * 0.98,
+                "close": prices,
+                "volume": np.random.uniform(1000, 2000, n),
+            }
+        )
 
         engine = TrailingStopEngine()
         state = engine.init_stop(entry_price=10.0, df=df)
@@ -167,10 +173,16 @@ class TestAdaptiveWaveWindow:
         for _ in range(1, n):
             prices.append(prices[-1] * (1 + np.random.uniform(-0.05, 0.05)))
         prices = np.array(prices)
-        df = pd.DataFrame({
-            "date": dates, "open": prices * 0.99, "high": prices * 1.02,
-            "low": prices * 0.98, "close": prices, "volume": np.random.uniform(1000, 2000, n),
-        })
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": prices * 0.99,
+                "high": prices * 1.02,
+                "low": prices * 0.98,
+                "close": prices,
+                "volume": np.random.uniform(1000, 2000, n),
+            }
+        )
         engine = TrailingStopEngine()
         window = engine._adaptive_wave_window(df)
         assert window == 8, f"高波动应返回8，got {window}"
@@ -185,10 +197,16 @@ class TestAdaptiveWaveWindow:
         for _ in range(1, n):
             prices.append(prices[-1] * (1 + np.random.uniform(-0.003, 0.003)))
         prices = np.array(prices)
-        df = pd.DataFrame({
-            "date": dates, "open": prices * 0.99, "high": prices * 1.001,
-            "low": prices * 0.999, "close": prices, "volume": np.random.uniform(1000, 2000, n),
-        })
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": prices * 0.99,
+                "high": prices * 1.001,
+                "low": prices * 0.999,
+                "close": prices,
+                "volume": np.random.uniform(1000, 2000, n),
+            }
+        )
         engine = TrailingStopEngine()
         window = engine._adaptive_wave_window(df)
         assert window == 3, f"低波动应返回3，got {window}"
@@ -226,11 +244,51 @@ class TestFindWaveValleys:
     def test_returns_valleys_in_time_order(self) -> None:
         """_find_wave_valleys 返回的浪谷应按时间顺序排列。"""
         np.random.seed(42)
-        lows = np.array([10, 9.5, 9, 9.8, 10.5, 10, 9.7, 10.2, 11, 10.5,
-                         10, 10.8, 11.5, 11, 10.7, 11.2, 12, 11.5, 11, 11.8,
-                         12.5, 12, 11.5, 12.2, 13, 12.5, 12, 12.8, 13.5, 13,
-                         12.5, 13.2, 14, 13.5, 13, 13.8, 14.5, 14, 13.5, 14.2],
-                        dtype=float)
+        lows = np.array(
+            [
+                10,
+                9.5,
+                9,
+                9.8,
+                10.5,
+                10,
+                9.7,
+                10.2,
+                11,
+                10.5,
+                10,
+                10.8,
+                11.5,
+                11,
+                10.7,
+                11.2,
+                12,
+                11.5,
+                11,
+                11.8,
+                12.5,
+                12,
+                11.5,
+                12.2,
+                13,
+                12.5,
+                12,
+                12.8,
+                13.5,
+                13,
+                12.5,
+                13.2,
+                14,
+                13.5,
+                13,
+                13.8,
+                14.5,
+                14,
+                13.5,
+                14.2,
+            ],
+            dtype=float,
+        )
         series = pd.Series(lows)
         engine = TrailingStopEngine()
         valleys = engine._find_wave_valleys(series, window=3)
@@ -337,10 +395,16 @@ class TestValleyBreakCount:
         n_rows = 40
         dates = pd.date_range("2026-01-01", periods=n_rows, freq="B")
         prices = np.full(n_rows, 10.8)  # 价格 10.8 < highest_price 11.0，未创新高
-        df = pd.DataFrame({
-            "date": dates, "open": prices * 0.99, "high": prices * 1.01,
-            "low": prices * 0.98, "close": prices, "volume": np.random.uniform(1000, 2000, n_rows),
-        })
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": prices * 0.99,
+                "high": prices * 1.01,
+                "low": prices * 0.98,
+                "close": prices,
+                "volume": np.random.uniform(1000, 2000, n_rows),
+            }
+        )
 
         state, _ = engine.update(state, df)
         # P2-2 修复后：未创新高 → 计数不变（不递减、不重置）
@@ -366,10 +430,16 @@ class TestValleyBreakCount:
         n_rows = 40
         dates = pd.date_range("2026-01-01", periods=n_rows, freq="B")
         prices = np.full(n_rows, 11.5)  # 价格 11.5 > highest_price 11.0，创新高
-        df = pd.DataFrame({
-            "date": dates, "open": prices * 0.99, "high": prices * 1.01,
-            "low": prices * 0.98, "close": prices, "volume": np.random.uniform(1000, 2000, n_rows),
-        })
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": prices * 0.99,
+                "high": prices * 1.01,
+                "low": prices * 0.98,
+                "close": prices,
+                "volume": np.random.uniform(1000, 2000, n_rows),
+            }
+        )
 
         state, _ = engine.update(state, df)
         # P2-2 修复后：创新高 → 计数重置为 0
@@ -405,10 +475,16 @@ class TestValleyBreakCount:
         n_rows = 40
         dates = pd.date_range("2026-01-01", periods=n_rows, freq="B")
         prices = np.full(n_rows, 9.5)
-        df = pd.DataFrame({
-            "date": dates, "open": prices * 0.99, "high": prices * 1.01,
-            "low": prices * 0.98, "close": prices, "volume": np.random.uniform(1000, 2000, n_rows),
-        })
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": prices * 0.99,
+                "high": prices * 1.01,
+                "low": prices * 0.98,
+                "close": prices,
+                "volume": np.random.uniform(1000, 2000, n_rows),
+            }
+        )
 
         # 第一日跌破 → ALERT
         state, signal1 = engine.update(state, df)
@@ -472,7 +548,9 @@ class TestRegimeAdaptive:
         state = engine.init_stop(entry_price=10.0, df=df)
 
         # 牛市更新
-        state_bull, _ = engine.update(state.copy() if hasattr(state, 'copy') else state, df, regime="bull")
+        state_bull, _ = engine.update(
+            state.copy() if hasattr(state, "copy") else state, df, regime="bull"
+        )
         # 熊市更新
         state_bear, _ = engine.update(
             TrailingStopEngine.dict_to_state(engine.state_to_dict(state)), df, regime="bear"

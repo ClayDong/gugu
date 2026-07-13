@@ -54,26 +54,25 @@ def detect_performance_mode() -> str:
 
 
 PERFORMANCE_CONFIG = {
-    "high":   {"interval_sec": 30,  "max_symbols": 50, "scan_watchlist": True},
+    "high": {"interval_sec": 30, "max_symbols": 50, "scan_watchlist": True},
     "medium": {"interval_sec": 120, "max_symbols": 30, "scan_watchlist": True},
-    "low":    {"interval_sec": 300, "max_symbols": 5,  "scan_watchlist": False},
-    "off":    {"interval_sec": 0,   "max_symbols": 0,  "scan_watchlist": False},
+    "low": {"interval_sec": 300, "max_symbols": 5, "scan_watchlist": False},
+    "off": {"interval_sec": 0, "max_symbols": 0, "scan_watchlist": False},
 }
 
 
 @dataclass
 class AlertItem:
     """异动告警条目。"""
-    alert_type: str        # "super_large_inflow" | "super_large_outflow" | "main_pct_high" | "main_pct_low" | "consecutive_inflow" | "consecutive_outflow" | "industry_inflow" | "industry_outflow" | "industry_divergence" | "position_warning"
+
+    alert_type: str  # "super_large_inflow" | "super_large_outflow" | "main_pct_high" | "main_pct_low" | "consecutive_inflow" | "consecutive_outflow" | "industry_inflow" | "industry_outflow" | "industry_divergence" | "position_warning"
     symbol: str
     name: str
-    severity: str          # "info" | "warning" | "critical"
-    direction: str         # "buy" | "sell" | "neutral"
-    value: float           # 数值（净流入额、占比等）
-    message: str           # 人类可读消息
-    timestamp: str = field(
-        default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    )
+    severity: str  # "info" | "warning" | "critical"
+    direction: str  # "buy" | "sell" | "neutral"
+    value: float  # 数值（净流入额、占比等）
+    message: str  # 人类可读消息
+    timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
 
 class IntradayMonitor:
@@ -97,8 +96,7 @@ class IntradayMonitor:
             return
         now = time.time()
         stale_keys = [
-            k for k, ts in self._alert_history.items()
-            if now - ts >= self.ALERT_COOLDOWN_SEC * 2
+            k for k, ts in self._alert_history.items() if now - ts >= self.ALERT_COOLDOWN_SEC * 2
         ]
         for k in stale_keys:
             del self._alert_history[k]
@@ -124,11 +122,11 @@ class IntradayMonitor:
         # P0-1 修复：原阈值按元单位配置（100_000_000），但数据源已 /1e8 转为亿元，
         # 导致 1.5（亿元）> 100_000_000 永远 False，整个盘中监控完全失效
         self._thresholds = alert_thresholds or {
-            "super_large_inflow": 1.0,        # 1 亿
+            "super_large_inflow": 1.0,  # 1 亿
             "super_large_outflow": 1.0,
-            "main_pct_threshold": 5.0,        # 5%（主力净占比，单位：%）
+            "main_pct_threshold": 5.0,  # 5%（主力净占比，单位：%）
             "consecutive_days": 3,
-            "consecutive_total": 3.0,         # 连续累计 3 亿
+            "consecutive_total": 3.0,  # 连续累计 3 亿
             "industry_flow_threshold": 10.0,  # 行业 10 亿
             "position_outflow_warning": 0.5,  # 持仓股主力净流出超 0.5 亿告警
         }
@@ -207,104 +205,111 @@ class IntradayMonitor:
 
             # 查询股票名称
             from gugu.data.stock_names import lookup_stock_name
+
             name = lookup_stock_name(symbol) or symbol
 
             # 告警 1：超大单净流入 > 1 亿
             # P0-1 修复：super_large_net 已是亿元单位，不再 /1e8
             if super_large_net > self._thresholds["super_large_inflow"]:
-                alerts.append(AlertItem(
-                    alert_type="super_large_inflow",
-                    symbol=symbol,
-                    name=name,
-                    severity="info",
-                    direction="buy",
-                    value=super_large_net,
-                    message=f"🟢 {name}({symbol}) 超大单净流入 {super_large_net:.2f}亿",
-                ))
+                alerts.append(
+                    AlertItem(
+                        alert_type="super_large_inflow",
+                        symbol=symbol,
+                        name=name,
+                        severity="info",
+                        direction="buy",
+                        value=super_large_net,
+                        message=f"🟢 {name}({symbol}) 超大单净流入 {super_large_net:.2f}亿",
+                    )
+                )
 
             # 告警 2：超大单净流出 > 1 亿
             if super_large_net < -self._thresholds["super_large_outflow"]:
-                alerts.append(AlertItem(
-                    alert_type="super_large_outflow",
-                    symbol=symbol,
-                    name=name,
-                    severity="warning",
-                    direction="sell",
-                    value=super_large_net,
-                    message=f"🔴 {name}({symbol}) 超大单净流出 {abs(super_large_net):.2f}亿",
-                ))
+                alerts.append(
+                    AlertItem(
+                        alert_type="super_large_outflow",
+                        symbol=symbol,
+                        name=name,
+                        severity="warning",
+                        direction="sell",
+                        value=super_large_net,
+                        message=f"🔴 {name}({symbol}) 超大单净流出 {abs(super_large_net):.2f}亿",
+                    )
+                )
 
             # 告警 3：主力净占比 > 5%
             # P0-1 修复：main_pct 已是百分比单位（5.0 = 5%），阈值也用百分比单位
             if main_pct > self._thresholds["main_pct_threshold"]:
-                alerts.append(AlertItem(
-                    alert_type="main_pct_high",
-                    symbol=symbol,
-                    name=name,
-                    severity="info",
-                    direction="buy",
-                    value=main_pct,
-                    message=f"🟢 {name}({symbol}) 主力净占比 {main_pct:.2f}%",
-                ))
+                alerts.append(
+                    AlertItem(
+                        alert_type="main_pct_high",
+                        symbol=symbol,
+                        name=name,
+                        severity="info",
+                        direction="buy",
+                        value=main_pct,
+                        message=f"🟢 {name}({symbol}) 主力净占比 {main_pct:.2f}%",
+                    )
+                )
 
             # 告警 4：主力净占比 < -5%
             if main_pct < -self._thresholds["main_pct_threshold"]:
-                alerts.append(AlertItem(
-                    alert_type="main_pct_low",
-                    symbol=symbol,
-                    name=name,
-                    severity="warning",
-                    direction="sell",
-                    value=main_pct,
-                    message=f"🔴 {name}({symbol}) 主力净占比 {main_pct:.2f}%",
-                ))
+                alerts.append(
+                    AlertItem(
+                        alert_type="main_pct_low",
+                        symbol=symbol,
+                        name=name,
+                        severity="warning",
+                        direction="sell",
+                        value=main_pct,
+                        message=f"🔴 {name}({symbol}) 主力净占比 {main_pct:.2f}%",
+                    )
+                )
 
             # 告警 5/6：连续 N 日主力净流入/流出
             consecutive_days = int(self._thresholds.get("consecutive_days", 3))
             if len(df) >= consecutive_days:
                 recent = df.tail(consecutive_days)
-                recent_main_net = (
-                    recent["main_net"].sum() if "main_net" in recent.columns else 0
-                )
+                recent_main_net = recent["main_net"].sum() if "main_net" in recent.columns else 0
                 all_positive = (
-                    (recent["main_net"] > 0).all()
-                    if "main_net" in recent.columns else False
+                    (recent["main_net"] > 0).all() if "main_net" in recent.columns else False
                 )
                 all_negative = (
-                    (recent["main_net"] < 0).all()
-                    if "main_net" in recent.columns else False
+                    (recent["main_net"] < 0).all() if "main_net" in recent.columns else False
                 )
-                consecutive_total = float(
-                    self._thresholds.get("consecutive_total", 3.0)
-                )
+                consecutive_total = float(self._thresholds.get("consecutive_total", 3.0))
 
                 if all_positive and recent_main_net > consecutive_total:
-                    alerts.append(AlertItem(
-                        alert_type="consecutive_inflow",
-                        symbol=symbol,
-                        name=name,
-                        severity="info",
-                        direction="buy",
-                        value=recent_main_net,
-                        message=(
-                            f"🟢 {name}({symbol}) 连续{consecutive_days}日主力净流入"
-                            f"累计 {recent_main_net:.2f}亿"
-                        ),
-                    ))
+                    alerts.append(
+                        AlertItem(
+                            alert_type="consecutive_inflow",
+                            symbol=symbol,
+                            name=name,
+                            severity="info",
+                            direction="buy",
+                            value=recent_main_net,
+                            message=(
+                                f"🟢 {name}({symbol}) 连续{consecutive_days}日主力净流入"
+                                f"累计 {recent_main_net:.2f}亿"
+                            ),
+                        )
+                    )
 
                 if all_negative and recent_main_net < -consecutive_total:
-                    alerts.append(AlertItem(
-                        alert_type="consecutive_outflow",
-                        symbol=symbol,
-                        name=name,
-                        severity="critical",
-                        direction="sell",
-                        value=recent_main_net,
-                        message=(
-                            f"🔴 {name}({symbol}) 连续{consecutive_days}日主力净流出"
-                            f"累计 {abs(recent_main_net):.2f}亿"
-                        ),
-                    ))
+                    alerts.append(
+                        AlertItem(
+                            alert_type="consecutive_outflow",
+                            symbol=symbol,
+                            name=name,
+                            severity="critical",
+                            direction="sell",
+                            value=recent_main_net,
+                            message=(
+                                f"🔴 {name}({symbol}) 连续{consecutive_days}日主力净流出"
+                                f"累计 {abs(recent_main_net):.2f}亿"
+                            ),
+                        )
+                    )
 
             # 告警 7：持仓股主力净流出超 5000 万
             # P0-1 修复：使用配置阈值，单位亿元
@@ -312,7 +317,8 @@ class IntradayMonitor:
                 self._thresholds.get("position_outflow_warning", 0.5)
             )
             if symbol in self._portfolio_symbols and main_net < -position_warning_threshold:
-                    alerts.append(AlertItem(
+                alerts.append(
+                    AlertItem(
                         alert_type="position_warning",
                         symbol=symbol,
                         name=name,
@@ -320,10 +326,10 @@ class IntradayMonitor:
                         direction="sell",
                         value=main_net,
                         message=(
-                            f"🔴 持仓 {name}({symbol}) 主力净流出"
-                            f"{abs(main_net):.2f}亿，建议关注"
+                            f"🔴 持仓 {name}({symbol}) 主力净流出{abs(main_net):.2f}亿，建议关注"
                         ),
-                    ))
+                    )
+                )
 
         except Exception as e:
             logger.debug(f"扫描 {symbol} 异常: {e}")
@@ -339,9 +345,7 @@ class IntradayMonitor:
             if df is None or df.empty:
                 return []
 
-            threshold = float(
-                self._thresholds.get("industry_flow_threshold", 10.0)
-            )
+            threshold = float(self._thresholds.get("industry_flow_threshold", 10.0))
 
             for _, row in df.iterrows():
                 sector = str(row.get("sector", ""))
@@ -354,63 +358,71 @@ class IntradayMonitor:
                 # 行业流入 > 10 亿
                 # P0-1 修复：main_net 已是亿元单位，不再 /1e8
                 if main_net > threshold:
-                    alerts.append(AlertItem(
-                        alert_type="industry_inflow",
-                        symbol=sector,
-                        name=sector,
-                        severity="info",
-                        direction="buy",
-                        value=main_net,
-                        message=(
-                            f"🟢 行业 {sector} 资金流入 {main_net:.2f}亿"
-                            f"（涨幅 {change_pct:.2f}%）"
-                        ),
-                    ))
+                    alerts.append(
+                        AlertItem(
+                            alert_type="industry_inflow",
+                            symbol=sector,
+                            name=sector,
+                            severity="info",
+                            direction="buy",
+                            value=main_net,
+                            message=(
+                                f"🟢 行业 {sector} 资金流入 {main_net:.2f}亿"
+                                f"（涨幅 {change_pct:.2f}%）"
+                            ),
+                        )
+                    )
 
                 # 行业流出 > 10 亿
                 if main_net < -threshold:
-                    alerts.append(AlertItem(
-                        alert_type="industry_outflow",
-                        symbol=sector,
-                        name=sector,
-                        severity="warning",
-                        direction="sell",
-                        value=main_net,
-                        message=(
-                            f"🔴 行业 {sector} 资金流出 {abs(main_net):.2f}亿"
-                            f"（涨幅 {change_pct:.2f}%）"
-                        ),
-                    ))
+                    alerts.append(
+                        AlertItem(
+                            alert_type="industry_outflow",
+                            symbol=sector,
+                            name=sector,
+                            severity="warning",
+                            direction="sell",
+                            value=main_net,
+                            message=(
+                                f"🔴 行业 {sector} 资金流出 {abs(main_net):.2f}亿"
+                                f"（涨幅 {change_pct:.2f}%）"
+                            ),
+                        )
+                    )
 
                 # 顶背离：资金流出但行业上涨
                 if main_net < -threshold / 2 and change_pct > 1.0:
-                    alerts.append(AlertItem(
-                        alert_type="industry_divergence",
-                        symbol=sector,
-                        name=sector,
-                        severity="warning",
-                        direction="neutral",
-                        value=main_net,
-                        message=(
-                            f"⚠️ 行业 {sector} 顶背离：上涨 {change_pct:.2f}%"
-                            f"但资金流出 {abs(main_net):.2f}亿"
-                        ),
-                    ))
+                    alerts.append(
+                        AlertItem(
+                            alert_type="industry_divergence",
+                            symbol=sector,
+                            name=sector,
+                            severity="warning",
+                            direction="neutral",
+                            value=main_net,
+                            message=(
+                                f"⚠️ 行业 {sector} 顶背离：上涨 {change_pct:.2f}%"
+                                f"但资金流出 {abs(main_net):.2f}亿"
+                            ),
+                        )
+                    )
 
                 # 底背离：资金流入但行业下跌
                 if main_net > threshold / 2 and change_pct < -1.0:
-                    alerts.append(AlertItem(
-                        alert_type="industry_divergence",
-                        symbol=sector,
-                        name=sector,
-                        severity="info",
-                        direction="buy",
-                        value=main_net,
-                        message=(
-                            f"⚠️ 行业 {sector} 底背离：下跌 {change_pct:.2f}%"
-                            f"但资金流入 {main_net:.2f}亿（可能吸筹）"
-                        ),
-                    ))
+                    alerts.append(
+                        AlertItem(
+                            alert_type="industry_divergence",
+                            symbol=sector,
+                            name=sector,
+                            severity="info",
+                            direction="buy",
+                            value=main_net,
+                            message=(
+                                f"⚠️ 行业 {sector} 底背离：下跌 {change_pct:.2f}%"
+                                f"但资金流入 {main_net:.2f}亿（可能吸筹）"
+                            ),
+                        )
+                    )
 
         except Exception as e:
             logger.debug(f"行业扫描异常: {e}")

@@ -77,9 +77,11 @@ def _http_get_json(url: str, params: dict[str, str], max_retries: int = 3) -> di
             logger.debug(f"东方财富 HTTP API 第 {attempt + 1}/{max_retries} 次失败: {e}")
             if attempt < max_retries - 1:
                 import time
+
                 time.sleep(0.5 * (attempt + 1))  # 递增等待 0.5s, 1s
     logger.info(f"东方财富 HTTP API {max_retries} 次重试均失败: {last_err}")
     return None
+
 
 # ── 工具函数 ──────────────────────────────────────────────────
 
@@ -186,12 +188,22 @@ def _collect_market_flow_akshare() -> dict[str, Any] | None:
                 }
         else:
             logger.warning("akshare 北向资金: 返回空数据，标记为获取不到")
-            result["north_bound"] = {"date": "", "time": "", "total": None,
-                                      "sh_connect": None, "sz_connect": None}
+            result["north_bound"] = {
+                "date": "",
+                "time": "",
+                "total": None,
+                "sh_connect": None,
+                "sz_connect": None,
+            }
     except Exception as e:
         logger.info(f"akshare 北向资金采集失败: {e}")
-        result["north_bound"] = {"date": "", "time": "", "total": None,
-                                  "sh_connect": None, "sz_connect": None}
+        result["north_bound"] = {
+            "date": "",
+            "time": "",
+            "total": None,
+            "sh_connect": None,
+            "sz_connect": None,
+        }
 
     return result if result else None
 
@@ -202,21 +214,26 @@ def _collect_market_flow_http() -> dict[str, Any] | None:
 
     # 大盘资金流（沪深京合并）
     try:
-        data = _http_get_json(_EASTMONEY_FFLOW_URL, {
-            "secid": "1.000001",
-            "fields1": "f1,f2,f3,f7",
-            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
-            "klt": "101",
-            "lmt": "1",
-        })
+        data = _http_get_json(
+            _EASTMONEY_FFLOW_URL,
+            {
+                "secid": "1.000001",
+                "fields1": "f1,f2,f3,f7",
+                "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
+                "klt": "101",
+                "lmt": "1",
+            },
+        )
         if data and data.get("data") and data["data"].get("klines"):
             kline = data["data"]["klines"][-1].split(",")
             # 字段顺序: 日期,主力净流入,小单,中单,大单,超大单,...
             if len(kline) >= 6:
                 result["market"] = {
                     "date": kline[0],
-                    "sh_close": None, "sh_change": None,
-                    "sz_close": None, "sz_change": None,
+                    "sh_close": None,
+                    "sh_change": None,
+                    "sz_close": None,
+                    "sz_change": None,
                     "main_net_inflow": _yuan_to_yi(_safe_float(kline[1])),
                     "main_net_ratio": None,
                     "small_inflow": _yuan_to_yi(_safe_float(kline[2])),
@@ -233,7 +250,9 @@ def _collect_market_flow_http() -> dict[str, Any] | None:
 
     # 北向资金
     try:
-        data = _http_get_json(_EASTMONEY_HSGT_URL, {"fields1": "f1,f2,f3,f4", "fields2": "f51,f52,f53,f54,f55,f56"})
+        data = _http_get_json(
+            _EASTMONEY_HSGT_URL, {"fields1": "f1,f2,f3,f4", "fields2": "f51,f52,f53,f54,f55,f56"}
+        )
         if data and data.get("data") and data["data"].get("s2n"):
             # s2n 可能是字符串（逗号分隔）或列表，统一处理
             raw = data["data"].get("s2n", "")
@@ -248,7 +267,9 @@ def _collect_market_flow_http() -> dict[str, Any] | None:
                         result["north_bound"] = {
                             "date": latest_parts[0] if len(latest_parts) > 0 else "",
                             "time": latest_parts[1] if len(latest_parts) > 1 else "",
-                            "total": _safe_float(latest_parts[2]) / 10000 if len(latest_parts) > 2 else None,
+                            "total": _safe_float(latest_parts[2]) / 10000
+                            if len(latest_parts) > 2
+                            else None,
                             "sh_connect": None,
                             "sz_connect": None,
                         }
@@ -319,11 +340,14 @@ def collect_market_flow() -> dict[str, Any] | None:
         nb_total = nb.get("total")
         result["market"] = {
             "date": nb.get("date", _date_str()),
-            "sh_close": None, "sh_change": None,
-            "sz_close": None, "sz_change": None,
+            "sh_close": None,
+            "sh_change": None,
+            "sz_close": None,
+            "sz_change": None,
             "main_net_inflow": nb_total if nb_total is not None else None,
             "main_net_ratio": None,
-            "super_large_inflow": None, "large_inflow": None,
+            "super_large_inflow": None,
+            "large_inflow": None,
             "medium_inflow": None,
             "small_inflow": -nb_total if nb_total is not None else None,
             "north_only": True,
@@ -396,18 +420,20 @@ def _collect_clist_http(fs: str, label: str) -> list[dict[str, Any]] | None:
     diff = data["data"]["diff"]
     records = []
     for item in diff:
-        records.append({
-            "代码": item.get("f12", ""),
-            "名称": item.get("f14", ""),
-            "最新价": item.get("f2", 0),
-            "涨跌幅": item.get("f3", 0),
-            "主力净流入-净额": item.get("f62", 0),
-            "主力净流入-净占比": item.get("f184", 0),
-            "超大单净流入-净额": item.get("f66", 0),
-            "大单净流入-净额": item.get("f72", 0),
-            "中单净流入-净额": item.get("f78", 0),
-            "小单净流入-净额": item.get("f84", 0),
-        })
+        records.append(
+            {
+                "代码": item.get("f12", ""),
+                "名称": item.get("f14", ""),
+                "最新价": item.get("f2", 0),
+                "涨跌幅": item.get("f3", 0),
+                "主力净流入-净额": item.get("f62", 0),
+                "主力净流入-净占比": item.get("f184", 0),
+                "超大单净流入-净额": item.get("f66", 0),
+                "大单净流入-净额": item.get("f72", 0),
+                "中单净流入-净额": item.get("f78", 0),
+                "小单净流入-净额": item.get("f84", 0),
+            }
+        )
     logger.info(f"HTTP {label}: {len(records)} 条")
     return records if records else None
 
@@ -439,6 +465,7 @@ def collect_stock_flow() -> list[dict[str, Any]] | None:
     # 通道1: akshare
     try:
         import akshare as ak
+
         df = ak.stock_individual_fund_flow_rank(indicator="今日")
         if df is not None and not df.empty:
             # akshare 个股字段名前缀 "今日" → 统一为 HTTP 格式
@@ -602,7 +629,9 @@ def analyze_key_industries(sector_data: list[dict[str, Any]] | None) -> list[dic
                         "category": category,
                         "name": name,
                         "main_inflow": main_in,
-                        "main_ratio": _safe_float(item.get("主力净流入-净占比", item.get("f184", 0))),
+                        "main_ratio": _safe_float(
+                            item.get("主力净流入-净占比", item.get("f184", 0))
+                        ),
                         "price_change": _safe_float(item.get("涨跌幅", item.get("f3", 0))),
                     }
 
@@ -611,13 +640,15 @@ def analyze_key_industries(sector_data: list[dict[str, Any]] | None) -> list[dic
             matched_names.add(best_match["name"])
         else:
             # 未匹配到也记录，让用户知道该行业暂无数据
-            result.append({
-                "category": category,
-                "name": "暂无数据",
-                "main_inflow": None,
-                "main_ratio": None,
-                "price_change": None,
-            })
+            result.append(
+                {
+                    "category": category,
+                    "name": "暂无数据",
+                    "main_inflow": None,
+                    "main_ratio": None,
+                    "price_change": None,
+                }
+            )
 
     return result
 
@@ -752,15 +783,20 @@ async def collect_all() -> dict[str, Any]:
     logger.info("资金流数据采集开始...")
 
     # 并行采集（通过线程池包装同步双通道调用：akshare → HTTP 直连）
-    market_task = loop.run_in_executor(None, collect_market_flow)
-    sector_task = loop.run_in_executor(None, collect_sector_flow)
-    concept_task = loop.run_in_executor(None, collect_concept_flow)
-    stock_task = loop.run_in_executor(None, collect_stock_flow)
+    # 每个任务60s超时，防止单源卡死全部采集
+    market_task = asyncio.wait_for(loop.run_in_executor(None, collect_market_flow), timeout=60.0)
+    sector_task = asyncio.wait_for(loop.run_in_executor(None, collect_sector_flow), timeout=60.0)
+    concept_task = asyncio.wait_for(loop.run_in_executor(None, collect_concept_flow), timeout=60.0)
+    stock_task = asyncio.wait_for(loop.run_in_executor(None, collect_stock_flow), timeout=60.0)
 
-    market_data = await market_task
-    sector_data = await sector_task
-    concept_data = await concept_task
-    stock_data = await stock_task
+    # 容错采集：单个超时不影响其他
+    results = await asyncio.gather(
+        market_task, sector_task, concept_task, stock_task, return_exceptions=True
+    )
+    market_data = results[0] if not isinstance(results[0], Exception) else None
+    sector_data = results[1] if not isinstance(results[1], Exception) else None
+    concept_data = results[2] if not isinstance(results[2], Exception) else None
+    stock_data = results[3] if not isinstance(results[3], Exception) else None
 
     logger.info("资金流数据采集完成，开始分析...")
 
@@ -807,7 +843,9 @@ async def collect_all() -> dict[str, Any]:
         else:
             # 既无实时数据也无缓存 → 标记为不可用
             result["sources_unavailable"] = True
-            logger.warning("资金流数据全链路不可用（akshare blocked + HTTP fallback 失败 + 无缓存），将发送状态通知")
+            logger.warning(
+                "资金流数据全链路不可用（akshare blocked + HTTP fallback 失败 + 无缓存），将发送状态通知"
+            )
 
     return result
 
@@ -894,9 +932,9 @@ def build_morning_card(data: dict[str, Any]) -> dict[str, Any]:
                 "3. 数据源恢复后系统会自动重试",
                 "",
                 "---",
-                "💡 此告警每日仅首次触发时推送，后续推送将静默跳过。"
+                "💡 此告警每日仅首次触发时推送，后续推送将静默跳过。",
             ],
-            note="明策 · gugu · 资金流数据源告警 | 需人工排查"
+            note="明策 · gugu · 资金流数据源告警 | 需人工排查",
         )
 
     market = data.get("market", {})
@@ -1037,7 +1075,7 @@ def build_close_card(data: dict[str, Any]) -> dict[str, Any]:
                 "2. 确认 akshare/东方财富服务状态",
                 "3. 数据源恢复后系统会自动重试",
             ],
-            note="明策 · gugu · 资金流数据源告警 | 需人工排查"
+            note="明策 · gugu · 资金流数据源告警 | 需人工排查",
         )
 
     market = data.get("market", {})
@@ -1187,7 +1225,9 @@ async def run_morning_report() -> dict[str, Any]:
     # 北向资金代理也算有效数据（north_only=True）
     has_valid_data = market is not None and (
         market.get("north_only", False)
-        or market.get("sh_close") or market.get("sz_close") or market.get("main_net_inflow")
+        or market.get("sh_close")
+        or market.get("sz_close")
+        or market.get("main_net_inflow")
     )
     if not has_valid_data and not data.get("sectors") and not data.get("strong_stocks"):
         logger.warning("资金流复盘: 全部数据源不可用，跳过推送")
@@ -1203,7 +1243,9 @@ async def run_close_report() -> dict[str, Any]:
     market = data.get("market")
     has_valid_data = market is not None and (
         market.get("north_only", False)
-        or market.get("sh_close") or market.get("sz_close") or market.get("main_net_inflow")
+        or market.get("sh_close")
+        or market.get("sz_close")
+        or market.get("main_net_inflow")
     )
     if not has_valid_data and not data.get("sectors") and not data.get("strong_stocks"):
         logger.warning("资金流日报: 全部数据源不可用，跳过推送")
@@ -1384,7 +1426,10 @@ async def run_afternoon_report() -> dict[str, Any]:
     has_valid_data = market is not None and (
         market.get("sh_close")
         or market.get("sz_close")
-        or (market.get("main_net_inflow") not in (None, 0, 0.0) and not market.get("north_only", False))
+        or (
+            market.get("main_net_inflow") not in (None, 0, 0.0)
+            and not market.get("north_only", False)
+        )
     )
     has_sector_data = bool(data.get("sectors"))
     has_stock_data = bool(data.get("strong_stocks"))
@@ -1463,9 +1508,7 @@ async def _collect_fallback_market_data() -> dict[str, Any] | None:
                 sz_close_val = float(sz_df.iloc[-1].get("close", 0))
                 sz_prev_close = float(sz_df.iloc[-2].get("close", 0))
                 if sz_prev_close > 0:
-                    sz_change_val = round(
-                        (sz_close_val - sz_prev_close) / sz_prev_close * 100, 2
-                    )
+                    sz_change_val = round((sz_close_val - sz_prev_close) / sz_prev_close * 100, 2)
 
             result["market"] = {
                 "date": str(sh_latest.get("date", _date_str())),
@@ -1486,6 +1529,7 @@ async def _collect_fallback_market_data() -> dict[str, Any] | None:
     # 2. 获取北向资金（直接尝试 akshare）
     try:
         import akshare as ak
+
         df_n = ak.stock_hsgt_fund_min_em(symbol="北向资金")
         if df_n is not None and not df_n.empty:
             latest_n = df_n.iloc[-1].to_dict()

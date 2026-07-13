@@ -2,6 +2,7 @@
 
 纯逻辑测试，mock 所有外部数据依赖，禁止真实 API 调用。
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
@@ -17,15 +18,17 @@ from gugu.filters.industry_constraint import IndustryConstraint
 def ranker() -> StockRanker:
     r = StockRanker()
     # v0.6.0: mock 筹码过滤器，避免真实 API 调用（返回数据缺失中性分0.5）
-    r._holder_concentration.check = AsyncMock(return_value={
-        "pass": True,
-        "label": "数据缺失",
-        "holder_num_pct": 0.0,
-        "avg_hold_change": 0.0,
-        "org_hold_pct": 0.0,
-        "data_missing": True,
-        "reasons": ["筹码数据不可用"],
-    })
+    r._holder_concentration.check = AsyncMock(
+        return_value={
+            "pass": True,
+            "label": "数据缺失",
+            "holder_num_pct": 0.0,
+            "avg_hold_change": 0.0,
+            "org_hold_pct": 0.0,
+            "data_missing": True,
+            "reasons": ["筹码数据不可用"],
+        }
+    )
     # v0.6.0: mock 流通市值获取（返回空 DataFrame，circ_mv 降级为0）
     r._dm.fetch_stock_realtime = AsyncMock(return_value=pd.DataFrame())
     return r
@@ -55,26 +58,46 @@ class TestStockRanker:
     async def test_rank_single_stock(self, ranker: StockRanker) -> None:
         """单只股票评分。"""
         n = 60
-        df = pd.DataFrame({
-            "close": [100.0 + i * 0.5 for i in range(n)],
-            "high": [101.0 + i * 0.5 for i in range(n)],
-            "low": [99.0 + i * 0.5 for i in range(n)],
-            "open": [100.0 + i * 0.5 for i in range(n)],
-            "volume": [1_000_000] * n,
-        })
+        df = pd.DataFrame(
+            {
+                "close": [100.0 + i * 0.5 for i in range(n)],
+                "high": [101.0 + i * 0.5 for i in range(n)],
+                "low": [99.0 + i * 0.5 for i in range(n)],
+                "open": [100.0 + i * 0.5 for i in range(n)],
+                "volume": [1_000_000] * n,
+            }
+        )
         ranker._dm.fetch_stock_history = AsyncMock(return_value=df)
-        ranker._dm.fetch_stock_meta = AsyncMock(return_value={
-            "name": "测试股票", "symbol": "600519",
-        })
+        ranker._dm.fetch_stock_meta = AsyncMock(
+            return_value={
+                "name": "测试股票",
+                "symbol": "600519",
+            }
+        )
 
         with patch.object(IndustryConstraint, "get_industry", return_value="白酒"):
-            with patch.object(ranker._fundamental, "check", return_value={
-                "pass": True, "pe": 15.0, "pb": 2.5, "roe": 12.0,
-                "reasons": [],
-            }):
-                with patch.object(ranker._money_flow, "check", AsyncMock(return_value={
-                    "pass": True, "score": 0.6, "reasons": [],
-                })):
+            with patch.object(
+                ranker._fundamental,
+                "check",
+                return_value={
+                    "pass": True,
+                    "pe": 15.0,
+                    "pb": 2.5,
+                    "roe": 12.0,
+                    "reasons": [],
+                },
+            ):
+                with patch.object(
+                    ranker._money_flow,
+                    "check",
+                    AsyncMock(
+                        return_value={
+                            "pass": True,
+                            "score": 0.6,
+                            "reasons": [],
+                        }
+                    ),
+                ):
                     result = await ranker.rank(["600519"], top_n=10)
 
         assert len(result) == 1
@@ -92,37 +115,62 @@ class TestStockRanker:
     async def test_rank_multiple_ordered(self, ranker: StockRanker) -> None:
         """多只股票按评分降序排列。"""
         n = 60
-        df1 = pd.DataFrame({
-            "close": [100.0 + i for i in range(n)],
-            "high": [101.0 + i for i in range(n)],
-            "low": [99.0 + i for i in range(n)],
-            "open": [100.0 + i for i in range(n)],
-            "volume": [1_000_000] * n,
-        })
-        df2 = pd.DataFrame({
-            "close": [50.0 - i * 0.3 for i in range(n)],
-            "high": [51.0 - i * 0.3 for i in range(n)],
-            "low": [49.0 - i * 0.3 for i in range(n)],
-            "open": [50.0 - i * 0.3 for i in range(n)],
-            "volume": [500_000] * n,
-        })
+        df1 = pd.DataFrame(
+            {
+                "close": [100.0 + i for i in range(n)],
+                "high": [101.0 + i for i in range(n)],
+                "low": [99.0 + i for i in range(n)],
+                "open": [100.0 + i for i in range(n)],
+                "volume": [1_000_000] * n,
+            }
+        )
+        df2 = pd.DataFrame(
+            {
+                "close": [50.0 - i * 0.3 for i in range(n)],
+                "high": [51.0 - i * 0.3 for i in range(n)],
+                "low": [49.0 - i * 0.3 for i in range(n)],
+                "open": [50.0 - i * 0.3 for i in range(n)],
+                "volume": [500_000] * n,
+            }
+        )
 
         async def mock_history(symbol: str, days: int = 60) -> pd.DataFrame:
             return df1 if symbol == "600519" else df2
 
         ranker._dm.fetch_stock_history = AsyncMock(side_effect=mock_history)
-        ranker._dm.fetch_stock_meta = AsyncMock(return_value={
-            "name": "测试", "symbol": "600519",
-        })
+        ranker._dm.fetch_stock_meta = AsyncMock(
+            return_value={
+                "name": "测试",
+                "symbol": "600519",
+            }
+        )
 
         with patch.object(IndustryConstraint, "get_industry", return_value="白酒"):
-            with patch.object(ranker._fundamental, "check", side_effect=[
-                {"pass": True, "pe": 15.0, "pb": 2.0, "roe": 10.0, "reasons": []},
-                {"pass": False, "pe": None, "pb": None, "roe": None, "reasons": ["PE too high"]},
-            ]):
-                with patch.object(ranker._money_flow, "check", AsyncMock(return_value={
-                    "pass": True, "score": 0.6, "reasons": [],
-                })):
+            with patch.object(
+                ranker._fundamental,
+                "check",
+                side_effect=[
+                    {"pass": True, "pe": 15.0, "pb": 2.0, "roe": 10.0, "reasons": []},
+                    {
+                        "pass": False,
+                        "pe": None,
+                        "pb": None,
+                        "roe": None,
+                        "reasons": ["PE too high"],
+                    },
+                ],
+            ):
+                with patch.object(
+                    ranker._money_flow,
+                    "check",
+                    AsyncMock(
+                        return_value={
+                            "pass": True,
+                            "score": 0.6,
+                            "reasons": [],
+                        }
+                    ),
+                ):
                     result = await ranker.rank(["600519", "000001"], top_n=10)
 
         assert len(result) == 2
@@ -134,23 +182,41 @@ class TestStockRanker:
     async def test_top_n_limit(self, ranker: StockRanker) -> None:
         """top_n 参数限制返回数量。"""
         n = 60
-        df = pd.DataFrame({
-            "close": [100.0 + i for i in range(n)],
-            "high": [101.0 + i for i in range(n)],
-            "low": [99.0 + i for i in range(n)],
-            "open": [100.0 + i for i in range(n)],
-            "volume": [1_000_000] * n,
-        })
+        df = pd.DataFrame(
+            {
+                "close": [100.0 + i for i in range(n)],
+                "high": [101.0 + i for i in range(n)],
+                "low": [99.0 + i for i in range(n)],
+                "open": [100.0 + i for i in range(n)],
+                "volume": [1_000_000] * n,
+            }
+        )
         ranker._dm.fetch_stock_history = AsyncMock(return_value=df)
         ranker._dm.fetch_stock_meta = AsyncMock(return_value={"name": "测试"})
 
         with patch.object(IndustryConstraint, "get_industry", return_value=""):
-            with patch.object(ranker._fundamental, "check", return_value={
-                "pass": True, "pe": 15.0, "pb": 2.0, "roe": 10.0, "reasons": [],
-            }):
-                with patch.object(ranker._money_flow, "check", AsyncMock(return_value={
-                    "pass": True, "score": 0.6, "reasons": [],
-                })):
+            with patch.object(
+                ranker._fundamental,
+                "check",
+                return_value={
+                    "pass": True,
+                    "pe": 15.0,
+                    "pb": 2.0,
+                    "roe": 10.0,
+                    "reasons": [],
+                },
+            ):
+                with patch.object(
+                    ranker._money_flow,
+                    "check",
+                    AsyncMock(
+                        return_value={
+                            "pass": True,
+                            "score": 0.6,
+                            "reasons": [],
+                        }
+                    ),
+                ):
                     result = await ranker.rank(
                         ["600519", "000001", "000002", "000003"],
                         top_n=2,
@@ -162,41 +228,63 @@ class TestStockRanker:
     async def test_hot_sector_boost(self, ranker: StockRanker) -> None:
         """股票属于热门板块时 sector_score 更高。"""
         n = 60
-        df = pd.DataFrame({
-            "close": [100.0 + i for i in range(n)],
-            "high": [101.0 + i for i in range(n)],
-            "low": [99.0 + i for i in range(n)],
-            "open": [100.0 + i for i in range(n)],
-            "volume": [1_000_000] * n,
-        })
+        df = pd.DataFrame(
+            {
+                "close": [100.0 + i for i in range(n)],
+                "high": [101.0 + i for i in range(n)],
+                "low": [99.0 + i for i in range(n)],
+                "open": [100.0 + i for i in range(n)],
+                "volume": [1_000_000] * n,
+            }
+        )
         ranker._dm.fetch_stock_history = AsyncMock(return_value=df)
         ranker._dm.fetch_stock_meta = AsyncMock(return_value={"name": "test"})
 
         with patch.object(IndustryConstraint, "get_industry", return_value="白酒"):
-            with patch.object(ranker._fundamental, "check", return_value={
-                "pass": True, "pe": 15.0, "pb": 2.0, "roe": 10.0, "reasons": [],
-            }):
-                with patch.object(ranker._money_flow, "check", AsyncMock(return_value={
-                    "pass": True, "score": 0.6, "reasons": [],
-                })):
+            with patch.object(
+                ranker._fundamental,
+                "check",
+                return_value={
+                    "pass": True,
+                    "pe": 15.0,
+                    "pb": 2.0,
+                    "roe": 10.0,
+                    "reasons": [],
+                },
+            ):
+                with patch.object(
+                    ranker._money_flow,
+                    "check",
+                    AsyncMock(
+                        return_value={
+                            "pass": True,
+                            "score": 0.6,
+                            "reasons": [],
+                        }
+                    ),
+                ):
                     # 不传 hot_sectors
                     result_no_sector = await ranker.rank(["600519"], top_n=10)
                     # 传空 hot_sectors
                     result_empty_sector = await ranker.rank(["600519"], hot_sectors=[], top_n=10)
                     # 两者评分应相等
-                    assert result_no_sector[0]["total_score"] == result_empty_sector[0]["total_score"]
+                    assert (
+                        result_no_sector[0]["total_score"] == result_empty_sector[0]["total_score"]
+                    )
 
     @pytest.mark.asyncio
     async def test_partial_failure_one_stock(self, ranker: StockRanker) -> None:
         """部分股票评分失败不影响其他股票。"""
         n = 60
-        good_df = pd.DataFrame({
-            "close": [100.0 + i for i in range(n)],
-            "high": [101.0 + i for i in range(n)],
-            "low": [99.0 + i for i in range(n)],
-            "open": [100.0 + i for i in range(n)],
-            "volume": [1_000_000] * n,
-        })
+        good_df = pd.DataFrame(
+            {
+                "close": [100.0 + i for i in range(n)],
+                "high": [101.0 + i for i in range(n)],
+                "low": [99.0 + i for i in range(n)],
+                "open": [100.0 + i for i in range(n)],
+                "volume": [1_000_000] * n,
+            }
+        )
 
         # 第一只股票正常，第二只返回空
         async def mock_history(symbol: str, days: int = 60) -> pd.DataFrame:
@@ -206,12 +294,28 @@ class TestStockRanker:
         ranker._dm.fetch_stock_meta = AsyncMock(return_value={"name": "test"})
 
         with patch.object(IndustryConstraint, "get_industry", return_value=""):
-            with patch.object(ranker._fundamental, "check", return_value={
-                "pass": True, "pe": 15.0, "pb": 2.0, "roe": 10.0, "reasons": [],
-            }):
-                with patch.object(ranker._money_flow, "check", AsyncMock(return_value={
-                    "pass": True, "score": 0.6, "reasons": [],
-                })):
+            with patch.object(
+                ranker._fundamental,
+                "check",
+                return_value={
+                    "pass": True,
+                    "pe": 15.0,
+                    "pb": 2.0,
+                    "roe": 10.0,
+                    "reasons": [],
+                },
+            ):
+                with patch.object(
+                    ranker._money_flow,
+                    "check",
+                    AsyncMock(
+                        return_value={
+                            "pass": True,
+                            "score": 0.6,
+                            "reasons": [],
+                        }
+                    ),
+                ):
                     result = await ranker.rank(["600519", "BAD_STOCK"], top_n=10)
 
         # 只有 600519 有结果

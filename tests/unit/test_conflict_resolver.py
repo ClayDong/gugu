@@ -2,6 +2,7 @@
 
 覆盖：多维权重计算、加权融合、冲突检测、冷启动、降级、历史追踪。
 """
+
 from __future__ import annotations
 
 import json
@@ -245,9 +246,7 @@ class TestResolveConflict:
     async def test_llm_success(self):
         resolver = ConflictResolver()
         resolver._llm_available = True
-        resolver._llm_cfg = MagicMock(
-            llm_base_url="http://test", llm_api_key="key", llm_model="m"
-        )
+        resolver._llm_cfg = MagicMock(llm_base_url="http://test", llm_api_key="key", llm_model="m")
         # mock router
         resolver._router = MagicMock()
         resolver._router.select_perspectives_dynamic.return_value = [
@@ -331,9 +330,7 @@ class TestResolutionDataclass:
             final_stop_loss_price=1450.0,
             is_conflict=False,
             dispersion=0.2,
-            opinions=[
-                PerspectiveOpinion("p1", "trading_system", "buy", 0.1, 1450.0, 0.8, "r1")
-            ],
+            opinions=[PerspectiveOpinion("p1", "trading_system", "buy", 0.1, 1450.0, 0.8, "r1")],
             weights={"p1": 1.0},
             action_scores={"buy": 1.0},
             dissenting_views=[],

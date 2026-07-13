@@ -69,14 +69,16 @@ class PerspectiveEngine:
             except Exception as e:
                 logger.error(f"视角 {perspective} 评分失败: {e}")
                 # 失败时给一个中性低置信分
-                scores.append(PerspectiveScore(
-                    perspective=perspective,
-                    score=5.0,
-                    weight=self._weights.get(perspective, 0.1),
-                    confidence=0.3,
-                    reasoning=f"评分异常: {e}",
-                    verdict="评分异常",
-                ))
+                scores.append(
+                    PerspectiveScore(
+                        perspective=perspective,
+                        score=5.0,
+                        weight=self._weights.get(perspective, 0.1),
+                        confidence=0.3,
+                        reasoning=f"评分异常: {e}",
+                        verdict="评分异常",
+                    )
+                )
 
         return self._aggregate(ctx, scores)
 

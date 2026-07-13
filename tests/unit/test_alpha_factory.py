@@ -2,6 +2,7 @@
 
 测试纯数学计算，不依赖网络或外部数据。
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -23,14 +24,16 @@ def uptrend_df() -> pd.DataFrame:
     dates = pd.bdate_range("2024-01-01", periods=200)
     close = 100.0 * np.cumprod(1 + np.random.randn(200) * 0.008 + 0.002)
     close = np.maximum(close, 10.0)
-    return pd.DataFrame({
-        "date": dates,
-        "open": close * 0.99,
-        "high": close * 1.02,
-        "low": close * 0.98,
-        "close": close,
-        "volume": np.random.randint(1_000_000, 10_000_000, 200),
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": close * 0.99,
+            "high": close * 1.02,
+            "low": close * 0.98,
+            "close": close,
+            "volume": np.random.randint(1_000_000, 10_000_000, 200),
+        }
+    )
 
 
 @pytest.fixture
@@ -40,20 +43,24 @@ def downtrend_df() -> pd.DataFrame:
     dates = pd.bdate_range("2024-01-01", periods=200)
     close = 100.0 * np.cumprod(1 + np.random.randn(200) * 0.008 - 0.002)
     close = np.maximum(close, 10.0)
-    return pd.DataFrame({
-        "date": dates,
-        "open": close * 0.99,
-        "high": close * 1.02,
-        "low": close * 0.98,
-        "close": close,
-        "volume": np.random.randint(1_000_000, 10_000_000, 200),
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": close * 0.99,
+            "high": close * 1.02,
+            "low": close * 0.98,
+            "close": close,
+            "volume": np.random.randint(1_000_000, 10_000_000, 200),
+        }
+    )
 
 
 class TestAlphaFactory:
     """AlphaFactory 功能测试。"""
 
-    def test_compute_all_returns_factors(self, factory: AlphaFactory, uptrend_df: pd.DataFrame) -> None:
+    def test_compute_all_returns_factors(
+        self, factory: AlphaFactory, uptrend_df: pd.DataFrame
+    ) -> None:
         """compute_all() 应返回因子字典。"""
         factors = factory.compute_all(uptrend_df)
 
@@ -80,7 +87,9 @@ class TestAlphaFactory:
         assert isinstance(result["buy_signal"], bool)
         assert isinstance(result["sell_signal"], bool)
 
-    def test_uptrend_has_positive_signal(self, factory: AlphaFactory, uptrend_df: pd.DataFrame) -> None:
+    def test_uptrend_has_positive_signal(
+        self, factory: AlphaFactory, uptrend_df: pd.DataFrame
+    ) -> None:
         """上升趋势应有正面的综合评分。"""
         factors = factory.compute_all(uptrend_df)
         result = factory.composite_score(factors)
@@ -90,7 +99,9 @@ class TestAlphaFactory:
             if cat in ("trend", "momentum"):
                 assert score > -0.3, f"{cat} score={score} too negative in uptrend"
 
-    def test_downtrend_has_negative_signal(self, factory: AlphaFactory, downtrend_df: pd.DataFrame) -> None:
+    def test_downtrend_has_negative_signal(
+        self, factory: AlphaFactory, downtrend_df: pd.DataFrame
+    ) -> None:
         """下跌趋势应有负面的趋势评分。"""
         factors = factory.compute_all(downtrend_df)
         result = factory.composite_score(factors)
@@ -145,23 +156,27 @@ class TestAlphaFactory:
 
     def test_insufficient_data(self, factory: AlphaFactory) -> None:
         """少于 5 行数据应返回空因子字典。"""
-        df = pd.DataFrame({
-            "close": [100.0, 101.0, 102.0],
-            "high": [101.0, 102.0, 103.0],
-            "low": [99.0, 100.0, 101.0],
-            "open": [100.0, 101.0, 102.0],
-        })
+        df = pd.DataFrame(
+            {
+                "close": [100.0, 101.0, 102.0],
+                "high": [101.0, 102.0, 103.0],
+                "low": [99.0, 100.0, 101.0],
+                "open": [100.0, 101.0, 102.0],
+            }
+        )
         factors = factory.compute_all(df)
         assert factors == {} or len(factors) < 5  # 大多数因子需要 5+ 行
 
     def test_missing_volume_column(self, factory: AlphaFactory) -> None:
         """缺少 volume 列应不会崩溃。"""
-        df = pd.DataFrame({
-            "close": [100.0 + i for i in range(100)],
-            "high": [101.0 + i for i in range(100)],
-            "low": [99.0 + i for i in range(100)],
-            "open": [100.0 + i for i in range(100)],
-        })
+        df = pd.DataFrame(
+            {
+                "close": [100.0 + i for i in range(100)],
+                "high": [101.0 + i for i in range(100)],
+                "low": [99.0 + i for i in range(100)],
+                "open": [100.0 + i for i in range(100)],
+            }
+        )
         factors = factory.compute_all(df)
         assert len(factors) >= 10  # 成交量因子外的因子应正常计算
 
@@ -169,9 +184,16 @@ class TestAlphaFactory:
         """自定义权重应影响综合评分。"""
         factors = factory.compute_all(uptrend_df)
         default_result = factory.composite_score(factors)
-        custom_result = factory.composite_score(factors, weights={
-            "trend": 1.0, "momentum": 0, "volatility": 0, "volume": 0, "pattern": 0,
-        })
+        custom_result = factory.composite_score(
+            factors,
+            weights={
+                "trend": 1.0,
+                "momentum": 0,
+                "volatility": 0,
+                "volume": 0,
+                "pattern": 0,
+            },
+        )
         # 权重不同，评分应该不同
         assert default_result["score"] != custom_result["score"]
 
@@ -198,8 +220,12 @@ class TestAlphaFactorDataClass:
     def test_full_construction(self) -> None:
         """完整构造 AlphaFactor。"""
         f = AlphaFactor(
-            name="rsi", category="momentum", direction="neutral",
-            value=75.0, normalized=0.75, signal=0.5,
+            name="rsi",
+            category="momentum",
+            direction="neutral",
+            value=75.0,
+            normalized=0.75,
+            signal=0.5,
             description="RSI超买",
         )
         assert f.name == "rsi"

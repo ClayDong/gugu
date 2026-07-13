@@ -248,7 +248,7 @@ class BacktestEngine:
                 try:
                     from gugu.analysis.trailing_stop import TrailingStopSignal
 
-                    window_df = df.iloc[max(0, i - 60) : i + 1]
+                    window_df = df.iloc[max(0, i - 60) : i]  # P0修复：排除当日，防止前视偏差
                     # P0 修复：回测中同步检测危险信号并传入移动止损引擎
                     # 确保回测与实盘移动止损行为一致（实盘在 _check_stop_loss 中传入 pos.danger_signals）
                     ts_danger_signals: list[str] = []
@@ -306,31 +306,35 @@ class BacktestEngine:
                     try:
                         from gugu.analysis.stage_detector import MarketStage
 
-                        window_df = df.iloc[max(0, i - 80) : i + 1]
-                        stage_result = self._stage_detector.detect(window_df)
-                        if stage_result.stage in (MarketStage.FRENZY, MarketStage.FINAL):
-                            cognitive_log.append(
-                                {
-                                    "date": str(current_date),
-                                    "action": "stage_filter",
-                                    "stage": stage_result.stage.value,
-                                    "reason": stage_result.description,
-                                }
-                            )
-                            cognitive_skip_buy = True
+                        window_df = df.iloc[max(0, i - 80) : i]
+                        if len(window_df) >= 20:
+                            stage_result = self._stage_detector.detect(window_df)
+                            if stage_result.stage in (MarketStage.FRENZY, MarketStage.FINAL):
+                                cognitive_log.append(
+                                    {
+                                        "date": str(current_date),
+                                        "action": "stage_filter",
+                                        "stage": stage_result.stage.value,
+                                        "reason": stage_result.description,
+                                    }
+                                )
+                                cognitive_skip_buy = True
                     except Exception as e:
                         self._logger.debug(f"Stage detection failed for {symbol}: {e}")
 
                 # 认知引擎：危险信号检查
                 if not cognitive_skip_buy and self._danger_detector is not None:
                     try:
-                        window_df = df.iloc[max(0, i - 20) : i + 1]
-                        danger_result = self._danger_detector.detect(
-                            window_df, prev_close=prev_close
-                        )
-                        if danger_result.has_signal and danger_result.severity in (
-                            "medium",
-                            "high",
+                        window_df = df.iloc[max(0, i - 20) : i]
+                        danger_result = None
+                        if len(window_df) >= 5:
+                            danger_result = self._danger_detector.detect(
+                                window_df, prev_close=prev_close
+                            )
+                        if (
+                            danger_result is not None
+                            and danger_result.has_signal
+                            and danger_result.severity in ("medium", "high")
                         ):
                             cognitive_log.append(
                                 {
@@ -344,7 +348,7 @@ class BacktestEngine:
                     except Exception as e:
                         self._logger.debug(f"Danger detection failed for {symbol}: {e}")
 
-                # 认知引擎：向下摊平检查
+                # 认知引擎：向下摊平检查（用prev_close，因为决策是基于前一天数据）
                 if (
                     not cognitive_skip_buy
                     and self._no_avg_down_checker is not None
@@ -356,7 +360,7 @@ class BacktestEngine:
                         symbol=symbol,
                         has_position=True,
                         cost_price=avg_cost,
-                        current_price=close,
+                        current_price=prev_close,
                         quantity=position_qty,
                     )
                     if not avg_down_result.allowed:

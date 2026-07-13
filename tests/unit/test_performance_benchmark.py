@@ -9,6 +9,7 @@
 3. 数据缓存读写（内存缓存）
 4. Signal 序列化/反序列化
 """
+
 from __future__ import annotations
 
 import time
@@ -35,25 +36,37 @@ def _make_kline_df(days: int = 250) -> pd.DataFrame:
             base *= 1.002
         prices.append(base)
 
-    return pd.DataFrame({
-        "date": dates,
-        "open": [p * 0.998 for p in prices],
-        "high": [p * 1.015 for p in prices],
-        "low": [p * 0.985 for p in prices],
-        "close": prices,
-        "volume": [100000 + (i % 10) * 5000 for i in range(days)],
-        "amount": [p * 100000 for p in prices],
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": [p * 0.998 for p in prices],
+            "high": [p * 1.015 for p in prices],
+            "low": [p * 0.985 for p in prices],
+            "close": prices,
+            "volume": [100000 + (i % 10) * 5000 for i in range(days)],
+            "amount": [p * 100000 for p in prices],
+        }
+    )
 
 
 class TestSignalGenerationBenchmark:
     """策略信号生成性能基准。"""
 
-    @pytest.mark.parametrize("strategy_name", [
-        "turtle", "dual_ma", "bollinger", "rsi_reversal",
-        "chen_jiangting", "box_breakout", "kdj",
-        "double_yin", "pullback_low", "money_flow_follow",
-    ])
+    @pytest.mark.parametrize(
+        "strategy_name",
+        [
+            "turtle",
+            "dual_ma",
+            "bollinger",
+            "rsi_reversal",
+            "chen_jiangting",
+            "box_breakout",
+            "kdj",
+            "double_yin",
+            "pullback_low",
+            "money_flow_follow",
+        ],
+    )
     def test_strategy_generation_speed(self, strategy_name: str) -> None:
         """各策略在 250 行 K 线上生成信号应 < 0.5s。"""
         from gugu.strategies.registry import get_strategy
@@ -106,9 +119,7 @@ class TestDataCacheBenchmark:
             cache.get(f"key_{i}")
         elapsed = time.perf_counter() - start
 
-        assert elapsed < 0.2 * _BENCHMARK_TOLERANCE, (
-            f"1000 次缓存读写耗时 {elapsed:.3f}s"
-        )
+        assert elapsed < 0.2 * _BENCHMARK_TOLERANCE, f"1000 次缓存读写耗时 {elapsed:.3f}s"
 
     def test_cache_lru_eviction(self) -> None:
         """LRU 淘汰 2000 条目 < 0.05s。"""
@@ -140,9 +151,7 @@ class TestRiskBenchmark:
             rm.check_daily_loss(0.01)
         elapsed = time.perf_counter() - start
 
-        assert elapsed < 0.3 * _BENCHMARK_TOLERANCE, (
-            f"1000 次风控检查耗时 {elapsed:.3f}s"
-        )
+        assert elapsed < 0.3 * _BENCHMARK_TOLERANCE, f"1000 次风控检查耗时 {elapsed:.3f}s"
 
 
 class TestSignalModelBenchmark:

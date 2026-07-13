@@ -11,6 +11,7 @@
 5. test_perspective_engine — PerspectiveEngine 实例化
 6. test_signal_pipeline_construction — SignalPipeline 带 mock 依赖构建
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock

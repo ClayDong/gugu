@@ -76,9 +76,7 @@ def build_perspective_card(result: PerspectiveAnalysisResult) -> dict[str, Any]:
     # ── 第一层：综合评分 + 判定 ──
     lines_header: list[str] = []
     status_emoji = "✅" if result.passed else "❌"
-    lines_header.append(
-        f"**{result.symbol} {result.name}** | ¥{result.price:.2f}"
-    )
+    lines_header.append(f"**{result.symbol} {result.name}** | ¥{result.price:.2f}")
     lines_header.append("")
     lines_header.append(
         f"### {status_emoji} 综合评分: **{result.composite_score:.1f}/10** "
@@ -89,10 +87,12 @@ def build_perspective_card(result: PerspectiveAnalysisResult) -> dict[str, Any]:
         f"🪣 木桶短板: **{result.min_perspective}({result.min_score:.1f}分)** | "
         f"🔴 致命缺陷 **{result.fatal_count}个**"
     )
-    elements.append({
-        "tag": "div",
-        "text": {"tag": "lark_md", "content": "\n".join(lines_header)},
-    })
+    elements.append(
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": "\n".join(lines_header)},
+        }
+    )
     elements.append({"tag": "hr"})
 
     # ── 第二层：各视角评分表 + 推理链 ──
@@ -109,8 +109,7 @@ def build_perspective_card(result: PerspectiveAnalysisResult) -> dict[str, Any]:
         bar = "█" * int(s.score) + "░" * (10 - int(s.score))
 
         lines_scores.append(
-            f"**{name_cn}** {s.score:.1f}{status} "
-            f"(权重{s.weight:.0%} 置信度{s.confidence:.0%})"
+            f"**{name_cn}** {s.score:.1f}{status} (权重{s.weight:.0%} 置信度{s.confidence:.0%})"
         )
         lines_scores.append(f"进度: {bar}")
         lines_scores.append(f"判定: {s.verdict}")
@@ -121,22 +120,20 @@ def build_perspective_card(result: PerspectiveAnalysisResult) -> dict[str, Any]:
 
         # 关键因子
         if s.key_factors:
-            lines_scores.append(
-                "✅ 正面: " + " | ".join(s.key_factors[:3])
-            )
+            lines_scores.append("✅ 正面: " + " | ".join(s.key_factors[:3]))
 
         # 风险标记
         if s.risk_flags:
-            lines_scores.append(
-                "⚠️ 风险: " + " | ".join(s.risk_flags[:3])
-            )
+            lines_scores.append("⚠️ 风险: " + " | ".join(s.risk_flags[:3]))
 
         lines_scores.append("")
 
-    elements.append({
-        "tag": "div",
-        "text": {"tag": "lark_md", "content": "\n".join(lines_scores)},
-    })
+    elements.append(
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": "\n".join(lines_scores)},
+        }
+    )
     elements.append({"tag": "hr"})
 
     # ── 第三层：核心优势/风险 + 操作建议 + 价位 ──
@@ -184,10 +181,12 @@ def build_perspective_card(result: PerspectiveAnalysisResult) -> dict[str, Any]:
     lines_action.append("")
     lines_action.append(f"**📝 综合推理**: {result.overall_reasoning}")
 
-    elements.append({
-        "tag": "div",
-        "text": {"tag": "lark_md", "content": "\n".join(lines_action)},
-    })
+    elements.append(
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": "\n".join(lines_action)},
+        }
+    )
     elements.append({"tag": "hr"})
 
     # ── 术语解释（新手友好，符合 project_memory 约束）──
@@ -205,25 +204,28 @@ def build_perspective_card(result: PerspectiveAnalysisResult) -> dict[str, Any]:
         "**MACD** = 趋势动量指标，金叉（DIF上穿DEA）看多，死叉看空",
         "**RSI** = 相对强弱指标，>70超买，<30超卖",
     ]
-    elements.append({
-        "tag": "div",
-        "text": {"tag": "lark_md", "content": "\n".join(glossary_lines)},
-    })
+    elements.append(
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": "\n".join(glossary_lines)},
+        }
+    )
     elements.append({"tag": "hr"})
 
     # ── 免责声明 ──
-    elements.append({
-        "tag": "note",
-        "elements": [
-            {
-                "tag": "plain_text",
-                "content": (
-                    "⚠️ 本分析基于量化模型自动生成，不构成投资建议。"
-                    "投资有风险，入市需谨慎。"
-                ),
-            }
-        ],
-    })
+    elements.append(
+        {
+            "tag": "note",
+            "elements": [
+                {
+                    "tag": "plain_text",
+                    "content": (
+                        "⚠️ 本分析基于量化模型自动生成，不构成投资建议。投资有风险，入市需谨慎。"
+                    ),
+                }
+            ],
+        }
+    )
 
     return {
         "header": {
@@ -308,14 +310,9 @@ def build_batch_summary_card(
         lines.append("")
 
     lines.append("---")
-    lines.append(
-        "*⚠️ 本分析基于量化模型自动生成，不构成投资建议。"
-        "投资有风险，入市需谨慎。*"
-    )
+    lines.append("*⚠️ 本分析基于量化模型自动生成，不构成投资建议。投资有风险，入市需谨慎。*")
     lines.append("")
-    lines.append(
-        "*📖 详细分析见后续推送的个股卡片（含视角评分表、推理链、价位参考、术语解释）*"
-    )
+    lines.append("*📖 详细分析见后续推送的个股卡片（含视角评分表、推理链、价位参考、术语解释）*")
 
     content = "\n".join(lines)
 

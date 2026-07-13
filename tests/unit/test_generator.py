@@ -1,4 +1,5 @@
 """策略生成器测试。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -72,7 +73,7 @@ def test_validate_strategy_code_no_strategy_class() -> None:
 def test_validate_strategy_code_multiple_strategy_classes() -> None:
     code = VALID_CODE.replace(
         "class TestDemoStrategy(Strategy):",
-        "class A(Strategy):\n    name = \"a\"\n    def generate_signals(self, df): return df\n\nclass TestDemoStrategy(Strategy):",
+        'class A(Strategy):\n    name = "a"\n    def generate_signals(self, df): return df\n\nclass TestDemoStrategy(Strategy):',
     )
     with pytest.raises(ValueError, match="只能有一个 Strategy 子类"):
         validate_strategy_code(code)
@@ -86,7 +87,7 @@ def test_validate_strategy_code_missing_name() -> None:
 
 def test_validate_strategy_code_missing_generate_signals() -> None:
     code = VALID_CODE.replace(
-        "    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:\n        self._ensure_columns(df)\n        df = df.copy()\n        df[\"signal\"] = 0\n        df[\"confidence\"] = 0.5\n        return df\n",
+        '    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:\n        self._ensure_columns(df)\n        df = df.copy()\n        df["signal"] = 0\n        df["confidence"] = 0.5\n        return df\n',
         "",
     )
     with pytest.raises(ValueError, match="generate_signals"):
@@ -159,7 +160,7 @@ def test_generate_strategy_code_malformed_response() -> None:
 def test_save_strategy(tmp_path: Path) -> None:
     registry = tmp_path / "registry.py"
     registry.write_text(
-        "_REGISTRY: dict[str, type] = {\n    \"existing\": object,\n}\n",
+        '_REGISTRY: dict[str, type] = {\n    "existing": object,\n}\n',
         encoding="utf-8",
     )
     with (

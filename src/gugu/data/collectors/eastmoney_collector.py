@@ -13,6 +13,7 @@
 - 重试机制（3次，指数退避）
 - 数据校验（价格>0、字段完整）
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -107,16 +108,18 @@ class EastmoneyCollector(BaseCollector):
                 if len(parts) < 11:
                     continue
                 try:
-                    rows.append({
-                        "date": parts[0],
-                        "open": float(parts[1]),
-                        "close": float(parts[2]),
-                        "high": float(parts[3]),
-                        "low": float(parts[4]),
-                        "volume": float(parts[5]),
-                        "amount": float(parts[6]),
-                        "change_pct": float(parts[9]) if parts[9] else 0.0,
-                    })
+                    rows.append(
+                        {
+                            "date": parts[0],
+                            "open": float(parts[1]),
+                            "close": float(parts[2]),
+                            "high": float(parts[3]),
+                            "low": float(parts[4]),
+                            "volume": float(parts[5]),
+                            "amount": float(parts[6]),
+                            "change_pct": float(parts[9]) if parts[9] else 0.0,
+                        }
+                    )
                 except (ValueError, IndexError):
                     continue
 
@@ -175,21 +178,25 @@ class EastmoneyCollector(BaseCollector):
                 amount = float(d.get("f48", 0))
                 name = str(d.get("f58", code))
 
-                rows.append({
-                    "symbol": code,
-                    "name": name,
-                    "price": price,
-                    "open": open_price,
-                    "change_pct": round(change_pct, 2),
-                    "volume": volume,
-                    "amount": amount,
-                })
+                rows.append(
+                    {
+                        "symbol": code,
+                        "name": name,
+                        "price": price,
+                        "open": open_price,
+                        "change_pct": round(change_pct, 2),
+                        "volume": volume,
+                        "amount": amount,
+                    }
+                )
             except Exception as e:
                 logger.warning(f"东方财富实时行情 {code} 采集失败: {e}")
                 continue
 
-        return pd.DataFrame(rows) if rows else pd.DataFrame(
-            columns=["symbol", "name", "price", "change_pct", "volume", "amount"]
+        return (
+            pd.DataFrame(rows)
+            if rows
+            else pd.DataFrame(columns=["symbol", "name", "price", "change_pct", "volume", "amount"])
         )
 
     def fetch_sector_flow(self) -> pd.DataFrame:
@@ -224,17 +231,19 @@ class EastmoneyCollector(BaseCollector):
                     medium = float(item.get("f78", 0)) / 1e8
                     small = float(item.get("f84", 0)) / 1e8
 
-                    rows.append({
-                        "date": datetime.now().strftime("%Y-%m-%d"),
-                        "sector": str(item.get("f14", "")),
-                        "main_net": round(main_net, 2),
-                        "main_pct": float(item.get("f184", 0)),
-                        "super_large_net": round(super_large, 2),
-                        "large_net": round(large, 2),
-                        "medium_net": round(medium, 2),
-                        "small_net": round(small, 2),
-                        "change_pct": float(item.get("f3", 0)),
-                    })
+                    rows.append(
+                        {
+                            "date": datetime.now().strftime("%Y-%m-%d"),
+                            "sector": str(item.get("f14", "")),
+                            "main_net": round(main_net, 2),
+                            "main_pct": float(item.get("f184", 0)),
+                            "super_large_net": round(super_large, 2),
+                            "large_net": round(large, 2),
+                            "medium_net": round(medium, 2),
+                            "small_net": round(small, 2),
+                            "change_pct": float(item.get("f3", 0)),
+                        }
+                    )
                 except (ValueError, TypeError):
                     continue
 
@@ -280,15 +289,17 @@ class EastmoneyCollector(BaseCollector):
                     large = float(parts[4]) / 1e8
                     super_large = float(parts[5]) / 1e8
 
-                    rows.append({
-                        "date": parts[0],
-                        "main_net": round(main_net, 2),
-                        "main_pct": 0.0,
-                        "super_large_net": round(super_large, 2),
-                        "large_net": round(large, 2),
-                        "medium_net": round(medium, 2),
-                        "small_net": round(small, 2),
-                    })
+                    rows.append(
+                        {
+                            "date": parts[0],
+                            "main_net": round(main_net, 2),
+                            "main_pct": 0.0,
+                            "super_large_net": round(super_large, 2),
+                            "large_net": round(large, 2),
+                            "medium_net": round(medium, 2),
+                            "small_net": round(small, 2),
+                        }
+                    )
                 except (ValueError, IndexError):
                     continue
 
@@ -337,20 +348,22 @@ class EastmoneyCollector(BaseCollector):
                     # 跳过停牌（价格为0或-）
                     if price <= 0:
                         continue
-                    rows.append({
-                        "symbol": str(item.get("f12", "")).zfill(6),
-                        "name": str(item.get("f14", "")),
-                        "price": price,
-                        "change_pct": float(item.get("f3", 0)),
-                        "volume": float(item.get("f5", 0)),
-                        "amount": float(item.get("f6", 0)),
-                        "open": float(item.get("f17", 0)),
-                        "high": float(item.get("f15", 0)),
-                        "low": float(item.get("f16", 0)),
-                        # v0.4.6: 换手率(%) + 流通市值(元)，支持豹哥三要素选股池过滤
-                        "turnover_pct": float(item.get("f8", 0) or 0),
-                        "circ_mv": float(item.get("f21", 0) or 0),
-                    })
+                    rows.append(
+                        {
+                            "symbol": str(item.get("f12", "")).zfill(6),
+                            "name": str(item.get("f14", "")),
+                            "price": price,
+                            "change_pct": float(item.get("f3", 0)),
+                            "volume": float(item.get("f5", 0)),
+                            "amount": float(item.get("f6", 0)),
+                            "open": float(item.get("f17", 0)),
+                            "high": float(item.get("f15", 0)),
+                            "low": float(item.get("f16", 0)),
+                            # v0.4.6: 换手率(%) + 流通市值(元)，支持豹哥三要素选股池过滤
+                            "turnover_pct": float(item.get("f8", 0) or 0),
+                            "circ_mv": float(item.get("f21", 0) or 0),
+                        }
+                    )
                 except (ValueError, TypeError):
                     continue
 

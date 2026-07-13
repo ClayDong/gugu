@@ -1,4 +1,5 @@
 """回测报告生成器单元测试。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -72,7 +73,9 @@ class TestGenerateReport:
         results = [
             _make_mock_result("000001", "strategy_a", total_return=0.10, sharpe=1.2, win_rate=0.6),
             _make_mock_result("000002", "strategy_a", total_return=0.05, sharpe=0.9, win_rate=0.55),
-            _make_mock_result("000003", "strategy_a", total_return=-0.02, sharpe=-0.1, win_rate=0.45),
+            _make_mock_result(
+                "000003", "strategy_a", total_return=-0.02, sharpe=-0.1, win_rate=0.45
+            ),
             _make_mock_result("000001", "strategy_b", total_return=0.08, sharpe=1.0, win_rate=0.58),
             _make_mock_result("000002", "strategy_b", total_return=0.03, sharpe=0.6, win_rate=0.52),
             _make_mock_result("000003", "strategy_b", total_return=0.01, sharpe=0.3, win_rate=0.50),
@@ -127,10 +130,18 @@ class TestGenerateReport:
     def test_sorting_tables_present(self):
         """报告包含多种排序表。"""
         results = [
-            _make_mock_result("000001", "s1", total_return=0.10, sharpe=1.5, win_rate=0.65, profit_factor=2.0),
-            _make_mock_result("000002", "s1", total_return=0.08, sharpe=1.2, win_rate=0.60, profit_factor=1.8),
-            _make_mock_result("000003", "s2", total_return=0.06, sharpe=1.0, win_rate=0.55, profit_factor=1.5),
-            _make_mock_result("000004", "s2", total_return=0.04, sharpe=0.8, win_rate=0.50, profit_factor=1.2),
+            _make_mock_result(
+                "000001", "s1", total_return=0.10, sharpe=1.5, win_rate=0.65, profit_factor=2.0
+            ),
+            _make_mock_result(
+                "000002", "s1", total_return=0.08, sharpe=1.2, win_rate=0.60, profit_factor=1.8
+            ),
+            _make_mock_result(
+                "000003", "s2", total_return=0.06, sharpe=1.0, win_rate=0.55, profit_factor=1.5
+            ),
+            _make_mock_result(
+                "000004", "s2", total_return=0.04, sharpe=0.8, win_rate=0.50, profit_factor=1.2
+            ),
         ]
         md = generate_report(results)
         # 所有排序表头应该存在
@@ -148,11 +159,38 @@ class TestGenerateReportFromMetricsDict:
         """基本的 metrics dict 输入。"""
         data = {
             "strategy_a": [
-                {"total_return": 0.10, "annual_return": 0.20, "sharpe": 1.2, "max_drawdown": 0.15, "win_rate": 0.6, "profit_factor": 1.5, "total_trades": 10.0, "avg_hold_days": 5.0},
-                {"total_return": 0.05, "annual_return": 0.10, "sharpe": 0.9, "max_drawdown": 0.12, "win_rate": 0.55, "profit_factor": 1.3, "total_trades": 8.0, "avg_hold_days": 4.0},
+                {
+                    "total_return": 0.10,
+                    "annual_return": 0.20,
+                    "sharpe": 1.2,
+                    "max_drawdown": 0.15,
+                    "win_rate": 0.6,
+                    "profit_factor": 1.5,
+                    "total_trades": 10.0,
+                    "avg_hold_days": 5.0,
+                },
+                {
+                    "total_return": 0.05,
+                    "annual_return": 0.10,
+                    "sharpe": 0.9,
+                    "max_drawdown": 0.12,
+                    "win_rate": 0.55,
+                    "profit_factor": 1.3,
+                    "total_trades": 8.0,
+                    "avg_hold_days": 4.0,
+                },
             ],
             "strategy_b": [
-                {"total_return": 0.03, "annual_return": 0.06, "sharpe": 0.5, "max_drawdown": 0.20, "win_rate": 0.5, "profit_factor": 1.1, "total_trades": 15.0, "avg_hold_days": 6.0},
+                {
+                    "total_return": 0.03,
+                    "annual_return": 0.06,
+                    "sharpe": 0.5,
+                    "max_drawdown": 0.20,
+                    "win_rate": 0.5,
+                    "profit_factor": 1.1,
+                    "total_trades": 15.0,
+                    "avg_hold_days": 6.0,
+                },
             ],
         }
         md = generate_report_from_metrics_dict(data)
@@ -168,7 +206,16 @@ class TestGenerateReportFromMetricsDict:
         """单个策略单个值。"""
         data = {
             "s1": [
-                {"total_return": 0.05, "annual_return": 0.10, "sharpe": 0.8, "max_drawdown": 0.10, "win_rate": 0.5, "profit_factor": 1.2, "total_trades": 5.0, "avg_hold_days": 3.0},
+                {
+                    "total_return": 0.05,
+                    "annual_return": 0.10,
+                    "sharpe": 0.8,
+                    "max_drawdown": 0.10,
+                    "win_rate": 0.5,
+                    "profit_factor": 1.2,
+                    "total_trades": 5.0,
+                    "avg_hold_days": 3.0,
+                },
             ],
         }
         md = generate_report_from_metrics_dict(data)

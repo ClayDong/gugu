@@ -27,6 +27,8 @@ except ImportError:
 
     class StrEnum(str, Enum):  # noqa: UP042
         pass
+
+
 from typing import Any
 
 import pandas as pd
@@ -104,29 +106,29 @@ class TrailingStopEngine:
     # 市场状态自适应参数（P3 优化）
     # 不同市场状态下 ATR 倍数调整：高波动市场放宽止损，低波动市场收紧止损
     REGIME_ATR_MULTIPLIERS = {
-        "bull": 3.5,      # 牛市放宽止损，避免被震荡出局
-        "bear": 2.5,      # 熊市收紧止损，保护本金
+        "bull": 3.5,  # 牛市放宽止损，避免被震荡出局
+        "bear": 2.5,  # 熊市收紧止损，保护本金
         "sideways": 2.0,  # 震荡市收紧止损，减少假突破损失
-        "crash": 2.0,     # 暴跌市收紧止损
-        "rally": 3.0,     # 反弹市适中
+        "crash": 2.0,  # 暴跌市收紧止损
+        "rally": 3.0,  # 反弹市适中
     }
 
     # 不同市场状态下最大回撤止损调整
     REGIME_MAX_DRAWDOWN = {
-        "bull": 0.18,     # 牛市允许更大回撤
-        "bear": 0.10,     # 熊市严格限制回撤
-        "sideways": 0.12, # 震荡市适中
-        "crash": 0.08,    # 暴跌市严格限制
-        "rally": 0.15,    # 反弹市适中
+        "bull": 0.18,  # 牛市允许更大回撤
+        "bear": 0.10,  # 熊市严格限制回撤
+        "sideways": 0.12,  # 震荡市适中
+        "crash": 0.08,  # 暴跌市严格限制
+        "rally": 0.15,  # 反弹市适中
     }
 
     # 不同市场状态下危险信号收紧因子
     REGIME_TIGHTEN_FACTORS = {
-        "bull": 0.3,      # 牛市收紧幅度小，给更多空间
-        "bear": 0.6,      # 熊市收紧幅度大，快速保护
+        "bull": 0.3,  # 牛市收紧幅度小，给更多空间
+        "bear": 0.6,  # 熊市收紧幅度大，快速保护
         "sideways": 0.5,  # 震荡市适中
-        "crash": 0.7,     # 暴跌市大幅收紧
-        "rally": 0.4,     # 反弹市适度收紧
+        "crash": 0.7,  # 暴跌市大幅收紧
+        "rally": 0.4,  # 反弹市适度收紧
     }
 
     def init_stop(
@@ -451,7 +453,7 @@ class TrailingStopEngine:
                             avg_vol_20 = float(df["volume"].iloc[-20:].mean())
                             if avg_vol_20 > 0 and today_vol / avg_vol_20 >= 1.5:
                                 logger.warning(
-                                    f"[trailing-stop] 放量跌破浪谷（量比={today_vol/avg_vol_20:.2f}），直接 EXIT"
+                                    f"[trailing-stop] 放量跌破浪谷（量比={today_vol / avg_vol_20:.2f}），直接 EXIT"
                                 )
                                 return TrailingStopSignal.EXIT
                         except Exception:
@@ -467,8 +469,7 @@ class TrailingStopEngine:
                 # P2-2 修复：去掉递减逻辑，仅当价格创新高时才重置计数
                 # 原递减逻辑被主力"跌停板吃货→拉升诱多→再下跌"手法利用，
                 # 导致 3 次清仓永远触发不了。改为仅在真正创新高时重置。
-                if (current_price >= state.highest_price
-                        and state.valley_break_count > 0):
+                if current_price >= state.highest_price and state.valley_break_count > 0:
                     old_count = state.valley_break_count
                     state.valley_break_count = 0
                     logger.info(

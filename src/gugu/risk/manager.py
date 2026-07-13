@@ -150,6 +150,11 @@ class RiskManager:
                         f"交易已被阻断，需人工 reset_halt 后恢复"
                     )
                 self._last_reset_date = data.get("last_reset_date", "")
+                # P0 修复：恢复组合峰值，防止重启后组合回撤熔断失效
+                loaded_peak = data.get("portfolio_peak", 0.0)
+                if loaded_peak and loaded_peak > self._portfolio_peak:
+                    self._portfolio_peak = float(loaded_peak)
+                    self._logger.info(f"恢复组合峰值: {self._portfolio_peak:.2f}")
         except Exception as e:
             # P0 修复：fail-safe 但记录 ERROR，便于人工介入
             self._logger.error(
@@ -180,6 +185,7 @@ class RiskManager:
             }
             # P0 修复：原子写入
             from gugu.utils.atomic import atomic_write_json
+
             atomic_write_json(RISK_STATE_FILE, data, ensure_ascii=False, indent=2)
         except Exception as e:
             self._logger.warning(f"保存熔断状态失败: {e}")
@@ -531,7 +537,9 @@ class RiskManager:
             message=f"组合回撤 {dd:.2%} 在安全范围内",
         )
 
-    def check_holding_duration(self, symbol: str, entry_date: str, current_pnl_pct: float) -> RiskCheckResult:
+    def check_holding_duration(
+        self, symbol: str, entry_date: str, current_pnl_pct: float
+    ) -> RiskCheckResult:
         """P2-5 新增：检查单股持仓时间是否超限。
 
         防止阴跌股套牢：不触发止损（每天跌 1-2%）但持仓 3 个月亏 20%。
@@ -553,6 +561,7 @@ class RiskManager:
 
         try:
             from datetime import date as _date
+
             entry = _date.fromisoformat(entry_date)
             today = _date.today()
             holding_days = (today - entry).days

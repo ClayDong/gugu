@@ -164,8 +164,12 @@ async def validate_yesterday_screener() -> list[ValidationResult]:
         if today_data is None:
             continue
         open_price, high_price, benchmark_open = today_data
-        open_premium = (open_price - rec.close_price) / rec.close_price if rec.close_price > 0 else 0.0
-        high_premium = (high_price - rec.close_price) / rec.close_price if rec.close_price > 0 else 0.0
+        open_premium = (
+            (open_price - rec.close_price) / rec.close_price if rec.close_price > 0 else 0.0
+        )
+        high_premium = (
+            (high_price - rec.close_price) / rec.close_price if rec.close_price > 0 else 0.0
+        )
         vr = ValidationResult(
             symbol=rec.symbol,
             name=rec.name,
@@ -192,8 +196,8 @@ async def validate_yesterday_screener() -> list[ValidationResult]:
         avg_high = sum(v.intraday_high_premium for v in validated) / len(validated)
         logger.info(
             f"尾盘验证完成: {len(validated)} 只 | "
-            f"高开率 {win_open}/{len(validated)}={win_open/len(validated)*100:.0f}% | "
-            f"日内冲高率 {win_high}/{len(validated)}={win_high/len(validated)*100:.0f}% | "
+            f"高开率 {win_open}/{len(validated)}={win_open / len(validated) * 100:.0f}% | "
+            f"日内冲高率 {win_high}/{len(validated)}={win_high / len(validated) * 100:.0f}% | "
             f"平均开盘溢价 {avg_open:+.2f}% | "
             f"平均日内最高溢价 {avg_high:+.2f}%"
         )

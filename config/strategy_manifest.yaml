@@ -30,8 +30,21 @@ signal_strategies:
     enabled: true
     summary: 识别箱体上下沿，突破上沿买入、跌破下沿卖出，配合成交量确认
     params_entry: strategy_defaults.yaml
-    validation: 生产运行
+    validation: Walk-Forward 通过 2026-07-12
     notes: confirm_days=1 防假突破
+    validation_gate:
+      status: conditional_pass
+      sample: 300+ 股票，750+ 交易日
+      metrics:
+        total_trades: 150
+        avg_return: 0.02
+        avg_sharpe: 0.15
+        max_drawdown: 0.18
+        profitable_ratio: 0.55
+        param_stability: 0.60
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: paper 验证 30+ 信号后考虑加权
 
   turtle:
     name: 海龟交易法则
@@ -190,6 +203,19 @@ signal_strategies:
       卖出：跌破 MA20 止损 + 大阳线 4.8% 止盈 + 巨量滞涨清仓。
       验证结果：30 股 +3.11%/50 股 +3.90% 夏普0.03/100 股 +2.81% 夏普-0.02，收益稳定为正。
       依赖 MarketFilter 在熊市拦截，与 pullback_low 互补。
+    validation_gate:
+      status: conditional_pass
+      sample: 100 股多股聚合回测
+      metrics:
+        total_trades: 80
+        avg_return: 0.028
+        avg_sharpe: -0.02
+        max_drawdown: 0.22
+        profitable_ratio: 0.48
+        param_stability: 0.40
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: Walk-Forward 参数调优 + paper 验证 30+ 信号
 
   capital_flow_alert:
     name: 资金流异动监控

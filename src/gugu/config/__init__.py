@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import warnings
 from functools import lru_cache
+from typing import Any
 
 # ── Re-export legacy loader functions for backward compatibility ─────
 # 已弃用：新代码请使用 get_config() 强类型接口
@@ -94,13 +95,14 @@ def config_has_changed() -> bool:
         return False
 
 
-def settings() -> dict:
+def settings() -> dict[str, Any]:
     """Backward-compatible dict-style access. Delegates to get_config().flatten().
 
     Prefer ``get_config()`` for new code.
     """
     warnings.warn(
         "settings() is deprecated, use get_config() for strong-typed access",
-        DeprecationWarning, stacklevel=2,
+        DeprecationWarning,
+        stacklevel=2,
     )
     return get_config().flatten()

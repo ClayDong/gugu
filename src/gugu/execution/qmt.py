@@ -103,13 +103,23 @@ class QmtBroker(BaseBroker):
         """
         if not self._health_check():
             return OrderResult(
-                False, symbol, direction, 0, 0, 0,
+                False,
+                symbol,
+                direction,
+                0,
+                0,
+                0,
                 message="QMT 未连接，请先调用 connect()",
             )
 
         if not self._account_id:
             return OrderResult(
-                False, symbol, direction, 0, 0, 0,
+                False,
+                symbol,
+                direction,
+                0,
+                0,
+                0,
                 message="QMT 未配置 account_id",
             )
 

@@ -1,4 +1,5 @@
 """工具函数单元测试。"""
+
 from __future__ import annotations
 
 from datetime import date, datetime

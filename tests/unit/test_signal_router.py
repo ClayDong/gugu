@@ -1,4 +1,5 @@
 """信号路由测试。"""
+
 from __future__ import annotations
 
 from unittest import mock

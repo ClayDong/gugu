@@ -1,4 +1,5 @@
 """资金管理模块单元测试。"""
+
 from __future__ import annotations
 
 import pytest
@@ -32,7 +33,9 @@ class TestKellyCalculator:
         """保守模式使用 1/4 Kelly。"""
         kelly = KellyCalculator()
         result_normal = kelly.calculate(win_rate=0.6, profit_loss_ratio=2.0, is_conservative=False)
-        result_conservative = kelly.calculate(win_rate=0.6, profit_loss_ratio=2.0, is_conservative=True)
+        result_conservative = kelly.calculate(
+            win_rate=0.6, profit_loss_ratio=2.0, is_conservative=True
+        )
         assert result_conservative.suggested_position < result_normal.suggested_position
 
     def test_calculate_custom_fractional(self):
@@ -107,7 +110,8 @@ class TestKellyCalculator:
         """第一层加仓条件满足时返回加仓量。"""
         kelly = KellyCalculator()
         amount, reason = kelly.pyramiding_add(
-            current_level=0, current_profit_pct=0.06,
+            current_level=0,
+            current_profit_pct=0.06,
             initial_position_size=100,
         )
         assert amount == 50.0  # 初始的 50%
@@ -117,7 +121,8 @@ class TestKellyCalculator:
         """未满足加仓条件返回 0。"""
         kelly = KellyCalculator()
         amount, reason = kelly.pyramiding_add(
-            current_level=0, current_profit_pct=0.02,
+            current_level=0,
+            current_profit_pct=0.02,
             initial_position_size=100,
         )
         assert amount == 0.0
@@ -127,7 +132,8 @@ class TestKellyCalculator:
         """第二层加仓。"""
         kelly = KellyCalculator()
         amount, reason = kelly.pyramiding_add(
-            current_level=1, current_profit_pct=0.12,
+            current_level=1,
+            current_profit_pct=0.12,
             initial_position_size=100,
         )
         assert amount == 30.0  # 初始的 30%
@@ -136,7 +142,8 @@ class TestKellyCalculator:
         """第三层加仓。"""
         kelly = KellyCalculator()
         amount, reason = kelly.pyramiding_add(
-            current_level=2, current_profit_pct=0.18,
+            current_level=2,
+            current_profit_pct=0.18,
             initial_position_size=100,
         )
         assert amount == 20.0  # 初始的 20%
@@ -144,21 +151,28 @@ class TestKellyCalculator:
     def test_pyramiding_add_custom_levels(self):
         """自定义加仓层级。"""
         from gugu.analysis.money_management import PyramidingLevel
+
         kelly = KellyCalculator()
         custom_levels = [
-            PyramidingLevel(level=1, trigger_profit_pct=0.03, ratio_of_initial=0.8, stop_loss_pct=0.03),
+            PyramidingLevel(
+                level=1, trigger_profit_pct=0.03, ratio_of_initial=0.8, stop_loss_pct=0.03
+            ),
         ]
         amount, reason = kelly.pyramiding_add(
-            current_level=0, current_profit_pct=0.04,
-            initial_position_size=100, levels=custom_levels,
+            current_level=0,
+            current_profit_pct=0.04,
+            initial_position_size=100,
+            levels=custom_levels,
         )
         assert amount == 80.0
 
     def test_estimate_from_history_basic(self):
         """从历史记录估算。"""
         win_rate, pl_ratio = KellyCalculator.estimate_from_history(
-            win_count=60, loss_count=40,
-            total_profit=30000, total_loss=10000,
+            win_count=60,
+            loss_count=40,
+            total_profit=30000,
+            total_loss=10000,
         )
         assert win_rate == 0.6
         assert pl_ratio > 1.0
@@ -184,7 +198,9 @@ class TestKellyCalculator:
     def test_estimate_from_history_pl_ratio_capped(self):
         """盈亏比上限 10。"""
         win_rate, pl_ratio = KellyCalculator.estimate_from_history(
-            win_count=5, loss_count=1,
-            total_profit=100000, total_loss=100,
+            win_count=5,
+            loss_count=1,
+            total_profit=100000,
+            total_loss=100,
         )
         assert pl_ratio <= 10.0

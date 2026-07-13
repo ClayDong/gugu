@@ -1,4 +1,5 @@
 """盘中异动告警模块测试。"""
+
 from __future__ import annotations
 
 from gugu.engine.intraday_monitor import AlertItem

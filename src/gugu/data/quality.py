@@ -162,7 +162,8 @@ class PlausiblePriceRule(ValidationRule):
         # 分级阈值：低价股波动大（宽松），高价股波动小（严格）
         # 如 ¥5 低价股 8x 偏离可能是投机拉升，但 ¥1500 高价股 3x 偏离几乎必然是数据错误
         tiered_max_dev = self._tiered_max_deviation(ma)
-        deviation = max(latest, ma) / min(latest, ma)
+        _denom = min(latest, ma)
+        deviation = max(latest, ma) / _denom if _denom > 0 else float("inf")
         if deviation > tiered_max_dev:
             msg = (
                 f"{symbol} 最新价 {latest:.2f} 偏离 {self._ma_window}日MA {ma:.2f} "
@@ -362,7 +363,9 @@ class DataValidator:
             if len(ret) == 3:
                 _, new_df, msg = ret
                 if new_df.empty and not result.empty:
-                    logger.warning(f"[quality] {symbol} 规则 {type(rule).__name__} 返回空 DF: {msg}")
+                    logger.warning(
+                        f"[quality] {symbol} 规则 {type(rule).__name__} 返回空 DF: {msg}"
+                    )
                     return new_df
                 result = new_df
             elif len(ret) == 2:

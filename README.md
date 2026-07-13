@@ -19,8 +19,10 @@
 - **多周期趋势确认** — 周线/日线趋势一致性检查，防止逆势操作
 
 ### 📊 策略体系
-- **多策略信号融合** — 8 个内置策略（趋势/均值回归/突破），支持 weighted/majority/any 融合模式
-- **策略注册中心** — 26 个策略统一登记到 `strategy_manifest.yaml`，支持清单/校验/看板/出处/参数查询
+- **多策略信号融合** — 15 个注册策略（趋势/均值回归/突破/主力行为），支持 weighted/majority/any 融合模式
+- **当前启用策略** — `box_breakout`（箱体突破）+ `double_yin`（双阴钱袋子），按市场状态分流启用
+- **策略准入门禁** — `scripts/validate_strategy_gate.py` 统一 9 项门槛（交易数/收益/夏普/回撤/盈利比/参数稳定性/paper 信号/paper 收益），结构化判断是否可启用
+- **策略注册中心** — 26 个策略统一登记到 `strategy_manifest.yaml`，启用策略必须包含 `validation_gate` 结构化验证记录
 - **Walk-Forward 参数优化** — 滚动窗口网格搜索 + 多股聚合训练，4 项解锁条件门控自动写回
 - **自优化调度闭环** — 周日 03:00 自动跑多股聚合 Walk-Forward，6 只行业代表股，失败不污染生产参数
 
@@ -121,6 +123,10 @@ python scripts/verify_enabled_strategies.py                    # 验证 box_brea
 python scripts/verify_enabled_strategies.py --max-stocks 50    # 限制测试股票数
 python scripts/verify_enabled_strategies.py --days 200         # 自定义回测天数
 python scripts/verify_enabled_strategies.py --output result.json  # 输出到 JSON
+
+# 策略准入门禁验证
+python scripts/validate_strategy_gate.py --strategy box_breakout --metrics metrics.json
+python scripts/validate_strategy_gate.py                        # 查看当前启用策略
 ```
 
 ## 系统架构
@@ -137,7 +143,7 @@ python scripts/verify_enabled_strategies.py --output result.json  # 输出到 JS
 |------|------|------|
 | 配置 | `config/` | 强类型 Pydantic 配置 + YAML |
 | 数据 | `data/` | 多源采集、三层缓存、数据质量校验 |
-| 策略 | `strategies/` | 8 个内置策略 + LLM 生成器 + 策略注册中心 |
+| 策略 | `strategies/` | 15 个注册策略 + LLM 生成器 + 策略注册中心 |
 | 回测 | `backtest/` | 含认知引擎/Walk-Forward 优化的回测引擎 |
 | 风控 | `risk/` | 三级风控、组合相关性监控、回撤熔断 |
 | 执行 | `execution/` | 模拟盘 + QMT 实盘骨架 |
@@ -185,7 +191,7 @@ python scripts/build_kb_index.py --force
 
 ## 测试
 
-**1326 测试，67% 覆盖率**（较 v0.5.4 新增 345 个测试用例，覆盖率提升 3%）。
+**1521 测试通过，5 跳过，69% 覆盖率**（当前本机 Python 3.14 验证结果）。
 
 ```bash
 # 运行全部测试

@@ -135,13 +135,7 @@ class LeopardThreeFactorsStrategy(Strategy):
         cond_trend = ma20 > ma60
 
         # ── 买入信号：三要素准入 + 放量突破 + 非涨停 + 趋势向上 ──
-        buy_cond = (
-            cond_three_factors
-            & cond_breakout
-            & cond_volume
-            & cond_not_limit
-            & cond_trend
-        )
+        buy_cond = cond_three_factors & cond_breakout & cond_volume & cond_not_limit & cond_trend
 
         # ── 卖出信号：跌破 MA20 或 量价背离 ──
         below_ma20 = df["close"] < ma20
@@ -164,7 +158,9 @@ class LeopardThreeFactorsStrategy(Strategy):
         vol_strength = (df["volume"] / (vol_ma * volume_ratio)).clip(0, 2.0) / 13.3
         # 突破强度加分（0-0.10）：突破越远置信度越高
         breakout_strength = ((df["close"] - recent_high) / recent_high).clip(0, 0.05) / 0.5
-        confidence = (base + amount_strength + vol_strength + breakout_strength).clip(0, 1.0).fillna(0.0)
+        confidence = (
+            (base + amount_strength + vol_strength + breakout_strength).clip(0, 1.0).fillna(0.0)
+        )
 
         df["confidence"] = confidence
         df.loc[df["signal"] == 0, "confidence"] = 0.0

@@ -191,9 +191,7 @@ class ConflictResolver:
             content = self._router._perspectives.get(p, "")
             extracted = self._router._extract_core_wisdom(content, p)
             category = _PERSPECTIVE_TO_CATEGORY.get(p, "trading_system")
-            perspective_contexts.append(
-                f"## 视角: {p} (类别: {category})\n{extracted}"
-            )
+            perspective_contexts.append(f"## 视角: {p} (类别: {category})\n{extracted}")
         perspectives_text = "\n\n".join(perspective_contexts)
 
         # 构建信号上下文
@@ -238,9 +236,7 @@ class ConflictResolver:
             logger.warning(f"[conflict-resolver] LLM 获取多视角建议失败，降级: {e}")
             return self._fallback_opinions(perspectives, signal, direction)
 
-    def _parse_opinions(
-        self, content: str, perspectives: list[str]
-    ) -> list[PerspectiveOpinion]:
+    def _parse_opinions(self, content: str, perspectives: list[str]) -> list[PerspectiveOpinion]:
         """解析 LLM 输出的多视角建议。"""
         try:
             data = json.loads(content)
@@ -416,9 +412,7 @@ class ConflictResolver:
 
     # ========== 加权融合 ==========
 
-    def _fuse(
-        self, opinions: list[PerspectiveOpinion], weights: dict[str, float]
-    ) -> Resolution:
+    def _fuse(self, opinions: list[PerspectiveOpinion], weights: dict[str, float]) -> Resolution:
         """加权融合裁决。"""
         if not opinions:
             return Resolution(
@@ -449,7 +443,9 @@ class ConflictResolver:
         final_position = min(final_position, 0.3)  # 单股上限
 
         # stop_loss：取最严格（最高价，最接近现价，触发最早、亏损最小）
-        stop_losses = [op.stop_loss_price for op in opinions if op.stop_loss_price and op.stop_loss_price > 0]
+        stop_losses = [
+            op.stop_loss_price for op in opinions if op.stop_loss_price and op.stop_loss_price > 0
+        ]
         final_stop = max(stop_losses) if stop_losses else None
 
         # 冲突检测：action 分散度 = 1 - max(score)/total
@@ -461,9 +457,7 @@ class ConflictResolver:
         dissenting_views = []
         for op in opinions:
             if op.action != final_action:
-                dissenting_views.append(
-                    f"{op.perspective} 建议 {op.action}: {op.reason[:60]}"
-                )
+                dissenting_views.append(f"{op.perspective} 建议 {op.action}: {op.reason[:60]}")
 
         return Resolution(
             final_action=final_action,

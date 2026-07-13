@@ -402,14 +402,17 @@ def test_validate_sector_flow_empty_raises() -> None:
 def test_validate_stock_flow_sorts_by_date() -> None:
     """个股资金流应按日期升序排序。"""
     from datetime import date as dt_date
+
     today = dt_date.today()
     df = pd.DataFrame(
         {
-            "date": pd.to_datetime([
-                str(today - timedelta(days=0)),
-                str(today - timedelta(days=2)),
-                str(today - timedelta(days=1)),
-            ]),
+            "date": pd.to_datetime(
+                [
+                    str(today - timedelta(days=0)),
+                    str(today - timedelta(days=2)),
+                    str(today - timedelta(days=1)),
+                ]
+            ),
             "main_net": [1e6, 2e6, 3e6],
             "main_pct": [0.01, 0.02, 0.03],
         }

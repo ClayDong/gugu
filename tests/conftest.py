@@ -1,4 +1,5 @@
 """测试共享 fixture。"""
+
 from __future__ import annotations
 
 import os
@@ -38,9 +39,7 @@ def isolate_project_paths(tmp_path, monkeypatch):
     monkeypatch.setattr("gugu.risk.manager.RISK_STATE_FILE", tmp_path / "risk_state.json")
     monkeypatch.setattr("gugu.execution.paper.STATE_FILE", tmp_path / "paper_broker_state.json")
     # 屏蔽 signals_history.jsonl 写入（测试用例无需关心历史记录持久化）
-    monkeypatch.setattr(
-        "gugu.engine.main.record_signal_history", lambda *a, **kw: None
-    )
+    monkeypatch.setattr("gugu.engine.main.record_signal_history", lambda *a, **kw: None)
     # 通过显式环境变量通知 FeishuNotifier 重定向重试队列（替代 sys.modules 检测）
     monkeypatch.setenv("GUGU_TEST_MODE", "1")
 

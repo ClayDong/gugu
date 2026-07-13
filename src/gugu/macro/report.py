@@ -54,13 +54,13 @@ class MacroReportBuilder:
             if si.get("sz_index", 0) > 0:
                 lines.append(f"深证成指: {si['sz_index']:.2f}  {_fmt_change(si['sz_change_pct'])}")
             if si.get("cyb_index", 0) > 0:
-                lines.append(f"创业板指: {si['cyb_index']:.2f}  {_fmt_change(si['cyb_change_pct'])}")
+                lines.append(
+                    f"创业板指: {si['cyb_index']:.2f}  {_fmt_change(si['cyb_change_pct'])}"
+                )
             if si.get("total_volume", 0) > 0:
                 lines.append(f"沪深成交额: {si['total_volume']:.0f} 亿")
             if si.get("limit_up_count", 0) > 0 or si.get("limit_down_count", 0) > 0:
-                lines.append(
-                    f"涨停 {si['limit_up_count']} 家 | 跌停 {si['limit_down_count']} 家"
-                )
+                lines.append(f"涨停 {si['limit_up_count']} 家 | 跌停 {si['limit_down_count']} 家")
             # 北向资金（None 或 0 均显示"获取不到"，避免误导）
             nf = dr.get("north_flow")
             if nf is not None and nf != 0:

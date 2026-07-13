@@ -75,8 +75,8 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
         return pd.Series(50.0, index=series.index)
 
     # 首次均值：前 period 个 gain/loss 的 SMA
-    avg_gain.iloc[period] = gain.iloc[1:period + 1].mean()
-    avg_loss.iloc[period] = loss.iloc[1:period + 1].mean()
+    avg_gain.iloc[period] = gain.iloc[1 : period + 1].mean()
+    avg_loss.iloc[period] = loss.iloc[1 : period + 1].mean()
 
     # Wilder 平滑
     for i in range(period + 1, len(series)):

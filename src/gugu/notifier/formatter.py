@@ -210,7 +210,9 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     )
     reason = signal.get("reason", "") or ""
     raw_confidence = signal.get("confidence")
-    confidence = raw_confidence if isinstance(raw_confidence, (int, float)) and raw_confidence > 0 else None
+    confidence = (
+        raw_confidence if isinstance(raw_confidence, (int, float)) and raw_confidence > 0 else None
+    )
     position = signal.get("suggested_position", "")
     position_ratio = float(signal.get("suggested_position_ratio", 0))
     if not position and position_ratio > 0:
@@ -254,7 +256,11 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     elif signal.get("weekly_misaligned") or signal.get("sector_check", {}).get("is_cold"):
         strength = "🟡 弱信号"
     else:
-        strength = "🔵 中信号" if isinstance(confidence, (int, float)) and confidence >= 0.6 else "🟡 弱信号"
+        strength = (
+            "🔵 中信号"
+            if isinstance(confidence, (int, float)) and confidence >= 0.6
+            else "🟡 弱信号"
+        )
 
     # entry-filtered signals use yellow card
     if signal.get("wisdom_filtered"):
@@ -269,7 +275,9 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
         summary_line = f"⚠️ 数据异常: {', '.join(missing_fields)}"
     else:
         summary_parts = [f"{action}信号"]
-        conf_text = f"置信度 {confidence:.0%}" if isinstance(confidence, (int, float)) else "置信度 --"
+        conf_text = (
+            f"置信度 {confidence:.0%}" if isinstance(confidence, (int, float)) else "置信度 --"
+        )
         summary_parts.append(conf_text)
         if position_ratio > 0:
             summary_parts.append(f"建议仓位 {position_ratio:.0%}")
@@ -284,21 +292,24 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
 
     title = f"{action}信号 · {name}({symbol})"
     show_price = isinstance(price, (int, float)) and price > 1.0
+    price_note = signal.get("price_note", "")
+    price_display = f"￥{price:.2f}" + (" ⚠️非实时" if price_note else "")
     if data_incomplete or (strength and not wisdom_decision.get("entry_filtered")):
         title = f"{strength} {title}"
-    subtitle = f"💰 ￥{price:.2f} | {summary_line}" if show_price else summary_line
+    subtitle = f"💰 {price_display} | {summary_line}" if show_price else summary_line
 
     # ===== 30秒决策摘要优先 =====
     # 优化：最重要的信息放在最前面，次要信息往后排
+    price_note_line = f"\n**⚠️ 价格提示**：{price_note}" if price_note else ""
     if data_incomplete:
         sections = [
-            f"**股票**：{name}({symbol})\n**方向**：{action}\n**当前价**：{price}\n**信号强度**：{strength}",
+            f"**股票**：{name}({symbol})\n**方向**：{action}\n**当前价**：{price_display}\n**信号强度**：{strength}{price_note_line}",
             f"**⚠️ 数据异常**：以下字段缺失 — {', '.join(missing_fields)}\n"
             f"**触发策略**：{strategy}\n**建议仓位**：{position or '未提供'}\n**触发理由**：{reason}",
         ]
     else:
         sections = [
-            f"**股票**：{name}({symbol})\n**方向**：{action}\n**当前价**：{price}\n**信号强度**：{strength}",
+            f"**股票**：{name}({symbol})\n**方向**：{action}\n**当前价**：{price_display}\n**信号强度**：{strength}{price_note_line}",
             f"**触发策略**：{strategy}\n**建议仓位**：{position or '未提供'}\n**触发理由**：{reason}",
         ]
 
@@ -310,9 +321,7 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     if take_profit:
         tp_pct = take_profit.get("target_1_pct", 0)
         if tp_pct:
-            sl_tp_lines.append(
-                f"🎯 止盈 +{tp_pct:.0%}（￥{take_profit.get('target_1', 0):.2f}）"
-            )
+            sl_tp_lines.append(f"🎯 止盈 +{tp_pct:.0%}（￥{take_profit.get('target_1', 0):.2f}）")
     if sl_tp_lines:
         sections.append("**止损止盈**\n" + "\n".join(sl_tp_lines))
 
@@ -403,7 +412,10 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
         sections.append(mentor_text)
 
     # signal_only 模式免责声明
-    if signal.get("llm_pending") is False and signal.get("wisdom_decision", {}).get("source") != "llm":
+    if (
+        signal.get("llm_pending") is False
+        and signal.get("wisdom_decision", {}).get("source") != "llm"
+    ):
         sections.append(
             "---\n⚠️ **仅通知模式**：此信号仅供参考，不构成交易建议。"
             "系统不会自动执行任何交易操作，请自行判断决策。"
@@ -469,9 +481,7 @@ def _format_mentor_perspectives(perspectives: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def format_conflict_card(
-    symbol: str, name: str, resolution: dict[str, Any]
-) -> dict[str, Any]:
+def format_conflict_card(symbol: str, name: str, resolution: dict[str, Any]) -> dict[str, Any]:
     """格式化多视角冲突研讨卡片。
 
     当冲突裁决器检测到分歧（is_conflict=True）时发送。
@@ -995,4 +1005,3 @@ def format_take_profit_alert(
         note="出处：财叔实战经验 · 策略逻辑：动态止盈减仓 · gugu · 止盈告警",
         subtitle=f"当前价 ￥{current_price:.2f} | 盈亏 {profit_pct:+.1%} | 减仓 {reduce_ratio:.0%}",
     )
-

@@ -109,6 +109,16 @@ STRATEGY_PARAM_GRIDS: dict[str, dict[str, list]] = {
         "ma_long": [40, 50, 60, 90],
         "max_daily_gain_pct": [0.05, 0.07, 0.09],
     },
+    "double_yin": {
+        "ma_slope_window": [3, 5, 8],
+        "first_yin_vol_ratio_max": [0.8, 0.9, 1.0],
+        "second_yin_vol_ratio_max": [0.5, 0.6, 0.7],
+        "doji_body_max": [0.008, 0.01, 0.015],
+        "small_yang_max_gain": [0.02, 0.03, 0.04],
+        "breakout_vol_ratio_min": [1.5, 2.0, 2.5],
+        "take_profit_pct": [0.06, 0.08, 0.10],
+        "stagnation_vol_ratio": [2.0, 2.5, 3.0],
+    },
 }
 
 # 策略 → 其策略类需要哪些参数（pyproject.toml 中定义的策略类）
@@ -131,6 +141,11 @@ STRATEGY_CONFIG_KEYS: dict[str, list[str]] = {
     "chen_jiangting": [
         "resistance_window", "volume_ratio", "vol_ma_window",
         "ma_short", "ma_long", "max_daily_gain_pct",
+    ],
+    "double_yin": [
+        "ma_slope_window", "first_yin_vol_ratio_max", "second_yin_vol_ratio_max",
+        "doji_body_max", "small_yang_max_gain", "breakout_vol_ratio_min",
+        "take_profit_pct", "stagnation_vol_ratio",
     ],
 }
 
@@ -184,6 +199,13 @@ def _money_flow_follow_constraints(p: dict) -> bool:
     return nw < nl
 
 
+def _double_yin_constraints(p: dict) -> bool:
+    """double_yin: 第二根阴量应弱于第一根阴量，止盈和滞涨阈值必须为正。"""
+    first = p.get("first_yin_vol_ratio_max", 0)
+    second = p.get("second_yin_vol_ratio_max", 0)
+    return second <= first and p.get("take_profit_pct", 0) > 0 and p.get("stagnation_vol_ratio", 0) > 0
+
+
 STRATEGY_PARAM_CONSTRAINTS: dict[str, "callable[[dict], bool]"] = {
     "dual_ma": _dual_ma_constraints,
     "macd": _macd_constraints,
@@ -192,6 +214,7 @@ STRATEGY_PARAM_CONSTRAINTS: dict[str, "callable[[dict], bool]"] = {
     "kdj": _kdj_constraints,
     "chen_jiangting": _chen_jiangting_constraints,
     "money_flow_follow": _money_flow_follow_constraints,
+    "double_yin": _double_yin_constraints,
 }
 
 

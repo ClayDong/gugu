@@ -1,4 +1,5 @@
 """EventEngine 单元测试。"""
+
 from __future__ import annotations
 
 from gugu.engine.event_engine import (
@@ -194,10 +195,13 @@ class TestEventEngine:
             received = event
 
         engine.register(EVENT_RISK_ALERT, handler)
-        engine.put(EVENT_RISK_ALERT, {
-            "level": "warn",
-            "message": "test message",
-        })
+        engine.put(
+            EVENT_RISK_ALERT,
+            {
+                "level": "warn",
+                "message": "test message",
+            },
+        )
 
         assert received is not None
         assert received["type"] == EVENT_RISK_ALERT

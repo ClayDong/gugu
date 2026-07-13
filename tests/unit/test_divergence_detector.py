@@ -1,4 +1,5 @@
 """量价背离检测器 DivergenceDetector 单元测试。"""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -9,14 +10,16 @@ from gugu.detectors.divergence_detector import DivergenceDetector
 def _make_df(n: int = 60, base_price: float = 100.0, base_vol: float = 1_000_000) -> pd.DataFrame:
     """构造测试用 K 线数据。"""
     dates = pd.date_range("2026-01-01", periods=n, freq="D")
-    return pd.DataFrame({
-        "date": dates,
-        "open": [base_price] * n,
-        "high": [base_price + 2] * n,
-        "low": [base_price - 2] * n,
-        "close": [base_price] * n,
-        "volume": [base_vol] * n,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": [base_price] * n,
+            "high": [base_price + 2] * n,
+            "low": [base_price - 2] * n,
+            "close": [base_price] * n,
+            "volume": [base_vol] * n,
+        }
+    )
 
 
 class TestVolumePriceDivergence:

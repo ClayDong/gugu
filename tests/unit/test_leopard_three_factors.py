@@ -7,6 +7,7 @@
 4. 卖出信号（跌破MA20 / 量价背离）
 5. 数据降级容错（回测中无换手率字段时用成交量分位近似）
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -34,15 +35,17 @@ def _make_uptrend_df(n: int = 100, seed: int = 42) -> pd.DataFrame:
     prices[80] = prices[79] * 1.05
     # 成交额 = close * volume * 100
     amounts = prices * volumes * 100
-    return pd.DataFrame({
-        "date": dates,
-        "open": prices * 0.99,
-        "high": prices * 1.01,
-        "low": prices * 0.98,
-        "close": prices,
-        "volume": volumes,
-        "amount": amounts,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": prices * 0.99,
+            "high": prices * 1.01,
+            "low": prices * 0.98,
+            "close": prices,
+            "volume": volumes,
+            "amount": amounts,
+        }
+    )
 
 
 class TestLeopardThreeFactors:
@@ -177,11 +180,17 @@ class TestLeopardThreeFactors:
             prices.append(prices[-1] * (1 + np.random.uniform(-0.025, 0.005)))
         prices = np.array(prices)
         volumes = 10_000_000 * (1 + np.random.uniform(-0.3, 0.5, n))
-        df = pd.DataFrame({
-            "date": dates, "open": prices * 0.99, "high": prices * 1.01,
-            "low": prices * 0.98, "close": prices, "volume": volumes,
-            "amount": prices * volumes * 100,
-        })
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": prices * 0.99,
+                "high": prices * 1.01,
+                "low": prices * 0.98,
+                "close": prices,
+                "volume": volumes,
+                "amount": prices * volumes * 100,
+            }
+        )
         s = LeopardThreeFactorsStrategy()
         result = s.generate_signals(df)
         assert (result["signal"] == 1).sum() == 0, "下跌趋势不应有买入信号"

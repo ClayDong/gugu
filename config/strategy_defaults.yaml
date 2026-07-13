@@ -2,17 +2,17 @@
 
 turtle:
   # 海龟交易系统：趋势跟踪 + 突破 + ATR 动态止损
-  breakout_window: 20            # 唐奇安通道突破窗口
-  exit_window: 10                # 退出窗口
-  atr_window: 20                 # ATR 计算窗口
-  risk_per_trade: 0.01           # 单笔风险占比 1%
-  max_units: 4                   # 最大加仓单元数
+  breakout_window: 20  # 唐奇安通道突破窗口
+  exit_window: 10  # 退出窗口
+  atr_window: 20  # ATR 计算窗口
+  risk_per_trade: 0.01  # 单笔风险占比 1%
+  max_units: 4  # 最大加仓单元数
 
 bollinger:
   # 布林带：触及下轨买入，触及上轨卖出
   window: 20
-  num_std: 2.0                   # 标准差倍数
-  stop_loss_atr: 2.0             # ATR 止损倍数
+  num_std: 2.0  # 标准差倍数
+  stop_loss_atr: 2.0  # ATR 止损倍数
 
 dual_ma:
   # 双均线交叉：短均线上穿长均线买入，下穿卖出
@@ -21,16 +21,16 @@ dual_ma:
 
 box_breakout:
   # 达尔文箱体理论：箱体震荡突破为信号
-  box_window: 20                 # 箱体识别窗口
-  volume_confirm: true           # 成交量确认
-  volume_ratio: 1.5              # 量比阈值
+  box_window: 15  # 箱体识别窗口
+  volume_confirm: True  # 成交量确认
+  volume_ratio: 1.2  # 量比阈值
   confirm_days: 1                # 突破后需 1 根 K 线确认（防假突破）
 
 rsi_reversal:
   # RSI 均值回归：超卖买入，超买卖出
   window: 14
-  oversold: 30                   # 超卖阈值
-  overbought: 70                 # 超买阈值
+  oversold: 30  # 超卖阈值
+  overbought: 70  # 超买阈值
 
 macd:
   short_window: 12
@@ -53,24 +53,24 @@ money_flow_follow:
   # 必要条件 hard filter：3 均线多头 + 放量 + 收盘>MA20 + 非历史天量
   # 增强评分 soft score：4 均线 / 创新高 / 涨幅强势 / 缩量回踩（仅影响置信度）
   ma_periods: [5, 10, 20, 60]        # 多头排列均线周期
-  new_high_window: 20                # 创新高回看窗口
-  new_high_lookback: 60              # 历史新高回看长度（P0: 120→60 放宽）
-  pullback_max_pct: 0.08             # 回踩最大幅度 8%（P0: 5%→8% 放宽）
-  volume_shrink_days: 2              # 缩量回踩天数
-  volume_expand_ratio: 1.2           # 放量确认量比阈值（P0: 1.5→1.2 放宽）
-  abnormal_volume_ratio: 3.0         # 天量剔除阈值（3倍60日均量）
+  new_high_window: 20  # 创新高回看窗口
+  new_high_lookback: 60  # 历史新高回看长度（P0: 120→60 放宽）
+  pullback_max_pct: 0.08  # 回踩最大幅度 8%（P0: 5%→8% 放宽）
+  volume_shrink_days: 2  # 缩量回踩天数
+  volume_expand_ratio: 1.2  # 放量确认量比阈值（P0: 1.5→1.2 放宽）
+  abnormal_volume_ratio: 3.0  # 天量剔除阈值（3倍60日均量）
   recent_gain_window: 10             # 近期涨幅窗口
-  recent_gain_threshold: 0.03        # 近期最低涨幅 3%（热点近似）
+  recent_gain_threshold: 0.03  # 近期最低涨幅 3%（热点近似）
   vol_ma_window: 60                  # 成交量均线窗口
 
 chen_jiangting:
   # 陈江挺《炒股的智慧》阻力突破策略
-  resistance_window: 20              # 阻力位回看窗口（近20日最高价）
-  volume_ratio: 1.5                  # 量比阈值（当日量 >= N日均量的1.5倍）
-  vol_ma_window: 20                   # 成交量均线窗口
-  ma_short: 20                        # 短期均线（趋势判断 + 跌破卖出）
-  ma_long: 60                         # 长期均线（中期趋势过滤）
-  max_daily_gain_pct: 0.07            # 阶段过滤：当日涨幅 >7% 视为疯狂阶段，不追
+  resistance_window: 20  # 阻力位回看窗口（近20日最高价）
+  volume_ratio: 1.5  # 量比阈值（当日量 >= N日均量的1.5倍）
+  vol_ma_window: 20  # 成交量均线窗口
+  ma_short: 20  # 短期均线（趋势判断 + 跌破卖出）
+  ma_long: 60  # 长期均线（中期趋势过滤）
+  max_daily_gain_pct: 0.07  # 阶段过滤：当日涨幅 >7% 视为疯狂阶段，不追
   divergence_vol_window: 5            # 量价背离判断窗口
 
 leopard_three_factors:

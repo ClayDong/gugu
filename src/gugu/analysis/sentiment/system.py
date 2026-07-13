@@ -21,7 +21,9 @@ logger = get_logger()
 class SentimentSystem:
     """完整的舆情分析系统。"""
 
-    def __init__(self, symbol: str = "600519", stock_name: str = "", data_dir: str | None = None) -> None:
+    def __init__(
+        self, symbol: str = "600519", stock_name: str = "", data_dir: str | None = None
+    ) -> None:
         self.symbol = symbol
         self.stock_name = stock_name or f"股票 {symbol}"
         self._fetcher = NewsFetcher(cache_dir=data_dir)
@@ -36,7 +38,9 @@ class SentimentSystem:
         report = self._report.generate(news_list)
         for n in report.get("analyzed_news", []):
             self._impact.add_case(n, n.get("sentiment", {}))
-        logger.info(f"舆情分析完成: {report['overall_sentiment']} (score={report['overall_sentiment_score']})")
+        logger.info(
+            f"舆情分析完成: {report['overall_sentiment']} (score={report['overall_sentiment_score']})"
+        )
         return report
 
     async def run_and_notify(self, notifier=None) -> dict[str, Any]:

@@ -7,6 +7,7 @@
 - 参数校验
 - 边界场景
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -118,30 +119,22 @@ class TestBreakoutReboundParams:
     def test_validate_params_ma_trend_gt_long_raises(self):
         """ma_trend_window >= ma_long_window 应抛错。"""
         with pytest.raises(ValueError, match="ma_trend_window"):
-            BreakoutReboundStrategy(
-                {"ma_trend_window": 60, "ma_long_window": 60}
-            ).validate_params()
+            BreakoutReboundStrategy({"ma_trend_window": 60, "ma_long_window": 60}).validate_params()
 
     def test_validate_params_lookback_zero_raises(self):
         """limit_up_lookback <= 0 应抛错。"""
         with pytest.raises(ValueError, match="limit_up_lookback"):
-            BreakoutReboundStrategy(
-                {"limit_up_lookback": 0}
-            ).validate_params()
+            BreakoutReboundStrategy({"limit_up_lookback": 0}).validate_params()
 
     def test_validate_params_limit_up_pct_out_of_range_raises(self):
         """limit_up_pct 超出 5%-11% 应抛错。"""
         with pytest.raises(ValueError, match="limit_up_pct"):
-            BreakoutReboundStrategy(
-                {"limit_up_pct": 0.03}
-            ).validate_params()
+            BreakoutReboundStrategy({"limit_up_pct": 0.03}).validate_params()
 
     def test_validate_params_breakout_vol_lt_one_raises(self):
         """breakout_vol_ratio < 1.0 应抛错。"""
         with pytest.raises(ValueError, match="breakout_vol_ratio"):
-            BreakoutReboundStrategy(
-                {"breakout_vol_ratio": 0.8}
-            ).validate_params()
+            BreakoutReboundStrategy({"breakout_vol_ratio": 0.8}).validate_params()
 
 
 class TestBreakoutReboundSignals:
@@ -272,8 +265,9 @@ class TestBreakoutReboundCoreConditions:
         out_weak = strat.generate_signals(df_weak)
         # 两者都可能触发信号（量能不再是硬门槛），但放量版本置信度应更高
         if out_strong.loc[52, "signal"] == 1 and out_weak.loc[52, "signal"] == 1:
-            assert out_strong.loc[52, "confidence"] > out_weak.loc[52, "confidence"], \
+            assert out_strong.loc[52, "confidence"] > out_weak.loc[52, "confidence"], (
                 "放量反包置信度应高于无量反包"
+            )
 
     def test_yin_line_no_signal(self):
         """反包日阴线不应触发信号。"""
@@ -357,12 +351,18 @@ class TestBreakoutReboundScoring:
         """断板日缩量应增加置信度。"""
         df1 = _make_df(days=80, seed=42)
         df1 = _inject_breakout_rebound(
-            df1, limit_up_idx=50, break_idx=51, rebound_idx=52,
+            df1,
+            limit_up_idx=50,
+            break_idx=51,
+            rebound_idx=52,
             break_vol=4_000_000,  # 缩量
         )
         df2 = _make_df(days=80, seed=42)
         df2 = _inject_breakout_rebound(
-            df2, limit_up_idx=50, break_idx=51, rebound_idx=52,
+            df2,
+            limit_up_idx=50,
+            break_idx=51,
+            rebound_idx=52,
             break_vol=8_000_000,  # 不缩量
         )
         strat = BreakoutReboundStrategy()
@@ -379,7 +379,10 @@ class TestBreakoutReboundSellSignals:
         """跌破 MA20 应触发卖出信号。"""
         df = _make_df(days=80, seed=42)
         df = _inject_breakout_rebound(
-            df, limit_up_idx=50, break_idx=51, rebound_idx=52,
+            df,
+            limit_up_idx=50,
+            break_idx=51,
+            rebound_idx=52,
         )
         # 在反包后注入大跌，跌破 MA20
         ma20_at_53 = df["close"].iloc[:53].rolling(20).mean().iloc[52]
@@ -396,7 +399,10 @@ class TestBreakoutReboundSellSignals:
         """巨量滞涨应触发卖出信号。"""
         df = _make_df(days=80, seed=42)
         df = _inject_breakout_rebound(
-            df, limit_up_idx=50, break_idx=51, rebound_idx=52,
+            df,
+            limit_up_idx=50,
+            break_idx=51,
+            rebound_idx=52,
         )
         # 注入巨量滞涨：量比 >= 2.5 + 长上影 > 2% + 涨幅小
         # vol_ma5[53] ≈ mean(vol[48:52]) ≈ 10.4M，需 volume >= 26M 达到 2.5 量比
@@ -413,7 +419,10 @@ class TestBreakoutReboundSellSignals:
         """大阳线冲高应触发止盈卖出（v0.5.8 阈值从 4.8% 提高到 6.4%）。"""
         df = _make_df(days=80, seed=42)
         df = _inject_breakout_rebound(
-            df, limit_up_idx=50, break_idx=51, rebound_idx=52,
+            df,
+            limit_up_idx=50,
+            break_idx=51,
+            rebound_idx=52,
         )
         # 注入大阳线：涨幅 >= 6.4%（take_profit_pct * 0.8）+ 量比 >= 1.5
         # vol_ma5[53] ≈ mean(vol[48:52]) ≈ 10.4M，需 volume >= 15.6M 达到 1.5 量比
@@ -467,17 +476,19 @@ class TestBreakoutReboundEdgeCases:
         df = _make_df(days=100, seed=42)
         # 在 index=50 涨停，51 断板，但反包在 56（超出 5 日窗口）
         df = _inject_breakout_rebound(
-            df, limit_up_idx=50, break_idx=51, rebound_idx=56,
+            df,
+            limit_up_idx=50,
+            break_idx=51,
+            rebound_idx=56,
         )
-        strat = BreakoutReboundStrategy(
-            {"limit_up_lookback": 5}
-        )
+        strat = BreakoutReboundStrategy({"limit_up_lookback": 5})
         out = strat.generate_signals(df)
         assert out.loc[56, "signal"] != 1, "超出 lookback 窗口的反包不应触发"
 
     def test_registry_integration(self):
         """策略应能在 registry 中获取。"""
         from gugu.strategies.registry import get_strategy, list_strategies
+
         assert "breakout_rebound" in list_strategies()
         strat = get_strategy("breakout_rebound")
         assert strat.name == "breakout_rebound"
@@ -486,7 +497,10 @@ class TestBreakoutReboundEdgeCases:
         """回测模式应跳过确认（is_backtest=True）。"""
         df = _make_df(days=80, seed=42)
         df = _inject_breakout_rebound(
-            df, limit_up_idx=50, break_idx=51, rebound_idx=52,
+            df,
+            limit_up_idx=50,
+            break_idx=51,
+            rebound_idx=52,
         )
         strat = BreakoutReboundStrategy({"confirm_days": 1})
         out = strat.generate_signals(df, is_backtest=True)
@@ -497,7 +511,10 @@ class TestBreakoutReboundEdgeCases:
         """卖出信号应覆盖买入信号（v0.5.8 持仓状态判断）。"""
         df = _make_df(days=80, seed=42)
         df = _inject_breakout_rebound(
-            df, limit_up_idx=50, break_idx=51, rebound_idx=52,
+            df,
+            limit_up_idx=50,
+            break_idx=51,
+            rebound_idx=52,
         )
         strat = BreakoutReboundStrategy()
         out = strat.generate_signals(df)
@@ -519,7 +536,10 @@ class TestBreakoutReboundEdgeCases:
         """min_confidence 应过滤低置信度信号。"""
         df = _make_df(days=80, seed=42)
         df = _inject_breakout_rebound(
-            df, limit_up_idx=50, break_idx=51, rebound_idx=52,
+            df,
+            limit_up_idx=50,
+            break_idx=51,
+            rebound_idx=52,
             break_high=118.0,
             rebound_close=118.5,  # 弱反包
             rebound_vol=12_000_000,

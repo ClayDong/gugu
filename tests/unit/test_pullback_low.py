@@ -9,6 +9,7 @@
 - 边界场景
 - 置信度评分
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -99,9 +100,7 @@ class TestPullbackLowParams:
     def test_validate_params_ma_short_gt_long_raises(self):
         """ma_short >= ma_long 应抛错。"""
         with pytest.raises(ValueError, match="ma_short"):
-            PullbackLowStrategy(
-                {"ma_short": 60, "ma_long": 60}
-            ).validate_params()
+            PullbackLowStrategy({"ma_short": 60, "ma_long": 60}).validate_params()
 
     def test_validate_params_pullback_inverted_raises(self):
         """pullback_min_pct >= pullback_max_pct 应抛错。"""
@@ -296,9 +295,7 @@ class TestPullbackLowSellSignals:
         df = _make_df(days=80, seed=42)
         # 第 55 天：5 日涨幅 < 2%
         df.loc[55, "close"] = df.loc[50, "close"] * 1.005  # 5 日涨 0.5%
-        strat = PullbackLowStrategy(
-            {"time_stop_window": 5, "time_stop_threshold": 0.02}
-        )
+        strat = PullbackLowStrategy({"time_stop_window": 5, "time_stop_threshold": 0.02})
         out = strat.generate_signals(df)
         # 第 55 天应有卖出信号（时间止损）
         # 但需要其他卖出条件不先触发

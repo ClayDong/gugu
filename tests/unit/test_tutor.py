@@ -3,6 +3,7 @@
 覆盖 4 个公开函数：get_daily_concept, get_concept_by_id, search_concepts, get_progress_stats。
 测试隔离：用 monkeypatch 重定向 _PROGRESS_FILE 到 tmp_path，清理 _concepts_cache。
 """
+
 from __future__ import annotations
 
 import json

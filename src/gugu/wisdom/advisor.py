@@ -15,6 +15,7 @@ LLM 决策优势：
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -176,6 +177,13 @@ class WisdomAdvisor:
         # async HTTP client 连接池（复用，避免每次创建新连接）
         self._async_client: httpx.AsyncClient | None = None
 
+        # Circuit Breaker（熔断器）：连续失败后快速降级，避免LLM服务异常拖慢信号流水线
+        self._cb_failure_threshold = 5
+        self._cb_recovery_timeout = 120.0
+        self._cb_failure_count = 0
+        self._cb_last_failure_time = 0.0
+        self._cb_state = "closed"
+
         # 检测 LLM 可用性
         cfg = env()
         self._llm_available = bool(cfg.llm_api_key and cfg.llm_base_url and cfg.llm_model)
@@ -194,6 +202,45 @@ class WisdomAdvisor:
         if self._async_client is None:
             self._async_client = httpx.AsyncClient(timeout=30.0)
         return self._async_client
+
+    def _cb_allow_request(self) -> bool:
+        """Circuit Breaker: 判断是否允许调用LLM。
+
+        三态：
+        - closed（正常）：允许请求，失败计数累加
+        - open（熔断）：连续失败≥阈值后拒绝，冷却时间过后进入half-open
+        - half-open（半开）：冷却时间到，允许单次探测请求
+        """
+        now = time.monotonic()
+        if self._cb_state == "open":
+            if now - self._cb_last_failure_time >= self._cb_recovery_timeout:
+                self._cb_state = "half_open"
+                logger.info("[wisdom] CB: half-open, allowing probe request")
+                return True
+            return False
+        return True
+
+    def _cb_on_success(self) -> None:
+        """LLM调用成功：重置失败计数，关闭熔断器。"""
+        if self._cb_failure_count > 0:
+            self._cb_failure_count = 0
+            self._cb_state = "closed"
+
+    def _cb_on_failure(self) -> None:
+        """LLM调用失败：累加失败计数，达到阈值则熔断。"""
+        self._cb_failure_count += 1
+        self._cb_last_failure_time = time.monotonic()
+        if self._cb_state == "half_open":
+            self._cb_state = "open"
+            logger.warning(
+                f"[wisdom] CB: probe failed, reopening circuit (failures={self._cb_failure_count})"
+            )
+        elif self._cb_failure_count >= self._cb_failure_threshold:
+            self._cb_state = "open"
+            logger.warning(
+                f"[wisdom] CB: circuit OPEN after {self._cb_failure_count} failures, "
+                f"cooling down for {self._cb_recovery_timeout}s"
+            )
 
     async def close(self) -> None:
         """关闭 async HTTP client 连接池。"""
@@ -248,16 +295,22 @@ class WisdomAdvisor:
                     hold_perspectives.append(name)
 
                 # 收集置信度最高的视角理由
-                top_reasons.append({
-                    "perspective": name,
-                    "reason": reason,
-                })
+                top_reasons.append(
+                    {
+                        "perspective": name,
+                        "reason": reason,
+                    }
+                )
 
             # 取 top-3 理由
             top_reasons = sorted(
                 top_reasons,
                 key=lambda x: next(
-                    (p.get("confidence", 0) for p in perspectives if p.get("name") == x["perspective"]),
+                    (
+                        p.get("confidence", 0)
+                        for p in perspectives
+                        if p.get("name") == x["perspective"]
+                    ),
                     0,
                 ),
                 reverse=True,
@@ -387,25 +440,29 @@ class WisdomAdvisor:
 
         优先使用冲突裁决器（多维权重融合），失败时降级到单LLM决策，
         再失败降级到硬编码规则。
-        所有路径完成后注入多视角共识分析。
+        Circuit Breaker：连续失败≥5次后熔断120秒，期间直接走fallback，
+        避免LLM服务不可用时拖慢整个信号流水线。
         """
         signal = self._as_dict(signal)
 
-        if self._llm_available:
-            # 优先尝试冲突裁决器
+        if self._llm_available and self._cb_allow_request():
             try:
                 result = await self._advise_with_conflict_resolution(signal)
                 if result is not None:
+                    self._cb_on_success()
                     return self._inject_perspective_consensus(result)
             except Exception as e:
                 logger.warning(f"[wisdom] 冲突裁决失败，降级到单LLM决策: {e}")
 
-            # 降级到单 LLM 决策
             try:
                 result = await self._advise_llm_async(signal)
+                self._cb_on_success()
                 return self._inject_perspective_consensus(result)
             except Exception as e:
                 logger.warning(f"[wisdom] LLM 异步决策失败，降级到硬编码规则: {e}")
+                self._cb_on_failure()
+        elif self._llm_available and self._cb_state == "open":
+            logger.debug("[wisdom] CB: circuit open, using fallback")
 
         result = self._advise_fallback(signal)
         return self._inject_perspective_consensus(result)
@@ -502,7 +559,7 @@ class WisdomAdvisor:
                 if dyn_perspectives:
                     book_context += (
                         f"\n（波动率={market_vol:.2%}，动态选择视角: {dyn_perspectives[:2]}）"
-                )
+                    )
 
         # 3. 构建 prompt
         system_prompt = self._build_system_prompt()
@@ -600,9 +657,7 @@ class WisdomAdvisor:
         # 6. 应用 LLM 决策到信号
         return self._apply_llm_decision(signal, llm_decision)
 
-    async def advise_macro_async(
-        self, macro_summary: str, portfolio_summary: str = ""
-    ) -> str:
+    async def advise_macro_async(self, macro_summary: str, portfolio_summary: str = "") -> str:
         """生成大师兄视角的宏观市场解读（异步）。
 
         与个股决策不同，宏观解读不输出 action/position_ratio，
@@ -1093,6 +1148,12 @@ class WisdomAdvisor:
 
             # 仓位调整——分层下注（三档：试仓/加仓/满仓）
             original_ratio = signal.get("suggested_position_ratio", 0.0)
+            # signal_only 模式下，即使仓位预算为0（如熊市），也提供参考性仓位建议
+            # 标注"仅参考"，不强制下单
+            is_signal_only = signal.get("_exec_mode") == "signal_only"
+            if original_ratio <= 0 and is_signal_only:
+                original_ratio = FALLBACK_TRIAL_RATIO  # signal_only 模式下用默认试仓比例作为参考
+                decision["position_note"] = "当前市场状态仓位建议为0%，此为参考性试仓比例"
             if original_ratio > 0:
                 has_position = signal.get("has_position", False)
                 profit_pct = signal.get("profit_pct", 0.0)
@@ -1110,14 +1171,18 @@ class WisdomAdvisor:
                 current_ratio = signal.get("current_position_ratio", 0.0)
                 max_ratio = _max_single_position()
                 remaining = max_ratio - float(current_ratio)
-                if remaining <= 0:
+                if remaining <= 0 and not is_signal_only:
                     adjusted_ratio = 0.0
                     decision["filter_reason"] = (
                         f"现有持仓占比 {current_ratio:.2%} 已达上限 {max_ratio:.2%}，不再加仓"
                     )
                     signal["wisdom_filtered"] = True
                 else:
-                    adjusted_ratio = min(adjusted_ratio, remaining)
+                    if is_signal_only:
+                        # signal_only模式：仅建议不下单，不受remaining硬限制，仍受单股max_ratio保护
+                        adjusted_ratio = min(adjusted_ratio, max_ratio)
+                    else:
+                        adjusted_ratio = min(adjusted_ratio, remaining)
                 decision["adjusted_position_ratio"] = adjusted_ratio
                 decision["position_strategy"] = strategy_label
                 signal["suggested_position_ratio"] = adjusted_ratio
@@ -1259,9 +1324,7 @@ class WisdomAdvisor:
                         return line.split(":", 1)[1].strip()
         return ""
 
-    def _build_data_driven_advice(
-        self, signal: dict[str, Any], direction: str
-    ) -> dict[str, str]:
+    def _build_data_driven_advice(self, signal: dict[str, Any], direction: str) -> dict[str, str]:
         """基于信号实际数据生成交易智慧建议（替代格言摘录）。
 
         每条建议包含：
@@ -1330,7 +1393,9 @@ class WisdomAdvisor:
 
             # 策略出处
             source = self._get_skill_source("stock-entry-decision")
-            entry_parts.append(f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》")
+            entry_parts.append(
+                f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》"
+            )
             advice["entry_check"] = "\n".join(entry_parts)
 
             # ── 止损建议 ──
@@ -1340,11 +1405,13 @@ class WisdomAdvisor:
                 stop_pct = (price - stop_price) / price
                 stop_parts.append(f"建议止损价：¥{stop_price:.2f}（-{stop_pct:.1%}）")
                 if atr > 0:
-                    stop_parts.append(f"ATR={atr:.2f}（占价 {atr/price:.1%}），止损幅度参考 ATR")
+                    stop_parts.append(f"ATR={atr:.2f}（占价 {atr / price:.1%}），止损幅度参考 ATR")
                 else:
                     stop_parts.append("无 ATR 数据，使用默认 8% 止损")
             else:
-                stop_parts.append(f"建议止损价：¥{price * 0.92:.2f}（-8%）" if price > 0 else "价格无效")
+                stop_parts.append(
+                    f"建议止损价：¥{price * 0.92:.2f}（-8%）" if price > 0 else "价格无效"
+                )
             stop_parts.append("原则：止损是铁律，不可违反，跌破立即执行")
             source = self._get_skill_source("stock-stop-loss-decision")
             stop_parts.append(f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》")
@@ -1378,7 +1445,9 @@ class WisdomAdvisor:
             elif profit_pct < -0.08:
                 profit_parts.append("⚠️ 亏损 >8%，应执行止损")
             source = self._get_skill_source("stock-profit-taking-decision")
-            profit_parts.append(f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》")
+            profit_parts.append(
+                f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》"
+            )
             advice["profit_taking"] = "\n".join(profit_parts)
 
             # ── 追踪止损 ──
@@ -1389,7 +1458,9 @@ class WisdomAdvisor:
             else:
                 trail_parts.append("无持仓或亏损中，不适用追踪止损")
             source = self._get_skill_source("stock-trailing-stop")
-            trail_parts.append(f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》")
+            trail_parts.append(
+                f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》"
+            )
             advice["trailing_stop"] = "\n".join(trail_parts)
 
         # ── 心态检查 ──

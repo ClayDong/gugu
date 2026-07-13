@@ -9,6 +9,7 @@
 
 所有测试使用合成/模拟数据，不依赖网络或数据库。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -185,6 +186,7 @@ def _make_regime_detector_with_data(data: pd.DataFrame) -> MultiPeriodRegimeDete
     dm.fetch_stock_history = _mock_fetch_stock_history.__get__(dm, MagicMock)
     # 绑定 data 到 partial
     import functools
+
     dm.fetch_stock_history = functools.partial(_mock_fetch_stock_history, data)
     detector._dm = dm
     return detector
@@ -193,10 +195,13 @@ def _make_regime_detector_with_data(data: pd.DataFrame) -> MultiPeriodRegimeDete
 def _make_performance_analyzer_with_data() -> PerformanceAnalyzer:
     """构造一个使用模拟 data_manager 的 PerformanceAnalyzer。"""
     import functools
-    benchmark_df = pd.DataFrame({
-        "date": pd.date_range("2023-01-01", periods=2, freq="D"),
-        "close": [100, 105],
-    })
+
+    benchmark_df = pd.DataFrame(
+        {
+            "date": pd.date_range("2023-01-01", periods=2, freq="D"),
+            "close": [100, 105],
+        }
+    )
     analyzer = PerformanceAnalyzer()
     dm = MagicMock()
     dm.fetch_stock_history = functools.partial(_mock_fetch_stock_history, benchmark_df)
@@ -206,8 +211,10 @@ def _make_performance_analyzer_with_data() -> PerformanceAnalyzer:
 
 def _make_detector_raising(error: Exception) -> MultiPeriodRegimeDetector:
     """构造一个 fetch 抛异常的 RegimeDetector。"""
+
     async def _raise(*args, **kwargs):
         raise error
+
     detector = MultiPeriodRegimeDetector()
     dm = MagicMock()
     dm.fetch_stock_history = _raise
@@ -295,6 +302,7 @@ class TestRegimeDetector:
 @dataclass
 class FakeAccount:
     """模拟账户对象。"""
+
     total_value: float
     cash: float
     positions: list
@@ -303,8 +311,9 @@ class FakeAccount:
 class TestPositionController:
     """PositionController 仓位预算计算测试。"""
 
-    def _make_regime(self, regime: str, limit: float, buy_allowed: bool = True,
-                     sell_required: bool = False) -> dict:
+    def _make_regime(
+        self, regime: str, limit: float, buy_allowed: bool = True, sell_required: bool = False
+    ) -> dict:
         return {
             "regime": regime,
             "total_position_limit": limit,
@@ -317,6 +326,7 @@ class TestPositionController:
         """Mock get_config() before each test in this class."""
         with patch("gugu.analysis.position_controller.get_config") as mock_cfg:
             from gugu.config.models import RiskConfig
+
             mock_cfg.return_value.risk = RiskConfig(
                 max_position_ratio=0.30,
                 max_total_positions=5,
@@ -370,7 +380,9 @@ class TestPositionController:
         budget = controller.calculate(regime=regime, account=account)
 
         assert budget.total_limit == 0.40, f"默认震荡总仓位应为 0.40, 实际 {budget.total_limit}"
-        assert budget.available_budget == 400_000, f"可用预算应为 400k, 实际 {budget.available_budget}"
+        assert budget.available_budget == 400_000, (
+            f"可用预算应为 400k, 实际 {budget.available_budget}"
+        )
         assert 0 < budget.single_limit <= 0.40, f"单股上限应 (0, 0.4], 实际 {budget.single_limit}"
 
     def test_accumulated_loss_halves_limit(self) -> None:
@@ -382,8 +394,9 @@ class TestPositionController:
         budget = controller.calculate(regime=regime, account=account, total_pnl_pct=-0.15)
 
         # 0.80 * 0.5 = 0.40
-        assert budget.total_limit == pytest.approx(0.40, abs=1e-4), \
+        assert budget.total_limit == pytest.approx(0.40, abs=1e-4), (
             f"亏损减半预期 0.40, 实际 {budget.total_limit}"
+        )
         assert "风险系数" in budget.reason or "减半" in budget.reason
 
     def test_buy_not_allowed_zero_budget(self) -> None:
@@ -404,8 +417,11 @@ class TestPositionController:
         controller = PositionController()
         regime = self._make_regime("bull", 0.80)
         # 已有 5 只持仓（等于 max_total_positions）
-        account = FakeAccount(total_value=1_000_000, cash=100_000,
-                              positions=["600001", "600002", "600003", "600004", "600005"])
+        account = FakeAccount(
+            total_value=1_000_000,
+            cash=100_000,
+            positions=["600001", "600002", "600003", "600004", "600005"],
+        )
 
         budget = controller.calculate(regime=regime, account=account)
 
@@ -488,8 +504,9 @@ class TestPositionManager:
 
         assert advice.action == "reduce", f"预期 reduce, 实际 {advice.action}"
         # 止盈 30%，2000 * 0.3 = 600，取整到 100 -> 600
-        assert advice.suggested_quantity == 600, \
+        assert advice.suggested_quantity == 600, (
             f"止盈数量预期 600, 实际 {advice.suggested_quantity}"
+        )
         assert "止盈" in advice.reason
 
     def test_trailing_stop_activated(self) -> None:
@@ -503,8 +520,9 @@ class TestPositionManager:
 
         # 移动止损应激活：10.80 * 0.97 = 10.476
         pos = pm.get_position("000001")
-        assert pos["stop_loss"] == pytest.approx(10.476, abs=0.01), \
+        assert pos["stop_loss"] == pytest.approx(10.476, abs=0.01), (
             f"移动止损应上移至 10.476, 实际 {pos['stop_loss']}"
+        )
 
         # 记录加仓，使 add_count > 0，避免下一轮返回 add
         pm.record_add("000001", add_qty=500, add_price=10.80)
@@ -568,8 +586,9 @@ class TestPerformanceAnalyzer:
         report = await analyzer.analyze(trades=trades, daily_equity=equity)
 
         assert report.total_trades == 3
-        assert report.win_rate == pytest.approx(2 / 3, abs=0.001), \
+        assert report.win_rate == pytest.approx(2 / 3, abs=0.001), (
             f"胜率应为 2/3, 实际 {report.win_rate}"
+        )
         assert report.total_return > 0, "总收益应为正"
         assert report.max_drawdown >= 0, "最大回撤应 >= 0"
 
@@ -654,7 +673,7 @@ class TestStrategyPool:
         assert "breakout" in weights
         assert "trend" in weights
         for w in weights.values():
-            assert w == pytest.approx(1 / 3, abs=1e-4), f"权重应均分 {1/3}"
+            assert w == pytest.approx(1 / 3, abs=1e-4), f"权重应均分 {1 / 3}"
 
     def test_best_strategies(self) -> None:
         """较高胜率的策略应获得更高权重。"""
@@ -672,8 +691,7 @@ class TestStrategyPool:
         weights = pool.get_weights()
         assert "mean_revert" in weights
         assert "breakout" in weights
-        assert weights["mean_revert"] > weights["breakout"], \
-            "高胜率策略权重应大于低胜率策略"
+        assert weights["mean_revert"] > weights["breakout"], "高胜率策略权重应大于低胜率策略"
 
     def test_empty_pool(self) -> None:
         """空策略池应返回空字典。"""
@@ -760,6 +778,8 @@ class TestStrategyPool:
 
         stats = pool.get_stats()
         assert stats["mean_revert"]["enabled"] is True, "连续盈利 3 次后应恢复"
+
+
 # =========================================================================
 # TestExecutionOptimizer
 # =========================================================================
@@ -888,14 +908,24 @@ class TestExecutionOptimizer:
         opt = ExecutionOptimizer()
 
         report1 = ExecutionReport(
-            symbol="000001", ordered_quantity=1000, filled_quantity=1000,
-            avg_fill_price=10.0, slippage_bps=0.5, total_cost=10000.0,
-            execution_time="09:30", status="completed",
+            symbol="000001",
+            ordered_quantity=1000,
+            filled_quantity=1000,
+            avg_fill_price=10.0,
+            slippage_bps=0.5,
+            total_cost=10000.0,
+            execution_time="09:30",
+            status="completed",
         )
         report2 = ExecutionReport(
-            symbol="000002", ordered_quantity=2000, filled_quantity=1800,
-            avg_fill_price=20.1, slippage_bps=2.0, total_cost=36180.0,
-            execution_time="09:45", status="partial",
+            symbol="000002",
+            ordered_quantity=2000,
+            filled_quantity=1800,
+            avg_fill_price=20.1,
+            slippage_bps=2.0,
+            total_cost=36180.0,
+            execution_time="09:45",
+            status="partial",
         )
         opt.record_execution(report1)
         opt.record_execution(report2)
@@ -913,16 +943,22 @@ class TestExecutionOptimizer:
 
         opt = ExecutionOptimizer()
         base_report = ExecutionReport(
-            symbol="000001", ordered_quantity=100, filled_quantity=100,
-            avg_fill_price=10.0, slippage_bps=0.1, total_cost=1000.0,
-            execution_time="09:30", status="completed",
+            symbol="000001",
+            ordered_quantity=100,
+            filled_quantity=100,
+            avg_fill_price=10.0,
+            slippage_bps=0.1,
+            total_cost=1000.0,
+            execution_time="09:30",
+            status="completed",
         )
         for _ in range(1100):
             opt.record_execution(base_report)
 
         quality = opt.get_execution_quality()
-        assert quality["total_executions"] == 1000, \
+        assert quality["total_executions"] == 1000, (
             f"历史应截断至 1000 条, 实际 {quality['total_executions']}"
+        )
 
 
 # =========================================================================
@@ -986,6 +1022,7 @@ class TestParamOptimizer:
     def test_optimize_empty(self) -> None:
         """空的参数范围应返回空的 best_params。"""
         import random
+
         random.seed(42)
 
         from gugu.analysis.param_optimizer import ParamOptimizer
@@ -1037,6 +1074,7 @@ class TestParamOptimizer:
     def test_optimize_converges(self) -> None:
         """遗传算法应能收敛到较优参数。"""
         import random
+
         random.seed(42)
 
         from gugu.analysis.param_optimizer import ParamOptimizer, ParamRange
@@ -1062,8 +1100,9 @@ class TestParamOptimizer:
         result = optimizer.optimize(verbose=False)
 
         # 应能找到 period >= 25 的参数
-        assert result.best_params.get("period", 0) >= 25, \
+        assert result.best_params.get("period", 0) >= 25, (
             f"应收敛到大 period, 实际 {result.best_params}"
+        )
         assert result.best_score > 0.0
         assert len(result.history) == 5
 
@@ -1114,11 +1153,13 @@ class TestSectorRotation:
         sr = SectorRotation()
 
         # 构造模拟的板块行情数据
-        df = pd.DataFrame({
-            "板块名称": ["银行", "计算机", "食品饮料", "钢铁"],
-            "板块涨跌幅": [2.0, 5.0, -1.0, 3.0],
-            "主力净流入": [5e8, 1e9, -2e8, 3e8],
-        })
+        df = pd.DataFrame(
+            {
+                "板块名称": ["银行", "计算机", "食品饮料", "钢铁"],
+                "板块涨跌幅": [2.0, 5.0, -1.0, 3.0],
+                "主力净流入": [5e8, 1e9, -2e8, 3e8],
+            }
+        )
 
         scores = sr._score_sectors(df)
 
@@ -1168,11 +1209,13 @@ class TestSectorRotation:
         sr = SectorRotation()
 
         # 超大涨幅、超大资金流入
-        df = pd.DataFrame({
-            "板块名称": ["科技板块"],
-            "板块涨跌幅": [15.0],   # 远超 5% 阈值
-            "主力净流入": [5e10],   # 远超 10 亿阈值
-        })
+        df = pd.DataFrame(
+            {
+                "板块名称": ["科技板块"],
+                "板块涨跌幅": [15.0],  # 远超 5% 阈值
+                "主力净流入": [5e10],  # 远超 10 亿阈值
+            }
+        )
         scores = sr._score_sectors(df)
         s = scores["科技板块"]
         # pct_score 应被 cap 到 1.0
@@ -1183,11 +1226,13 @@ class TestSectorRotation:
         assert s["total"] == 1.0
 
         # 超大跌幅、超大资金流出
-        df2 = pd.DataFrame({
-            "板块名称": ["衰退板块"],
-            "板块涨跌幅": [-20.0],
-            "主力净流入": [-5e10],
-        })
+        df2 = pd.DataFrame(
+            {
+                "板块名称": ["衰退板块"],
+                "板块涨跌幅": [-20.0],
+                "主力净流入": [-5e10],
+            }
+        )
         scores2 = sr._score_sectors(df2)
         s2 = scores2["衰退板块"]
         assert s2["pct_score"] == -1.0
@@ -1205,6 +1250,7 @@ class TestSectorRotation:
             mock_ak.side_effect = Exception("网络连接失败")
 
             import asyncio
+
             result = asyncio.run(sr.detect())
 
             assert result["hot_sectors"] == []
@@ -1220,8 +1266,12 @@ class TestSectorRotation:
 
         sr = SectorRotation()
 
-        with patch("gugu.analysis.sector_rotation.ak.stock_board_industry_name_em", return_value=pd.DataFrame()):
+        with patch(
+            "gugu.analysis.sector_rotation.ak.stock_board_industry_name_em",
+            return_value=pd.DataFrame(),
+        ):
             import asyncio
+
             result = asyncio.run(sr.detect())
 
             assert result["hot_sectors"] == []
@@ -1240,17 +1290,22 @@ class TestSectorRotation:
         # inside filter_stocks_by_sector, so we patch at source
         with patch("gugu.filters.industry_constraint.IndustryConstraint") as MockIndustry:
             mock_instance = MagicMock()
+
             def mock_get_industry(symbol):
                 mapping = {"000001": "银行", "000002": "电子", "000003": "未知行业"}
                 return mapping.get(symbol, "")
+
             mock_instance.get_industry = mock_get_industry
             MockIndustry.return_value = mock_instance
 
             import asyncio
-            result = asyncio.run(sr.filter_stocks_by_sector(
-                symbols=["000001", "000002", "000003"],
-                hot_sectors=["银行", "计算机"],
-            ))
+
+            result = asyncio.run(
+                sr.filter_stocks_by_sector(
+                    symbols=["000001", "000002", "000003"],
+                    hot_sectors=["银行", "计算机"],
+                )
+            )
 
             # 000001 -> 银行 (属于 hot_sectors) -> 保留
             assert "000001" in result
@@ -1274,11 +1329,13 @@ class TestSectorRotation:
             "reason": "缓存测试",
         }
         from datetime import date
+
         sr._cache = cached_result
         sr._cache_date = str(date.today())
 
         with patch("gugu.analysis.sector_rotation.ak.stock_board_industry_name_em") as mock_ak:
             import asyncio
+
             result = asyncio.run(sr.detect())
             # 缓存生效，不应调用 akshare
             mock_ak.assert_not_called()

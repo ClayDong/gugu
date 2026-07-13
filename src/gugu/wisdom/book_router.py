@@ -436,13 +436,15 @@ class BookPerspectiveRouter:
                 if name in cat_members:
                     category = cat_name
                     break
-            result.append({
-                "name": name,
-                "display_name": self._DISPLAY_NAMES.get(name, name),
-                "category": category,
-                "summary": self.get_perspective_summary(name),
-                "available": True,
-            })
+            result.append(
+                {
+                    "name": name,
+                    "display_name": self._DISPLAY_NAMES.get(name, name),
+                    "category": category,
+                    "summary": self.get_perspective_summary(name),
+                    "available": True,
+                }
+            )
         return result
 
     def get_advice(self, signal: dict[str, Any]) -> dict[str, Any]:
@@ -473,7 +475,11 @@ class BookPerspectiveRouter:
         # 动态选择相关视角
         selected = self.select_perspectives_dynamic(scenario, direction, signal=signal)
         if not selected:
-            return {"perspectives": [], "consensus": {"buy_pct": 0, "sell_pct": 0, "hold_pct": 0}, "conflicts": []}
+            return {
+                "perspectives": [],
+                "consensus": {"buy_pct": 0, "sell_pct": 0, "hold_pct": 0},
+                "conflicts": [],
+            }
 
         signal_confidence = signal.get("confidence", 0.5)
         is_filtered = signal.get("wisdom_filtered", False)
@@ -495,12 +501,14 @@ class BookPerspectiveRouter:
                 name, category, direction, signal_confidence, signal, is_filtered
             )
 
-            perspectives_advice.append({
-                "name": self._DISPLAY_NAMES.get(name, name),
-                "action": action,
-                "reason": reason,
-                "confidence": round(conf, 2),
-            })
+            perspectives_advice.append(
+                {
+                    "name": self._DISPLAY_NAMES.get(name, name),
+                    "action": action,
+                    "reason": reason,
+                    "confidence": round(conf, 2),
+                }
+            )
 
         # 计算共识
         total = len(perspectives_advice) if perspectives_advice else 1

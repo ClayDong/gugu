@@ -3,6 +3,7 @@
 仅 Mock 外部 IO（akshare API），不 Mock 业务逻辑。
 验证采集器列名归一化、异常处理、降级源差异。
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -15,39 +16,46 @@ from gugu.data.collectors.fallback import SinaCollector
 
 # ========== Fixture 数据 ==========
 
+
 def make_history_df(rows: int = 60) -> pd.DataFrame:
     """构造模拟历史行情 DataFrame（带微小波动以通过 PlausiblePriceRule）。
     日期使用近 60 天，避免 FreshnessRule 拒绝失效数据。
     """
     import datetime
+
     today = datetime.date.today()
     start = today - datetime.timedelta(days=rows)
     prices = [100.0 + (i * 0.02) for i in range(rows)]
-    return pd.DataFrame({
-        "日期": pd.date_range(start, periods=rows, freq="D").strftime("%Y-%m-%d"),
-        "开盘": [p - 0.1 for p in prices],
-        "收盘": prices,
-        "最高": [p + 0.2 for p in prices],
-        "最低": [p - 0.2 for p in prices],
-        "成交量": [1_000_000] * rows,
-        "成交额": [100_000_000] * rows,
-        "涨跌幅": [1.0] * rows,
-    })
+    return pd.DataFrame(
+        {
+            "日期": pd.date_range(start, periods=rows, freq="D").strftime("%Y-%m-%d"),
+            "开盘": [p - 0.1 for p in prices],
+            "收盘": prices,
+            "最高": [p + 0.2 for p in prices],
+            "最低": [p - 0.2 for p in prices],
+            "成交量": [1_000_000] * rows,
+            "成交额": [100_000_000] * rows,
+            "涨跌幅": [1.0] * rows,
+        }
+    )
 
 
 def make_realtime_df() -> pd.DataFrame:
     """构造合法的实时行情 DataFrame（akshare 中文列名）。"""
-    return pd.DataFrame({
-        "代码": ["600519", "000858"],
-        "名称": ["贵州茅台", "五粮液"],
-        "最新价": [1500.0, 100.0],
-        "涨跌幅": [1.5, -0.5],
-        "成交量": [2_000_000, 3_000_000],
-        "成交额": [3_000_000_000.0, 300_000_000.0],
-    })
+    return pd.DataFrame(
+        {
+            "代码": ["600519", "000858"],
+            "名称": ["贵州茅台", "五粮液"],
+            "最新价": [1500.0, 100.0],
+            "涨跌幅": [1.5, -0.5],
+            "成交量": [2_000_000, 3_000_000],
+            "成交额": [3_000_000_000.0, 300_000_000.0],
+        }
+    )
 
 
 # ========== AkshareCollector 测试 ==========
+
 
 class TestAkshareCollectorSource:
     """AkshareCollector 基本属性。"""
@@ -160,6 +168,7 @@ class TestAkshareCollectorRealtime:
 
 # ========== SinaCollector 测试 ==========
 
+
 class TestSinaCollectorSource:
     """SinaCollector 基本属性。"""
 
@@ -178,8 +187,15 @@ class TestSinaCollectorRealtime:
         """新浪实时行情应返回 DataFrame。"""
         # 新浪实时行情返回 33+ 个逗号分隔字段（mock 至少 32 个）
         fields = [
-            "贵州茅台", "1734.00", "1732.00", "1735.00", "1728.00",
-            "1730.00", "1726.00", "1000000", "50000000",
+            "贵州茅台",
+            "1734.00",
+            "1732.00",
+            "1735.00",
+            "1728.00",
+            "1730.00",
+            "1726.00",
+            "1000000",
+            "50000000",
         ] + [""] * 24
         mock_text = 'var hq_str_sh600519="' + ",".join(fields) + '";\n'
 
@@ -187,6 +203,7 @@ class TestSinaCollectorRealtime:
             def __init__(self):
                 self.text = mock_text
                 self.status_code = 200
+
             def raise_for_status(self):
                 pass
 
@@ -217,6 +234,7 @@ class TestSinaCollectorRealtime:
 
     def test_fetch_stock_realtime_handles_api_error(self, monkeypatch):
         """API 异常应返回空 DataFrame，不抛出。"""
+
         class ErrorClient:
             def get(self, url, **kwargs):
                 raise RuntimeError("network error")

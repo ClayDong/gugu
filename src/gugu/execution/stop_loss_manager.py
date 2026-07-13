@@ -98,9 +98,7 @@ class StopLossManager:
             # 自动补建缺失的 trailing_stop 状态
             if not pos.trailing_stop and pos.avg_cost > 0 and not df.empty:
                 try:
-                    state = self._trailing_stop_engine.init_stop(
-                        entry_price=pos.avg_cost, df=df
-                    )
+                    state = self._trailing_stop_engine.init_stop(entry_price=pos.avg_cost, df=df)
                     pos.trailing_stop = self._trailing_stop_engine.state_to_dict(state)
                     if state.current_stop_price > 0 and (
                         pos.stop_loss_price is None
@@ -273,9 +271,7 @@ class StopLossManager:
             )
 
             if not risk_result.allowed:
-                logger.warning(
-                    f"[take_profit] {symbol} 止盈减仓被风控拦截: {risk_result.message}"
-                )
+                logger.warning(f"[take_profit] {symbol} 止盈减仓被风控拦截: {risk_result.message}")
                 continue
 
             result = broker.order(symbol, "sell", reduce_qty, pos.current_price)

@@ -48,14 +48,16 @@ def make_uptrend_kline(days: int = 120, base: float = 50.0) -> pd.DataFrame:
     high = close + np.abs(np.random.randn(days)) * 0.3 + 0.1
     low = close - np.abs(np.random.randn(days)) * 0.3 - 0.1
     volume = np.random.randint(1_000_000, 5_000_000, size=days)
-    return pd.DataFrame({
-        "date": pd.date_range("2024-01-01", periods=days, freq="B"),
-        "open": low + 0.1,
-        "high": high,
-        "low": low,
-        "close": close,
-        "volume": volume,
-    })
+    return pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=days, freq="B"),
+            "open": low + 0.1,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+        }
+    )
 
 
 def make_downtrend_kline(days: int = 120, base: float = 100.0) -> pd.DataFrame:
@@ -67,14 +69,16 @@ def make_downtrend_kline(days: int = 120, base: float = 100.0) -> pd.DataFrame:
     high = close + np.abs(np.random.randn(days)) * 0.3 + 0.1
     low = close - np.abs(np.random.randn(days)) * 0.3 - 0.1
     volume = np.random.randint(1_000_000, 5_000_000, size=days)
-    return pd.DataFrame({
-        "date": pd.date_range("2024-01-01", periods=days, freq="B"),
-        "open": low + 0.1,
-        "high": high,
-        "low": low,
-        "close": close,
-        "volume": volume,
-    })
+    return pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=days, freq="B"),
+            "open": low + 0.1,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+        }
+    )
 
 
 def make_excellent_context() -> StockDataContext:
@@ -271,10 +275,7 @@ class TestPerspectiveAnalysisResult:
 
     def test_passed_all_good(self):
         """测试全部通过时的判定。"""
-        scores = [
-            PerspectiveScore(perspective=p, score=8.0, weight=0.1)
-            for p in ALL_PERSPECTIVES
-        ]
+        scores = [PerspectiveScore(perspective=p, score=8.0, weight=0.1) for p in ALL_PERSPECTIVES]
         result = PerspectiveAnalysisResult(
             symbol="600519",
             name="茅台",
@@ -290,10 +291,7 @@ class TestPerspectiveAnalysisResult:
 
     def test_failed_fatal(self):
         """测试有致命缺陷时判定。"""
-        scores = [
-            PerspectiveScore(perspective=p, score=8.0, weight=0.1)
-            for p in ALL_PERSPECTIVES
-        ]
+        scores = [PerspectiveScore(perspective=p, score=8.0, weight=0.1) for p in ALL_PERSPECTIVES]
         # 设一个极低分
         scores[0] = PerspectiveScore(
             perspective=ALL_PERSPECTIVES[0],
@@ -315,10 +313,7 @@ class TestPerspectiveAnalysisResult:
 
     def test_failed_low_composite(self):
         """测试综合分不足时判定。"""
-        scores = [
-            PerspectiveScore(perspective=p, score=5.0, weight=0.1)
-            for p in ALL_PERSPECTIVES
-        ]
+        scores = [PerspectiveScore(perspective=p, score=5.0, weight=0.1) for p in ALL_PERSPECTIVES]
         result = PerspectiveAnalysisResult(
             symbol="000001",
             name="测试",
@@ -355,9 +350,7 @@ class TestPerspectiveAnalysisResult:
             PerspectiveScore(perspective=p, score=float(i), weight=0.1)
             for i, p in enumerate(ALL_PERSPECTIVES)
         ]
-        result = PerspectiveAnalysisResult(
-            symbol="test", name="test", price=10, scores=scores
-        )
+        result = PerspectiveAnalysisResult(symbol="test", name="test", price=10, scores=scores)
         s = result.get_score("buffett")
         assert s is not None
         assert s.perspective == "buffett"
@@ -369,10 +362,7 @@ class TestPerspectiveAnalysisResult:
 
     def test_to_dict(self):
         """测试字典转换。"""
-        scores = [
-            PerspectiveScore(perspective=p, score=7.0, weight=0.1)
-            for p in ALL_PERSPECTIVES
-        ]
+        scores = [PerspectiveScore(perspective=p, score=7.0, weight=0.1) for p in ALL_PERSPECTIVES]
         result = PerspectiveAnalysisResult(
             symbol="600519",
             name="茅台",
@@ -395,9 +385,7 @@ class TestPerspectiveAnalysisResult:
         for i, p in enumerate(ALL_PERSPECTIVES):
             # 只有6个通过（<7）
             score_val = 7.0 if i < 6 else 4.0
-            scores.append(PerspectiveScore(
-                perspective=p, score=score_val, weight=0.1
-            ))
+            scores.append(PerspectiveScore(perspective=p, score=score_val, weight=0.1))
         result = PerspectiveAnalysisResult(
             symbol="test",
             name="test",
@@ -827,11 +815,15 @@ class TestPerspectiveReport:
 
         results = [
             PerspectiveAnalysisResult(
-                symbol="600519", name="茅台", price=1800,
+                symbol="600519",
+                name="茅台",
+                price=1800,
                 composite_score=8.5,
             ),
             PerspectiveAnalysisResult(
-                symbol="000001", name="垃圾", price=5,
+                symbol="000001",
+                name="垃圾",
+                price=5,
                 composite_score=3.0,
             ),
         ]
@@ -931,6 +923,7 @@ class TestMungerScorerDetail:
     def test_high_profit_growth(self):
         """高净利增长应加分。"""
         from gugu.analysis.perspectives.scorer import score_munger
+
         ctx = make_excellent_context()
         ctx.profit_growth = 50.0
         result = score_munger(ctx)
@@ -939,6 +932,7 @@ class TestMungerScorerDetail:
     def test_negative_cash_flow_penalty(self):
         """负经营现金流应扣分。"""
         from gugu.analysis.perspectives.scorer import score_munger
+
         ctx = make_excellent_context()
         ctx.operating_cash_flow = -100.0
         result = score_munger(ctx)
@@ -947,6 +941,7 @@ class TestMungerScorerDetail:
     def test_high_peg_penalty(self):
         """高PEG应扣分。"""
         from gugu.analysis.perspectives.scorer import score_munger
+
         ctx = make_excellent_context()
         ctx.pe_dynamic = 100.0
         ctx.profit_growth = 10.0  # PEG=10
@@ -960,6 +955,7 @@ class TestLivermoreScorerDetail:
     def test_near_52w_high_bonus(self):
         """接近52周高点应加分（突破新高）。"""
         from gugu.analysis.perspectives.scorer import score_livermore
+
         ctx = make_excellent_context()
         ctx.distance_from_52w_high = -2.0  # 距高点仅2%
         result = score_livermore(ctx)
@@ -968,6 +964,7 @@ class TestLivermoreScorerDetail:
     def test_strong_downtrend_penalty(self):
         """强下降趋势应扣分。"""
         from gugu.analysis.perspectives.scorer import score_livermore
+
         ctx = make_excellent_context()
         # 构造空头排列
         ctx.price = 50
@@ -981,6 +978,7 @@ class TestLivermoreScorerDetail:
     def test_volume_breakout_bonus(self):
         """放量突破应加分。"""
         from gugu.analysis.perspectives.scorer import score_livermore
+
         ctx = make_excellent_context()
         ctx.volume_ratio = 2.0
         ctx.change_pct = 3.0
@@ -994,6 +992,7 @@ class TestQiuGuoLuScorerDetail:
     def test_monopoly_bonus(self):
         """行业龙头应加分。"""
         from gugu.analysis.perspectives.scorer import score_qiu_guo_lu
+
         ctx = make_excellent_context()
         ctx.is_monopoly = True
         result = score_qiu_guo_lu(ctx)
@@ -1002,6 +1001,7 @@ class TestQiuGuoLuScorerDetail:
     def test_pe_below_industry(self):
         """PE低于行业均值应加分。"""
         from gugu.analysis.perspectives.scorer import score_qiu_guo_lu
+
         ctx = make_excellent_context()
         ctx.pe_static = 20.0
         ctx.industry_pe_avg = 40.0
@@ -1011,6 +1011,7 @@ class TestQiuGuoLuScorerDetail:
     def test_pe_above_industry_penalty(self):
         """PE高于行业均值应扣分。"""
         from gugu.analysis.perspectives.scorer import score_qiu_guo_lu
+
         ctx = make_excellent_context()
         ctx.pe_static = 60.0
         ctx.industry_pe_avg = 30.0
@@ -1024,6 +1025,7 @@ class TestChenJiangTingScorerDetail:
     def test_reasonable_stop_distance(self):
         """合理止损距离应加分。"""
         from gugu.analysis.perspectives.scorer import score_chen_jiang_ting
+
         ctx = make_excellent_context()
         ctx.price = 100
         ctx.ma20 = 95
@@ -1033,6 +1035,7 @@ class TestChenJiangTingScorerDetail:
     def test_high_turnover_penalty(self):
         """高换手率应扣分。"""
         from gugu.analysis.perspectives.scorer import score_chen_jiang_ting
+
         ctx = make_excellent_context()
         ctx.turnover_pct = 20.0
         result = score_chen_jiang_ting(ctx)
@@ -1045,6 +1048,7 @@ class TestTechnicalScorerDetail:
     def test_rsi_oversold_bonus(self):
         """RSI超卖应加分。"""
         from gugu.analysis.perspectives.scorer import score_technical
+
         ctx = make_excellent_context()
         ctx.rsi14 = 30.0
         result = score_technical(ctx)
@@ -1053,6 +1057,7 @@ class TestTechnicalScorerDetail:
     def test_rsi_overbought_penalty(self):
         """RSI超买应扣分。"""
         from gugu.analysis.perspectives.scorer import score_technical
+
         ctx = make_excellent_context()
         ctx.rsi14 = 85.0
         result = score_technical(ctx)
@@ -1061,6 +1066,7 @@ class TestTechnicalScorerDetail:
     def test_macd_bullish(self):
         """MACD多头应加分。"""
         from gugu.analysis.perspectives.scorer import score_technical
+
         ctx = make_excellent_context()
         ctx.macd_hist = 2.0
         ctx.macd_dif = 5.0
@@ -1071,6 +1077,7 @@ class TestTechnicalScorerDetail:
     def test_macd_bearish(self):
         """MACD空头应扣分。"""
         from gugu.analysis.perspectives.scorer import score_technical
+
         ctx = make_excellent_context()
         ctx.macd_hist = -2.0
         ctx.macd_dif = -5.0
@@ -1085,6 +1092,7 @@ class TestInvestingHabitsScorerDetail:
     def test_insider_selling_penalty(self):
         """内部人减持应扣分。"""
         from gugu.analysis.perspectives.scorer import score_investing_habits
+
         ctx = make_excellent_context()
         ctx.insider_selling = True
         result = score_investing_habits(ctx)
@@ -1093,6 +1101,7 @@ class TestInvestingHabitsScorerDetail:
     def test_high_volatility_penalty(self):
         """高波动率应扣分。"""
         from gugu.analysis.perspectives.scorer import score_investing_habits
+
         ctx = make_excellent_context()
         ctx.atr14 = 20.0
         ctx.price = 100.0  # ATR=20%
@@ -1106,6 +1115,7 @@ class TestDashixiongScorerDetail:
     def test_bull_market_bonus(self):
         """牛市应加分。"""
         from gugu.analysis.perspectives.scorer import score_dashixiong
+
         ctx = make_excellent_context()
         ctx.market_stage = "bull"
         result = score_dashixiong(ctx)
@@ -1114,6 +1124,7 @@ class TestDashixiongScorerDetail:
     def test_crash_market_penalty(self):
         """崩盘应大幅扣分。"""
         from gugu.analysis.perspectives.scorer import score_dashixiong
+
         ctx = make_excellent_context()
         ctx.market_stage = "crash"
         result = score_dashixiong(ctx)
@@ -1122,6 +1133,7 @@ class TestDashixiongScorerDetail:
     def test_high_usd_cny_penalty(self):
         """人民币贬值应扣分。"""
         from gugu.analysis.perspectives.scorer import score_dashixiong
+
         ctx = make_excellent_context()
         ctx.usd_cny = 7.5
         result = score_dashixiong(ctx)
@@ -1130,6 +1142,7 @@ class TestDashixiongScorerDetail:
     def test_high_us10y_penalty(self):
         """高美债收益率应扣分。"""
         from gugu.analysis.perspectives.scorer import score_dashixiong
+
         ctx = make_excellent_context()
         ctx.us10y_yield = 5.0
         result = score_dashixiong(ctx)
@@ -1142,6 +1155,7 @@ class TestSorosScorerDetail:
     def test_main_inflow_bonus(self):
         """主力流入应加分。"""
         from gugu.analysis.perspectives.scorer import score_soros
+
         ctx = make_excellent_context()
         ctx.main_net_inflow_5d = 20.0
         result = score_soros(ctx)
@@ -1150,6 +1164,7 @@ class TestSorosScorerDetail:
     def test_main_outflow_penalty(self):
         """主力流出应扣分。"""
         from gugu.analysis.perspectives.scorer import score_soros
+
         ctx = make_excellent_context()
         ctx.main_net_inflow_5d = -20.0
         result = score_soros(ctx)
@@ -1158,6 +1173,7 @@ class TestSorosScorerDetail:
     def test_hot_sector_bonus(self):
         """热门板块应加分。"""
         from gugu.analysis.perspectives.scorer import score_soros
+
         ctx = make_excellent_context()
         ctx.hot_sector = True
         result = score_soros(ctx)
@@ -1170,6 +1186,7 @@ class TestBuffettScorerDetail:
     def test_low_pe_bonus(self):
         """低PE应加分。"""
         from gugu.analysis.perspectives.scorer import score_buffett
+
         ctx = make_excellent_context()
         ctx.pe_dynamic = 10.0
         result = score_buffett(ctx)
@@ -1178,6 +1195,7 @@ class TestBuffettScorerDetail:
     def test_high_debt_penalty(self):
         """高负债率应扣分。"""
         from gugu.analysis.perspectives.scorer import score_buffett
+
         ctx = make_excellent_context()
         ctx.debt_ratio = 80.0
         result = score_buffett(ctx)
@@ -1186,6 +1204,7 @@ class TestBuffettScorerDetail:
     def test_dividend_bonus(self):
         """高股息率应加分。"""
         from gugu.analysis.perspectives.scorer import score_buffett
+
         ctx = make_excellent_context()
         ctx.dividend_yield = 4.0
         result = score_buffett(ctx)
@@ -1198,6 +1217,7 @@ class TestLynchScorerDetail:
     def test_small_mcap_bonus(self):
         """中小市值应加分（Tenbagger潜力）。"""
         from gugu.analysis.perspectives.scorer import score_lynch
+
         ctx = make_excellent_context()
         ctx.mcap_billion = 50.0
         result = score_lynch(ctx)
@@ -1206,6 +1226,7 @@ class TestLynchScorerDetail:
     def test_low_institutional_holding_bonus(self):
         """低机构持仓应加分（潜在黑马）。"""
         from gugu.analysis.perspectives.scorer import score_lynch
+
         ctx = make_excellent_context()
         ctx.institutional_holding = 10.0
         result = score_lynch(ctx)
@@ -1214,6 +1235,7 @@ class TestLynchScorerDetail:
     def test_negative_growth_penalty(self):
         """负增长应扣分。"""
         from gugu.analysis.perspectives.scorer import score_lynch
+
         ctx = make_excellent_context()
         ctx.profit_growth = -30.0
         result = score_lynch(ctx)

@@ -37,6 +37,7 @@ class StockRanker:
         self._money_flow = MoneyFlowFilter()
         # v0.6.0: 筹码画像评分（复用现有 HolderConcentrationFilter）
         from gugu.filters.holder_concentration import HolderConcentrationFilter
+
         self._holder_concentration = HolderConcentrationFilter()
 
     async def rank(
@@ -155,8 +156,11 @@ class StockRanker:
 
         # 加权总分 v0.6.0: 新增筹码画像15%，调整其他维度权重
         total = (
-            factor_score * 0.25 + fund_score * 0.20 + flow_score * 0.25
-            + sector_score * 0.15 + chip_score * 0.15
+            factor_score * 0.25
+            + fund_score * 0.20
+            + flow_score * 0.25
+            + sector_score * 0.15
+            + chip_score * 0.15
         )
 
         return {

@@ -118,8 +118,13 @@ class SignalRouter:
         # 趋势类/突破类策略若发出 sell，说明趋势已破坏，禁止买入
         # 这些策略的 sell 信号覆盖任何 buy 信号
         _trend_breakdown_strategies = {
-            "turtle", "dual_ma", "chen_jiangting", "money_flow_follow",
-            "box_breakout", "breakout", "leopard_three_factors",
+            "turtle",
+            "dual_ma",
+            "chen_jiangting",
+            "money_flow_follow",
+            "box_breakout",
+            "breakout",
+            "leopard_three_factors",
         }
         sell_strategy_names = {n for n, _ in sell_votes}
         trend_breakdown = sell_strategy_names & _trend_breakdown_strategies
@@ -128,36 +133,26 @@ class SignalRouter:
         triggered = []
 
         # P2 修复：weighted 模式使用 StrategyPool 加权融合
+        avg_conf = 0.0
         if self._fusion_rule == "weighted" and self._pool is not None:
-            # 市场状态自适应权重调整
-            if regime:
-                base_weights = self._pool.get_weights()
-                adjusted_weights = compute_regime_weights(base_weights, regime)
-                # P0 修复：深拷贝原始权重，防止就地修改 WeightEntry 导致并发数据竞争
-                import copy as _copy
-                original_weights = _copy.deepcopy(self._pool._weights)
-                for name, w in self._pool._weights.items():
-                    if name in adjusted_weights:
-                        w.weight = adjusted_weights[name] * sum(
-                            v.weight for v in original_weights.values()
-                        )
-                # 归一化
-                total = sum(v.weight for v in self._pool._weights.values() if v.enabled)
-                if total > 0:
-                    for v in self._pool._weights.values():
-                        if v.enabled:
-                            v.weight /= total
-
             # 将 votes 转为 StrategyPool 可接受的信号格式
             pool_signals = [
                 {"direction": "buy" if s == 1 else "sell", "confidence": c, "strategy_name": n}
                 for n, s, c in votes
             ]
-            pool_result = self._pool.weighted_fusion(pool_signals)
-
-            # 恢复原始权重（避免影响后续交易的性能追踪）
+            # 市场状态自适应权重：计算临时权重，不修改pool内部状态（避免竞态）
+            effective_weights = None
             if regime:
-                self._pool._weights = original_weights
+                base_weights = self._pool.get_weights()
+                raw_adjusted = compute_regime_weights(base_weights, regime)
+                total_raw = sum(raw_adjusted.get(n, w) for n, w in base_weights.items())
+                if total_raw > 0:
+                    effective_weights = {
+                        n: raw_adjusted.get(n, w) / total_raw for n, w in base_weights.items()
+                    }
+            pool_result = self._pool.weighted_fusion(
+                pool_signals, override_weights=effective_weights
+            )
 
             if pool_result["direction"] == "buy":
                 direction = "buy"
@@ -179,15 +174,23 @@ class SignalRouter:
                 direction = "sell"
                 triggered = [n for n, _ in sell_votes]
         elif self._fusion_rule == "majority":
-            # 多数投票策略同方向
-            if total_votes > 0 and len(buy_votes) > total_votes / 2:
+            if len(buy_votes) > len(sell_votes) and len(buy_votes) > total_votes / 2:
                 direction = "buy"
                 triggered = [n for n, _ in buy_votes]
-            elif total_votes > 0 and len(sell_votes) > total_votes / 2:
+            elif len(sell_votes) > len(buy_votes) and len(sell_votes) > total_votes / 2:
                 direction = "sell"
                 triggered = [n for n, _ in sell_votes]
-        else:  # any
-            if buy_votes:
+        else:  # any — 买卖同时触发时，比较总置信度，高者胜；平盘sell优先
+            if buy_votes and sell_votes:
+                buy_total_conf = sum(c for _, c in buy_votes)
+                sell_total_conf = sum(c for _, c in sell_votes)
+                if sell_total_conf >= buy_total_conf:
+                    direction = "sell"
+                    triggered = [n for n, _ in sell_votes]
+                else:
+                    direction = "buy"
+                    triggered = [n for n, _ in buy_votes]
+            elif buy_votes:
                 direction = "buy"
                 triggered = [n for n, _ in buy_votes]
             elif sell_votes:
@@ -205,11 +208,11 @@ class SignalRouter:
                 f"强制覆盖 buy → sell（趋势破坏时不入场）"
             )
             direction = "sell"
-            triggered = list(trend_breakdown) + [t for t in triggered if t not in trend_breakdown]
-            # 卖出置信度取趋势策略的卖出置信度（如有）否则用原置信度
+            triggered = list(trend_breakdown)
             trend_sell_conf = [c for n, c in sell_votes if n in trend_breakdown]
-            if trend_sell_conf:
-                avg_conf = sum(trend_sell_conf) / len(trend_sell_conf)
+            avg_conf = (
+                max(sum(trend_sell_conf) / len(trend_sell_conf), 0.8) if trend_sell_conf else 0.8
+            )
 
         # P0 修复：多策略共识折扣
         # 原逻辑：单策略触发时 avg_conf = 该策略 confidence（常为 1.0），无共识惩罚
@@ -219,14 +222,13 @@ class SignalRouter:
         if self._fusion_rule != "weighted":
             chosen_votes = buy_votes if direction == "buy" else sell_votes
             avg_conf = sum(c for _, c in chosen_votes) / len(chosen_votes) if chosen_votes else 0
-        # P0 修复：weighted 模式也应用共识折扣
-        # 原逻辑 weighted 模式直接用 pool 返回的 confidence，单策略时归一化后恒为 1.0
-        # 导致 min_confidence=0.6 阈值形同虚设，所有单策略信号都通过
-        total_strategies = max(len(self._strategies), 1)
+        # P0 修复：共识折扣分母使用实际投票数（非总策略数）
+        # 很多策略在当前市场/个股上不产生信号（sig=0），不算投票
+        # 例：10个策略中只有2个策略有效且一致买入 → 共识度2/2=100%，而非2/10=20%
+        active_voters = max(len(votes), 1)
         agreeing_count = len(triggered)
-        if total_strategies > 1:
-            consensus_ratio = agreeing_count / total_strategies
-            # 单策略: ratio=1/N → 折扣 0.7; 全策略共识: ratio=1.0 → 折扣 1.0
+        if active_voters > 1:
+            consensus_ratio = min(agreeing_count / active_voters, 1.0)
             consensus_factor = 0.7 + 0.3 * consensus_ratio
             avg_conf *= consensus_factor
 

@@ -42,20 +42,20 @@ ALL_PERSPECTIVES = [
 
 # ── 默认权重（总和=1.0） ──
 DEFAULT_WEIGHTS: dict[str, float] = {
-    PERSPECTIVE_BUFFETT: 0.15,          # 价值投资基石：护城河+安全边际
-    PERSPECTIVE_MUNGER: 0.10,           # 多元思维+反向思考
-    PERSPECTIVE_SOROS: 0.10,            # 反身性+趋势判断
-    PERSPECTIVE_LYNCH: 0.10,            # 成长股分类+PEG
-    PERSPECTIVE_LIVERMORE: 0.10,        # 关键点+趋势跟随
-    PERSPECTIVE_QIU_GUO_LU: 0.10,       # 行业格局+估值
+    PERSPECTIVE_BUFFETT: 0.15,  # 价值投资基石：护城河+安全边际
+    PERSPECTIVE_MUNGER: 0.10,  # 多元思维+反向思考
+    PERSPECTIVE_SOROS: 0.10,  # 反身性+趋势判断
+    PERSPECTIVE_LYNCH: 0.10,  # 成长股分类+PEG
+    PERSPECTIVE_LIVERMORE: 0.10,  # 关键点+趋势跟随
+    PERSPECTIVE_QIU_GUO_LU: 0.10,  # 行业格局+估值
     PERSPECTIVE_CHEN_JIANG_TING: 0.10,  # 趋势+仓位+止损
-    PERSPECTIVE_TECHNICAL: 0.10,         # 技术指标综合
+    PERSPECTIVE_TECHNICAL: 0.10,  # 技术指标综合
     PERSPECTIVE_INVESTING_HABITS: 0.08,  # 行为金融+纪律
-    PERSPECTIVE_DASHIXIONG: 0.07,       # 宏观五维框架
+    PERSPECTIVE_DASHIXIONG: 0.07,  # 宏观五维框架
 }
 
 # ── 评分通过阈值 ──
-PASS_THRESHOLD = 6.0        # 单视角最低通过分
+PASS_THRESHOLD = 6.0  # 单视角最低通过分
 MIN_PERSPECTIVE_SCORE = 4.0  # 单视角最低容忍分（低于此直接否决）
 COMPOSITE_PASS_THRESHOLD = 7.0  # 综合评分通过阈值
 
@@ -67,21 +67,22 @@ class StockDataContext:
     设计为懒加载模式：各视角按需访问字段，不强制要求全部字段存在。
     缺失字段由评分函数自行处理（降级或跳过）。
     """
+
     symbol: str
     name: str = ""
     price: float = 0.0
-    change_pct: float = 0.0          # 当日涨跌幅 (%)
-    volume_ratio: float = 0.0        # 量比
-    turnover_pct: float = 0.0        # 换手率 (%)
-    mcap_billion: float = 0.0        # 流通市值 (亿)
+    change_pct: float = 0.0  # 当日涨跌幅 (%)
+    volume_ratio: float = 0.0  # 量比
+    turnover_pct: float = 0.0  # 换手率 (%)
+    mcap_billion: float = 0.0  # 流通市值 (亿)
 
     # 估值指标
-    pe_static: float = 0.0           # 静态 PE
-    pe_dynamic: float = 0.0          # 动态 PE (Forward)
-    pb: float = 0.0                  # PB
-    roe: float = 0.0                 # ROE (%)
-    revenue_growth: float = 0.0      # 营收增长率 (%)
-    profit_growth: float = 0.0       # 净利润增长率 (%)
+    pe_static: float = 0.0  # 静态 PE
+    pe_dynamic: float = 0.0  # 动态 PE (Forward)
+    pb: float = 0.0  # PB
+    roe: float = 0.0  # ROE (%)
+    revenue_growth: float = 0.0  # 营收增长率 (%)
+    profit_growth: float = 0.0  # 净利润增长率 (%)
 
     # 均线系统
     ma5: float = 0.0
@@ -92,53 +93,53 @@ class StockDataContext:
     ma250: float = 0.0
 
     # 技术指标
-    rsi14: float = 0.0               # RSI(14)
+    rsi14: float = 0.0  # RSI(14)
     macd_dif: float = 0.0
     macd_dea: float = 0.0
     macd_hist: float = 0.0
     bollinger_upper: float = 0.0
     bollinger_lower: float = 0.0
-    atr14: float = 0.0               # ATR(14)
+    atr14: float = 0.0  # ATR(14)
 
     # 价格位置
-    high_52w: float = 0.0            # 52周最高
-    low_52w: float = 0.0             # 52周最低
+    high_52w: float = 0.0  # 52周最高
+    low_52w: float = 0.0  # 52周最低
     distance_from_52w_high: float = 0.0  # 距52w高点 (%)
-    distance_from_52w_low: float = 0.0    # 距52w低点 (%)
+    distance_from_52w_low: float = 0.0  # 距52w低点 (%)
 
     # 资金流
-    main_net_inflow: float = 0.0      # 主力净流入 (亿)
-    main_net_inflow_5d: float = 0.0   # 5日主力净流入 (亿)
-    retail_net_inflow: float = 0.0    # 散户净流入 (亿)
+    main_net_inflow: float = 0.0  # 主力净流入 (亿)
+    main_net_inflow_5d: float = 0.0  # 5日主力净流入 (亿)
+    retail_net_inflow: float = 0.0  # 散户净流入 (亿)
 
     # 市场环境
-    market_stage: str = ""           # 市场阶段: bull/bear/sideway/crash
+    market_stage: str = ""  # 市场阶段: bull/bear/sideway/crash
     sector_rotation_strength: float = 0.0  # 板块轮动强度
-    hot_sector: bool = False         # 是否属于热门板块
+    hot_sector: bool = False  # 是否属于热门板块
 
     # 公司质量
-    debt_ratio: float = 0.0          # 资产负债率 (%)
+    debt_ratio: float = 0.0  # 资产负债率 (%)
     operating_cash_flow: float = 0.0  # 经营现金流 (亿)
-    free_cash_flow: float = 0.0       # 自由现金流 (亿)
-    dividend_yield: float = 0.0      # 股息率 (%)
+    free_cash_flow: float = 0.0  # 自由现金流 (亿)
+    dividend_yield: float = 0.0  # 股息率 (%)
     institutional_holding: float = 0.0  # 机构持股比例 (%)
 
     # 管理层
-    insider_buying: bool = False     # 内部人增持
-    insider_selling: bool = False    # 内部人减持
+    insider_buying: bool = False  # 内部人增持
+    insider_selling: bool = False  # 内部人减持
 
     # 行业
-    industry: str = ""               # 行业名称
-    industry_pe_avg: float = 0.0     # 行业平均PE
-    is_monopoly: bool = False        # 是否垄断/龙头
-    moat_type: str = ""             # 护城河类型: brand/cost/network/switching/unknown
+    industry: str = ""  # 行业名称
+    industry_pe_avg: float = 0.0  # 行业平均PE
+    is_monopoly: bool = False  # 是否垄断/龙头
+    moat_type: str = ""  # 护城河类型: brand/cost/network/switching/unknown
 
     # 宏观（大师兄五维）
     gold_price: float = 0.0
     oil_price: float = 0.0
     usd_cny: float = 0.0
     us10y_yield: float = 0.0
-    market_regime: str = ""          # 市场状态: risk_on/risk_off/neutral
+    market_regime: str = ""  # 市场状态: risk_on/risk_off/neutral
 
     # 原始K线数据（可选，供高级分析）
     kline_data: list[dict[str, Any]] = field(default_factory=list)
@@ -155,14 +156,15 @@ class StockDataContext:
 @dataclass
 class PerspectiveScore:
     """单一视角的评分结果。"""
-    perspective: str                 # 视角名称
-    score: float                     # 0-10 分
-    weight: float                    # 该视角权重
-    confidence: float = 1.0         # 评分置信度 (0-1)，数据不足时降低
-    reasoning: str = ""             # 评分推理链（可解释性）
+
+    perspective: str  # 视角名称
+    score: float  # 0-10 分
+    weight: float  # 该视角权重
+    confidence: float = 1.0  # 评分置信度 (0-1)，数据不足时降低
+    reasoning: str = ""  # 评分推理链（可解释性）
     key_factors: list[str] = field(default_factory=list)  # 关键因子
-    risk_flags: list[str] = field(default_factory=list)   # 风险标记
-    verdict: str = ""               # 一句话判定
+    risk_flags: list[str] = field(default_factory=list)  # 风险标记
+    verdict: str = ""  # 一句话判定
 
     @property
     def weighted_score(self) -> float:
@@ -183,25 +185,26 @@ class PerspectiveScore:
 @dataclass
 class PerspectiveAnalysisResult:
     """十大视角综合分析结果。"""
+
     symbol: str
     name: str
     price: float
     timestamp: str = ""
 
     scores: list[PerspectiveScore] = field(default_factory=list)
-    composite_score: float = 0.0     # 加权综合评分
-    min_score: float = 10.0          # 最低单视角分（木桶效应）
-    min_perspective: str = ""        # 最低分视角名称
-    passed_count: int = 0            # 通过视角数
-    fatal_count: int = 0             # 致命缺陷数
-    overall_verdict: str = ""        # 综合判定
-    overall_reasoning: str = ""      # 综合推理
+    composite_score: float = 0.0  # 加权综合评分
+    min_score: float = 10.0  # 最低单视角分（木桶效应）
+    min_perspective: str = ""  # 最低分视角名称
+    passed_count: int = 0  # 通过视角数
+    fatal_count: int = 0  # 致命缺陷数
+    overall_verdict: str = ""  # 综合判定
+    overall_reasoning: str = ""  # 综合推理
     top_strengths: list[str] = field(default_factory=list)  # 核心优势
-    top_risks: list[str] = field(default_factory=list)      # 核心风险
-    suggestion: str = ""             # 操作建议
-    entry_price: float | None = None   # 建议入场价
+    top_risks: list[str] = field(default_factory=list)  # 核心风险
+    suggestion: str = ""  # 操作建议
+    entry_price: float | None = None  # 建议入场价
     stop_loss_price: float | None = None  # 建议止损价
-    target_price: float | None = None     # 建议目标价
+    target_price: float | None = None  # 建议目标价
 
     @property
     def passed(self) -> bool:

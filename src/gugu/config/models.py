@@ -27,16 +27,24 @@ class RiskConfig(BaseModel):
     max_total_positions: int = Field(default=5, ge=1, description="最大持仓数")
     max_same_industry: int = Field(default=2, ge=1, description="同行业最大持仓数")
     t_plus_1: bool = Field(default=True, description="T+1 限制（系统默认开启）")
-    max_holding_days_warn: int = Field(default=30, ge=1, description="持仓 N 天未盈利 → 警告减半仓（防阴跌套牢）")
-    max_holding_days_halt: int = Field(default=60, ge=1, description="持仓 N 天未盈利 → 强制清仓（防阴跌套牢）")
-    max_drawdown_halt: float = Field(default=0.15, ge=0.0, le=1.0, description="组合最大回撤熔断阈值")
+    max_holding_days_warn: int = Field(
+        default=30, ge=1, description="持仓 N 天未盈利 → 警告减半仓（防阴跌套牢）"
+    )
+    max_holding_days_halt: int = Field(
+        default=60, ge=1, description="持仓 N 天未盈利 → 强制清仓（防阴跌套牢）"
+    )
+    max_drawdown_halt: float = Field(
+        default=0.15, ge=0.0, le=1.0, description="组合最大回撤熔断阈值"
+    )
 
 
 class DataConfig(BaseModel):
     """数据源配置."""
 
     primary_source: str = Field(default="sina", description="主数据源")
-    fallback_sources: list[str] = Field(default_factory=lambda: ["akshare"], description="降级源列表")
+    fallback_sources: list[str] = Field(
+        default_factory=lambda: ["akshare"], description="降级源列表"
+    )
     fetch_interval_seconds: int = Field(default=120, ge=10, description="实时采集间隔（秒）")
     fail_threshold: int = Field(default=3, ge=1, description="连续失败 N 次触发降级")
     fail_cooldown_seconds: int = Field(default=300, ge=0, description="降级冷却时间（秒）")
@@ -137,12 +145,8 @@ class LeopardUniverseConfig(BaseModel):
 
     enabled: bool = Field(default=False, description="是否启用三要素选股池预筛")
     turnover_min: float = Field(default=15.0, ge=0, description="换手率下限(%)")
-    amount_min: float = Field(
-        default=1_000_000_000, ge=0, description="成交额下限(元，10亿)"
-    )
-    circ_mv_min: float = Field(
-        default=7_000_000_000, ge=0, description="流通市值下限(元，70亿)"
-    )
+    amount_min: float = Field(default=1_000_000_000, ge=0, description="成交额下限(元，10亿)")
+    circ_mv_min: float = Field(default=7_000_000_000, ge=0, description="流通市值下限(元，70亿)")
 
 
 class PaperConfig(BaseModel):
@@ -228,7 +232,6 @@ class SchedulerTasksConfig(BaseModel):
     flow_afternoon: bool = Field(default=True, description="14:30 盘后资金流决策报告")
     signal_close: bool = Field(default=True, description="15:10 收盘信号汇总")
     macro_close: bool = Field(default=True, description="15:15 收盘宏观简报")
-    fund_monitor: bool = Field(default=True, description="15:35 基金监控")
     concept_daily: bool = Field(default=True, description="20:00 每日概念")
     sentiment_daily: bool = Field(default=True, description="20:30 舆情日报")
     weekly_optimize: bool = Field(default=True, description="周日 03:00 周参数优化")
@@ -289,22 +292,6 @@ class FundamentalConfig(BaseModel):
     revenue_growth_min: float = Field(default=-20, description="营收增长率下限（%）")
 
 
-class FundItemConfig(BaseModel):
-    """单只基金配置."""
-
-    code: str = Field(default="", description="基金代码")
-    name: str = Field(default="", description="基金名称")
-    cost_price: float | None = Field(default=None, description="持仓成本价")
-    base_investment: float = Field(default=1000, description="定投基准金额")
-
-
-class FundConfig(BaseModel):
-    """基金监控配置."""
-
-    enabled: bool = Field(default=True, description="是否启用基金监控")
-    funds: list[FundItemConfig] = Field(default_factory=list, description="基金列表")
-
-
 class LogConfig(BaseModel):
     """日志配置."""
 
@@ -320,15 +307,26 @@ class PerspectiveConfig(BaseModel):
     enabled: bool = Field(default=True, description="是否启用十大视角分析")
     perspectives: list[str] = Field(
         default_factory=lambda: [
-            "buffett", "munger", "soros", "lynch", "livermore",
-            "qiu_guo_lu", "chen_jiang_ting", "technical",
-            "investing_habits", "dashixiong",
+            "buffett",
+            "munger",
+            "soros",
+            "lynch",
+            "livermore",
+            "qiu_guo_lu",
+            "chen_jiang_ting",
+            "technical",
+            "investing_habits",
+            "dashixiong",
         ],
         description="启用的视角列表",
     )
     pass_threshold: float = Field(default=6.0, ge=0.0, le=10.0, description="单视角通过阈值")
-    composite_pass_threshold: float = Field(default=7.0, ge=0.0, le=10.0, description="综合评分通过阈值")
-    min_perspective_score: float = Field(default=4.0, ge=0.0, le=10.0, description="单视角最低容忍分（低于此否决）")
+    composite_pass_threshold: float = Field(
+        default=7.0, ge=0.0, le=10.0, description="综合评分通过阈值"
+    )
+    min_perspective_score: float = Field(
+        default=4.0, ge=0.0, le=10.0, description="单视角最低容忍分（低于此否决）"
+    )
     auto_analyze_watchlist: bool = Field(default=True, description="是否自动分析自选股")
     scan_with_perspectives: bool = Field(default=True, description="选股时是否运行视角分析")
     report_time: str = Field(default="08:30", description="每日推送时间（交易日）")
@@ -352,9 +350,7 @@ class HolderConcentrationConfig(BaseModel):
     avg_hold_change_threshold: float = Field(
         default=-20.0, description="户均持股变化率阈值(%)，低于即拒绝"
     )
-    lurker_consecutive_quarters: int = Field(
-        default=2, ge=1, description="潜伏者连续季度数"
-    )
+    lurker_consecutive_quarters: int = Field(default=2, ge=1, description="潜伏者连续季度数")
     lurker_total_decline_threshold: float = Field(
         default=20.0, ge=0.0, description="潜伏者累计降幅阈值(%)"
     )
@@ -368,9 +364,7 @@ class IntradayMonitorConfig(BaseModel):
     """
 
     enabled: bool = Field(default=True, description="是否启用盘中实时盯盘")
-    performance_mode: str = Field(
-        default="auto", description="性能模式: auto|high|medium|low|off"
-    )
+    performance_mode: str = Field(default="auto", description="性能模式: auto|high|medium|low|off")
     custom_watchlist: list[str] = Field(
         default_factory=list, description="自定义监控范围（留空则按性能模式自动决定）"
     )
@@ -411,7 +405,6 @@ class AppConfig(BaseModel):
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     wisdom: WisdomConfig = Field(default_factory=WisdomConfig)
     fundamental: FundamentalConfig = Field(default_factory=FundamentalConfig)
-    fund: FundConfig = Field(default_factory=FundConfig)
     log: LogConfig = Field(default_factory=LogConfig)
     perspective: PerspectiveConfig = Field(default_factory=PerspectiveConfig)
     holder_concentration_filter: HolderConcentrationConfig = Field(
@@ -541,18 +534,6 @@ def flatten_config(app_config: AppConfig) -> dict[str, Any]:
             "pb_max": app_config.fundamental.pb_max,
             "roe_min": app_config.fundamental.roe_min,
             "revenue_growth_min": app_config.fundamental.revenue_growth_min,
-        },
-        "fund": {
-            "enabled": app_config.fund.enabled,
-            "funds": [
-                {
-                    "code": f.code,
-                    "name": f.name,
-                    "cost_price": f.cost_price,
-                    "base_investment": f.base_investment,
-                }
-                for f in app_config.fund.funds
-            ],
         },
         "log": {
             "level": app_config.log.level,

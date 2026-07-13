@@ -79,9 +79,7 @@ class KnowledgeBaseAgent:
             return True
         result = load_index()
         if result is None:
-            logger.warning(
-                "[kb-agent] 索引未构建。请先运行: python scripts/build_kb_index.py"
-            )
+            logger.warning("[kb-agent] 索引未构建。请先运行: python scripts/build_kb_index.py")
             return False
         self._chunks, self._tokens, self._meta = result
         try:

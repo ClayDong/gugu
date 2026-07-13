@@ -100,7 +100,9 @@ class DoubleYinMoneyBagStrategy(Strategy):
         df["ma_long"] = df["close"].rolling(ma_long_window).mean()
 
         # MA20 斜率（持续向上拐头判定）
-        df["ma_slope"] = df["ma_trend"].diff(ma_slope_window) / df["ma_trend"].shift(ma_slope_window)
+        df["ma_slope"] = df["ma_trend"].diff(ma_slope_window) / df["ma_trend"].shift(
+            ma_slope_window
+        )
 
         # ── 计算量能指标 ──────────────────────────────
         df["vol_ma5"] = df["volume"].rolling(5).mean().shift(1)
@@ -111,7 +113,9 @@ class DoubleYinMoneyBagStrategy(Strategy):
         df["is_yin"] = (df["close"] < df["open"]).astype(bool)
         df["is_yang"] = (df["close"] > df["open"]).astype(bool)
         df["body"] = (df["close"] - df["open"]).abs() / df["open"].replace(0, np.nan)
-        df["upper_shadow"] = (df["high"] - df[["open", "close"]].max(axis=1)) / df["open"].replace(0, np.nan)
+        df["upper_shadow"] = (df["high"] - df[["open", "close"]].max(axis=1)) / df["open"].replace(
+            0, np.nan
+        )
 
         # ════════════════════════════════════════════════
         # 核心4硬AND条件（钱袋子图标日）
@@ -131,7 +135,9 @@ class DoubleYinMoneyBagStrategy(Strategy):
 
         # 条件4: 反转K线（当日十字 or 小阳）
         df["is_doji"] = df["body"] < doji_body_max
-        df["is_small_yang"] = df["is_yang"] & (df["daily_return"] <= small_yang_max_gain) & (df["daily_return"] >= 0)
+        df["is_small_yang"] = (
+            df["is_yang"] & (df["daily_return"] <= small_yang_max_gain) & (df["daily_return"] >= 0)
+        )
         cond_kline_reversal = df["is_doji"] | df["is_small_yang"]
 
         # 核心买入信号（4硬AND）
@@ -151,8 +157,11 @@ class DoubleYinMoneyBagStrategy(Strategy):
         score_trend_resonance = df["ma20_above_ma60"].astype(float) * 0.10
 
         df["confidence_score"] = (
-            score_second_shrink + score_first_shrink + score_today_vol
-            + score_recovers + score_trend_resonance
+            score_second_shrink
+            + score_first_shrink
+            + score_today_vol
+            + score_recovers
+            + score_trend_resonance
         ).clip(0, 1)
 
         # ════════════════════════════════════════════════
@@ -164,8 +173,7 @@ class DoubleYinMoneyBagStrategy(Strategy):
         cond_volume_breakout = df["vol_ratio"] >= breakout_vol_min
         cond_recovers_double_yin = df["close"] > df["double_yin_high"]
         add_position_cond = (
-            df["prev_buy_signal"] & df["is_yang"]
-            & cond_volume_breakout & cond_recovers_double_yin
+            df["prev_buy_signal"] & df["is_yang"] & cond_volume_breakout & cond_recovers_double_yin
         )
 
         # ════════════════════════════════════════════════
@@ -184,9 +192,7 @@ class DoubleYinMoneyBagStrategy(Strategy):
 
         # 止盈1：第一根放量大阳线冲高 5%-8%（take_profit_pct × 0.6 触发）
         df["big_yang"] = (
-            df["is_yang"]
-            & (df["daily_return"] >= take_profit_pct * 0.6)
-            & (df["vol_ratio"] >= 1.5)
+            df["is_yang"] & (df["daily_return"] >= take_profit_pct * 0.6) & (df["vol_ratio"] >= 1.5)
         )
         cond_take_profit_1 = df["big_yang"]
 
@@ -209,7 +215,9 @@ class DoubleYinMoneyBagStrategy(Strategy):
         # 置信度：核心信号用评分，倍量加仓日置信度更高
         df["confidence"] = 0.0
         core_with_conf = core_buy_cond & (df["confidence_score"] >= min_confidence)
-        df.loc[core_with_conf, "confidence"] = df.loc[core_with_conf, "confidence_score"].clip(0.5, 0.85)
+        df.loc[core_with_conf, "confidence"] = df.loc[core_with_conf, "confidence_score"].clip(
+            0.5, 0.85
+        )
         # 倍量加仓日置信度更高（已有前日信号确认）
         df.loc[add_position_cond, "confidence"] = 0.90
 

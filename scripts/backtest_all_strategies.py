@@ -5,7 +5,7 @@
 设计：
 1. 从 akshare 获取全市场股票列表（约 5000 只）
 2. 每只股票取 200 天历史数据
-3. 对每只股票跑所有启用策略（7 个）
+3. 对每只股票跑 settings.yaml 中实际启用的策略
 4. 汇总每个策略的胜率、收益、夏普、最大回撤
 5. 按指标排序输出对比表
 
@@ -51,15 +51,9 @@ _DISTRIBUTION_METRICS = [
 
 
 def get_enabled_strategies() -> list[str]:
-    """从 settings.yaml 读取启用的策略列表。"""
-    try:
-        strategies = get_config().strategies.enabled
-        if strategies:
-            return strategies
-    except Exception:
-        pass
-    # 默认回退（与 settings.yaml enabled 列表一致）
-    return ["box_breakout", "pullback_low", "double_yin"]
+    """从 settings.yaml 读取实际启用的信号策略。"""
+    cfg = get_config().strategy
+    return cfg.get_all_enabled_unique() if cfg.enabled_by_regime else list(cfg.enabled)
 
 
 async def fetch_stock_list(max_stocks: int | None = None) -> list[str]:

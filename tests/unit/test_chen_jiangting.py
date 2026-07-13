@@ -18,15 +18,17 @@ def _make_df(n: int = 120, base_price: float = 10.0, trend: float = 0.0) -> pd.D
     close = [base_price * (1 + trend) ** i for i in range(n)]
     high = [c + 0.05 for c in close]
     low = [c - 0.05 for c in close]
-    return pd.DataFrame({
-        "date": dates,
-        "open": close,
-        "high": high,
-        "low": low,
-        "close": close,
-        "volume": [10000 + i * 100 for i in range(n)],
-        "amount": [100000 + i * 1000 for i in range(n)],
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": close,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": [10000 + i * 100 for i in range(n)],
+            "amount": [100000 + i * 1000 for i in range(n)],
+        }
+    )
 
 
 def _make_rising_df(n: int = 120, base_price: float = 10.0, trend: float = 0.005) -> pd.DataFrame:
@@ -53,15 +55,17 @@ def test_no_breakout_no_signal():
     dates = pd.date_range("2026-01-01", periods=n, freq="D")
     # 价格在 10.0 附近窄幅震荡，不形成突破
     close = [10.0 + 0.1 * np.sin(i / 10) for i in range(n)]
-    df = pd.DataFrame({
-        "date": dates,
-        "open": close,
-        "high": [c + 0.05 for c in close],
-        "low": [c - 0.05 for c in close],
-        "close": close,
-        "volume": [10000 + i * 100 for i in range(n)],
-        "amount": [100000 + i * 1000 for i in range(n)],
-    })
+    df = pd.DataFrame(
+        {
+            "date": dates,
+            "open": close,
+            "high": [c + 0.05 for c in close],
+            "low": [c - 0.05 for c in close],
+            "close": close,
+            "volume": [10000 + i * 100 for i in range(n)],
+            "amount": [100000 + i * 1000 for i in range(n)],
+        }
+    )
 
     strategy = ChenJiangtingStrategy()
     result = strategy.generate_signals(df)
@@ -150,6 +154,7 @@ def test_confidence_range():
 def test_strategy_registered():
     """策略应注册到 registry。"""
     from gugu.strategies.registry import _REGISTRY
+
     assert "chen_jiangting" in _REGISTRY
 
 

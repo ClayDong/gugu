@@ -8,6 +8,7 @@
 - 参数校验
 - 边界场景
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -231,9 +232,7 @@ class TestDoubleYinSellSignals:
         df.loc[50, "low"] = prev_close * 0.99
         df.loc[50, "volume"] = df["volume"].iloc[45:50].mean() * 2  # 2 倍量
 
-        strat = DoubleYinMoneyBagStrategy(
-            {"take_profit_pct": 0.08, "stop_loss_pct": 0.0}
-        )
+        strat = DoubleYinMoneyBagStrategy({"take_profit_pct": 0.08, "stop_loss_pct": 0.0})
         out = strat.generate_signals(df)
         # 第 50 天应有卖出信号（止盈）
         assert out.loc[50, "signal"] == -1

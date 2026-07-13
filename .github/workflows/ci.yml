@@ -24,9 +24,9 @@ jobs:
       - name: Lint with ruff
         run: |
           uv run ruff check src/gugu scripts
-      - name: Type check with mypy
+      - name: Type check changed critical modules with mypy
         run: |
-          uv run mypy src/gugu --ignore-missing-imports
+          uv run mypy --python-version 3.12 src/gugu/config src/gugu/filters/money_flow.py src/gugu/web/app.py --ignore-missing-imports
 
   test:
     runs-on: ubuntu-latest

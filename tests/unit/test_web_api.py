@@ -1,4 +1,5 @@
 """Web API 单元测试（使用 FastAPI TestClient）。"""
+
 from __future__ import annotations
 
 import json
@@ -242,8 +243,20 @@ class TestEquityEndpoint:
         from pathlib import Path
 
         records = [
-            {"last_cycle_at": "2026-06-25T09:30:00", "total_value": 1000000, "cash": 700000, "status": "ok", "halted": False},
-            {"last_cycle_at": "2026-06-25T10:30:00", "total_value": 1005000, "cash": 650000, "status": "ok", "halted": False},
+            {
+                "last_cycle_at": "2026-06-25T09:30:00",
+                "total_value": 1000000,
+                "cash": 700000,
+                "status": "ok",
+                "halted": False,
+            },
+            {
+                "last_cycle_at": "2026-06-25T10:30:00",
+                "total_value": 1005000,
+                "cash": 650000,
+                "status": "ok",
+                "halted": False,
+            },
         ]
 
         app = create_app()
@@ -272,6 +285,108 @@ class TestHaltEndpoint:
             MockEngine.return_value.reset_halt.return_value = None
             resp = client.post("/api/halt/reset")
             assert resp.status_code == 200
+
+
+class TestOrderEndpoint:
+    """模拟盘下单端点测试。"""
+
+    def test_order_rejects_non_paper_mode(self):
+        """非 paper 模式拒绝 Web 下单。"""
+        app = create_app()
+        client = TestClient(app)
+        with mock.patch("gugu.web.app._execution_mode", return_value="signal_only"):
+            resp = client.post(
+                "/api/order",
+                json={"symbol": "600276", "direction": "buy", "quantity": 100, "price": 50.0},
+            )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "error"
+        assert "paper" in data["message"]
+
+    def test_order_rejects_invalid_quantity(self):
+        """数量必须为正数。"""
+        app = create_app()
+        client = TestClient(app)
+        with mock.patch("gugu.web.app._execution_mode", return_value="paper"):
+            resp = client.post(
+                "/api/order",
+                json={"symbol": "600276", "direction": "buy", "quantity": 0, "price": 50.0},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "error"
+        assert "数量" in resp.json()["message"]
+
+    def test_order_rejects_when_risk_halts(self):
+        """风控拒绝时不调用 broker.order。"""
+        from gugu.risk.rules import RiskAction, RiskCheckResult, RiskLevel
+
+        app = create_app()
+        client = TestClient(app)
+        with (
+            mock.patch("gugu.web.app._execution_mode", return_value="paper"),
+            mock.patch("gugu.web.app._get_web_broker") as mock_broker_fn,
+            mock.patch("gugu.web.app._get_web_risk") as mock_risk_fn,
+        ):
+            mock_broker = mock.MagicMock()
+            mock_account = mock.MagicMock(cash=100000.0)
+            mock_broker.get_account.return_value = mock_account
+            mock_broker.get_portfolio.return_value = {}
+            mock_broker_fn.return_value = mock_broker
+
+            mock_risk = mock.MagicMock()
+            mock_risk.check_order.return_value = RiskCheckResult(
+                RiskLevel.L1_POSITION, RiskAction.HALT, "position too large"
+            )
+            mock_risk_fn.return_value = mock_risk
+
+            resp = client.post(
+                "/api/order",
+                json={"symbol": "600276", "direction": "buy", "quantity": 100, "price": 50.0},
+            )
+
+        data = resp.json()
+        assert data["status"] == "error"
+        assert "风控拒绝" in data["message"]
+        mock_broker.order.assert_not_called()
+
+    def test_order_places_paper_buy_after_risk_allows(self):
+        """风控通过后执行模拟盘买入。"""
+        from gugu.execution.base import OrderResult
+        from gugu.risk.rules import RiskAction, RiskCheckResult, RiskLevel
+
+        app = create_app()
+        client = TestClient(app)
+        with (
+            mock.patch("gugu.web.app._execution_mode", return_value="paper"),
+            mock.patch("gugu.web.app._get_web_broker") as mock_broker_fn,
+            mock.patch("gugu.web.app._get_web_risk") as mock_risk_fn,
+        ):
+            mock_broker = mock.MagicMock()
+            mock_broker.get_account.return_value = mock.MagicMock(cash=100000.0)
+            mock_broker.get_portfolio.return_value = {}
+            mock_broker.order.return_value = OrderResult(
+                True, "600276", "buy", 50.0, 100, 5.0, message="ok"
+            )
+            mock_broker_fn.return_value = mock_broker
+
+            mock_risk = mock.MagicMock()
+            mock_risk.check_order.return_value = RiskCheckResult(
+                RiskLevel.L1_POSITION, RiskAction.ALLOW, "approved"
+            )
+            mock_risk_fn.return_value = mock_risk
+
+            resp = client.post(
+                "/api/order",
+                json={"symbol": "600276", "direction": "buy", "quantity": 100, "price": 50.0},
+            )
+
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["symbol"] == "600276"
+        assert data["direction"] == "buy"
+        mock_risk.check_order.assert_called_once()
+        mock_broker.order.assert_called_once_with("600276", "buy", 100, price=50.0)
 
 
 class TestSignalPerformanceEndpoint:

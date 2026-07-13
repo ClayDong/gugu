@@ -945,6 +945,7 @@ def score_dashixiong(ctx: StockDataContext) -> PerspectiveScore:
 # 辅助函数
 # ══════════════════════════════════════════════════════════════
 
+
 def _calc_ma_trend(ctx: StockDataContext) -> float:
     """计算均线趋势得分 (-2.0 ~ +2.0)。"""
     score = 0.0

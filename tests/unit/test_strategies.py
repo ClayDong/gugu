@@ -1,4 +1,5 @@
 """策略基类与内置策略测试。"""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -30,9 +31,7 @@ def test_base_ensure_columns_missing(ohlcv_df: pd.DataFrame) -> None:
 
 
 def test_turtle_strategy(ohlcv_df: pd.DataFrame) -> None:
-    strat = TurtleStrategy(
-        {"breakout_window": 20, "exit_window": 10, "atr_window": 20}
-    )
+    strat = TurtleStrategy({"breakout_window": 20, "exit_window": 10, "atr_window": 20})
     out = strat.generate_signals(ohlcv_df)
     assert "signal" in out.columns
     assert "confidence" in out.columns
@@ -47,9 +46,7 @@ def test_dual_ma_strategy(ohlcv_df: pd.DataFrame) -> None:
 
 
 def test_macd_strategy(ohlcv_df: pd.DataFrame) -> None:
-    strat = MACDStrategy(
-        {"short_window": 12, "long_window": 26, "signal_window": 9}
-    )
+    strat = MACDStrategy({"short_window": 12, "long_window": 26, "signal_window": 9})
     out = strat.generate_signals(ohlcv_df)
     assert "signal" in out.columns
     assert "confidence" in out.columns
@@ -63,36 +60,28 @@ def test_bollinger_strategy(ohlcv_df: pd.DataFrame) -> None:
 
 
 def test_rsi_strategy(ohlcv_df: pd.DataFrame) -> None:
-    strat = RSIStrategy(
-        {"window": 14, "oversold": 30, "overbought": 70}
-    )
+    strat = RSIStrategy({"window": 14, "oversold": 30, "overbought": 70})
     out = strat.generate_signals(ohlcv_df)
     assert "signal" in out.columns
     assert "confidence" in out.columns
 
 
 def test_kdj_strategy(ohlcv_df: pd.DataFrame) -> None:
-    strat = KDJStrategy(
-        {"window": 9, "oversold": 20, "overbought": 80}
-    )
+    strat = KDJStrategy({"window": 9, "oversold": 20, "overbought": 80})
     out = strat.generate_signals(ohlcv_df)
     assert "signal" in out.columns
     assert "confidence" in out.columns
 
 
 def test_box_breakout_strategy(ohlcv_df: pd.DataFrame) -> None:
-    strat = BoxBreakoutStrategy(
-        {"box_window": 20, "volume_confirm": True, "volume_ratio": 1.5}
-    )
+    strat = BoxBreakoutStrategy({"box_window": 20, "volume_confirm": True, "volume_ratio": 1.5})
     out = strat.generate_signals(ohlcv_df)
     assert "signal" in out.columns
     assert "confidence" in out.columns
 
 
 def test_dual_thrust_strategy(ohlcv_df: pd.DataFrame) -> None:
-    strat = DualThrustStrategy(
-        {"lookback": 5, "k_up": 0.5, "k_down": 0.5}
-    )
+    strat = DualThrustStrategy({"lookback": 5, "k_up": 0.5, "k_down": 0.5})
     out = strat.generate_signals(ohlcv_df)
     assert "signal" in out.columns
     assert "confidence" in out.columns
@@ -110,6 +99,7 @@ def test_registry_unknown_strategy() -> None:
 
 
 # ========== Turtle 成交量确认独立测试（《炒股的智慧》阻力突破需量配合） ==========
+
 
 def _make_turtle_breakout_df(breakout_volume: float, days: int = 25) -> pd.DataFrame:
     """构造海龟突破数据：前20天震荡，第21天突破20日高点。
@@ -133,10 +123,17 @@ def _make_turtle_breakout_df(breakout_volume: float, days: int = 25) -> pd.DataF
     open_ = [c - 0.5 for c in close]
     volume = [1_000_000] * 20 + [breakout_volume] * (days - 20)
     amount = [c * v for c, v in zip(close, volume)]
-    return pd.DataFrame({
-        "date": dates[:days], "open": open_, "high": high, "low": low,
-        "close": close, "volume": volume, "amount": amount,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates[:days],
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+            "amount": amount,
+        }
+    )
 
 
 class TestTurtleVolumeConfirm:
@@ -146,8 +143,13 @@ class TestTurtleVolumeConfirm:
         """成交量充足时（>1.5倍均量）买入信号通过。"""
         df = _make_turtle_breakout_df(breakout_volume=2_000_000)
         strat = TurtleStrategy(
-            {"breakout_window": 20, "exit_window": 10, "atr_window": 20,
-             "volume_confirm": True, "vol_ratio": 1.5}
+            {
+                "breakout_window": 20,
+                "exit_window": 10,
+                "atr_window": 20,
+                "volume_confirm": True,
+                "vol_ratio": 1.5,
+            }
         )
         out = strat.generate_signals(df)
         buy_signals = out[out["signal"] == 1]
@@ -157,8 +159,13 @@ class TestTurtleVolumeConfirm:
         """成交量不足时（<1.5倍均量）买入信号被过滤。"""
         df = _make_turtle_breakout_df(breakout_volume=1_000_000)  # 等于均量，低于1.5倍
         strat = TurtleStrategy(
-            {"breakout_window": 20, "exit_window": 10, "atr_window": 20,
-             "volume_confirm": True, "vol_ratio": 1.5}
+            {
+                "breakout_window": 20,
+                "exit_window": 10,
+                "atr_window": 20,
+                "volume_confirm": True,
+                "vol_ratio": 1.5,
+            }
         )
         out = strat.generate_signals(df)
         buy_signals = out[out["signal"] == 1]
@@ -168,8 +175,7 @@ class TestTurtleVolumeConfirm:
         """关闭成交量确认时，低成交量也能产生买入信号。"""
         df = _make_turtle_breakout_df(breakout_volume=1_000_000)
         strat = TurtleStrategy(
-            {"breakout_window": 20, "exit_window": 10, "atr_window": 20,
-             "volume_confirm": False}
+            {"breakout_window": 20, "exit_window": 10, "atr_window": 20, "volume_confirm": False}
         )
         out = strat.generate_signals(df)
         buy_signals = out[out["signal"] == 1]

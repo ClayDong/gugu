@@ -64,15 +64,21 @@ def build_context_from_signal(signal: dict[str, Any]) -> StockDataContext:
         distance_from_52w_low=float(signal.get("distance_from_52w_low", 0)),
         # 资金流
         main_net_inflow=float(money_flow.get("main_net_inflow", signal.get("main_net_inflow", 0))),
-        main_net_inflow_5d=float(money_flow.get("main_net_inflow_5d", signal.get("main_net_inflow_5d", 0))),
+        main_net_inflow_5d=float(
+            money_flow.get("main_net_inflow_5d", signal.get("main_net_inflow_5d", 0))
+        ),
         # 市场环境
         market_stage=market.get("market_stage", signal.get("market_stage", "")),
         hot_sector=signal.get("hot_sector", False),
         # 公司质量
         debt_ratio=float(fundamental.get("debt_ratio", signal.get("debt_ratio", 0))),
-        operating_cash_flow=float(fundamental.get("operating_cash_flow", signal.get("operating_cash_flow", 0))),
+        operating_cash_flow=float(
+            fundamental.get("operating_cash_flow", signal.get("operating_cash_flow", 0))
+        ),
         dividend_yield=float(fundamental.get("dividend_yield", signal.get("dividend_yield", 0))),
-        institutional_holding=float(fundamental.get("institutional_holding", signal.get("institutional_holding", 0))),
+        institutional_holding=float(
+            fundamental.get("institutional_holding", signal.get("institutional_holding", 0))
+        ),
         insider_buying=signal.get("insider_buying", False),
         insider_selling=signal.get("insider_selling", False),
         # 行业
@@ -85,7 +91,8 @@ def build_context_from_signal(signal: dict[str, Any]) -> StockDataContext:
 def _kline_cache_key(symbol: str, kline_df: Any) -> str:
     """生成K线缓存键（基于 symbol + 最后10个收盘价的哈希）。"""
     import hashlib
-    if kline_df is None or (hasattr(kline_df, 'empty') and kline_df.empty):
+
+    if kline_df is None or (hasattr(kline_df, "empty") and kline_df.empty):
         return f"{symbol}_empty"
     try:
         closes = kline_df["close"].values[-10:].tobytes() if "close" in kline_df else b""
@@ -110,10 +117,10 @@ def build_context_from_kline(
     import numpy as np
     import pandas as pd
 
-    if kline_df is None or (hasattr(kline_df, 'empty') and kline_df.empty):
+    if kline_df is None or (hasattr(kline_df, "empty") and kline_df.empty):
         return StockDataContext(symbol=symbol, name=name, **kwargs)
 
-    df = kline_df.copy() if hasattr(kline_df, 'copy') else pd.DataFrame(kline_df)
+    df = kline_df.copy() if hasattr(kline_df, "copy") else pd.DataFrame(kline_df)
 
     # 确保 close 列存在
     close_col = "close" if "close" in df.columns else "收盘"
@@ -195,8 +202,8 @@ def build_context_from_kline(
         atr14 = float(np.mean(trs))
 
     # 52周高低
-    high_52w = float(np.max(highs[-min(len(highs), 250):])) if len(highs) > 0 else 0
-    low_52w = float(np.min(lows[-min(len(lows), 250):])) if len(lows) > 0 else 0
+    high_52w = float(np.max(highs[-min(len(highs), 250) :])) if len(highs) > 0 else 0
+    low_52w = float(np.min(lows[-min(len(lows), 250) :])) if len(lows) > 0 else 0
 
     dist_high = ((price - high_52w) / high_52w * 100) if high_52w > 0 else 0
     dist_low = ((price - low_52w) / low_52w * 100) if low_52w > 0 else 0
@@ -246,6 +253,7 @@ def build_context_from_kline(
 def _calc_ema(data: Any, period: int) -> float:
     """计算 EMA。"""
     import numpy as np
+
     if len(data) < period:
         return float(np.nanmean(data)) if len(data) > 0 else 0.0
     alpha = 2.0 / (period + 1)
@@ -256,6 +264,7 @@ def _calc_ema(data: Any, period: int) -> float:
 
 
 # ── 集成辅助函数 ──
+
 
 def attach_perspective_to_signal(
     signal: dict[str, Any],

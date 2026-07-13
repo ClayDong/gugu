@@ -5,6 +5,7 @@
 
 所有外部依赖（网络/LLM/飞书）均被 mock，测试纯逻辑正确性。
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -28,15 +29,17 @@ def _make_kline_df(days: int = 60) -> pd.DataFrame:
             base *= 1.003  # 恢复上涨
         prices.append(base)
 
-    df = pd.DataFrame({
-        "date": dates,
-        "open": [p * 0.998 for p in prices],
-        "high": [p * 1.01 for p in prices],
-        "low": [p * 0.99 for p in prices],
-        "close": prices,
-        "volume": [100000 + i * 1000 for i in range(days)],
-        "amount": [p * 100000 for p in prices],
-    })
+    df = pd.DataFrame(
+        {
+            "date": dates,
+            "open": [p * 0.998 for p in prices],
+            "high": [p * 1.01 for p in prices],
+            "low": [p * 0.99 for p in prices],
+            "close": prices,
+            "volume": [100000 + i * 1000 for i in range(days)],
+            "amount": [p * 100000 for p in prices],
+        }
+    )
     return df
 
 

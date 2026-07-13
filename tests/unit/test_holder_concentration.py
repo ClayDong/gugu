@@ -8,6 +8,7 @@
 - 缓存跨日失效
 - 元数据 describe()
 """
+
 from __future__ import annotations
 
 from datetime import date as date_cls
@@ -66,10 +67,7 @@ def _make_history_df(
         ]
         dates = default_dates[: len(pcts)]
     return pd.DataFrame(
-        [
-            {"holder_num_pct": p, "end_date": d, "holder_num": 100000}
-            for d, p in zip(dates, pcts)
-        ]
+        [{"holder_num_pct": p, "end_date": d, "holder_num": 100000} for d, p in zip(dates, pcts)]
     )
 
 
@@ -96,9 +94,7 @@ def holder_filter(mock_collector):
 class TestHolderConcentrationFilter:
     """筹码集中度过滤器测试。"""
 
-    async def test_default_filter_passes_when_data_missing(
-        self, mock_collector
-    ):
+    async def test_default_filter_passes_when_data_missing(self, mock_collector):
         """数据缺失时（fetch 返回 None）应默认放行 pass=True。"""
         mock_collector.fetch_holder_structure.return_value = None
         f = HolderConcentrationFilter()
@@ -195,9 +191,7 @@ class TestHolderConcentrationFilter:
 
         mock_date = MagicMock()
         mock_date.today.return_value = dt.date(2024, 1, 1)
-        monkeypatch.setattr(
-            "gugu.filters.holder_concentration.date", mock_date
-        )
+        monkeypatch.setattr("gugu.filters.holder_concentration.date", mock_date)
 
         mock_collector.fetch_holder_structure.return_value = _make_holder_df()
         mock_collector.fetch_holder_history.return_value = None
@@ -281,9 +275,7 @@ class TestHolderConcentrationFilter:
 
     async def test_collector_exception_passes(self, mock_collector):
         """采集器抛异常时应默认放行（慢变量不阻塞信号）。"""
-        mock_collector.fetch_holder_structure.side_effect = RuntimeError(
-            "network error"
-        )
+        mock_collector.fetch_holder_structure.side_effect = RuntimeError("network error")
         f = HolderConcentrationFilter()
         f._collector = mock_collector
 
@@ -298,9 +290,7 @@ class TestHolderConcentrationFilter:
 
         mock_date = MagicMock()
         mock_date.today.return_value = dt.date(2024, 6, 15)
-        monkeypatch.setattr(
-            "gugu.filters.holder_concentration.date", mock_date
-        )
+        monkeypatch.setattr("gugu.filters.holder_concentration.date", mock_date)
 
         mock_collector.fetch_holder_structure.return_value = _make_holder_df()
         mock_collector.fetch_holder_history.return_value = None

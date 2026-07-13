@@ -5,6 +5,7 @@
 仅 mock 外部依赖（TradingEngine、is_trading_day、asyncio.sleep），
 不 mock 被测的 TradingScheduler 业务逻辑。
 """
+
 from __future__ import annotations
 
 from unittest import mock
@@ -23,9 +24,7 @@ def mock_engine() -> mock.AsyncMock:
 @pytest.fixture
 def scheduler(mock_engine: mock.AsyncMock) -> TradingScheduler:
     """构造一个引擎被 mock 的 TradingScheduler。"""
-    with mock.patch(
-        "gugu.engine.scheduler.TradingEngine", return_value=mock_engine
-    ):
+    with mock.patch("gugu.engine.scheduler.TradingEngine", return_value=mock_engine):
         return TradingScheduler()
 
 
@@ -41,7 +40,7 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     # v0.5.0: 新增 perspective_report_0830（十大视角分析日报）
     # v0.5.0: 新增 intraday_monitor（盘中实时盯盘，每分钟触发）
     # v0.6.0: 新增 config_hot_reload（配置热加载检测，每5分钟）
-    assert len(jobs) == 27  # v0.5.6 新增 market_temp_0825 市场温度计任务
+    assert len(jobs) == 26  # v0.5.9 移除 fund_monitor_1535 基金监控任务
     job_ids = {j.id for j in jobs}
     assert "intraday_monitor" in job_ids
     assert "scan_1" in job_ids

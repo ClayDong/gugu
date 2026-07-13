@@ -1,4 +1,5 @@
 """持仓模型测试。"""
+
 from __future__ import annotations
 
 import pytest

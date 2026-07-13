@@ -11,6 +11,7 @@
 - 超大单净流入告警
 - 行业资金流告警
 """
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -83,9 +84,7 @@ def _make_sector_flow_df() -> pd.DataFrame:
 def mock_dm():
     """构造 mock DataManager，避免实际调用 API。"""
     dm = MagicMock()
-    dm.fetch_stock_flow = AsyncMock(
-        return_value=_make_stock_flow_df()
-    )
+    dm.fetch_stock_flow = AsyncMock(return_value=_make_stock_flow_df())
     dm.fetch_sector_flow = AsyncMock(return_value=_make_sector_flow_df())
     return dm
 
@@ -372,9 +371,7 @@ class TestRunCycle:
         result = await monitor.run_cycle()
         assert result == []
 
-    async def test_run_cycle_returns_empty_when_not_trading(
-        self, mock_dm, monkeypatch
-    ):
+    async def test_run_cycle_returns_empty_when_not_trading(self, mock_dm, monkeypatch):
         """非交易日 run_cycle() 应返回空列表。"""
         monkeypatch.setattr(
             "gugu.engine.intraday_monitor.is_trading_day",
@@ -388,9 +385,7 @@ class TestRunCycle:
         result = await monitor.run_cycle()
         assert result == []
 
-    async def test_super_large_inflow_alert(
-        self, mock_dm, trading_time, mock_stock_name
-    ):
+    async def test_super_large_inflow_alert(self, mock_dm, trading_time, mock_stock_name):
         """超大单净流入 > 1 亿应触发告警。"""
         mock_dm.fetch_stock_flow.return_value = _make_stock_flow_df(
             super_large_net=150_000_000,  # 1.5 亿 > 1 亿阈值
@@ -407,9 +402,7 @@ class TestRunCycle:
         assert inflow_alerts[0].direction == "buy"
         assert inflow_alerts[0].value == 150_000_000
 
-    async def test_super_large_outflow_alert(
-        self, mock_dm, trading_time, mock_stock_name
-    ):
+    async def test_super_large_outflow_alert(self, mock_dm, trading_time, mock_stock_name):
         """超大单净流出 > 1 亿应触发告警。"""
         mock_dm.fetch_stock_flow.return_value = _make_stock_flow_df(
             super_large_net=-120_000_000,  # -1.2 亿 < -1 亿阈值
@@ -421,15 +414,11 @@ class TestRunCycle:
         )
         result = await monitor.run_cycle()
 
-        outflow_alerts = [
-            a for a in result if a.alert_type == "super_large_outflow"
-        ]
+        outflow_alerts = [a for a in result if a.alert_type == "super_large_outflow"]
         assert len(outflow_alerts) >= 1
         assert outflow_alerts[0].direction == "sell"
 
-    async def test_industry_inflow_alert(
-        self, mock_dm, trading_time, mock_stock_name
-    ):
+    async def test_industry_inflow_alert(self, mock_dm, trading_time, mock_stock_name):
         """行业流入 > 10 亿应触发告警。"""
         # 个股无异动，仅行业触发
         mock_dm.fetch_stock_flow.return_value = _make_stock_flow_df(
@@ -446,16 +435,12 @@ class TestRunCycle:
         )
         result = await monitor.run_cycle()
 
-        industry_alerts = [
-            a for a in result if a.alert_type == "industry_inflow"
-        ]
+        industry_alerts = [a for a in result if a.alert_type == "industry_inflow"]
         assert len(industry_alerts) >= 1
         assert industry_alerts[0].symbol == "半导体"
         assert industry_alerts[0].direction == "buy"
 
-    async def test_industry_outflow_alert(
-        self, mock_dm, trading_time, mock_stock_name
-    ):
+    async def test_industry_outflow_alert(self, mock_dm, trading_time, mock_stock_name):
         """行业流出 > 10 亿应触发告警。"""
         mock_dm.fetch_stock_flow.return_value = _make_stock_flow_df(
             super_large_net=0,
@@ -470,16 +455,12 @@ class TestRunCycle:
         )
         result = await monitor.run_cycle()
 
-        outflow_alerts = [
-            a for a in result if a.alert_type == "industry_outflow"
-        ]
+        outflow_alerts = [a for a in result if a.alert_type == "industry_outflow"]
         assert len(outflow_alerts) >= 1
         assert outflow_alerts[0].symbol == "房地产"
         assert outflow_alerts[0].direction == "sell"
 
-    async def test_position_warning_alert(
-        self, mock_dm, trading_time, mock_stock_name
-    ):
+    async def test_position_warning_alert(self, mock_dm, trading_time, mock_stock_name):
         """持仓股主力净流出超 5000 万应触发持仓预警。"""
         mock_dm.fetch_stock_flow.return_value = _make_stock_flow_df(
             main_net=-80_000_000,  # -8000万 < -5000万阈值
@@ -491,8 +472,6 @@ class TestRunCycle:
         )
         result = await monitor.run_cycle()
 
-        position_alerts = [
-            a for a in result if a.alert_type == "position_warning"
-        ]
+        position_alerts = [a for a in result if a.alert_type == "position_warning"]
         assert len(position_alerts) >= 1
         assert position_alerts[0].severity == "critical"

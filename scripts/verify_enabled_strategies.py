@@ -187,6 +187,12 @@ def print_report(summary: dict) -> None:
     print()
 
 
+def get_enabled_strategies() -> list[str]:
+    """从 settings.yaml 读取实际启用的信号策略。"""
+    cfg = get_config().strategy
+    return cfg.get_all_enabled_unique() if cfg.enabled_by_regime else list(cfg.enabled)
+
+
 async def main():
     parser = argparse.ArgumentParser(description="验证已启用策略回测")
     parser.add_argument("--max-stocks", type=int, default=100, help="最大测试股票数")
@@ -195,10 +201,7 @@ async def main():
     args = parser.parse_args()
 
     # 获取已启用策略
-    try:
-        enabled = list(get_config().strategies.enabled)
-    except Exception:
-        enabled = ["box_breakout", "double_yin"]
+    enabled = get_enabled_strategies()
 
     symbols = _TEST_SYMBOLS[:args.max_stocks]
     print(f"\n📊 验证已启用策略: {enabled}")

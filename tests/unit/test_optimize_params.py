@@ -6,6 +6,7 @@
 - 高收益但回撤 >50% = 赌徒参数，破产风险
 - 系统性亏损 = 直接禁止
 """
+
 from __future__ import annotations
 
 import sys
@@ -34,9 +35,9 @@ class TestUnlockConditionsAllPass:
         report = _check_unlock_conditions(
             strategy_name="test",
             results=results,
-            avg_sharpe=0.5,        # > 0 通过
-            avg_return=0.1,        # >= 0 通过
-            avg_max_dd=0.15,       # < 25% 通过
+            avg_sharpe=0.5,  # > 0 通过
+            avg_return=0.1,  # >= 0 通过
+            avg_max_dd=0.15,  # < 25% 通过
             param_votes=param_votes,
         )
 
@@ -46,19 +47,16 @@ class TestUnlockConditionsAllPass:
 
     def test_minimal_pass_thresholds(self) -> None:
         """刚好处在阈值边界时也应通过（>0 / 50% / <25% / >=0）。"""
-        results = [
-            {"window": i, "best_params": {"x": 10}, "test_sharpe": 0.0}
-            for i in range(4)
-        ]
+        results = [{"window": i, "best_params": {"x": 10}, "test_sharpe": 0.0} for i in range(4)]
         # 2/4 = 50% 一致性（边界值，通过）
         param_votes = {"x": {"10": 2, "20": 2}}
 
         report = _check_unlock_conditions(
             strategy_name="test",
             results=results,
-            avg_sharpe=0.001,     # 微 > 0 通过
-            avg_return=0.0,       # = 0 通过（边界）
-            avg_max_dd=0.249,     # 微 < 25% 通过
+            avg_sharpe=0.001,  # 微 > 0 通过
+            avg_return=0.0,  # = 0 通过（边界）
+            avg_max_dd=0.249,  # 微 < 25% 通过
             param_votes=param_votes,
         )
 
@@ -81,9 +79,9 @@ class TestUnlockConditionsOverfit:
         report = _check_unlock_conditions(
             strategy_name="overfit",
             results=results,
-            avg_sharpe=-6.28,     # < 0 失败
-            avg_return=-0.15,     # < 0 失败
-            avg_max_dd=0.45,     # > 25% 失败
+            avg_sharpe=-6.28,  # < 0 失败
+            avg_return=-0.15,  # < 0 失败
+            avg_max_dd=0.45,  # > 25% 失败
             param_votes=param_votes,
         )
 
@@ -128,9 +126,9 @@ class TestUnlockConditionsSingleFailure:
         report = _check_unlock_conditions(
             strategy_name="test",
             results=results,
-            avg_sharpe=-0.1,      # < 0 失败
-            avg_return=0.05,      # > 0 通过
-            avg_max_dd=0.15,      # < 25% 通过
+            avg_sharpe=-0.1,  # < 0 失败
+            avg_return=0.05,  # > 0 通过
+            avg_max_dd=0.15,  # < 25% 通过
             param_votes=param_votes,
         )
 
@@ -149,9 +147,9 @@ class TestUnlockConditionsSingleFailure:
         report = _check_unlock_conditions(
             strategy_name="test",
             results=results,
-            avg_sharpe=0.5,       # > 0 通过
-            avg_return=0.05,      # > 0 通过
-            avg_max_dd=0.35,      # > 25% 失败
+            avg_sharpe=0.5,  # > 0 通过
+            avg_return=0.05,  # > 0 通过
+            avg_max_dd=0.35,  # > 25% 失败
             param_votes=param_votes,
         )
 
@@ -170,9 +168,9 @@ class TestUnlockConditionsSingleFailure:
         report = _check_unlock_conditions(
             strategy_name="test",
             results=results,
-            avg_sharpe=0.1,       # > 0 通过
-            avg_return=-0.05,     # < 0 失败
-            avg_max_dd=0.15,      # < 25% 通过
+            avg_sharpe=0.1,  # > 0 通过
+            avg_return=-0.05,  # < 0 失败
+            avg_max_dd=0.15,  # < 25% 通过
             param_votes=param_votes,
         )
 

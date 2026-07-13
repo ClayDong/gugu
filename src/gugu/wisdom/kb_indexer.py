@@ -63,7 +63,9 @@ def extract_text_from_docx(docx_path: Path) -> str:
     return "\n".join(parts)
 
 
-def chunk_text(text: str, book: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[Chunk]:
+def chunk_text(
+    text: str, book: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP
+) -> list[Chunk]:
     """将文本切分为重叠块。"""
     chunks: list[Chunk] = []
     start = 0

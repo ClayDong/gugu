@@ -265,9 +265,7 @@ class HolderConcentrationFilter:
         return result
 
     @staticmethod
-    def _check_consecutive_trend(
-        history_df: pd.DataFrame, direction: str
-    ) -> tuple[int, float]:
+    def _check_consecutive_trend(history_df: pd.DataFrame, direction: str) -> tuple[int, float]:
         """检查历史数据中连续同向变化的季度数及累计变化率。
 
         Args:
@@ -302,7 +300,7 @@ class HolderConcentrationFilter:
                 recent_pcts = list(reversed(pcts))[:consecutive]
                 cumulative_ratio = 1.0
                 for p in recent_pcts:
-                    cumulative_ratio *= (1.0 + p / 100.0)
+                    cumulative_ratio *= 1.0 + p / 100.0
                 cumulative = (cumulative_ratio - 1.0) * 100.0
                 # down 方向返回降幅绝对值（正数），与调用方 > threshold 比较一致
                 if direction == "down":

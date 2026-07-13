@@ -2,6 +2,7 @@
 
 覆盖 FundamentalFilter、MoneyFlowFilter、IndustryConstraint、MarketRegimeDetector。
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -20,6 +21,7 @@ from gugu.filters.market_regime import MarketRegimeDetector, _HS300_SYMBOL, _MA_
 # 辅助函数
 # ============================================================
 
+
 def _make_spot_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
     """生成模拟的 akshare 实时行情 DataFrame。"""
     return pd.DataFrame(rows)
@@ -27,7 +29,9 @@ def _make_spot_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
 
 def _make_individual_info_df(industry: str) -> pd.DataFrame:
     """生成模拟的 akshare 个股信息 DataFrame。"""
-    return pd.DataFrame({"item": ["股票简称", "行业", "总市值"], "value": ["测试", industry, "100亿"]})
+    return pd.DataFrame(
+        {"item": ["股票简称", "行业", "总市值"], "value": ["测试", industry, "100亿"]}
+    )
 
 
 def _make_financial_df(
@@ -35,17 +39,20 @@ def _make_financial_df(
     revenue_growth: float | None = 5.0,
 ) -> pd.DataFrame:
     """生成模拟的 akshare 财务指标 DataFrame。"""
-    return pd.DataFrame({
-        "净资产收益率": [roe],
-        "营业收入同比增长率": [revenue_growth],
-        "年份": [2025],
-        "季度": [4],
-    })
+    return pd.DataFrame(
+        {
+            "净资产收益率": [roe],
+            "营业收入同比增长率": [revenue_growth],
+            "年份": [2025],
+            "季度": [4],
+        }
+    )
 
 
 # ============================================================
 # TestFundamentalFilter
 # ============================================================
+
 
 class TestFundamentalFilter:
     """FundamentalFilter 单元测试。"""
@@ -65,9 +72,11 @@ class TestFundamentalFilter:
         mock_spot: MagicMock,
     ) -> None:
         """PE/PB 在阈值范围内且 ROE 为正 → 通过。"""
-        mock_spot.return_value = _make_spot_df([
-            {"代码": "000001", "市盈率-动态": 15.0, "市净率": 1.5},
-        ])
+        mock_spot.return_value = _make_spot_df(
+            [
+                {"代码": "000001", "市盈率-动态": 15.0, "市净率": 1.5},
+            ]
+        )
         mock_info.return_value = _make_individual_info_df("银行")
         mock_financial.return_value = _make_financial_df(roe=12.0, revenue_growth=5.0)
 
@@ -91,9 +100,11 @@ class TestFundamentalFilter:
         mock_spot: MagicMock,
     ) -> None:
         """PE 超过最大值 → 未通过。"""
-        mock_spot.return_value = _make_spot_df([
-            {"代码": "000001", "市盈率-动态": 200.0, "市净率": 1.5},
-        ])
+        mock_spot.return_value = _make_spot_df(
+            [
+                {"代码": "000001", "市盈率-动态": 200.0, "市净率": 1.5},
+            ]
+        )
         mock_info.return_value = _make_individual_info_df("科技")
         mock_financial.return_value = _make_financial_df(roe=10.0, revenue_growth=5.0)
 
@@ -113,9 +124,11 @@ class TestFundamentalFilter:
         mock_spot: MagicMock,
     ) -> None:
         """PE 为负（亏损股）→ 未通过。"""
-        mock_spot.return_value = _make_spot_df([
-            {"代码": "000001", "市盈率-动态": -5.0, "市净率": 1.0},
-        ])
+        mock_spot.return_value = _make_spot_df(
+            [
+                {"代码": "000001", "市盈率-动态": -5.0, "市净率": 1.0},
+            ]
+        )
         mock_info.return_value = _make_individual_info_df("消费")
         mock_financial.return_value = _make_financial_df(roe=10.0, revenue_growth=5.0)
 
@@ -135,9 +148,11 @@ class TestFundamentalFilter:
         mock_spot: MagicMock,
     ) -> None:
         """ROE 为负 → 未通过。"""
-        mock_spot.return_value = _make_spot_df([
-            {"代码": "000001", "市盈率-动态": 20.0, "市净率": 1.2},
-        ])
+        mock_spot.return_value = _make_spot_df(
+            [
+                {"代码": "000001", "市盈率-动态": 20.0, "市净率": 1.2},
+            ]
+        )
         mock_info.return_value = _make_individual_info_df("地产")
         mock_financial.return_value = _make_financial_df(roe=-5.0, revenue_growth=2.0)
 
@@ -192,18 +207,24 @@ class TestFundamentalFilter:
         mock_board: MagicMock,
     ) -> None:
         """P1-6：高景气度行业（>=30）→ 基本面通过，prosperity 包含评分。"""
-        mock_spot.return_value = _make_spot_df([
-            {"代码": "000001", "市盈率-动态": 15.0, "市净率": 1.5},
-        ])
+        mock_spot.return_value = _make_spot_df(
+            [
+                {"代码": "000001", "市盈率-动态": 15.0, "市净率": 1.5},
+            ]
+        )
         mock_info.return_value = _make_individual_info_df("电子")
         mock_financial.return_value = _make_financial_df(roe=12.0, revenue_growth=5.0)
-        mock_board.return_value = pd.DataFrame([{
-            "板块名称": "电子",
-            "板块涨跌幅": 3.5,
-            "主力净流入": 15e8,
-            "换手率": 3.0,
-            "量比": 1.8,
-        }])
+        mock_board.return_value = pd.DataFrame(
+            [
+                {
+                    "板块名称": "电子",
+                    "板块涨跌幅": 3.5,
+                    "主力净流入": 15e8,
+                    "换手率": 3.0,
+                    "量比": 1.8,
+                }
+            ]
+        )
 
         f = FundamentalFilter()
         result = f.check("000001")
@@ -226,18 +247,24 @@ class TestFundamentalFilter:
         mock_board: MagicMock,
     ) -> None:
         """P1-6：行业景气度极低（<10）→ 硬拦截，pass=False。"""
-        mock_spot.return_value = _make_spot_df([
-            {"代码": "000001", "市盈率-动态": 15.0, "市净率": 1.5},
-        ])
+        mock_spot.return_value = _make_spot_df(
+            [
+                {"代码": "000001", "市盈率-动态": 15.0, "市净率": 1.5},
+            ]
+        )
         mock_info.return_value = _make_individual_info_df("衰退行业")
         mock_financial.return_value = _make_financial_df(roe=12.0, revenue_growth=5.0)
-        mock_board.return_value = pd.DataFrame([{
-            "板块名称": "衰退行业",
-            "板块涨跌幅": -5.0,
-            "主力净流入": -10e8,
-            "换手率": 0.0,
-            "量比": 0.0,
-        }])
+        mock_board.return_value = pd.DataFrame(
+            [
+                {
+                    "板块名称": "衰退行业",
+                    "板块涨跌幅": -5.0,
+                    "主力净流入": -10e8,
+                    "换手率": 0.0,
+                    "量比": 0.0,
+                }
+            ]
+        )
 
         f = FundamentalFilter()
         result = f.check("000001")
@@ -261,9 +288,11 @@ class TestFundamentalFilter:
         mock_board: MagicMock,
     ) -> None:
         """P1-6：行业景气度数据缺失 → 不影响 pass，prosperity.score 为 None。"""
-        mock_spot.return_value = _make_spot_df([
-            {"代码": "000001", "市盈率-动态": 15.0, "市净率": 1.5},
-        ])
+        mock_spot.return_value = _make_spot_df(
+            [
+                {"代码": "000001", "市盈率-动态": 15.0, "市净率": 1.5},
+            ]
+        )
         mock_info.return_value = _make_individual_info_df("银行")
         mock_financial.return_value = _make_financial_df(roe=12.0, revenue_growth=5.0)
         mock_board.side_effect = Exception("API error")
@@ -282,6 +311,7 @@ class TestFundamentalFilter:
 # TestMoneyFlowFilter
 # ============================================================
 
+
 class TestMoneyFlowFilter:
     """MoneyFlowFilter 异步单元测试。"""
 
@@ -298,11 +328,14 @@ class TestMoneyFlowFilter:
     ) -> pd.DataFrame:
         """构造模拟的资金流 DataFrame。"""
         import pandas as pd
-        return pd.DataFrame({
-            "date": [f"2025-01-{i:02d}" for i in range(1, len(main_nets) + 1)],
-            "main_net": main_nets,
-            "main_pct": main_pcts,
-        })
+
+        return pd.DataFrame(
+            {
+                "date": [f"2025-01-{i:02d}" for i in range(1, len(main_nets) + 1)],
+                "main_net": main_nets,
+                "main_pct": main_pcts,
+            }
+        )
 
     @patch("gugu.filters.money_flow.data_manager")
     async def test_strong_inflow(
@@ -347,12 +380,15 @@ class TestMoneyFlowFilter:
         assert result["pass"] is False
         assert result["main_net_5d"] < 0
 
+    @patch("gugu.config.get_config")
     @patch("gugu.filters.money_flow.data_manager")
-    async def test_missing_data(
+    async def test_missing_data_rejected_in_paper_mode(
         self,
         mock_dm: MagicMock,
+        mock_get_config: MagicMock,
     ) -> None:
-        """DataFrame 为空 → 默认放行（数据源降级时不拦截信号）。"""
+        """paper 模式下资金流缺失 → 拒绝买入。"""
+        mock_get_config.return_value.execution.mode = "paper"
         dm_instance = AsyncMock()
         dm_instance.fetch_stock_flow = AsyncMock()
         dm_instance.fetch_stock_flow.return_value = pd.DataFrame()
@@ -361,11 +397,31 @@ class TestMoneyFlowFilter:
         mf = MoneyFlowFilter()
         result = await mf.check("000001")
 
-        # 空数据时默认放行（降级场景）
-        assert result["pass"] is True
+        assert result["pass"] is False
         assert result["data_missing"] is True
         assert result["main_net_today"] == 0.0
         assert result["main_pct_today"] == 0.0
+        assert result["reasons"] == ["资金流数据不可用，无法确认主力方向"]
+
+    @patch("gugu.config.get_config")
+    @patch("gugu.filters.money_flow.data_manager")
+    async def test_missing_data_allowed_in_signal_only_mode(
+        self,
+        mock_dm: MagicMock,
+        mock_get_config: MagicMock,
+    ) -> None:
+        """signal_only 模式下资金流缺失 → 仅观察放行。"""
+        mock_get_config.return_value.execution.mode = "signal_only"
+        dm_instance = AsyncMock()
+        dm_instance.fetch_stock_flow = AsyncMock()
+        dm_instance.fetch_stock_flow.return_value = pd.DataFrame()
+        mock_dm.return_value = dm_instance
+
+        mf = MoneyFlowFilter()
+        result = await mf.check("000001")
+
+        assert result["pass"] is True
+        assert result["data_missing"] is True
         assert result["reasons"] == []
 
     @patch("gugu.filters.money_flow.data_manager")
@@ -395,6 +451,7 @@ class TestMoneyFlowFilter:
 # ============================================================
 # TestIndustryConstraint
 # ============================================================
+
 
 class TestIndustryConstraint:
     """IndustryConstraint 单元测试。"""
@@ -489,6 +546,7 @@ class TestIndustryConstraint:
 # TestMarketRegimeDetector
 # ============================================================
 
+
 class TestMarketRegimeDetector:
     """MarketRegimeDetector 单元测试。"""
 
@@ -500,11 +558,14 @@ class TestMarketRegimeDetector:
     def _build_close_series(self, start: float, step: float, count: int) -> pd.DataFrame:
         """构建单调递增/递减的行情数据。"""
         import numpy as np
+
         closes = [start + step * i for i in range(count)]
-        return pd.DataFrame({
-            "close": closes,
-            "date": pd.date_range("2025-01-01", periods=count, freq="B"),
-        })
+        return pd.DataFrame(
+            {
+                "close": closes,
+                "date": pd.date_range("2025-01-01", periods=count, freq="B"),
+            }
+        )
 
     def test_bull_detected(self, detector: MarketRegimeDetector) -> None:
         """MA20 > MA60 且 MA20 斜率向上 → 牛市。"""
@@ -530,11 +591,14 @@ class TestMarketRegimeDetector:
         """价格波动极小 → 震荡市。"""
         # 100 个交易日几乎不动（微幅震荡）
         import numpy as np
+
         rng = np.random.default_rng(42)
         closes = 3500 + rng.uniform(-5, 5, size=100)
-        df = pd.DataFrame({
-            "close": closes,
-        })
+        df = pd.DataFrame(
+            {
+                "close": closes,
+            }
+        )
         result = detector._analyze(df)
 
         # 由于随机性，可能是 sideways 或 bull/bear，但这里用近乎平坦的数据确保 sideways
@@ -551,7 +615,9 @@ class TestMarketRegimeDetector:
         assert result["position_modifier"] == 0.5
 
     @patch("gugu.filters.market_regime.data_manager")
-    async def test_detect_api_failure(self, mock_dm: MagicMock, detector: MarketRegimeDetector) -> None:
+    async def test_detect_api_failure(
+        self, mock_dm: MagicMock, detector: MarketRegimeDetector
+    ) -> None:
         """数据获取异常时安全降级为震荡市。"""
         dm_instance = AsyncMock()
         dm_instance.fetch_stock_history = AsyncMock()

@@ -82,7 +82,7 @@ class MoneyFlowFollowStrategy(Strategy):
         df["ma60"] = ma60
 
         # ── 条件1：近期强势涨幅（热点近似）──
-        recent_gain = (df["close"] / df["close"].shift(recent_gain_window) - 1.0)
+        recent_gain = df["close"] / df["close"].shift(recent_gain_window) - 1.0
         _cond_hot = recent_gain >= recent_gain_threshold
 
         # ── 条件2：均线多头排列 ──
@@ -104,7 +104,9 @@ class MoneyFlowFollowStrategy(Strategy):
         made_new_high = rolling_high_prev >= historical_high
         # 回踩：当日收盘低于前 N 日最高（真正回踩，非继续创新高）
         pullback_from_high = (df["close"] - rolling_high_prev) / rolling_high_prev
-        cond_pullback_hold = made_new_high & (pullback_from_high < 0) & (pullback_from_high >= -pullback_max_pct)
+        cond_pullback_hold = (
+            made_new_high & (pullback_from_high < 0) & (pullback_from_high >= -pullback_max_pct)
+        )
         # 回踩不破 MA20
         cond_above_ma20 = df["close"] > ma20
 
@@ -136,13 +138,7 @@ class MoneyFlowFollowStrategy(Strategy):
         vol_expanding = vol_ratio_today >= volume_expand_ratio
         # 4. 收盘在 MA20 之上（趋势未破）
         # 5. 非历史天量（保留风控，避免主力出货）
-        buy_cond = (
-            ma_aligned_4
-            & ma20_rising
-            & vol_expanding
-            & cond_above_ma20
-            & cond_not_abnormal
-        )
+        buy_cond = ma_aligned_4 & ma20_rising & vol_expanding & cond_above_ma20 & cond_not_abnormal
 
         # ── 增强评分（soft score，仅影响置信度）──
         # 基础置信度 0.5（满足必要条件）
@@ -160,9 +156,10 @@ class MoneyFlowFollowStrategy(Strategy):
         vol_strength_bonus = (vol_ratio_today / volume_expand_ratio).clip(0, 2.0) / 20.0
 
         confidence = (
-            base_confidence + new_high_boost + hot_boost
-            + shrink_boost + vol_strength_bonus
-        ).clip(0, 1.0).fillna(0.0)
+            (base_confidence + new_high_boost + hot_boost + shrink_boost + vol_strength_bonus)
+            .clip(0, 1.0)
+            .fillna(0.0)
+        )
 
         # ── 卖出信号：均线多头排列破坏 或 跌破 MA20 ──
         ma_breakdown = (ma5 < ma10) & (ma5.shift(1) >= ma10.shift(1))  # MA5 下穿 MA10

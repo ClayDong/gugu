@@ -25,6 +25,7 @@ except ImportError:
     class StrEnum(str, Enum):  # noqa: UP042
         pass
 
+
 from typing import Any
 
 import numpy as np
@@ -155,8 +156,8 @@ class StageDetector:
         if len(ma_medium_valid) >= self.MA_MEDIUM:
             x = np.arange(len(ma_medium_valid))
             # 使用最近 MA_MEDIUM 个点做线性回归
-            x_seg = x[-self.MA_MEDIUM:]
-            y_seg = ma_medium_valid[-self.MA_MEDIUM:]
+            x_seg = x[-self.MA_MEDIUM :]
+            y_seg = ma_medium_valid[-self.MA_MEDIUM :]
             if len(x_seg) >= 2:
                 slope, _ = np.polyfit(x_seg, y_seg, 1)
                 ma_slope = slope / (np.mean(y_seg) if np.mean(y_seg) > 0 else 1)
@@ -182,9 +183,8 @@ class StageDetector:
         atr_ratio = atr / close.iloc[-1] if close.iloc[-1] > 0 else 0
 
         # 6. 近期涨幅
-        price_change_20 = (close.iloc[-1] - close.iloc[-min(21, len(close))]) / close.iloc[
-            -min(21, len(close))
-        ]
+        _ref_20 = close.iloc[-min(21, len(close))]
+        price_change_20 = (close.iloc[-1] - _ref_20) / _ref_20 if _ref_20 != 0 else 0.0
 
         # 7. 均线排列
         ma_bullish = ma_short > ma_medium > ma_long

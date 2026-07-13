@@ -1,4 +1,5 @@
 """通知模块单元测试。"""
+
 from __future__ import annotations
 
 from unittest import mock
@@ -114,9 +115,7 @@ def test_format_system_error():
     """系统异常卡片。"""
     from gugu.notifier.formatter import format_system_error
 
-    card = format_system_error(
-        {"module": "data", "message": "采集失败", "suggestion": "重试"}
-    )
+    card = format_system_error({"module": "data", "message": "采集失败", "suggestion": "重试"})
     assert card["msg_type"] == "interactive"
     assert card["card"]["header"]["template"] == "red"
 
@@ -207,7 +206,16 @@ async def test_feishu_notifier_token_and_send():
         mock_env.return_value.feishu_chat_id = "chat-id"
         notifier = FeishuNotifier()
         notifier._client = mock_client
-        ok = await notifier.notify_signal({"symbol": "600519", "direction": "buy", "price": 1500.0, "confidence": 0.85, "strategies": ["turtle"], "reason": "突破"})
+        ok = await notifier.notify_signal(
+            {
+                "symbol": "600519",
+                "direction": "buy",
+                "price": 1500.0,
+                "confidence": 0.85,
+                "strategies": ["turtle"],
+                "reason": "突破",
+            }
+        )
         assert ok is True
         assert len(requests) == 2  # token + message
 
@@ -340,6 +348,7 @@ def test_format_signal_entry_filtered():
 def test_format_decision_chain_empty():
     """空的 decision_chain 返回空字符串。"""
     from gugu.notifier.formatter import _format_decision_chain
+
     assert _format_decision_chain([]) == ""
 
 
@@ -366,8 +375,13 @@ def test_format_decision_chain_with_filter():
 
     chain = [
         {"step": 0, "name": "四阶段判断", "result": "normal_up", "passed": True},
-        {"step": 1, "name": "基本面过滤", "result": "fail", "passed": False,
-         "reasons": ["PE异常高"]},
+        {
+            "step": 1,
+            "name": "基本面过滤",
+            "result": "fail",
+            "passed": False,
+            "reasons": ["PE异常高"],
+        },
     ]
     text = _format_decision_chain(chain)
     assert "❌" in text
@@ -386,8 +400,13 @@ def test_format_signal_with_decision_chain():
         "price": 1500.0,
         "decision_chain": [
             {"step": 0, "name": "四阶段判断", "result": "normal_up", "passed": True},
-            {"step": 5, "name": "Wisdom决策", "result": "buy", "passed": True,
-             "reason": "趋势良好"},
+            {
+                "step": 5,
+                "name": "Wisdom决策",
+                "result": "buy",
+                "passed": True,
+                "reason": "趋势良好",
+            },
         ],
     }
     card = format_signal(signal)

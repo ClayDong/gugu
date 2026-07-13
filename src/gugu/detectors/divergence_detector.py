@@ -23,9 +23,7 @@ class DivergenceDetector:
             # 发出卖出预警
     """
 
-    def detect_volume_price_divergence(
-        self, df: pd.DataFrame, window: int = 20
-    ) -> pd.Series:
+    def detect_volume_price_divergence(self, df: pd.DataFrame, window: int = 20) -> pd.Series:
         """检测量价背离：股价创窗口新高但成交量萎缩。
 
         条件：
@@ -53,9 +51,7 @@ class DivergenceDetector:
         divergence = (price_new_high & volume_shrink).astype(int)
         return divergence
 
-    def detect_climax_volume(
-        self, df: pd.DataFrame, window: int = 20
-    ) -> pd.Series:
+    def detect_climax_volume(self, df: pd.DataFrame, window: int = 20) -> pd.Series:
         """检测天量滞涨：成交量 > 20日均量*2 但涨幅 < 1%。
 
         Args:

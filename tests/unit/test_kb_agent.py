@@ -2,6 +2,7 @@
 
 覆盖：索引构建、检索、问答（含 LLM 降级）、用户画像影响。
 """
+
 from __future__ import annotations
 
 import json
@@ -238,8 +239,18 @@ class TestKBAsk:
 
     def _build_test_index(self):
         chunks = [
-            Chunk(id=0, book="聪明的投资者", text="安全边际是价值投资的核心原则，以低于内在价值的价格买入", char_offset=0),
-            Chunk(id=1, book="股票大作手回忆录", text="关键点是趋势开始加速的位置，确认后进场", char_offset=0),
+            Chunk(
+                id=0,
+                book="聪明的投资者",
+                text="安全边际是价值投资的核心原则，以低于内在价值的价格买入",
+                char_offset=0,
+            ),
+            Chunk(
+                id=1,
+                book="股票大作手回忆录",
+                text="关键点是趋势开始加速的位置，确认后进场",
+                char_offset=0,
+            ),
         ]
         tokens = [tokenize_zh(c.text) for c in chunks]
         (self.output_dir / "chunks.json").write_text(
@@ -250,7 +261,10 @@ class TestKBAsk:
         with (self.output_dir / "tokens.pkl").open("wb") as f:
             pickle.dump(tokens, f)
         (self.output_dir / "meta.json").write_text(
-            json.dumps({"books": ["聪明的投资者", "股票大作手回忆录"], "book_count": 2, "chunk_count": 2}, ensure_ascii=False),
+            json.dumps(
+                {"books": ["聪明的投资者", "股票大作手回忆录"], "book_count": 2, "chunk_count": 2},
+                ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
 
@@ -291,9 +305,7 @@ class TestKBAsk:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(return_value=mock_resp)
             agent._async_client = mock_client
-            agent._llm_cfg = MagicMock(
-                llm_base_url="http://test", llm_api_key="key", llm_model="m"
-            )
+            agent._llm_cfg = MagicMock(llm_base_url="http://test", llm_api_key="key", llm_model="m")
 
             result = await agent.ask("什么是安全边际")
             assert result.source == "llm"
@@ -310,9 +322,7 @@ class TestKBAsk:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(side_effect=Exception("LLM down"))
             agent._async_client = mock_client
-            agent._llm_cfg = MagicMock(
-                llm_base_url="http://test", llm_api_key="key", llm_model="m"
-            )
+            agent._llm_cfg = MagicMock(llm_base_url="http://test", llm_api_key="key", llm_model="m")
 
             result = await agent.ask("安全边际")
             # 应降级为原始片段

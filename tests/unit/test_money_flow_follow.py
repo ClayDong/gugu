@@ -19,15 +19,17 @@ def _make_df(n: int = 150, seed: int = 42) -> pd.DataFrame:
         prices.append(prices[-1] * (1 + np.random.uniform(0.001, 0.015)))
     prices = np.array(prices)
     volumes = np.random.uniform(1000, 2000, n).astype(float)
-    return pd.DataFrame({
-        "date": dates,
-        "open": prices * 0.99,
-        "high": prices * 1.01,
-        "low": prices * 0.98,
-        "close": prices,
-        "volume": volumes,
-        "amount": prices * volumes,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": prices * 0.99,
+            "high": prices * 1.01,
+            "low": prices * 0.98,
+            "close": prices,
+            "volume": volumes,
+            "amount": prices * volumes,
+        }
+    )
 
 
 def _make_bullish_pullback_df() -> pd.DataFrame:
@@ -62,15 +64,17 @@ def _make_bullish_pullback_df() -> pd.DataFrame:
     # day 144 放量确认 (900/400 = 2.25 >= 1.5)
     volumes[144] = 900
 
-    return pd.DataFrame({
-        "date": dates,
-        "open": prices * 0.99,
-        "high": prices * 1.02,
-        "low": prices * 0.98,
-        "close": prices,
-        "volume": volumes,
-        "amount": prices * volumes,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": prices * 0.99,
+            "high": prices * 1.02,
+            "low": prices * 0.98,
+            "close": prices,
+            "volume": volumes,
+            "amount": prices * volumes,
+        }
+    )
 
 
 class TestMoneyFlowFollowRegistration:
@@ -87,8 +91,8 @@ class TestMoneyFlowFollowRegistration:
         assert s.params["new_high_window"] == 20
         # P0 修复后放宽参数（5 AND → 3 核心 + 2 增强）
         assert s.params["volume_expand_ratio"] == 1.2  # 原 1.5 → 1.2
-        assert s.params["new_high_lookback"] == 60       # 原 120 → 60
-        assert s.params["pullback_max_pct"] == 0.08      # 原 0.05 → 0.08
+        assert s.params["new_high_lookback"] == 60  # 原 120 → 60
+        assert s.params["pullback_max_pct"] == 0.08  # 原 0.05 → 0.08
         assert s.params["abnormal_volume_ratio"] == 3.0
         assert s.params["recent_gain_threshold"] == 0.03
 
@@ -106,7 +110,9 @@ class TestMoneyFlowFollowSignalGeneration:
         assert len(buy_signals) >= 1, "应至少产生1个买入信号"
         # 确认 day 144 附近有买入信号
         signal_dates = buy_signals["date"].dt.strftime("%Y-%m-%d").tolist()
-        assert any("2026-07" in d for d in signal_dates), f"买入信号应出现在放量确认日, got {signal_dates}"
+        assert any("2026-07" in d for d in signal_dates), (
+            f"买入信号应出现在放量确认日, got {signal_dates}"
+        )
 
     def test_no_buy_signal_on_flat_market(self) -> None:
         """震荡市（无趋势）不应产生买入信号。"""
@@ -116,11 +122,17 @@ class TestMoneyFlowFollowSignalGeneration:
         # 价格在 10±0.5 震荡
         prices = 10.0 + np.random.uniform(-0.5, 0.5, n)
         volumes = np.random.uniform(1000, 2000, n).astype(float)
-        df = pd.DataFrame({
-            "date": dates, "open": prices * 0.99, "high": prices * 1.01,
-            "low": prices * 0.98, "close": prices, "volume": volumes,
-            "amount": prices * volumes,
-        })
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": prices * 0.99,
+                "high": prices * 1.01,
+                "low": prices * 0.98,
+                "close": prices,
+                "volume": volumes,
+                "amount": prices * volumes,
+            }
+        )
         s = MoneyFlowFollowStrategy()
         result = s.generate_signals(df)
         # 震荡市不应有买入信号（均线多头排列不成立）
@@ -139,11 +151,17 @@ class TestMoneyFlowFollowSignalGeneration:
             prices.append(prices[-1] * 0.98)
         prices = np.array(prices)
         volumes = np.random.uniform(1000, 2000, n).astype(float)
-        df = pd.DataFrame({
-            "date": dates, "open": prices * 0.99, "high": prices * 1.01,
-            "low": prices * 0.98, "close": prices, "volume": volumes,
-            "amount": prices * volumes,
-        })
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": prices * 0.99,
+                "high": prices * 1.01,
+                "low": prices * 0.98,
+                "close": prices,
+                "volume": volumes,
+                "amount": prices * volumes,
+            }
+        )
         s = MoneyFlowFollowStrategy()
         result = s.generate_signals(df)
         # 下跌阶段应有卖出信号
@@ -178,17 +196,25 @@ class TestMoneyFlowFollowSignalGeneration:
             prices.append(prices[-1] * 0.95)
         prices = np.array(prices)
         volumes = np.random.uniform(1000, 2000, n).astype(float)
-        df = pd.DataFrame({
-            "date": dates, "open": prices * 0.99, "high": prices * 1.01,
-            "low": prices * 0.98, "close": prices, "volume": volumes,
-            "amount": prices * volumes,
-        })
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": prices * 0.99,
+                "high": prices * 1.01,
+                "low": prices * 0.98,
+                "close": prices,
+                "volume": volumes,
+                "amount": prices * volumes,
+            }
+        )
         s = MoneyFlowFollowStrategy()
         result = s.generate_signals(df)
         sell_rows = result[result["signal"] == -1]
         if not sell_rows.empty:
             conf_values = sell_rows["confidence"].unique()
-            assert all(c in (0.6, 0.8) for c in conf_values), f"卖出置信度应为 0.6 或 0.8, got {conf_values}"
+            assert all(c in (0.6, 0.8) for c in conf_values), (
+                f"卖出置信度应为 0.6 或 0.8, got {conf_values}"
+            )
 
 
 class TestMoneyFlowFollowConditions:

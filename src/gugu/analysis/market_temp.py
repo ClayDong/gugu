@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -45,18 +46,18 @@ logger = get_logger()
 # ── 指数列表（akshare stock_index_pe_lg 支持的宽基指数）──────────
 # 覆盖大盘价值/大盘核心/中盘/小盘/红利/创业板，足以反映市场整体估值
 WIDE_INDEXES = [
-    {"name": "上证50",   "lg_symbol": "上证50",   "weight": 1.0},
-    {"name": "沪深300",  "lg_symbol": "沪深300",  "weight": 1.0},
-    {"name": "上证380",  "lg_symbol": "上证380",  "weight": 1.0},
+    {"name": "上证50", "lg_symbol": "上证50", "weight": 1.0},
+    {"name": "沪深300", "lg_symbol": "沪深300", "weight": 1.0},
+    {"name": "上证380", "lg_symbol": "上证380", "weight": 1.0},
     {"name": "创业板50", "lg_symbol": "创业板50", "weight": 1.0},
-    {"name": "中证500",  "lg_symbol": "中证500",  "weight": 1.0},
-    {"name": "上证180",  "lg_symbol": "上证180",  "weight": 1.0},
+    {"name": "中证500", "lg_symbol": "中证500", "weight": 1.0},
+    {"name": "上证180", "lg_symbol": "上证180", "weight": 1.0},
     {"name": "深证红利", "lg_symbol": "深证红利", "weight": 1.0},
     {"name": "深证100", "lg_symbol": "深证100", "weight": 1.0},
     {"name": "中证1000", "lg_symbol": "中证1000", "weight": 1.0},
     {"name": "上证红利", "lg_symbol": "上证红利", "weight": 1.0},
-    {"name": "中证100",  "lg_symbol": "中证100",  "weight": 1.0},
-    {"name": "中证800",  "lg_symbol": "中证800",  "weight": 1.0},
+    {"name": "中证100", "lg_symbol": "中证100", "weight": 1.0},
+    {"name": "中证800", "lg_symbol": "中证800", "weight": 1.0},
 ]
 
 # ── PB 指数列表（stock_index_pb_lg 支持的指数）──────────────────
@@ -66,10 +67,10 @@ PB_INDEXES = [
 ]
 
 # 温度阀值
-_TEMP_BUY_DOUBLE = 20    # < 20° 加倍买入
-_TEMP_BUY_NORMAL = 30    # < 30° 正常买入
-_TEMP_HOLD = 50          # < 50° 正常定投
-_TEMP_SELL_HEAVY = 70    # ≥ 70° 大幅减仓
+_TEMP_BUY_DOUBLE = 20  # < 20° 加倍买入
+_TEMP_BUY_NORMAL = 30  # < 30° 正常买入
+_TEMP_HOLD = 50  # < 50° 正常定投
+_TEMP_SELL_HEAVY = 70  # ≥ 70° 大幅减仓
 
 # 历史回看年数
 _LOOKBACK_YEARS = 10
@@ -96,6 +97,7 @@ _EASTMONEY_HEADERS = {
 @dataclass
 class IndexTempResult:
     """单个指数的温度计算结果。"""
+
     name: str
     current_pe: float | None
     pe_percentile: float | None  # 0-100
@@ -109,6 +111,7 @@ class IndexTempResult:
 @dataclass
 class PBTempResult:
     """单个指数 PB 百分位结果。"""
+
     name: str
     current_pb: float | None
     pb_percentile: float | None  # 0-100
@@ -122,7 +125,8 @@ class PBTempResult:
 @dataclass
 class BuffettResult:
     """巴菲特指数（总市值/GDP）结果。"""
-    current_ratio: float | None      # 当前总市值/GDP 比值
+
+    current_ratio: float | None  # 当前总市值/GDP 比值
     ratio_percentile: float | None  # 0-100
     min_ratio: float | None
     max_ratio: float | None
@@ -134,9 +138,8 @@ class BuffettResult:
 @dataclass
 class MarketTempResult:
     """全市场温度计算结果（多维度加权）。"""
-    timestamp: str = field(
-        default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M")
-    )
+
+    timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M"))
     temperature: float | None = None  # 0.0-100.0 综合温度
     pe_temperature: float | None = None  # PE 百分位平均温度
     pb_temperature: float | None = None  # PB 百分位平均温度
@@ -200,18 +203,23 @@ class MarketTempResult:
                 "name": self.hottest.name,
                 "pe_percentile": self.hottest.pe_percentile,
                 "current_pe": self.hottest.current_pe,
-            } if self.hottest else None,
+            }
+            if self.hottest
+            else None,
             "coldest": {
                 "name": self.coldest.name,
                 "pe_percentile": self.coldest.pe_percentile,
                 "current_pe": self.coldest.current_pe,
-            } if self.coldest else None,
+            }
+            if self.coldest
+            else None,
         }
 
 
 # ── 全局缓存 ──────────────────────────────────────────────────
 _cache: dict[str, Any] = {}
 _cache_time: float = 0.0
+_cache_lock = threading.Lock()
 
 
 def _fetch_pe_history_lg(symbol: str, years: int = _LOOKBACK_YEARS) -> pd.DataFrame | None:
@@ -229,6 +237,7 @@ def _fetch_pe_history_lg(symbol: str, years: int = _LOOKBACK_YEARS) -> pd.DataFr
     """
     try:
         import akshare as ak
+
         raw = ak.stock_index_pe_lg(symbol=symbol)
         if raw is None or raw.empty:
             return None
@@ -236,10 +245,12 @@ def _fetch_pe_history_lg(symbol: str, years: int = _LOOKBACK_YEARS) -> pd.DataFr
         # 列名：日期, 指数, 等权静态市盈率, 静态市盈率, 静态市盈率中位数,
         #       等权滚动市盈率, 滚动市盈率, 滚动市盈率中位数
         # 优先使用滚动市盈率（TTM），缺失时降级到静态市盈率
-        df = pd.DataFrame({
-            "date": pd.to_datetime(raw["日期"], errors="coerce"),
-            "pe": pd.to_numeric(raw.get("滚动市盈率"), errors="coerce"),
-        })
+        df = pd.DataFrame(
+            {
+                "date": pd.to_datetime(raw["日期"], errors="coerce"),
+                "pe": pd.to_numeric(raw.get("滚动市盈率"), errors="coerce"),
+            }
+        )
         df["pe"] = df["pe"].fillna(pd.to_numeric(raw.get("静态市盈率"), errors="coerce"))
         df = df.dropna(subset=["date", "pe"])
         df = df[df["pe"] > 0]  # 过滤负 PE（亏损）
@@ -254,9 +265,7 @@ def _fetch_pe_history_lg(symbol: str, years: int = _LOOKBACK_YEARS) -> pd.DataFr
         return None
 
 
-def _fetch_pe_history_eastmoney(
-    code: str, years: int = _LOOKBACK_YEARS
-) -> pd.DataFrame | None:
+def _fetch_pe_history_eastmoney(code: str, years: int = _LOOKBACK_YEARS) -> pd.DataFrame | None:
     """东方财富 push2 备用数据源：获取指数 PE 历史序列。
 
     当乐咕乐股数据源失败时使用。通过 kline 接口获取历史数据，
@@ -325,15 +334,18 @@ def _fetch_pb_history_lg(symbol: str, years: int = _LOOKBACK_YEARS) -> pd.DataFr
     """
     try:
         import akshare as ak
+
         raw = ak.stock_index_pb_lg(symbol=symbol)
         if raw is None or raw.empty:
             return None
 
         # 列名：日期, 指数, 市净率, 等权市净率, 市净率中位数
-        df = pd.DataFrame({
-            "date": pd.to_datetime(raw["日期"], errors="coerce"),
-            "pb": pd.to_numeric(raw.get("市净率"), errors="coerce"),
-        })
+        df = pd.DataFrame(
+            {
+                "date": pd.to_datetime(raw["日期"], errors="coerce"),
+                "pb": pd.to_numeric(raw.get("市净率"), errors="coerce"),
+            }
+        )
         df["pb"] = df["pb"].fillna(pd.to_numeric(raw.get("等权市净率"), errors="coerce"))
         df = df.dropna(subset=["date", "pb"])
         df = df[df["pb"] > 0]
@@ -360,14 +372,17 @@ def _fetch_buffett_index_lg(years: int = _LOOKBACK_YEARS) -> pd.DataFrame | None
     """
     try:
         import akshare as ak
+
         raw = ak.stock_buffett_index_lg()
         if raw is None or raw.empty:
             return None
 
         # 列名：日期, 收盘价, 总市值, GDP
-        df = pd.DataFrame({
-            "date": pd.to_datetime(raw["日期"], errors="coerce"),
-        })
+        df = pd.DataFrame(
+            {
+                "date": pd.to_datetime(raw["日期"], errors="coerce"),
+            }
+        )
         market_cap = pd.to_numeric(raw.get("总市值"), errors="coerce")
         gdp = pd.to_numeric(raw.get("GDP"), errors="coerce")
         # 巴菲特指数 = 总市值 / GDP（单位：均为亿元，比值无单位）
@@ -395,15 +410,23 @@ def calc_pb_percentile(df: pd.DataFrame) -> dict[str, Any]:
     """
     if df is None or df.empty:
         return {
-            "current_pb": None, "pb_percentile": None,
-            "min_pb": None, "max_pb": None, "median_pb": None, "data_points": 0,
+            "current_pb": None,
+            "pb_percentile": None,
+            "min_pb": None,
+            "max_pb": None,
+            "median_pb": None,
+            "data_points": 0,
         }
 
     pb_series = df["pb"].dropna()
     if pb_series.empty:
         return {
-            "current_pb": None, "pb_percentile": None,
-            "min_pb": None, "max_pb": None, "median_pb": None, "data_points": 0,
+            "current_pb": None,
+            "pb_percentile": None,
+            "min_pb": None,
+            "max_pb": None,
+            "median_pb": None,
+            "data_points": 0,
         }
 
     current_pb = float(pb_series.iloc[-1])
@@ -437,15 +460,23 @@ def calc_buffett_percentile(df: pd.DataFrame) -> dict[str, Any]:
     """
     if df is None or df.empty:
         return {
-            "current_ratio": None, "ratio_percentile": None,
-            "min_ratio": None, "max_ratio": None, "median_ratio": None, "data_points": 0,
+            "current_ratio": None,
+            "ratio_percentile": None,
+            "min_ratio": None,
+            "max_ratio": None,
+            "median_ratio": None,
+            "data_points": 0,
         }
 
     ratio_series = df["ratio"].dropna()
     if ratio_series.empty:
         return {
-            "current_ratio": None, "ratio_percentile": None,
-            "min_ratio": None, "max_ratio": None, "median_ratio": None, "data_points": 0,
+            "current_ratio": None,
+            "ratio_percentile": None,
+            "min_ratio": None,
+            "max_ratio": None,
+            "median_ratio": None,
+            "data_points": 0,
         }
 
     current_ratio = float(ratio_series.iloc[-1])
@@ -484,8 +515,12 @@ async def fetch_pb_temp(index: dict) -> PBTempResult:
 
     if df is None:
         return PBTempResult(
-            name=name, current_pb=None, pb_percentile=None,
-            min_pb=None, max_pb=None, median_pb=None,
+            name=name,
+            current_pb=None,
+            pb_percentile=None,
+            min_pb=None,
+            max_pb=None,
+            median_pb=None,
             error="PB 历史数据获取失败",
         )
 
@@ -511,8 +546,11 @@ async def fetch_buffett_temp() -> BuffettResult:
 
     if df is None:
         return BuffettResult(
-            current_ratio=None, ratio_percentile=None,
-            min_ratio=None, max_ratio=None, median_ratio=None,
+            current_ratio=None,
+            ratio_percentile=None,
+            min_ratio=None,
+            max_ratio=None,
+            median_ratio=None,
             error="巴菲特指数历史数据获取失败",
         )
 
@@ -538,15 +576,23 @@ def calc_pe_percentile(df: pd.DataFrame) -> dict[str, Any]:
     """
     if df is None or df.empty:
         return {
-            "current_pe": None, "pe_percentile": None,
-            "min_pe": None, "max_pe": None, "median_pe": None, "data_points": 0,
+            "current_pe": None,
+            "pe_percentile": None,
+            "min_pe": None,
+            "max_pe": None,
+            "median_pe": None,
+            "data_points": 0,
         }
 
     pe_series = df["pe"].dropna()
     if pe_series.empty:
         return {
-            "current_pe": None, "pe_percentile": None,
-            "min_pe": None, "max_pe": None, "median_pe": None, "data_points": 0,
+            "current_pe": None,
+            "pe_percentile": None,
+            "min_pe": None,
+            "max_pe": None,
+            "median_pe": None,
+            "data_points": 0,
         }
 
     current_pe = float(pe_series.iloc[-1])
@@ -595,8 +641,12 @@ async def fetch_index_temp(index: dict) -> IndexTempResult:
 
     if df is None:
         return IndexTempResult(
-            name=name, current_pe=None, pe_percentile=None,
-            min_pe=None, max_pe=None, median_pe=None,
+            name=name,
+            current_pe=None,
+            pe_percentile=None,
+            min_pe=None,
+            max_pe=None,
+            median_pe=None,
             error="PE 历史数据获取失败",
         )
 
@@ -631,9 +681,11 @@ async def calc_market_temp(use_cache: bool = True) -> MarketTempResult:
     """
     global _cache, _cache_time
 
-    if use_cache and _cache and time.time() - _cache_time < _CACHE_TTL_MINUTES * 60:
-        logger.debug("市场温度计使用缓存")
-        return _cache
+    if use_cache:
+        with _cache_lock:
+            if _cache and time.time() - _cache_time < _CACHE_TTL_MINUTES * 60:
+                logger.debug("市场温度计使用缓存")
+                return _cache
 
     result = MarketTempResult()
 
@@ -642,18 +694,16 @@ async def calc_market_temp(use_cache: bool = True) -> MarketTempResult:
     pb_tasks = [fetch_pb_temp(idx) for idx in PB_INDEXES]
     buffett_task = fetch_buffett_temp()
 
-    all_results = await asyncio.gather(
-        *pe_tasks, *pb_tasks, buffett_task, return_exceptions=True
-    )
+    all_results = await asyncio.gather(*pe_tasks, *pb_tasks, buffett_task, return_exceptions=True)
 
     # 解析 PE 结果
-    pe_results = all_results[:len(pe_tasks)]
+    pe_results = all_results[: len(pe_tasks)]
     result.indexes = [r for r in pe_results if isinstance(r, IndexTempResult)]
     result.total_indexes = len(WIDE_INDEXES)
     result.success_count = sum(1 for r in result.indexes if r.pe_percentile is not None)
 
     # 解析 PB 结果
-    pb_results = all_results[len(pe_tasks):len(pe_tasks) + len(pb_tasks)]
+    pb_results = all_results[len(pe_tasks) : len(pe_tasks) + len(pb_tasks)]
     result.pb_indexes = [r for r in pb_results if isinstance(r, PBTempResult)]
     result.pb_success_count = sum(1 for r in result.pb_indexes if r.pb_percentile is not None)
 
@@ -688,14 +738,13 @@ async def calc_market_temp(use_cache: bool = True) -> MarketTempResult:
         pb_temp = result.pb_temperature or 0.0
         buffett_temp = result.buffett_temperature or 0.0
         result.temperature = round(
-            (pe_temp * weight_pe
-             + pb_temp * weight_pb
-             + buffett_temp * weight_buffett) / total_weight,
+            (pe_temp * weight_pe + pb_temp * weight_pb + buffett_temp * weight_buffett)
+            / total_weight,
             1,
         )
         result.data_source = (
-            f"PE(×{weight_pe/total_weight:.1f})+PB(×{weight_pb/total_weight:.1f})"
-            + (f"+Buffett(×{weight_buffett/total_weight:.1f})" if weight_buffett > 0 else "")
+            f"PE(×{weight_pe / total_weight:.1f})+PB(×{weight_pb / total_weight:.1f})"
+            + (f"+Buffett(×{weight_buffett / total_weight:.1f})" if weight_buffett > 0 else "")
         )
     else:
         result.temperature = None
@@ -708,8 +757,9 @@ async def calc_market_temp(use_cache: bool = True) -> MarketTempResult:
         result.coldest = min(valid_idx, key=lambda r: r.pe_percentile)
 
     # 写缓存
-    _cache = result
-    _cache_time = time.time()
+    with _cache_lock:
+        _cache = result
+        _cache_time = time.time()
 
     logger.info(
         f"市场温度: {result.temperature}° ({result.zone}), "
@@ -767,9 +817,13 @@ def build_market_temp_card(result: MarketTempResult) -> dict[str, Any]:
     # 第二段：各维度温度
     dim_lines: list[str] = []
     if result.pe_temperature is not None:
-        dim_lines.append(f"📊 PE 百分位: {result.pe_temperature}° ({result.success_count}/{result.total_indexes} 指数)")
+        dim_lines.append(
+            f"📊 PE 百分位: {result.pe_temperature}° ({result.success_count}/{result.total_indexes} 指数)"
+        )
     if result.pb_temperature is not None:
-        dim_lines.append(f"💰 PB 百分位: {result.pb_temperature}° ({result.pb_success_count}/{len(PB_INDEXES)} 指数)")
+        dim_lines.append(
+            f"💰 PB 百分位: {result.pb_temperature}° ({result.pb_success_count}/{len(PB_INDEXES)} 指数)"
+        )
     if result.buffett_temperature is not None and result.buffett:
         dim_lines.append(
             f"🏦 巴菲特指数: {result.buffett_temperature}° "
@@ -787,15 +841,15 @@ def build_market_temp_card(result: MarketTempResult) -> dict[str, Any]:
     for idx in sorted_idx:
         if idx.pe_percentile is not None:
             emoji = (
-                "🔴" if idx.pe_percentile >= 70
-                else "🟠" if idx.pe_percentile >= 50
-                else "🟡" if idx.pe_percentile >= 30
+                "🔴"
+                if idx.pe_percentile >= 70
+                else "🟠"
+                if idx.pe_percentile >= 50
+                else "🟡"
+                if idx.pe_percentile >= 30
                 else "🟢"
             )
-            idx_lines.append(
-                f"{emoji} {idx.name} PE{idx.current_pe} "
-                f"历史{idx.pe_percentile}%分位"
-            )
+            idx_lines.append(f"{emoji} {idx.name} PE{idx.current_pe} 历史{idx.pe_percentile}%分位")
         else:
             idx_lines.append(f"⚪ {idx.name} 数据暂缺")
     detail = "\n".join(idx_lines)
@@ -808,10 +862,7 @@ def build_market_temp_card(result: MarketTempResult) -> dict[str, Any]:
             f"❄️ 最冷: {result.coldest.name}({result.coldest.pe_percentile}°)"
         )
 
-    note = (
-        f"⚠️ 估值参考，非交易指令 | {result.data_source} | "
-        f"10年滚动窗口 | {result.timestamp}"
-    )
+    note = f"⚠️ 估值参考，非交易指令 | {result.data_source} | 10年滚动窗口 | {result.timestamp}"
 
     sections = [overview, dimension, detail]
     if hotspot:
@@ -849,9 +900,12 @@ def format_temp_report(result: MarketTempResult) -> str:
         return "\n".join(lines)
 
     temp_emoji = (
-        "🟢" if result.temperature < 30
-        else "🟡" if result.temperature < 50
-        else "🟠" if result.temperature < 70
+        "🟢"
+        if result.temperature < 30
+        else "🟡"
+        if result.temperature < 50
+        else "🟠"
+        if result.temperature < 70
         else "🔴"
     )
     lines.append(f"📊 **市场温度计** {temp_emoji} **{result.temperature}°**")
@@ -867,8 +921,7 @@ def format_temp_report(result: MarketTempResult) -> str:
         lines.append(f"  PB 百分位: {result.pb_temperature}°")
     if result.buffett_temperature is not None and result.buffett:
         lines.append(
-            f"  巴菲特指数: {result.buffett_temperature}° "
-            f"(市值/GDP={result.buffett.current_ratio})"
+            f"  巴菲特指数: {result.buffett_temperature}° (市值/GDP={result.buffett.current_ratio})"
         )
     lines.append("")
 
@@ -882,15 +935,15 @@ def format_temp_report(result: MarketTempResult) -> str:
     for idx in sorted_idx:
         if idx.pe_percentile is not None:
             emoji = (
-                "🔴" if idx.pe_percentile >= 70
-                else "🟠" if idx.pe_percentile >= 50
-                else "🟡" if idx.pe_percentile >= 30
+                "🔴"
+                if idx.pe_percentile >= 70
+                else "🟠"
+                if idx.pe_percentile >= 50
+                else "🟡"
+                if idx.pe_percentile >= 30
                 else "🟢"
             )
-            lines.append(
-                f"  {emoji} {idx.name} PE{idx.current_pe} "
-                f"历史{idx.pe_percentile}%分位"
-            )
+            lines.append(f"  {emoji} {idx.name} PE{idx.current_pe} 历史{idx.pe_percentile}%分位")
         else:
             lines.append(f"  ⚪ {idx.name} 数据暂缺")
     lines.append("")
@@ -903,8 +956,5 @@ def format_temp_report(result: MarketTempResult) -> str:
         )
 
     lines.append("")
-    lines.append(
-        f"_⚠️ 估值参考，非交易指令 | {result.data_source} | "
-        f"10年滚动窗口_"
-    )
+    lines.append(f"_⚠️ 估值参考，非交易指令 | {result.data_source} | 10年滚动窗口_")
     return "\n".join(lines)

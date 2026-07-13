@@ -11,6 +11,7 @@ fetch_stock_history），业务逻辑（_filter_basic、SignalRouter.route、
 RiskManager.is_tradable）均使用真实实现。为便于在测试数据上稳定产生
 信号，将 SignalRouter 配置为单策略 + any 融合（仍为真实路由，非 mock）。
 """
+
 from __future__ import annotations
 
 from unittest import mock

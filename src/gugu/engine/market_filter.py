@@ -97,14 +97,16 @@ class MarketFilter:
             rows: list[dict[str, Any]] = []
             for item in data:
                 try:
-                    rows.append({
-                        "date": item["day"],
-                        "open": float(item["open"]),
-                        "high": float(item["high"]),
-                        "low": float(item["low"]),
-                        "close": float(item["close"]),
-                        "volume": float(item.get("volume", 0)),
-                    })
+                    rows.append(
+                        {
+                            "date": item["day"],
+                            "open": float(item["open"]),
+                            "high": float(item["high"]),
+                            "low": float(item["low"]),
+                            "close": float(item["close"]),
+                            "volume": float(item.get("volume", 0)),
+                        }
+                    )
                 except (KeyError, ValueError, TypeError):
                     continue
 
@@ -130,7 +132,7 @@ class MarketFilter:
             "fields1": "f1,f2,f3,f4,f5,f6",
             "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
             "klt": "101",  # 101=日K
-            "fqt": "0",   # 0=不复权（指数无需复权）
+            "fqt": "0",  # 0=不复权（指数无需复权）
             "end": "20500101",
             "lmt": str(max(days * 2, 500)),
         }
@@ -155,14 +157,16 @@ class MarketFilter:
                 if len(parts) < 7:
                     continue
                 try:
-                    rows.append({
-                        "date": parts[0],
-                        "open": float(parts[1]),
-                        "close": float(parts[2]),
-                        "high": float(parts[3]),
-                        "low": float(parts[4]),
-                        "volume": float(parts[5]),
-                    })
+                    rows.append(
+                        {
+                            "date": parts[0],
+                            "open": float(parts[1]),
+                            "close": float(parts[2]),
+                            "high": float(parts[3]),
+                            "low": float(parts[4]),
+                            "volume": float(parts[5]),
+                        }
+                    )
                 except (ValueError, IndexError):
                     continue
 
@@ -267,9 +271,7 @@ class MarketFilter:
 
         # 两个中小盘指数中至少 1 个在 MA200 之上才算中小盘可买
         small_cap_bullish = any(results)
-        reason = "中小盘：" + "；".join(reasons) + (
-            " → 可买" if small_cap_bullish else " → 不可买"
-        )
+        reason = "中小盘：" + "；".join(reasons) + (" → 可买" if small_cap_bullish else " → 不可买")
 
         return {
             "bullish": small_cap_bullish,
@@ -282,7 +284,9 @@ class MarketFilter:
         """P2-7 新增：获取指定指数的 K 线数据（三级冗余）。"""
         # 通道1：akshare
         try:
-            raw = await asyncio.to_thread(ak.stock_zh_index_daily_em, symbol=symbol)
+            raw = await asyncio.wait_for(
+                asyncio.to_thread(ak.stock_zh_index_daily_em, symbol=symbol), timeout=30.0
+            )
             if raw is not None and not raw.empty:
                 return self._normalize_index_df(raw)
         except Exception as e:
@@ -327,14 +331,16 @@ class MarketFilter:
             rows: list[dict[str, Any]] = []
             for item in data:
                 try:
-                    rows.append({
-                        "date": item["day"],
-                        "open": float(item["open"]),
-                        "high": float(item["high"]),
-                        "low": float(item["low"]),
-                        "close": float(item["close"]),
-                        "volume": float(item.get("volume", 0)),
-                    })
+                    rows.append(
+                        {
+                            "date": item["day"],
+                            "open": float(item["open"]),
+                            "high": float(item["high"]),
+                            "low": float(item["low"]),
+                            "close": float(item["close"]),
+                            "volume": float(item.get("volume", 0)),
+                        }
+                    )
                 except (KeyError, ValueError, TypeError):
                     continue
             if not rows:
@@ -378,14 +384,16 @@ class MarketFilter:
                 if len(parts) < 7:
                     continue
                 try:
-                    rows.append({
-                        "date": parts[0],
-                        "open": float(parts[1]),
-                        "close": float(parts[2]),
-                        "high": float(parts[3]),
-                        "low": float(parts[4]),
-                        "volume": float(parts[5]),
-                    })
+                    rows.append(
+                        {
+                            "date": parts[0],
+                            "open": float(parts[1]),
+                            "close": float(parts[2]),
+                            "high": float(parts[3]),
+                            "low": float(parts[4]),
+                            "volume": float(parts[5]),
+                        }
+                    )
                 except (ValueError, IndexError):
                     continue
             if not rows:
@@ -403,8 +411,12 @@ class MarketFilter:
     def _normalize_index_df(raw: pd.DataFrame) -> pd.DataFrame:
         """P2-7 新增：规范化指数 DataFrame 列名。"""
         column_map = {
-            "日期": "date", "开盘": "open", "最高": "high",
-            "最低": "low", "收盘": "close", "成交量": "volume",
+            "日期": "date",
+            "开盘": "open",
+            "最高": "high",
+            "最低": "low",
+            "收盘": "close",
+            "成交量": "volume",
         }
         df = raw.rename(columns=column_map)
         needed = ["date", "open", "high", "low", "close", "volume"]
@@ -433,7 +445,9 @@ class MarketFilter:
         # 通道1：akshare
         raw: pd.DataFrame | None = None
         try:
-            raw = ak.stock_zh_index_daily_em(symbol=_HS300_SYMBOL)
+            raw = await asyncio.wait_for(
+                asyncio.to_thread(ak.stock_zh_index_daily_em, symbol=_HS300_SYMBOL), timeout=30.0
+            )
             if raw is not None and not raw.empty:
                 logger.info(f"大市数据(akshare): {len(raw)} 条K线")
         except Exception as e:

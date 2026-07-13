@@ -309,10 +309,35 @@ gugu/
 ## 元数据
 
 - 创建日期：2026-07-06
-- 版本：v0.5.7
-- 阶段：阶段三（信号监控）+ 十大视角分析系统 + 信号流融合 + 宏观增强 + 博格市场温度计 + 策略全链路优化 + A股费用模型对齐
-- 测试：1584 passed, 5 skipped
-- 最近审查：2026-07-09（A股交易费用模型对齐+多专家审查）
+- 版本：v0.5.8
+- 阶段：阶段三（信号监控）+ 十大视角分析系统 + 信号流融合 + 宏观增强 + 博格市场温度计 + 策略全链路优化 + A股费用模型对齐 + 多专家深度审查
+- 测试：1585 passed, 5 skipped
+- 最近审查：2026-07-09（A股交易费用模型对齐+回测前视偏差+信号链P0级修复+风控/数据源线程安全）
+- v0.5.8 变更（2026-07-09 多专家深度审查 + P0级Bug修复）：
+  - 🔴 P0修复：回测认知引擎前视偏差（会导致回测结果虚假偏高）
+    - 四阶段判断器`window_df`从`df.iloc[max(0,i-60):i+1]`改为`df.iloc[max(0,i-60):i]`，不包含当日数据
+    - 危险信号检测器同样修复window_df切片，添加`len(window_df) < 20`数据长度检查返回None
+    - 根本原因：回测循环中第i根K线已包含当日close/high/low，认知引擎不应再偷看
+  - 🔴 P0修复：信号链7个致命Bug（直接导致错误信号/风控失效）
+    1. **无持仓卖出未拦截**：`signal_pipeline.py`入口添加硬检查，direction=sell且has_position=False直接返回None（防对空仓发卖出信号）
+    2. **any模式买卖信号永远优先买入**：改为比较买卖总置信度，高者胜；平盘时sell优先（安全优先）
+    3. **Wisdom决策覆盖前置风控结果**：合并结果时保留wisdom_filtered=True和filter_reason，已过滤信号不再调用LLM
+    4. **筹码集中度键名不匹配**：filter_reason写"holder_concentration"但wisdom检查"chip_check"，统一为"筹码"匹配
+    5. **趋势破坏后triggered列表混合买卖策略**：trend_breakdown强制sell时triggered只包含sell策略名
+    6. **共识折扣使用总策略数而非实际投票数**：weighted模式分母改为len(voted)，避免全票一致反而被低置信度策略稀释
+    7. **ST/停牌硬检查未正确终止流程**：is_st买入/is_suspended时return None而非继续wisdom决策
+  - 🔴 P0修复：风控管理器熔断状态持久化不完整
+    - `_load_halt_state()`恢复`_portfolio_peak`字段，防止进程重启后组合回撤熔断失效
+  - 🔴 P0修复：DataCache线程不安全
+    - 所有公共方法（get/set/clear/cleanup_expired）添加`threading.RLock()`保护
+    - 防止多线程/协程并发读写时_store和_order竞态条件
+  - 🔧 P1修复：策略池工厂废弃类引用
+    - `strategy_pool.py`移除`Stage2Detector`，改用已存在的`StageDetector`
+  - 🧪 测试增强：新增无持仓卖出拦截测试，修复原有卖出测试使用空portfolio的问题
+  - 📚 审查参考：借鉴了qlib、zipline、backtrader、vnpy等开源量化项目的最佳实践
+    - qlib：DataHandler数据缓存过期机制、策略组合信号融合
+    - zipline/backtrader：前视偏差防护、严格的历史窗口边界
+    - vnpy：RougeCell风控熔断持久化、线程安全设计
 - v0.5.7 变更（2026-07-09 A股交易费用模型对齐 + 数据完整性修复）：
   - 🔴 P0修复：回测引擎费用模型对齐PaperBroker（真实A股交易成本）
     - 新增 `_calc_transfer_fee()` 方法：沪市（600/601/603/605/688/689/9开头）双向收取0.001%过户费，深市/创业板无

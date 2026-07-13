@@ -100,18 +100,17 @@ class CapitalFlowAlertStrategy(Strategy):
 
         # ── K线基础属性 ────────────────────────────────
         df["daily_return"] = df["close"].pct_change()
-        df["upper_shadow"] = (
-            (df["high"] - df[["open", "close"]].max(axis=1))
-            / df["open"].replace(0, np.nan)
+        df["upper_shadow"] = (df["high"] - df[["open", "close"]].max(axis=1)) / df["open"].replace(
+            0, np.nan
         )
 
         # ════════════════════════════════════════════════
         # 卖出信号：4 核心特征（任一触发 → signal=-1）
         # ════════════════════════════════════════════════
         # 特征 1：持续放量下跌（3 日内 2 日放量且 3 日累计收跌）
-        cond_volume_drop = (
-            (df["volume"] > df["vol_ma5"] * 1.2).rolling(3).sum() >= 2
-        ) & (df["close"].pct_change(3) < -0.03)
+        cond_volume_drop = ((df["volume"] > df["vol_ma5"] * 1.2).rolling(3).sum() >= 2) & (
+            df["close"].pct_change(3) < -0.03
+        )
 
         # 特征 2：量价背离（放量但收盘走弱，前一日还是涨）
         cond_divergence = (
@@ -159,9 +158,8 @@ class CapitalFlowAlertStrategy(Strategy):
         df["recent_max"] = df["close"].rolling(recent_strong_window).max()
         df["recent_min"] = df["close"].rolling(recent_strong_window).min()
         cond_recent_strong = (
-            (df["recent_max"] / df["recent_min"].shift(recent_strong_window) - 1)
-            >= recent_strong_threshold
-        )
+            df["recent_max"] / df["recent_min"].shift(recent_strong_window) - 1
+        ) >= recent_strong_threshold
 
         buy_cond = cond_shrink_pullback & cond_ma20_up & cond_recent_strong
 
@@ -189,15 +187,11 @@ class CapitalFlowAlertStrategy(Strategy):
         buy_confidence = pd.Series(0.5, index=df.index)  # 基础分
 
         # +0.15 缩量程度（vol_ratio < 0.6 时加 0.15）
-        buy_confidence = buy_confidence + (
-            (df["vol_ratio"] < 0.6).astype(float) * 0.15
-        )
+        buy_confidence = buy_confidence + ((df["vol_ratio"] < 0.6).astype(float) * 0.15)
 
         # +0.10 MA20 斜率强度（ma20_slope / ma20 > 0.01 时加 0.10）
         ma20_slope_ratio = df["ma20_slope"] / df["ma20"].replace(0, np.nan)
-        buy_confidence = buy_confidence + (
-            (ma20_slope_ratio > 0.01).astype(float) * 0.10
-        )
+        buy_confidence = buy_confidence + ((ma20_slope_ratio > 0.01).astype(float) * 0.10)
 
         # +0.10 距离 MA20 距离（(close - ma20) / ma20 在 [0, 0.02] 时加 0.10）
         ma20_distance = (df["close"] - df["ma20"]) / df["ma20"].replace(0, np.nan)

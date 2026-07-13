@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,8 @@ logger = get_logger()
 class DataCache:
     """带 TTL 的内存缓存，有最大条目限制和 LRU 淘汰策略。
 
+    线程安全：所有公共方法使用 RLock 保护，防止 asyncio/多线程并发竞态。
+
     Attributes:
         _ttl: 缓存 TTL（秒）。
         _max_size: 最大缓存条目数，超出时淘汰最旧条目。
@@ -25,43 +28,46 @@ class DataCache:
         self._ttl = ttl_seconds
         self._max_size = max_size
         self._store: dict[str, tuple[float, Any]] = {}
-        # 维护插入顺序用于简单淘汰
         self._order: list[str] = []
+        self._lock = threading.RLock()
 
-    def get(self, key: str) -> Any | None:
-        """获取缓存。过期返回 None。"""
-        if key not in self._store:
-            return None
-        ts, val = self._store[key]
-        if time.time() - ts > self._ttl:
-            del self._store[key]
-            if key in self._order:
-                self._order.remove(key)
-            return None
-        return val
+    def get(self, key: str, ignore_ttl: bool = False) -> Any | None:
+        """获取缓存。过期返回 None。ignore_ttl=True 时即使过期也返回（兜底用）。"""
+        with self._lock:
+            if key not in self._store:
+                return None
+            ts, val = self._store[key]
+            if not ignore_ttl and time.time() - ts > self._ttl:
+                del self._store[key]
+                if key in self._order:
+                    self._order.remove(key)
+                return None
+            return val
 
     def set(self, key: str, value: Any) -> None:
         """写入缓存。若超出最大条目限制，淘汰最旧条目。"""
-        # 淘汰策略：超出上限时移除最旧的 10% 条目
-        if key not in self._store and len(self._store) >= self._max_size:
-            evict_count = max(1, self._max_size // 10)
-            for _ in range(evict_count):
-                if self._order:
-                    oldest = self._order.pop(0)
-                    self._store.pop(oldest, None)
+        with self._lock:
+            if key not in self._store and len(self._store) >= self._max_size:
+                evict_count = max(1, self._max_size // 10)
+                for _ in range(evict_count):
+                    if self._order:
+                        oldest = self._order.pop(0)
+                        self._store.pop(oldest, None)
 
-        if key not in self._store:
-            self._order.append(key)
-        self._store[key] = (time.time(), value)
+            if key not in self._store:
+                self._order.append(key)
+            self._store[key] = (time.time(), value)
 
     def clear(self) -> None:
         """清空缓存。"""
-        self._store.clear()
-        self._order.clear()
+        with self._lock:
+            self._store.clear()
+            self._order.clear()
 
     def stats(self) -> dict[str, int]:
         """缓存统计。"""
-        return {"keys": len(self._store), "max_size": self._max_size}
+        with self._lock:
+            return {"keys": len(self._store), "max_size": self._max_size}
 
 
 class ParquetPersistentCache:
@@ -134,6 +140,7 @@ class ParquetPersistentCache:
             # 防止缓存了坏数据（如数据源返回错误价格后写入缓存）
             try:
                 from gugu.data.quality import validate_stock_history
+
                 validated = validate_stock_history(df, symbol)
                 if validated.empty:
                     logger.warning(f"Parquet 缓存数据 {symbol} {days}d 校验失败，删除缓存")

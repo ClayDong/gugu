@@ -75,9 +75,7 @@ class TradingScheduler:
             cfg = get_config()
             im_cfg = getattr(cfg, "intraday_monitor", None)
             mode = getattr(im_cfg, "performance_mode", "auto") if im_cfg else "auto"
-            thresholds = (
-                getattr(im_cfg, "alert_thresholds", None) if im_cfg else None
-            )
+            thresholds = getattr(im_cfg, "alert_thresholds", None) if im_cfg else None
 
             # portfolio_symbols 留空，每次 run_cycle 前动态更新
             return IntradayMonitor(
@@ -126,10 +124,10 @@ class TradingScheduler:
         if self._task_enabled("screener"):
             self._scheduler.add_job(
                 self._safe_screener,
-            CronTrigger(hour=14, minute=31, day_of_week="mon-fri"),
-            id="screener_1430",
-            name="尾盘选股-14:30",
-        )
+                CronTrigger(hour=14, minute=31, day_of_week="mon-fri"),
+                id="screener_1430",
+                name="尾盘选股-14:30",
+            )
 
         # 盘后资金流决策报告（14:32，错开 screener 1 分钟，避免三项任务并发竞争资源）
         if self._task_enabled("flow_afternoon"):
@@ -186,15 +184,6 @@ class TradingScheduler:
         from gugu.macro.scheduler import register_macro_jobs
 
         register_macro_jobs(self._scheduler, broker=self._engine._broker)
-
-        # 基金监控推送：15:35（交易日）
-        if self._task_enabled("fund_monitor"):
-            self._scheduler.add_job(
-                self._safe_fund_monitor,
-                CronTrigger(hour=15, minute=35, day_of_week="mon-fri"),
-                id="fund_monitor_1535",
-                name="基金监控-15:35",
-            )
 
         # 小白学堂每日概念推送：20:00（交易日）
         if self._task_enabled("concept_daily"):
@@ -262,6 +251,7 @@ class TradingScheduler:
 
         # v0.5.0 盘中实时盯盘
         from gugu.config import get_config as _get_cfg
+
         try:
             _cfg = _get_cfg()
             _im_cfg = getattr(_cfg, "intraday_monitor", None)
@@ -304,14 +294,13 @@ class TradingScheduler:
             regime = market_status.get("regime", "unknown")
             # 获取当前扫描时刻
             from datetime import datetime as _dt
+
             now = _dt.now()
             current_hour_min = (now.hour, now.minute)
 
             # 熊市/暴跌市：仅保留开盘和尾盘扫描
             if regime in ("bear", "crash") and current_hour_min in [(10, 30), (13, 5)]:
-                logger.info(
-                    f"市场状态={regime}，跳过盘中扫描（仅保留开盘/尾盘扫描）"
-                )
+                logger.info(f"市场状态={regime}，跳过盘中扫描（仅保留开盘/尾盘扫描）")
                 return
         except Exception:
             pass  # 市场状态获取失败时正常执行
@@ -337,7 +326,8 @@ class TradingScheduler:
             # 动态更新持仓列表（持仓可能变化）
             portfolio_symbols = (
                 list(self._engine._broker.positions.keys())
-                if hasattr(self._engine._broker, "positions") else []
+                if hasattr(self._engine._broker, "positions")
+                else []
             )
             self._intraday_monitor._portfolio_symbols = portfolio_symbols
 
@@ -419,9 +409,9 @@ class TradingScheduler:
                 logger.info(
                     f"📊 尾盘验证日报: "
                     f"昨日选股 {n} 只 | "
-                    f"高开 {win_open}/{n}({win_open/n*100:.0f}%) | "
-                    f"日内冲高 {win_high}/{n}({win_high/n*100:.0f}%) | "
-                    f"平均开盘溢价 {sum(v.open_premium for v in results)/n:+.2f}%"
+                    f"高开 {win_open}/{n}({win_open / n * 100:.0f}%) | "
+                    f"日内冲高 {win_high}/{n}({win_high / n * 100:.0f}%) | "
+                    f"平均开盘溢价 {sum(v.open_premium for v in results) / n:+.2f}%"
                 )
                 # 推送飞书验证结果卡片
                 await self._engine._notifier.notify_screener_validation(results)
@@ -478,6 +468,7 @@ class TradingScheduler:
         async def check_one(symbol: str) -> dict | None:
             try:
                 from gugu.data.stock_names import lookup_stock_name
+
                 df = await self._engine._dm.fetch_stock_history(symbol, days=60)
                 if df is None or df.empty or len(df) < 30:
                     return None
@@ -550,27 +541,6 @@ class TradingScheduler:
         except Exception as e:
             logger.exception(f"盘后资金流决策报告异常: {e}")
 
-    async def _safe_fund_monitor(self) -> None:
-        """安全执行基金监控（非交易日跳过）。"""
-        if not is_trading_day():
-            return
-        try:
-            from gugu.notifier.fund_monitor import run_all_fund_monitors
-
-            report = await run_all_fund_monitors()
-            results = report.get("results", [])
-            if not results:
-                logger.info("基金监控: 无结果")
-                return
-
-            # 每只基金单独推送卡片
-            for result in results:
-                await self._engine._notifier.notify_fund_monitor(result)
-
-            logger.info(f"基金监控推送完成: {len(results)} 只基金")
-        except Exception as e:
-            logger.exception(f"基金监控异常: {e}")
-
     # 资金流推送已合并到宏观卡片中（macro/scheduler.py 的 _push_macro_report）
     # 不再单独推送 flow_morning / flow_close
 
@@ -596,6 +566,7 @@ class TradingScheduler:
                 answer = await agent.ask(concept.get("kb_query", concept["name"]))
                 explanation = answer.answer
                 from dataclasses import asdict
+
                 citations = [asdict(c) if not isinstance(c, dict) else c for c in answer.citations]
             except Exception as e:
                 logger.debug(f"KB Agent 检索概念解释失败: {e}")
@@ -675,10 +646,16 @@ class TradingScheduler:
 
             # 6 只行业代表股 + --write 模式（自动门控）
             cmd = [
-                "uv", "run", "python", str(script),
-                "--multi-stock", "600519,002714,300750,603259,002415,601318",
-                "--days", "500",
-                "--splits", "3",
+                "uv",
+                "run",
+                "python",
+                str(script),
+                "--multi-stock",
+                "600519,002714,300750,603259,002415,601318",
+                "--days",
+                "500",
+                "--splits",
+                "3",
                 "--write",
             ]
             logger.info(f"启动周参数优化: {' '.join(cmd)}")
@@ -736,12 +713,11 @@ class TradingScheduler:
                     for line in f:
                         try:
                             import json as _json
+
                             record = _json.loads(line)
                             ts_str = record.get("timestamp", record.get("date", ""))
                             if ts_str:
-                                record_date = datetime.fromisoformat(
-                                    ts_str.replace("Z", "")
-                                ).date()
+                                record_date = datetime.fromisoformat(ts_str.replace("Z", "")).date()
                                 if record_date >= week_ago:
                                     signals.append(record)
                         except (ValueError, KeyError):
@@ -756,8 +732,12 @@ class TradingScheduler:
 
             # 统计信号
             total_signals = len(signals)
-            buy_signals = sum(1 for s in signals if s.get("signal") == 1 or s.get("action") == "buy")
-            sell_signals = sum(1 for s in signals if s.get("signal") == -1 or s.get("action") == "sell")
+            buy_signals = sum(
+                1 for s in signals if s.get("signal") == 1 or s.get("action") == "buy"
+            )
+            sell_signals = sum(
+                1 for s in signals if s.get("signal") == -1 or s.get("action") == "sell"
+            )
 
             # 按策略分组统计
             strategy_stats: dict[str, int] = {}
@@ -767,14 +747,16 @@ class TradingScheduler:
 
             # 推送飞书复盘卡片
             try:
-                await self._engine._notifier.notify_weekly_review({
-                    "period": f"{week_ago.isoformat()} ~ {today.isoformat()}",
-                    "total_signals": total_signals,
-                    "buy_signals": buy_signals,
-                    "sell_signals": sell_signals,
-                    "strategy_stats": strategy_stats,
-                    "signals": signals[:20],  # 仅展示前 20 条
-                })
+                await self._engine._notifier.notify_weekly_review(
+                    {
+                        "period": f"{week_ago.isoformat()} ~ {today.isoformat()}",
+                        "total_signals": total_signals,
+                        "buy_signals": buy_signals,
+                        "sell_signals": sell_signals,
+                        "strategy_stats": strategy_stats,
+                        "signals": signals[:20],  # 仅展示前 20 条
+                    }
+                )
                 logger.info(
                     f"周复盘推送完成: 信号 {total_signals} 条 "
                     f"(买 {buy_signals} / 卖 {sell_signals})"
@@ -859,9 +841,7 @@ class TradingScheduler:
                     await self._engine._notifier.send_card(detail_card)
                     await asyncio.sleep(1.0)  # 飞书限流保护
                 except Exception as e:
-                    logger.warning(
-                        f"十大视角: {result.symbol} 详细卡片发送失败: {e}"
-                    )
+                    logger.warning(f"十大视角: {result.symbol} 详细卡片发送失败: {e}")
 
             passed_count = sum(1 for r in results if r.passed)
             logger.info(
@@ -877,25 +857,76 @@ class TradingScheduler:
         基于博格市场温度计方法：采集12个宽基指数的近10年PE百分位，
         算术平均得到全市场估值温度（0°-100°）。
         温度规则：<20°加倍买入 | <30°正常买入 | 30-50°定投 | >50°减仓。
+
+        ⚠️ akshare 乐咕乐股接口内部使用 py_mini_racer 执行 JS 解密，
+        而 libmini_racer.dylib 在 macOS 上存在 address_pool_manager
+        初始化 FATAL crash，会直接杀死进程。
+        因此将整个计算+卡片构建放到子进程中执行，主进程只负责发送。
         """
         if not is_trading_day():
             return
         try:
-            from gugu.analysis.market_temp import build_market_temp_card, calc_market_temp
-
-            result = await calc_market_temp(use_cache=False)
-            if result.temperature is None:
-                logger.warning("市场温度计数据获取失败，跳过推送")
+            card = await self._run_market_temp_subprocess()
+            if card is None:
+                logger.warning("市场温度计子进程未返回卡片，跳过推送")
                 return
-
-            card = build_market_temp_card(result)
             await self._engine._notifier.send_card(card)
-            logger.info(
-                f"市场温度计推送完成: {result.temperature}° ({result.zone}), "
-                f"有效 {result.success_count}/{result.total_indexes}"
-            )
+            logger.info("市场温度计推送完成（子进程隔离执行）")
         except Exception as e:
             logger.exception(f"市场温度计推送异常: {e}")
+
+    async def _run_market_temp_subprocess(self) -> dict | None:
+        """在子进程中执行市场温度计计算，返回飞书卡片 dict。
+
+        子进程 crash 时返回 None，不影响主调度器。
+        """
+        import json
+        import sys
+
+        script = (
+            "import asyncio, json, sys\n"
+            "from gugu.analysis.market_temp import calc_market_temp, build_market_temp_card\n"
+            "async def main():\n"
+            "    result = await calc_market_temp(use_cache=False)\n"
+            "    if result.temperature is None:\n"
+            "        print(json.dumps({'error': 'no_data'}))\n"
+            "        return\n"
+            "    card = build_market_temp_card(result)\n"
+            "    print(json.dumps(card, ensure_ascii=False, default=str))\n"
+            "asyncio.run(main())\n"
+        )
+        proc = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                script,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+            if proc.returncode != 0:
+                logger.error(
+                    f"市场温度计子进程 crash (exit={proc.returncode}): {stderr.decode()[-500:]}"
+                )
+                return None
+            data = json.loads(stdout.decode().strip())
+            if isinstance(data, dict) and data.get("error"):
+                logger.warning(f"市场温度计子进程返回错误: {data['error']}")
+                return None
+            return data
+        except TimeoutError:
+            logger.error("市场温度计子进程超时(180s)")
+            if proc is not None and proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+            return None
+        except Exception as e:
+            logger.exception(f"市场温度计子进程异常: {e}")
+            if proc is not None and proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+            return None
 
     async def start(self) -> None:
         """启动调度器。启动后立即执行一次盘中扫描（如果是交易日）。"""

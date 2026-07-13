@@ -99,7 +99,10 @@ class Strategy(ABC):
         return tr.rolling(window=window, min_periods=1).mean()
 
     def _require_confirmation(
-        self, df: pd.DataFrame, signal_col: str = "signal", confirm_days: int | None = None,
+        self,
+        df: pd.DataFrame,
+        signal_col: str = "signal",
+        confirm_days: int | None = None,
         is_backtest: bool = False,
     ) -> pd.DataFrame:
         """信号确认机制：检查后续 K 线是否维持信号方向。

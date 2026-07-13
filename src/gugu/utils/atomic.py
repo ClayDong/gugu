@@ -3,6 +3,7 @@
 防止进程在写入过程中崩溃导致文件截断/损坏。
 策略：写到临时文件 → fsync → os.replace（原子替换）。
 """
+
 from __future__ import annotations
 
 import contextlib

@@ -1,4 +1,5 @@
 """市场温度计模块单元测试。"""
+
 from __future__ import annotations
 
 from unittest import mock
@@ -200,16 +201,18 @@ class TestFetchPeHistoryLg:
 
     def test_mock_success(self):
         """mock akshare 成功返回。"""
-        mock_raw = pd.DataFrame({
-            "日期": pd.date_range("2025-01-01", periods=100, freq="D"),
-            "指数": [4000.0] * 100,
-            "等权静态市盈率": [20.0] * 100,
-            "静态市盈率": [15.0] * 100,
-            "静态市盈率中位数": [18.0] * 100,
-            "等权滚动市盈率": [22.0] * 100,
-            "滚动市盈率": [13.0] * 100,
-            "滚动市盈率中位数": [16.0] * 100,
-        })
+        mock_raw = pd.DataFrame(
+            {
+                "日期": pd.date_range("2025-01-01", periods=100, freq="D"),
+                "指数": [4000.0] * 100,
+                "等权静态市盈率": [20.0] * 100,
+                "静态市盈率": [15.0] * 100,
+                "静态市盈率中位数": [18.0] * 100,
+                "等权滚动市盈率": [22.0] * 100,
+                "滚动市盈率": [13.0] * 100,
+                "滚动市盈率中位数": [16.0] * 100,
+            }
+        )
         with mock.patch("akshare.stock_index_pe_lg", return_value=mock_raw):
             df = _fetch_pe_history_lg("沪深300", years=10)
             assert df is not None
@@ -239,16 +242,18 @@ class TestFetchPeHistoryLg:
 
     def test_negative_pe_filtered(self):
         """负 PE 应被过滤。"""
-        mock_raw = pd.DataFrame({
-            "日期": pd.date_range("2025-01-01", periods=5, freq="D"),
-            "指数": [4000.0] * 5,
-            "等权静态市盈率": [20.0] * 5,
-            "静态市盈率": [15.0] * 5,
-            "静态市盈率中位数": [18.0] * 5,
-            "等权滚动市盈率": [22.0] * 5,
-            "滚动市盈率": [13.0, -5.0, 14.0, -3.0, 15.0],
-            "滚动市盈率中位数": [16.0] * 5,
-        })
+        mock_raw = pd.DataFrame(
+            {
+                "日期": pd.date_range("2025-01-01", periods=5, freq="D"),
+                "指数": [4000.0] * 5,
+                "等权静态市盈率": [20.0] * 5,
+                "静态市盈率": [15.0] * 5,
+                "静态市盈率中位数": [18.0] * 5,
+                "等权滚动市盈率": [22.0] * 5,
+                "滚动市盈率": [13.0, -5.0, 14.0, -3.0, 15.0],
+                "滚动市盈率中位数": [16.0] * 5,
+            }
+        )
         with mock.patch("akshare.stock_index_pe_lg", return_value=mock_raw):
             df = _fetch_pe_history_lg("沪深300", years=10)
             assert df is not None
@@ -257,16 +262,18 @@ class TestFetchPeHistoryLg:
 
     def test_fallback_to_static_pe(self):
         """滚动市盈率缺失时降级到静态市盈率。"""
-        mock_raw = pd.DataFrame({
-            "日期": pd.date_range("2025-01-01", periods=10, freq="D"),
-            "指数": [4000.0] * 10,
-            "等权静态市盈率": [20.0] * 10,
-            "静态市盈率": [15.0] * 10,
-            "静态市盈率中位数": [18.0] * 10,
-            "等权滚动市盈率": [22.0] * 10,
-            "滚动市盈率": [None] * 10,  # 滚动市盈率全部缺失
-            "滚动市盈率中位数": [16.0] * 10,
-        })
+        mock_raw = pd.DataFrame(
+            {
+                "日期": pd.date_range("2025-01-01", periods=10, freq="D"),
+                "指数": [4000.0] * 10,
+                "等权静态市盈率": [20.0] * 10,
+                "静态市盈率": [15.0] * 10,
+                "静态市盈率中位数": [18.0] * 10,
+                "等权滚动市盈率": [22.0] * 10,
+                "滚动市盈率": [None] * 10,  # 滚动市盈率全部缺失
+                "滚动市盈率中位数": [16.0] * 10,
+            }
+        )
         with mock.patch("akshare.stock_index_pe_lg", return_value=mock_raw):
             df = _fetch_pe_history_lg("沪深300", years=10)
             assert df is not None
@@ -311,12 +318,15 @@ class TestFetchIndexTemp:
     async def test_fallback_to_eastmoney(self):
         """乐咕乐股失败后降级到东方财富。"""
         mock_df = _make_pe_history(50, base_pe=20.0)
-        with mock.patch(
-            "gugu.analysis.market_temp._fetch_pe_history_lg",
-            return_value=None,
-        ), mock.patch(
-            "gugu.analysis.market_temp._fetch_pe_history_eastmoney",
-            return_value=mock_df,
+        with (
+            mock.patch(
+                "gugu.analysis.market_temp._fetch_pe_history_lg",
+                return_value=None,
+            ),
+            mock.patch(
+                "gugu.analysis.market_temp._fetch_pe_history_eastmoney",
+                return_value=mock_df,
+            ),
         ):
             idx_config = {"name": "沪深300", "lg_symbol": "沪深300", "code": "000300"}
             result = await fetch_index_temp(idx_config)
@@ -330,27 +340,46 @@ class TestCalcMarketTemp:
     @pytest.mark.asyncio
     async def test_all_success(self):
         """所有维度成功（PE + PB + Buffett）。"""
+
         async def mock_pe_fetch(idx):
             return IndexTempResult(
-                name=idx["name"], current_pe=15.0, pe_percentile=50.0,
-                min_pe=10.0, max_pe=20.0, median_pe=15.0, data_points=100,
+                name=idx["name"],
+                current_pe=15.0,
+                pe_percentile=50.0,
+                min_pe=10.0,
+                max_pe=20.0,
+                median_pe=15.0,
+                data_points=100,
             )
 
         async def mock_pb_fetch(idx):
             return PBTempResult(
-                name=idx["name"], current_pb=1.5, pb_percentile=40.0,
-                min_pb=1.0, max_pb=2.0, median_pb=1.4, data_points=100,
+                name=idx["name"],
+                current_pb=1.5,
+                pb_percentile=40.0,
+                min_pb=1.0,
+                max_pb=2.0,
+                median_pb=1.4,
+                data_points=100,
             )
 
         async def mock_buffett_fetch():
             return BuffettResult(
-                current_ratio=0.9, ratio_percentile=60.0,
-                min_ratio=0.6, max_ratio=1.2, median_ratio=0.85, data_points=100,
+                current_ratio=0.9,
+                ratio_percentile=60.0,
+                min_ratio=0.6,
+                max_ratio=1.2,
+                median_ratio=0.85,
+                data_points=100,
             )
 
-        with mock.patch("gugu.analysis.market_temp.fetch_index_temp", side_effect=mock_pe_fetch), \
-             mock.patch("gugu.analysis.market_temp.fetch_pb_temp", side_effect=mock_pb_fetch), \
-             mock.patch("gugu.analysis.market_temp.fetch_buffett_temp", side_effect=mock_buffett_fetch):
+        with (
+            mock.patch("gugu.analysis.market_temp.fetch_index_temp", side_effect=mock_pe_fetch),
+            mock.patch("gugu.analysis.market_temp.fetch_pb_temp", side_effect=mock_pb_fetch),
+            mock.patch(
+                "gugu.analysis.market_temp.fetch_buffett_temp", side_effect=mock_buffett_fetch
+            ),
+        ):
             result = await calc_market_temp(use_cache=False)
             assert result.temperature is not None
             # PE=50, PB=40, Buffett=60 → 50*0.7+40*0.2+60*0.1 = 35+8+6 = 49.0
@@ -366,27 +395,46 @@ class TestCalcMarketTemp:
     @pytest.mark.asyncio
     async def test_pe_only_success(self):
         """只有 PE 成功，PB 和 Buffett 失败。"""
+
         async def mock_pe_fetch(idx):
             return IndexTempResult(
-                name=idx["name"], current_pe=15.0, pe_percentile=50.0,
-                min_pe=10.0, max_pe=20.0, median_pe=15.0, data_points=100,
+                name=idx["name"],
+                current_pe=15.0,
+                pe_percentile=50.0,
+                min_pe=10.0,
+                max_pe=20.0,
+                median_pe=15.0,
+                data_points=100,
             )
 
         async def mock_pb_fetch(idx):
             return PBTempResult(
-                name=idx["name"], current_pb=None, pb_percentile=None,
-                min_pb=None, max_pb=None, median_pb=None, error="失败",
+                name=idx["name"],
+                current_pb=None,
+                pb_percentile=None,
+                min_pb=None,
+                max_pb=None,
+                median_pb=None,
+                error="失败",
             )
 
         async def mock_buffett_fetch():
             return BuffettResult(
-                current_ratio=None, ratio_percentile=None,
-                min_ratio=None, max_ratio=None, median_ratio=None, error="失败",
+                current_ratio=None,
+                ratio_percentile=None,
+                min_ratio=None,
+                max_ratio=None,
+                median_ratio=None,
+                error="失败",
             )
 
-        with mock.patch("gugu.analysis.market_temp.fetch_index_temp", side_effect=mock_pe_fetch), \
-             mock.patch("gugu.analysis.market_temp.fetch_pb_temp", side_effect=mock_pb_fetch), \
-             mock.patch("gugu.analysis.market_temp.fetch_buffett_temp", side_effect=mock_buffett_fetch):
+        with (
+            mock.patch("gugu.analysis.market_temp.fetch_index_temp", side_effect=mock_pe_fetch),
+            mock.patch("gugu.analysis.market_temp.fetch_pb_temp", side_effect=mock_pb_fetch),
+            mock.patch(
+                "gugu.analysis.market_temp.fetch_buffett_temp", side_effect=mock_buffett_fetch
+            ),
+        ):
             result = await calc_market_temp(use_cache=False)
             assert result.temperature is not None
             # 只有 PE，权重自动归一到 PE
@@ -398,32 +446,56 @@ class TestCalcMarketTemp:
     @pytest.mark.asyncio
     async def test_partial_pe_failure(self):
         """部分 PE 指数失败。"""
+
         async def mock_pe_fetch(idx):
             if idx["name"] == "沪深300":
                 return IndexTempResult(
-                    name="沪深300", current_pe=None, pe_percentile=None,
-                    min_pe=None, max_pe=None, median_pe=None, error="失败",
+                    name="沪深300",
+                    current_pe=None,
+                    pe_percentile=None,
+                    min_pe=None,
+                    max_pe=None,
+                    median_pe=None,
+                    error="失败",
                 )
             return IndexTempResult(
-                name=idx["name"], current_pe=15.0, pe_percentile=60.0,
-                min_pe=10.0, max_pe=20.0, median_pe=15.0, data_points=100,
+                name=idx["name"],
+                current_pe=15.0,
+                pe_percentile=60.0,
+                min_pe=10.0,
+                max_pe=20.0,
+                median_pe=15.0,
+                data_points=100,
             )
 
         async def mock_pb_fetch(idx):
             return PBTempResult(
-                name=idx["name"], current_pb=1.5, pb_percentile=40.0,
-                min_pb=1.0, max_pb=2.0, median_pb=1.4, data_points=100,
+                name=idx["name"],
+                current_pb=1.5,
+                pb_percentile=40.0,
+                min_pb=1.0,
+                max_pb=2.0,
+                median_pb=1.4,
+                data_points=100,
             )
 
         async def mock_buffett_fetch():
             return BuffettResult(
-                current_ratio=0.9, ratio_percentile=60.0,
-                min_ratio=0.6, max_ratio=1.2, median_ratio=0.85, data_points=100,
+                current_ratio=0.9,
+                ratio_percentile=60.0,
+                min_ratio=0.6,
+                max_ratio=1.2,
+                median_ratio=0.85,
+                data_points=100,
             )
 
-        with mock.patch("gugu.analysis.market_temp.fetch_index_temp", side_effect=mock_pe_fetch), \
-             mock.patch("gugu.analysis.market_temp.fetch_pb_temp", side_effect=mock_pb_fetch), \
-             mock.patch("gugu.analysis.market_temp.fetch_buffett_temp", side_effect=mock_buffett_fetch):
+        with (
+            mock.patch("gugu.analysis.market_temp.fetch_index_temp", side_effect=mock_pe_fetch),
+            mock.patch("gugu.analysis.market_temp.fetch_pb_temp", side_effect=mock_pb_fetch),
+            mock.patch(
+                "gugu.analysis.market_temp.fetch_buffett_temp", side_effect=mock_buffett_fetch
+            ),
+        ):
             result = await calc_market_temp(use_cache=False)
             assert result.temperature is not None
             assert result.success_count == len(WIDE_INDEXES) - 1
@@ -432,27 +504,46 @@ class TestCalcMarketTemp:
     @pytest.mark.asyncio
     async def test_all_fail(self):
         """所有数据源失败。"""
+
         async def mock_pe_fetch(idx):
             return IndexTempResult(
-                name=idx["name"], current_pe=None, pe_percentile=None,
-                min_pe=None, max_pe=None, median_pe=None, error="失败",
+                name=idx["name"],
+                current_pe=None,
+                pe_percentile=None,
+                min_pe=None,
+                max_pe=None,
+                median_pe=None,
+                error="失败",
             )
 
         async def mock_pb_fetch(idx):
             return PBTempResult(
-                name=idx["name"], current_pb=None, pb_percentile=None,
-                min_pb=None, max_pb=None, median_pb=None, error="失败",
+                name=idx["name"],
+                current_pb=None,
+                pb_percentile=None,
+                min_pb=None,
+                max_pb=None,
+                median_pb=None,
+                error="失败",
             )
 
         async def mock_buffett_fetch():
             return BuffettResult(
-                current_ratio=None, ratio_percentile=None,
-                min_ratio=None, max_ratio=None, median_ratio=None, error="失败",
+                current_ratio=None,
+                ratio_percentile=None,
+                min_ratio=None,
+                max_ratio=None,
+                median_ratio=None,
+                error="失败",
             )
 
-        with mock.patch("gugu.analysis.market_temp.fetch_index_temp", side_effect=mock_pe_fetch), \
-             mock.patch("gugu.analysis.market_temp.fetch_pb_temp", side_effect=mock_pb_fetch), \
-             mock.patch("gugu.analysis.market_temp.fetch_buffett_temp", side_effect=mock_buffett_fetch):
+        with (
+            mock.patch("gugu.analysis.market_temp.fetch_index_temp", side_effect=mock_pe_fetch),
+            mock.patch("gugu.analysis.market_temp.fetch_pb_temp", side_effect=mock_pb_fetch),
+            mock.patch(
+                "gugu.analysis.market_temp.fetch_buffett_temp", side_effect=mock_buffett_fetch
+            ),
+        ):
             result = await calc_market_temp(use_cache=False)
             assert result.temperature is None
             assert result.error is not None
@@ -463,28 +554,49 @@ class TestCalcMarketTemp:
     @pytest.mark.asyncio
     async def test_hottest_coldest(self):
         """最热/最冷指数。"""
+
         async def mock_pe_fetch(idx):
-            pe_pct = 30.0 if idx["name"] == "上证50" else 70.0 if idx["name"] == "创业板50" else 50.0
+            pe_pct = (
+                30.0 if idx["name"] == "上证50" else 70.0 if idx["name"] == "创业板50" else 50.0
+            )
             return IndexTempResult(
-                name=idx["name"], current_pe=15.0, pe_percentile=pe_pct,
-                min_pe=10.0, max_pe=20.0, median_pe=15.0, data_points=100,
+                name=idx["name"],
+                current_pe=15.0,
+                pe_percentile=pe_pct,
+                min_pe=10.0,
+                max_pe=20.0,
+                median_pe=15.0,
+                data_points=100,
             )
 
         async def mock_pb_fetch(idx):
             return PBTempResult(
-                name=idx["name"], current_pb=1.5, pb_percentile=40.0,
-                min_pb=1.0, max_pb=2.0, median_pb=1.4, data_points=100,
+                name=idx["name"],
+                current_pb=1.5,
+                pb_percentile=40.0,
+                min_pb=1.0,
+                max_pb=2.0,
+                median_pb=1.4,
+                data_points=100,
             )
 
         async def mock_buffett_fetch():
             return BuffettResult(
-                current_ratio=0.9, ratio_percentile=60.0,
-                min_ratio=0.6, max_ratio=1.2, median_ratio=0.85, data_points=100,
+                current_ratio=0.9,
+                ratio_percentile=60.0,
+                min_ratio=0.6,
+                max_ratio=1.2,
+                median_ratio=0.85,
+                data_points=100,
             )
 
-        with mock.patch("gugu.analysis.market_temp.fetch_index_temp", side_effect=mock_pe_fetch), \
-             mock.patch("gugu.analysis.market_temp.fetch_pb_temp", side_effect=mock_pb_fetch), \
-             mock.patch("gugu.analysis.market_temp.fetch_buffett_temp", side_effect=mock_buffett_fetch):
+        with (
+            mock.patch("gugu.analysis.market_temp.fetch_index_temp", side_effect=mock_pe_fetch),
+            mock.patch("gugu.analysis.market_temp.fetch_pb_temp", side_effect=mock_pb_fetch),
+            mock.patch(
+                "gugu.analysis.market_temp.fetch_buffett_temp", side_effect=mock_buffett_fetch
+            ),
+        ):
             result = await calc_market_temp(use_cache=False)
             assert result.hottest is not None
             assert result.coldest is not None
@@ -500,15 +612,43 @@ class TestBuildMarketTempCard:
         result = MarketTempResult(
             temperature=35.0,
             indexes=[
-                IndexTempResult(name="沪深300", current_pe=13.5, pe_percentile=80.0,
-                                min_pe=10.0, max_pe=17.0, median_pe=12.0, data_points=100),
-                IndexTempResult(name="上证50", current_pe=11.0, pe_percentile=60.0,
-                                min_pe=8.0, max_pe=14.0, median_pe=10.0, data_points=100),
+                IndexTempResult(
+                    name="沪深300",
+                    current_pe=13.5,
+                    pe_percentile=80.0,
+                    min_pe=10.0,
+                    max_pe=17.0,
+                    median_pe=12.0,
+                    data_points=100,
+                ),
+                IndexTempResult(
+                    name="上证50",
+                    current_pe=11.0,
+                    pe_percentile=60.0,
+                    min_pe=8.0,
+                    max_pe=14.0,
+                    median_pe=10.0,
+                    data_points=100,
+                ),
             ],
-            hottest=IndexTempResult(name="沪深300", current_pe=13.5, pe_percentile=80.0,
-                                    min_pe=10.0, max_pe=17.0, median_pe=12.0, data_points=100),
-            coldest=IndexTempResult(name="上证50", current_pe=11.0, pe_percentile=60.0,
-                                    min_pe=8.0, max_pe=14.0, median_pe=10.0, data_points=100),
+            hottest=IndexTempResult(
+                name="沪深300",
+                current_pe=13.5,
+                pe_percentile=80.0,
+                min_pe=10.0,
+                max_pe=17.0,
+                median_pe=12.0,
+                data_points=100,
+            ),
+            coldest=IndexTempResult(
+                name="上证50",
+                current_pe=11.0,
+                pe_percentile=60.0,
+                min_pe=8.0,
+                max_pe=14.0,
+                median_pe=10.0,
+                data_points=100,
+            ),
             total_indexes=2,
             success_count=2,
         )
@@ -544,13 +684,34 @@ class TestFormatTempReport:
         result = MarketTempResult(
             temperature=35.0,
             indexes=[
-                IndexTempResult(name="沪深300", current_pe=13.5, pe_percentile=80.0,
-                                min_pe=10.0, max_pe=17.0, median_pe=12.0, data_points=100),
+                IndexTempResult(
+                    name="沪深300",
+                    current_pe=13.5,
+                    pe_percentile=80.0,
+                    min_pe=10.0,
+                    max_pe=17.0,
+                    median_pe=12.0,
+                    data_points=100,
+                ),
             ],
-            hottest=IndexTempResult(name="沪深300", current_pe=13.5, pe_percentile=80.0,
-                                    min_pe=10.0, max_pe=17.0, median_pe=12.0, data_points=100),
-            coldest=IndexTempResult(name="沪深300", current_pe=13.5, pe_percentile=80.0,
-                                    min_pe=10.0, max_pe=17.0, median_pe=12.0, data_points=100),
+            hottest=IndexTempResult(
+                name="沪深300",
+                current_pe=13.5,
+                pe_percentile=80.0,
+                min_pe=10.0,
+                max_pe=17.0,
+                median_pe=12.0,
+                data_points=100,
+            ),
+            coldest=IndexTempResult(
+                name="沪深300",
+                current_pe=13.5,
+                pe_percentile=80.0,
+                min_pe=10.0,
+                max_pe=17.0,
+                median_pe=12.0,
+                data_points=100,
+            ),
             total_indexes=1,
             success_count=1,
         )
@@ -655,13 +816,15 @@ class TestFetchPbHistoryLg:
 
     def test_mock_success(self):
         """mock akshare 成功返回。"""
-        mock_raw = pd.DataFrame({
-            "日期": pd.date_range("2025-01-01", periods=100, freq="D"),
-            "指数": [4000.0] * 100,
-            "市净率": [1.5] * 100,
-            "等权市净率": [2.0] * 100,
-            "市净率中位数": [1.4] * 100,
-        })
+        mock_raw = pd.DataFrame(
+            {
+                "日期": pd.date_range("2025-01-01", periods=100, freq="D"),
+                "指数": [4000.0] * 100,
+                "市净率": [1.5] * 100,
+                "等权市净率": [2.0] * 100,
+                "市净率中位数": [1.4] * 100,
+            }
+        )
         with mock.patch("akshare.stock_index_pb_lg", return_value=mock_raw):
             df = _fetch_pb_history_lg("沪深300", years=10)
             assert df is not None
@@ -687,12 +850,14 @@ class TestFetchBuffettIndexLg:
 
     def test_mock_success(self):
         """mock akshare 成功返回。"""
-        mock_raw = pd.DataFrame({
-            "日期": pd.date_range("2025-01-01", periods=100, freq="D"),
-            "收盘价": [4000.0] * 100,
-            "总市值": [1300000.0] * 100,
-            "GDP": [1400000.0] * 100,
-        })
+        mock_raw = pd.DataFrame(
+            {
+                "日期": pd.date_range("2025-01-01", periods=100, freq="D"),
+                "收盘价": [4000.0] * 100,
+                "总市值": [1300000.0] * 100,
+                "GDP": [1400000.0] * 100,
+            }
+        )
         with mock.patch("akshare.stock_buffett_index_lg", return_value=mock_raw):
             df = _fetch_buffett_index_lg(years=10)
             assert df is not None
@@ -720,10 +885,12 @@ class TestFetchPbTemp:
     @pytest.mark.asyncio
     async def test_success(self):
         """成功获取 PB 温度。"""
-        mock_df = pd.DataFrame({
-            "date": pd.date_range("2025-01-01", periods=100, freq="D"),
-            "pb": [1.5] * 100,
-        })
+        mock_df = pd.DataFrame(
+            {
+                "date": pd.date_range("2025-01-01", periods=100, freq="D"),
+                "pb": [1.5] * 100,
+            }
+        )
         with mock.patch("gugu.analysis.market_temp._fetch_pb_history_lg", return_value=mock_df):
             result = await fetch_pb_temp({"name": "沪深300", "lg_symbol": "沪深300"})
             assert result.name == "沪深300"
@@ -746,10 +913,12 @@ class TestFetchBuffettTemp:
     @pytest.mark.asyncio
     async def test_success(self):
         """成功获取巴菲特指数温度。"""
-        mock_df = pd.DataFrame({
-            "date": pd.date_range("2025-01-01", periods=100, freq="D"),
-            "ratio": [0.9] * 100,
-        })
+        mock_df = pd.DataFrame(
+            {
+                "date": pd.date_range("2025-01-01", periods=100, freq="D"),
+                "ratio": [0.9] * 100,
+            }
+        )
         with mock.patch("gugu.analysis.market_temp._fetch_buffett_index_lg", return_value=mock_df):
             result = await fetch_buffett_temp()
             assert result.current_ratio is not None

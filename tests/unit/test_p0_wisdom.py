@@ -26,6 +26,7 @@ from gugu.wisdom.book_router import BookPerspectiveRouter
 # 测试数据生成辅助
 # ---------------------------------------------------------------------------
 
+
 def _make_df(closes, volumes=None, highs=None, lows=None):
     """生成 OHLCV DataFrame。"""
     n = len(closes)
@@ -36,14 +37,16 @@ def _make_df(closes, volumes=None, highs=None, lows=None):
     if lows is None:
         lows = [c * 0.98 for c in closes]
     dates = pd.date_range("2025-01-01", periods=n, freq="D")
-    return pd.DataFrame({
-        "date": dates,
-        "open": closes,
-        "high": highs,
-        "low": lows,
-        "close": closes,
-        "volume": volumes,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": closes,
+            "high": highs,
+            "low": lows,
+            "close": closes,
+            "volume": volumes,
+        }
+    )
 
 
 def _make_uptrend_df(n=80, start=10.0, step=0.15, vol_base=10000):
@@ -80,6 +83,7 @@ def _make_downtrend_df(n=80, start=30.0, step=0.2, vol_base=10000):
 # StageDetector 测试
 # ---------------------------------------------------------------------------
 
+
 class TestStageDetector:
     """四阶段判断器测试。"""
 
@@ -98,7 +102,11 @@ class TestStageDetector:
         """正常升势：价格逐步上升，高点低点逐步抬高。"""
         df = _make_uptrend_df(n=80, step=0.15)
         result = self.detector.detect(df)
-        assert result.stage in (MarketStage.NORMAL_UPTREND, MarketStage.FRENZY, MarketStage.SIDEWAYS)
+        assert result.stage in (
+            MarketStage.NORMAL_UPTREND,
+            MarketStage.FRENZY,
+            MarketStage.SIDEWAYS,
+        )
         assert result.confidence >= 0
 
     def test_frenzy_stage(self):
@@ -137,6 +145,7 @@ class TestStageDetector:
 # ---------------------------------------------------------------------------
 # TrailingStopEngine 测试
 # ---------------------------------------------------------------------------
+
 
 class TestTrailingStopEngine:
     """移动止损引擎测试。"""
@@ -184,7 +193,11 @@ class TestTrailingStopEngine:
         # 价格跌破止损价
         df = _make_df([100.0, 90.0, 85.0, 80.0])
         state, signal = self.engine.update(state, df)
-        assert signal in (TrailingStopSignal.EXIT, TrailingStopSignal.WARNING, TrailingStopSignal.ALERT)
+        assert signal in (
+            TrailingStopSignal.EXIT,
+            TrailingStopSignal.WARNING,
+            TrailingStopSignal.ALERT,
+        )
 
     def test_state_dict_roundtrip(self):
         """状态序列化/反序列化往返。"""
@@ -219,6 +232,7 @@ class TestTrailingStopEngine:
 # ---------------------------------------------------------------------------
 # DangerSignalDetector 测试
 # ---------------------------------------------------------------------------
+
 
 class TestDangerSignalDetector:
     """危险信号检测器测试。"""
@@ -278,6 +292,7 @@ class TestDangerSignalDetector:
 # ---------------------------------------------------------------------------
 # NoAverageDownChecker 测试
 # ---------------------------------------------------------------------------
+
 
 class TestNoAverageDownChecker:
     """向下摊平检查器测试。"""
@@ -346,6 +361,7 @@ class TestNoAverageDownChecker:
 # ---------------------------------------------------------------------------
 # BookPerspectiveRouter 测试
 # ---------------------------------------------------------------------------
+
 
 class TestBookPerspectiveRouter:
     """书籍多视角路由器测试。"""

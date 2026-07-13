@@ -55,15 +55,17 @@ class SentimentReport:
             text = f"{n.get('title', '')} {n.get('content', '')}"
             sentiment = self._analyzer.analyze(text)
             impact = self._impact.calculate(sentiment, n.get("source", "未知"))
-            analyzed.append({
-                "title": n.get("title", ""),
-                "content": n.get("content", ""),
-                "source": n.get("source", ""),
-                "publish_time": n.get("publish_time", ""),
-                "url": n.get("url", ""),
-                "sentiment": sentiment,
-                "impact": impact,
-            })
+            analyzed.append(
+                {
+                    "title": n.get("title", ""),
+                    "content": n.get("content", ""),
+                    "source": n.get("source", ""),
+                    "publish_time": n.get("publish_time", ""),
+                    "url": n.get("url", ""),
+                    "sentiment": sentiment,
+                    "impact": impact,
+                }
+            )
             s = sentiment["sentiment_score"]
             total += s
             if sentiment["sentiment"] == "positive":
@@ -119,14 +121,21 @@ class SentimentReport:
         if sug:
             ae = _ACTION_EMOJI.get(sug.get("action", "hold"), "⚪")
             stars = "★" * sug.get("confidence", 1) + "☆" * (5 - sug.get("confidence", 1))
-            elements.append({
-                "tag": "div",
-                "text": {"tag": "lark_md", "content": f"**操作建议**\n{ae} {sug.get('message', '')}\n置信度：{stars}"},
-            })
+            elements.append(
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": f"**操作建议**\n{ae} {sug.get('message', '')}\n置信度：{stars}",
+                    },
+                }
+            )
 
         analyzed = report.get("analyzed_news", [])
         if analyzed:
-            sorted_n = sorted(analyzed, key=lambda x: abs(x["sentiment"]["sentiment_score"]), reverse=True)
+            sorted_n = sorted(
+                analyzed, key=lambda x: abs(x["sentiment"]["sentiment_score"]), reverse=True
+            )
             lines = []
             for i, n in enumerate(sorted_n[:5], 1):
                 s = n["sentiment"]
@@ -135,15 +144,24 @@ class SentimentReport:
                 lines.append(f"{i}. {e} {n['title']}")
                 if kw:
                     lines.append(f"   🔑 {kw}")
-            elements.append({
-                "tag": "div",
-                "text": {"tag": "lark_md", "content": "**重要新闻**\n" + "\n".join(lines)},
-            })
+            elements.append(
+                {
+                    "tag": "div",
+                    "text": {"tag": "lark_md", "content": "**重要新闻**\n" + "\n".join(lines)},
+                }
+            )
 
-        elements.append({
-            "tag": "note",
-            "elements": [{"tag": "plain_text", "content": "舆情日报 · gugu · 东方财富新闻 + 金融情感词典"}],
-        })
+        elements.append(
+            {
+                "tag": "note",
+                "elements": [
+                    {
+                        "tag": "plain_text",
+                        "content": "舆情日报 · gugu · 东方财富新闻 + 金融情感词典",
+                    }
+                ],
+            }
+        )
 
         return {
             "card": {
@@ -174,7 +192,11 @@ class SentimentReport:
     @staticmethod
     def _suggestion(sentiment: str, score: float, risk: int) -> dict:
         if sentiment == "positive" and score > 0.3:
-            return {"action": "buy", "message": "舆情积极向好，可考虑加仓", "confidence": min(5, int(abs(score) * 5) + 1)}
+            return {
+                "action": "buy",
+                "message": "舆情积极向好，可考虑加仓",
+                "confidence": min(5, int(abs(score) * 5) + 1),
+            }
         elif sentiment == "positive":
             return {"action": "hold", "message": "舆情偏正面，建议继续持有", "confidence": 3}
         elif sentiment == "negative" and score < -0.3:

@@ -111,7 +111,9 @@ class BreakoutReboundStrategy(Strategy):
         # ── 计算均线 ──────────────────────────────────
         df["ma_trend"] = df["close"].rolling(ma_trend_window).mean()
         df["ma_long"] = df["close"].rolling(ma_long_window).mean()
-        df["ma_slope"] = df["ma_trend"].diff(ma_slope_window) / df["ma_trend"].shift(ma_slope_window)
+        df["ma_slope"] = df["ma_trend"].diff(ma_slope_window) / df["ma_trend"].shift(
+            ma_slope_window
+        )
 
         # ── 计算量能指标 ──────────────────────────────
         df["vol_ma5"] = df["volume"].rolling(5).mean().shift(1)
@@ -122,7 +124,9 @@ class BreakoutReboundStrategy(Strategy):
         df["is_yin"] = (df["close"] < df["open"]).astype(bool)
         df["is_yang"] = (df["close"] > df["open"]).astype(bool)
         df["body"] = (df["close"] - df["open"]).abs() / df["open"].replace(0, np.nan)
-        df["upper_shadow"] = (df["high"] - df[["open", "close"]].max(axis=1)) / df["open"].replace(0, np.nan)
+        df["upper_shadow"] = (df["high"] - df[["open", "close"]].max(axis=1)) / df["open"].replace(
+            0, np.nan
+        )
 
         # ════════════════════════════════════════════════
         # 条件1: 涨停板识别（前 N 日内有涨停）
@@ -153,10 +157,7 @@ class BreakoutReboundStrategy(Strategy):
         # 涨停次日 = limit_up_day_offset == 1 的那天
         # 断板 = 涨停次日的涨幅 < limit_up_pct（未继续涨停）
         # 我们需要识别"断板日"，即涨停后的调整日
-        df["is_break_day"] = (
-            (df["limit_up_day_offset"] == 1)
-            & (df["daily_return"] < limit_up_pct)
-        )
+        df["is_break_day"] = (df["limit_up_day_offset"] == 1) & (df["daily_return"] < limit_up_pct)
 
         # 找到断板日的高点（用于反包判定）
         # 断板日 = is_break_day == True 的那天
@@ -175,7 +176,9 @@ class BreakoutReboundStrategy(Strategy):
                 if i - last_break <= limit_up_lookback:
                     df.loc[df.index[i], "break_day_high"] = df.loc[df.index[last_break], "high"]
                     df.loc[df.index[i], "break_day_low"] = df.loc[df.index[last_break], "low"]
-                    df.loc[df.index[i], "break_day_vol_ratio"] = df.loc[df.index[last_break], "vol_ratio"]
+                    df.loc[df.index[i], "break_day_vol_ratio"] = df.loc[
+                        df.index[last_break], "vol_ratio"
+                    ]
 
                     # 找到对应的涨停日（断板日的前一天）
                     lu_idx = last_break - 1
@@ -251,11 +254,16 @@ class BreakoutReboundStrategy(Strategy):
         # 注意：limit_up_day_offset 是"距最近涨停日"，但反包日是断板日的次日
         # 所以反包日的 offset = 断板日的 offset + 1 = 2（昨天涨停→前天）
         # 实际上 break_day 的 offset=1，反包日 break_day+1 的 offset=2
-        score_timing = ((df["limit_up_day_offset"] >= 2) & (df["limit_up_day_offset"] <= 4)).astype(float) * 0.10
+        score_timing = ((df["limit_up_day_offset"] >= 2) & (df["limit_up_day_offset"] <= 4)).astype(
+            float
+        ) * 0.10
 
         df["confidence_score"] = (
-            score_break_shrink + score_rebound_vol_strong + score_strong_rebound
-            + score_trend_up + score_timing
+            score_break_shrink
+            + score_rebound_vol_strong
+            + score_strong_rebound
+            + score_trend_up
+            + score_timing
         ).clip(0, 1)
 
         # ════════════════════════════════════════════════
@@ -304,9 +312,7 @@ class BreakoutReboundStrategy(Strategy):
         # ── 止盈1：涨幅达 take_profit_pct * 0.6（大阳线冲高） ──
         # v0.5.8 恢复原阈值 4.8%，因仅在持仓状态判断
         df["big_yang"] = (
-            df["is_yang"]
-            & (df["daily_return"] >= take_profit_pct * 0.6)
-            & (df["vol_ratio"] >= 1.5)
+            df["is_yang"] & (df["daily_return"] >= take_profit_pct * 0.6) & (df["vol_ratio"] >= 1.5)
         )
         cond_take_profit_1 = df["in_position"] & df["big_yang"]
 
@@ -342,8 +348,10 @@ class BreakoutReboundStrategy(Strategy):
         df.loc[buy_cond_final, "signal"] = 1
         # 卖出信号优先（止损1 + 止损2 + 止盈1 + 止盈2 + 时间止损）
         df.loc[
-            cond_stop_loss_1 | cond_stop_loss_2
-            | cond_take_profit_1 | cond_take_profit_2
+            cond_stop_loss_1
+            | cond_stop_loss_2
+            | cond_take_profit_1
+            | cond_take_profit_2
             | cond_time_stop,
             "signal",
         ] = -1
@@ -353,6 +361,8 @@ class BreakoutReboundStrategy(Strategy):
         # ════════════════════════════════════════════════
         df["confidence"] = 0.0
         # 核心信号用评分（clip 0.5-0.85）
-        df.loc[buy_cond_final, "confidence"] = df.loc[buy_cond_final, "confidence_score"].clip(0.5, 0.85)
+        df.loc[buy_cond_final, "confidence"] = df.loc[buy_cond_final, "confidence_score"].clip(
+            0.5, 0.85
+        )
 
         return df

@@ -76,11 +76,11 @@ class ScreeningResult:
     passed: bool
     failed_conditions: list[str] = field(default_factory=list)
     # P0-2: 可执行性信息（入场区间/止损位/仓位/目标位）
-    ma20: float = 0.0           # MA20 支撑位
-    recent_high: float = 0.0    # 前 20 日最高价（止盈目标位）
+    ma20: float = 0.0  # MA20 支撑位
+    recent_high: float = 0.0  # 前 20 日最高价（止盈目标位）
     suggested_position: float = 0.10  # 建议仓位占比（默认 10%）
     # P2: 十大视角评分（可选，通过筛选后附加）
-    perspective_score: float = 0.0   # 综合评分 0-10
+    perspective_score: float = 0.0  # 综合评分 0-10
 
     @property
     def pass_count(self) -> int:
@@ -178,8 +178,7 @@ class TerminalScreener:
         top = (passed + partial)[:MAX_CANDIDATES]
         elapsed = time.time() - start_time
         logger.info(
-            f"尾盘选股: 完成 完全通过 {len(passed)} 只，上报 {len(top)} 只，"
-            f"耗时 {elapsed:.0f}s"
+            f"尾盘选股: 完成 完全通过 {len(passed)} 只，上报 {len(top)} 只，耗时 {elapsed:.0f}s"
         )
         return top
 
@@ -199,10 +198,15 @@ class TerminalScreener:
 
         # 标准化列名（兼容 stock_zh_a_spot_em 和 stock_zh_a_spot）
         col_map = {
-            "code": "代码", "name": "名称", "trade": "最新价",
-            "changepercent": "涨跌幅", "volume": "成交量",
-            "amount": "成交额", "turnoverratio": "换手率",
-            "volume_ratio": "量比", "circ_mv": "流通市值",
+            "code": "代码",
+            "name": "名称",
+            "trade": "最新价",
+            "changepercent": "涨跌幅",
+            "volume": "成交量",
+            "amount": "成交额",
+            "turnoverratio": "换手率",
+            "volume_ratio": "量比",
+            "circ_mv": "流通市值",
         }
         spot = spot.rename(columns={k: v for k, v in col_map.items() if k in spot.columns})
 
@@ -265,8 +269,15 @@ class TerminalScreener:
                 try:
                     r = await asyncio.wait_for(
                         self._check_stock(
-                            code, name, price, chg_pct, today_vol, index_chg,
-                            vol_ratio, turnover_pct, mcap_b,
+                            code,
+                            name,
+                            price,
+                            chg_pct,
+                            today_vol,
+                            index_chg,
+                            vol_ratio,
+                            turnover_pct,
+                            mcap_b,
                         ),
                         timeout=_PER_STOCK_TIMEOUT,
                     )
@@ -301,7 +312,7 @@ class TerminalScreener:
                 )
                 break
 
-            batch = candidates.iloc[batch_start:batch_start + batch_size]
+            batch = candidates.iloc[batch_start : batch_start + batch_size]
             tasks = [check_one(row) for _, row in batch.iterrows()]
             batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -319,7 +330,8 @@ class TerminalScreener:
         # 方式1: ak.stock_zh_a_spot_em（推荐，包含换手率/流通市值/量比）
         try:
             import akshare as ak
-            spot = await asyncio.to_thread(ak.stock_zh_a_spot_em)
+
+            spot = await asyncio.wait_for(asyncio.to_thread(ak.stock_zh_a_spot_em), timeout=30.0)
             if spot is not None and not spot.empty:
                 logger.info(f"尾盘选股: 使用 stock_zh_a_spot_em 全市场快照 ({len(spot)} 只)")
                 return spot
@@ -329,7 +341,8 @@ class TerminalScreener:
         # 方式2: ak.stock_zh_a_spot（旧版，字段较少）
         try:
             import akshare as ak
-            spot = await asyncio.to_thread(ak.stock_zh_a_spot)
+
+            spot = await asyncio.wait_for(asyncio.to_thread(ak.stock_zh_a_spot), timeout=30.0)
             if spot is not None and not spot.empty:
                 logger.info(f"尾盘选股: 降级使用 stock_zh_a_spot ({len(spot)} 只)")
                 return spot
@@ -342,11 +355,15 @@ class TerminalScreener:
                 spot = await self._dm.fetch_stock_realtime([])
                 if spot is not None and not spot.empty:
                     logger.info(f"尾盘选股: 降级使用 DataManager 实时行情 ({len(spot)} 只)")
-                    spot = spot.rename(columns={
-                        "symbol": "代码", "name": "名称",
-                        "price": "最新价", "change_pct": "涨跌幅",
-                        "volume": "成交量",
-                    })
+                    spot = spot.rename(
+                        columns={
+                            "symbol": "代码",
+                            "name": "名称",
+                            "price": "最新价",
+                            "change_pct": "涨跌幅",
+                            "volume": "成交量",
+                        }
+                    )
                     return spot
             except Exception as e:
                 logger.warning(f"尾盘选股: DataManager 降级也失败: {e}")
@@ -357,7 +374,10 @@ class TerminalScreener:
         """获取上证指数今日涨幅。"""
         try:
             import akshare as ak
-            df = await asyncio.to_thread(ak.stock_zh_index_daily, symbol="sh000001")
+
+            df = await asyncio.wait_for(
+                asyncio.to_thread(ak.stock_zh_index_daily, symbol="sh000001"), timeout=30.0
+            )
             if not df.empty and len(df) >= 2:
                 today = df.iloc[-1]
                 yesterday = df.iloc[-2]
@@ -371,16 +391,18 @@ class TerminalScreener:
                 if not df.empty and len(df) >= 2:
                     today = df.iloc[-1]
                     yesterday = df.iloc[-2]
-                    return float(
-                        (today["close"] - yesterday["close"]) / yesterday["close"] * 100
-                    )
+                    return float((today["close"] - yesterday["close"]) / yesterday["close"] * 100)
             except Exception as e:
                 logger.debug(f"DataManager 获取大盘涨幅失败: {e}")
         return 0.0
 
     async def _score_with_perspectives(
-        self, code: str, name: str, price: float,
-        ma20_val: float, ma60_val: float,
+        self,
+        code: str,
+        name: str,
+        price: float,
+        ma20_val: float,
+        ma60_val: float,
     ) -> float | None:
         """对候选股运行十大视角评分（轻量版，仅使用已有K线数据）。
 
@@ -398,8 +420,12 @@ class TerminalScreener:
                 return None
 
             ctx = build_context_from_kline(
-                symbol=code, name=name, kline_df=df,
-                price=price, ma20=ma20_val, ma60=ma60_val,
+                symbol=code,
+                name=name,
+                kline_df=df,
+                price=price,
+                ma20=ma20_val,
+                ma60=ma60_val,
             )
             engine = PerspectiveEngine()
             result = engine.analyze(ctx)
@@ -438,9 +464,12 @@ class TerminalScreener:
                 latest = recent.iloc[-1]
                 outstanding = float(latest.get("outstanding_share", 0))
                 if outstanding == 0:
-                    outstanding = float(latest.get("volume", 0)) / max(
-                        float(latest.get("turnover", 0.001)), 0.001
-                    ) if float(latest.get("turnover", 0)) > 0 else 1e8
+                    outstanding = (
+                        float(latest.get("volume", 0))
+                        / max(float(latest.get("turnover", 0.001)), 0.001)
+                        if float(latest.get("turnover", 0)) > 0
+                        else 1e8
+                    )
                 mcap_b = price * outstanding / 1e8
 
             if mcap_b < 5 or mcap_b > 500:
@@ -474,7 +503,7 @@ class TerminalScreener:
 
             # 条件3: 前 5 日内有涨幅 ≥ 5% 的强势表现
             if len(recent) >= RECENT_STRONG_DAYS + 1:
-                recent_closes = recent["close"].iloc[-(RECENT_STRONG_DAYS + 1):-1]
+                recent_closes = recent["close"].iloc[-(RECENT_STRONG_DAYS + 1) : -1]
                 recent_chg_pct = recent_closes.pct_change() * 100
                 has_strong = (recent_chg_pct >= RECENT_STRONG_PCT).any()
             else:
@@ -495,7 +524,11 @@ class TerminalScreener:
             pullback_hold = pd.notna(ma20) and price >= ma20 * 0.98
 
             # P0-2: 计算前 20 日最高价（止盈目标位）
-            recent_high_val = float(recent["high"].iloc[-20:].max()) if len(recent) >= 20 else float(recent["high"].max())
+            recent_high_val = (
+                float(recent["high"].iloc[-20:].max())
+                if len(recent) >= 20
+                else float(recent["high"].max())
+            )
             ma20_val = float(ma20) if pd.notna(ma20) else price
 
             result = ScreeningResult(
@@ -519,7 +552,11 @@ class TerminalScreener:
             if result.passed:
                 try:
                     perspective_score = await self._score_with_perspectives(
-                        code, name, price, ma20_val, ma60_val=float(ma60) if pd.notna(ma60) else 0,
+                        code,
+                        name,
+                        price,
+                        ma20_val,
+                        ma60_val=float(ma60) if pd.notna(ma60) else 0,
                     )
                     if perspective_score is not None:
                         result.perspective_score = perspective_score
@@ -552,8 +589,11 @@ class TerminalScreener:
         """获取个股日K线历史（需 60 日数据用于 MA60）。"""
         try:
             import akshare as ak
+
             prefix = _symbol_prefix(code)
-            df = await asyncio.to_thread(ak.stock_zh_a_daily, symbol=prefix, adjust="qfq")
+            df = await asyncio.wait_for(
+                asyncio.to_thread(ak.stock_zh_a_daily, symbol=prefix, adjust="qfq"), timeout=30.0
+            )
             if df is not None and not df.empty:
                 return df
         except Exception as e:

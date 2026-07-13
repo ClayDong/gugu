@@ -64,6 +64,7 @@ class MoneyFlowFilter:
         # 仅 signal_only 模式下放行（仅观察）
         try:
             from gugu.config import get_config
+
             exec_mode = get_config().execution.mode
         except Exception:
             exec_mode = "paper"  # 默认 paper 模式（严格）
@@ -146,9 +147,9 @@ class MoneyFlowFilter:
 
         # 规则1：近5日主力净流入合计 > 0
         if main_net_5d > 0:
-            reasons.append(f"近5日主力净流入合计 {main_net_5d / 1e8:.2f}亿 > 0，资金在流入")
+            reasons.append(f"近5日主力净流入合计 {main_net_5d:.2f}亿 > 0，资金在流入")
         else:
-            reasons.append(f"近5日主力净流入合计 {main_net_5d / 1e8:.2f}亿 <= 0，资金在流出")
+            reasons.append(f"近5日主力净流入合计 {main_net_5d:.2f}亿 <= 0，资金在流出")
 
         # 规则2：今日主力净流入占比 > -5%
         if main_pct_today > -5.0:

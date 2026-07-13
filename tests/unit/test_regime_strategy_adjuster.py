@@ -1,4 +1,5 @@
 """市场状态自适应策略权重调整器测试。"""
+
 from __future__ import annotations
 
 import pytest
@@ -81,9 +82,7 @@ class TestComputeRegimeWeights:
         """暴跌市所有策略权重乘数应最低。"""
         base_weights = {"turtle": 0.5, "rsi_reversal": 0.3, "box_breakout": 0.2}
         raw_adjusted = {
-            k: base_weights[k] * REGIME_MULTIPLIERS["crash"].get(
-                get_strategy_category(k), 1.0
-            )
+            k: base_weights[k] * REGIME_MULTIPLIERS["crash"].get(get_strategy_category(k), 1.0)
             for k in base_weights
         }
 

@@ -1,4 +1,5 @@
 """技术指标工具函数单元测试。"""
+
 from __future__ import annotations
 
 import numpy as np
@@ -6,7 +7,13 @@ import pandas as pd
 import pytest
 
 from gugu.analysis.technical import (
-    atr, bollinger, ema, macd, obv, rsi, sma,
+    atr,
+    bollinger,
+    ema,
+    macd,
+    obv,
+    rsi,
+    sma,
 )
 
 
@@ -58,6 +65,7 @@ class TestATR:
     def test_atr_period_14_default(self):
         """默认 period=14。"""
         from inspect import signature
+
         sig = signature(atr)
         assert sig.parameters["period"].default == 14
 
@@ -101,13 +109,13 @@ class TestRSI:
 
     def test_rsi_overbought(self):
         """持续大涨后 RSI 应进入超买区。"""
-        s = pd.Series([100.0 * (1.02 ** i) for i in range(30)])  # 持续大涨
+        s = pd.Series([100.0 * (1.02**i) for i in range(30)])  # 持续大涨
         result = rsi(s, period=14)
         assert result.iloc[-1] > 70
 
     def test_rsi_oversold(self):
         """持续大跌后 RSI 应进入超卖区。"""
-        s = pd.Series([100.0 * (0.98 ** i) for i in range(30)])  # 持续大跌
+        s = pd.Series([100.0 * (0.98**i) for i in range(30)])  # 持续大跌
         result = rsi(s, period=14)
         assert result.iloc[-1] < 30
 
@@ -193,14 +201,14 @@ class TestOBV:
 
     def test_obv_uptrend(self):
         """上涨时 OBV 应上升。"""
-        prices = [100.0 * (1.01 ** i) for i in range(20)]
+        prices = [100.0 * (1.01**i) for i in range(20)]
         df = _make_df(prices)
         result = obv(df)
         assert result.iloc[-1] > result.iloc[0]
 
     def test_obv_downtrend(self):
         """下跌时 OBV 应下降。"""
-        prices = [100.0 * (0.99 ** i) for i in range(20)]
+        prices = [100.0 * (0.99**i) for i in range(20)]
         df = _make_df(prices)
         result = obv(df)
         assert result.iloc[-1] < result.iloc[0]

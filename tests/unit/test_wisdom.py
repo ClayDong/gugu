@@ -9,6 +9,7 @@
 - Fallback 模式验证精确数值
 - 两种模式都验证核心安全约束（仓位上限、止损价）
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -204,13 +205,15 @@ class TestLLMMode:
                 },
                 mock_response,
             )
-            result = advisor.advise({
-                "symbol": "600519",
-                "direction": "buy",
-                "price": 1500.0,
-                "confidence": 0.8,
-                "suggested_position_ratio": 0.24,
-            })
+            result = advisor.advise(
+                {
+                    "symbol": "600519",
+                    "direction": "buy",
+                    "price": 1500.0,
+                    "confidence": 0.8,
+                    "suggested_position_ratio": 0.24,
+                }
+            )
 
         decision = result["wisdom_decision"]
         assert decision["source"] == "llm"
@@ -406,13 +409,15 @@ class TestLLMMode:
         advisor = self._make_advisor_with_mock_llm()
 
         with patch.object(advisor, "_advise_llm", side_effect=Exception("LLM timeout")):
-            result = advisor.advise({
-                "symbol": "600519",
-                "direction": "buy",
-                "price": 1500.0,
-                "confidence": 0.8,
-                "suggested_position_ratio": 0.24,
-            })
+            result = advisor.advise(
+                {
+                    "symbol": "600519",
+                    "direction": "buy",
+                    "price": 1500.0,
+                    "confidence": 0.8,
+                    "suggested_position_ratio": 0.24,
+                }
+            )
 
         # 应降级到 fallback
         decision = result["wisdom_decision"]

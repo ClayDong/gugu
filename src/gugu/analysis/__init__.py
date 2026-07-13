@@ -3,6 +3,17 @@
 from gugu.analysis.alpha_factory import AlphaFactor, AlphaFactory
 from gugu.analysis.danger_signal import DangerSignalDetector, DangerSignalResult
 from gugu.analysis.execution_optimizer import ExecutionOptimizer, ExecutionPlan, ExecutionReport
+from gugu.analysis.golden_ratio import (
+    FibonacciLevel,
+    GoldenRatioResult,
+    calc_golden_ratio,
+)
+from gugu.analysis.m_factor import (
+    MFactorResult,
+    calc_m_basic_from_df,
+    calc_m_factor,
+    calc_m_sector_from_df,
+)
 from gugu.analysis.money_management import KellyCalculator, KellyResult, PyramidingLevel
 from gugu.analysis.no_average_down import AverageDownCheckResult, NoAverageDownChecker
 from gugu.analysis.param_optimizer import OptimizationResult, ParamOptimizer, ParamRange
@@ -38,8 +49,11 @@ __all__ = [
     "ExecutionOptimizer",
     "ExecutionPlan",
     "ExecutionReport",
+    "FibonacciLevel",
+    "GoldenRatioResult",
     "KellyCalculator",
     "KellyResult",
+    "MFactorResult",
     "MarketStage",
     "MultiPeriodRegimeDetector",
     "NewsFetcher",
@@ -75,5 +89,9 @@ __all__ = [
     "attach_perspective_to_signal",
     "build_context_from_kline",
     "build_context_from_signal",
+    "calc_golden_ratio",
+    "calc_m_basic_from_df",
+    "calc_m_factor",
+    "calc_m_sector_from_df",
     "filter_by_perspective",
 ]

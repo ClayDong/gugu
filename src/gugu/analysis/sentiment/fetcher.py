@@ -40,6 +40,7 @@ class NewsFetcher:
         if self._ak is None:
             try:
                 import akshare as ak
+
                 self._ak = ak
             except ImportError:
                 logger.error("akshare 未安装，无法获取新闻")

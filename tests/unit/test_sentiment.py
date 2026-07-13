@@ -144,7 +144,9 @@ class TestSentimentReport:
             news.append({"title": "利好公司竞争力领先", "content": "市场份额增长积极向好"})
         result = report.generate(news)
         sug = result.get("suggestion", {})
-        assert sug.get("action") == "buy" or (sug.get("action") == "hold" and result["overall_sentiment"] == "positive")
+        assert sug.get("action") == "buy" or (
+            sug.get("action") == "hold" and result["overall_sentiment"] == "positive"
+        )
 
     def test_suggestion_sell(self) -> None:
         """负面强信号给出卖出建议。"""
@@ -167,4 +169,7 @@ class TestSentimentReport:
         assert "card" in card
         assert "header" in card["card"]
         assert "elements" in card["card"]
-        assert "600519" in card["card"]["header"]["title"]["content"] or "贵州茅台" in card["card"]["header"]["title"]["content"]
+        assert (
+            "600519" in card["card"]["header"]["title"]["content"]
+            or "贵州茅台" in card["card"]["header"]["title"]["content"]
+        )

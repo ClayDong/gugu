@@ -45,6 +45,7 @@ def _em_secid(code: str) -> str:
     prefix = "1" if code[0] in ("6", "9") else "0"
     return f"{prefix}.{code}"
 
+
 # 默认过滤阈值
 _DEFAULT_THRESHOLDS: dict[str, Any] = {
     "pe_min": 0,
@@ -209,7 +210,9 @@ class IndustryProsperityChecker:
             min(turnover_rate, self._TURNOVER_RANGE), self._TURNOVER_RANGE, self._SCORE_TURNOVER_MAX
         )
         vol_ratio_score = self._linear_map_positive(
-            min(volume_ratio, self._VOL_RATIO_RANGE), self._VOL_RATIO_RANGE, self._SCORE_VOL_RATIO_MAX
+            min(volume_ratio, self._VOL_RATIO_RANGE),
+            self._VOL_RATIO_RANGE,
+            self._SCORE_VOL_RATIO_MAX,
         )
 
         total = round(pct_score + flow_score + turnover_score + vol_ratio_score, 2)

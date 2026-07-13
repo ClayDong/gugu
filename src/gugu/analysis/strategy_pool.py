@@ -64,16 +64,21 @@ class StrategyPool:
         """获取启用的策略名称列表"""
         return [k for k, v in self._weights.items() if v.enabled]
 
-    def weighted_fusion(self, signals: list[dict[str, Any]]) -> dict[str, Any]:
+    def weighted_fusion(
+        self,
+        signals: list[dict[str, Any]],
+        override_weights: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
         """加权融合多个策略信号。
 
         Args:
             signals: 各策略的信号列表，每个包含 direction/confidence/strategy_name
+            override_weights: 临时权重覆盖（不修改内部状态），用于市场状态自适应调整
 
         Returns:
             dict: 融合后的信号（direction/confidence/strategies/weighted_score）
         """
-        weights = self.get_weights()
+        weights = override_weights if override_weights is not None else self.get_weights()
         if not signals or not weights:
             return {"direction": "hold", "confidence": 0.0, "strategies": [], "weighted_score": 0.0}
 

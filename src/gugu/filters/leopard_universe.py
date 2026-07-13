@@ -49,21 +49,15 @@ class LeopardUniverseFilter:
     """
 
     # 文章原文阈值（类常量，作为默认值和文档锚点）
-    DEFAULT_TURNOVER_MIN = 15.0      # 换手率 ≥ 15%
-    DEFAULT_AMOUNT_MIN = 1_000_000_000   # 成交额 ≥ 10亿（1e9 元）
-    DEFAULT_CIRC_MV_MIN = 7_000_000_000   # 流通市值 ≥ 70亿（7e9 元）
+    DEFAULT_TURNOVER_MIN = 15.0  # 换手率 ≥ 15%
+    DEFAULT_AMOUNT_MIN = 1_000_000_000  # 成交额 ≥ 10亿（1e9 元）
+    DEFAULT_CIRC_MV_MIN = 7_000_000_000  # 流通市值 ≥ 70亿（7e9 元）
 
     def __init__(self, params: dict[str, Any] | None = None) -> None:
         self._params = params or {}
-        self.turnover_min = float(
-            self._params.get("turnover_min", self.DEFAULT_TURNOVER_MIN)
-        )
-        self.amount_min = float(
-            self._params.get("amount_min", self.DEFAULT_AMOUNT_MIN)
-        )
-        self.circ_mv_min = float(
-            self._params.get("circ_mv_min", self.DEFAULT_CIRC_MV_MIN)
-        )
+        self.turnover_min = float(self._params.get("turnover_min", self.DEFAULT_TURNOVER_MIN))
+        self.amount_min = float(self._params.get("amount_min", self.DEFAULT_AMOUNT_MIN))
+        self.circ_mv_min = float(self._params.get("circ_mv_min", self.DEFAULT_CIRC_MV_MIN))
 
     def filter(self, market_df: pd.DataFrame) -> pd.DataFrame:
         """过滤出符合三要素的股票池。
@@ -95,36 +89,26 @@ class LeopardUniverseFilter:
             logger.warning("豹哥三要素：快照缺少 amount 列，跳过成交额过滤")
 
         # 要素2：换手率 ≥ 15%
-        has_turnover = (
-            "turnover_pct" in df.columns
-            and not df["turnover_pct"].eq(0).all()
-        )
+        has_turnover = "turnover_pct" in df.columns and not df["turnover_pct"].eq(0).all()
         if has_turnover:
             df = df[df["turnover_pct"] >= self.turnover_min]
         else:
             logger.warning(
-                "豹哥三要素：快照缺少 turnover_pct 列或全为 0，"
-                "降级为仅成交额+流通市值过滤"
+                "豹哥三要素：快照缺少 turnover_pct 列或全为 0，降级为仅成交额+流通市值过滤"
             )
 
         # 要素3：流通市值 ≥ 70亿
-        has_circ_mv = (
-            "circ_mv" in df.columns
-            and not df["circ_mv"].eq(0).all()
-        )
+        has_circ_mv = "circ_mv" in df.columns and not df["circ_mv"].eq(0).all()
         if has_circ_mv:
             df = df[df["circ_mv"] >= self.circ_mv_min]
         else:
-            logger.warning(
-                "豹哥三要素：快照缺少 circ_mv 列或全为 0，"
-                "降级为仅成交额+换手率过滤"
-            )
+            logger.warning("豹哥三要素：快照缺少 circ_mv 列或全为 0，降级为仅成交额+换手率过滤")
 
         after = len(df)
         logger.info(
             f"豹哥三要素选股池过滤: {before} → {after} 只 "
-            f"(换手率≥{self.turnover_min}% + 成交额≥{self.amount_min/1e8:.0f}亿 "
-            f"+ 流通市值≥{self.circ_mv_min/1e8:.0f}亿)"
+            f"(换手率≥{self.turnover_min}% + 成交额≥{self.amount_min / 1e8:.0f}亿 "
+            f"+ 流通市值≥{self.circ_mv_min / 1e8:.0f}亿)"
         )
         return df.reset_index(drop=True)
 

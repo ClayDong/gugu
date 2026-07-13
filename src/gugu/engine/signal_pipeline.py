@@ -32,6 +32,7 @@ import pandas as pd
 
 from gugu import config as gugu_config
 from gugu.analysis.danger_signal import DangerSignalDetector
+from gugu.analysis.golden_ratio import calc_golden_ratio
 from gugu.analysis.no_average_down import NoAverageDownChecker
 from gugu.analysis.perspectives.engine import PerspectiveEngine
 from gugu.analysis.perspectives.integrators import (
@@ -155,9 +156,54 @@ class SignalPipeline:
             if not signal:
                 return None
 
+            signal["has_position"] = symbol in portfolio
+
+            # P0 修复：无持仓卖出硬检查（任何模式下都拦截，防止对空仓发卖出信号）
+            if signal["direction"] == "sell" and not signal["has_position"]:
+                logger.debug(f"{symbol} 无持仓，过滤卖出信号")
+                return None
+
+            # P0 修复：停牌股票硬拦截（任何模式、任何方向都不发信号）
+            is_suspended = bool(meta.get("is_suspended", False))
+            if is_suspended:
+                logger.debug(f"{symbol} 停牌，过滤信号")
+                return None
+
+            # P0 修复：ST股票买入拦截
+            is_st = bool(meta.get("is_st", False))
+            signal["is_st"] = is_st
+            signal["is_suspended"] = is_suspended
+            if is_st and signal["direction"] == "buy":
+                logger.info(f"{symbol} 是ST股票，拦截买入信号")
+                signal["wisdom_filtered"] = True
+                signal["filter_reason"] = "ST股票不建议买入"
+
+            # V5框架集成：Golden-Ratio军规检查（买入信号专用）
+            # 军规线0.5破位 → 禁止新建仓（趋势已破坏）
+            if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
+                try:
+                    market_cap = meta.get("market_cap")
+                    gr = calc_golden_ratio(df, market_cap=market_cap)
+                    if gr and gr.military_rule_broken:
+                        signal["wisdom_filtered"] = True
+                        signal["filter_reason"] = (
+                            f"GR军规破位({gr.current_callback_pct:.1f}%回调)，禁止新建仓"
+                        )
+                        signal["golden_ratio"] = gr.to_dict()
+                        logger.info(
+                            f"{symbol} GR军规破位: {gr.action_zone}, "
+                            f"回调{gr.current_callback_pct:.1f}%，拦截买入"
+                        )
+                    elif gr:
+                        signal["golden_ratio"] = gr.to_dict()
+                        if gr.discount_factor < 1.0:
+                            signal["confidence"] = (
+                                signal.get("confidence", 0.7) * gr.discount_factor
+                            )
+                except Exception:
+                    logger.debug(f"{symbol} GR计算异常，跳过军规检查", exc_info=True)
+
             signal["prev_close"] = float(df.iloc[-2]["close"]) if len(df) >= 2 else None
-            signal["is_st"] = bool(meta.get("is_st", False))
-            signal["is_suspended"] = bool(meta.get("is_suspended", False))
             # 保留 name：API 有效就用 API 的，API 脤数据（等于代码）就留给 formatter 的 fallback 表解析
             # 不再清空为 ""，避免下游 fallback 表查不到时只显示代码
             raw_name = signal.get("name") or meta.get("name", "")
@@ -175,6 +221,7 @@ class SignalPipeline:
 
             signal["price"] = float(df.iloc[-1]["close"])
             signal["price_is_realtime"] = False
+            signal["price_note"] = ""
             if rt_all is not None and not rt_all.empty:
                 try:
                     row = rt_all[rt_all["symbol"] == symbol]
@@ -183,8 +230,17 @@ class SignalPipeline:
                         if rt_price > 0:
                             signal["price"] = rt_price
                             signal["price_is_realtime"] = True
+                            signal["price_note"] = ""
                 except Exception:
                     pass
+            # 非实时价格标注（不丢弃信号）：
+            # - signal_only模式：标注为参考价，正常推送（盘前/盘后分析用）
+            # - paper/live模式：标注为非实时，由wisdom层决定是否仅观察不下单
+            if not signal["price_is_realtime"]:
+                signal["price_note"] = "⚠️ 非实时价格（实时行情获取失败，使用最新收盘价）"
+                logger.info(
+                    f"{symbol} 实时行情获取失败，使用历史收盘价 price={signal['price']:.2f}（非实时）"
+                )
 
             signal["suggested_position_ratio"] = budget.single_limit
             signal["has_position"] = symbol in portfolio
@@ -192,7 +248,6 @@ class SignalPipeline:
             # P0 修复：信号数据合理性校验（防止错误数据发送飞书）
             price = signal.get("price", 0)
             confidence = signal.get("confidence")
-            price_is_realtime = signal.get("price_is_realtime", False)
             if price <= 1.0:
                 logger.warning(
                     f"{symbol} 信号价格异常 price={price}，丢弃该信号。"
@@ -200,14 +255,8 @@ class SignalPipeline:
                     f" rt_available={rt_all is not None and not rt_all.empty}"
                 )
                 return None
-            # 实时行情获取失败时，价格来自历史K线收盘价，不是真实市场价
-            # 严格拒绝发送，避免飞书通知显示过期/错误价格
-            if not price_is_realtime:
-                logger.warning(
-                    f"{symbol} 实时行情获取失败，价格={price}来自历史K线（非实时），丢弃该信号。"
-                    f" name={meta.get('name', '')} df_close={float(df.iloc[-1]['close']) if len(df) > 0 else 'N/A'}"
-                )
-                return None
+            # 非实时价格不再直接丢弃，而是标注后继续
+            # （原逻辑：实时行情失败直接丢弃 → 新逻辑：使用历史价标注非实时）
             if confidence is None or confidence <= 0.0:
                 logger.warning(f"{symbol} 信号置信度无效 confidence={confidence}，丢弃该信号")
                 return None
@@ -225,7 +274,7 @@ class SignalPipeline:
                 "cash_ratio": (
                     account.cash / account.total_value if account.total_value > 0 else 1.0
                 ),
-                "regime": "",
+                "regime": regime or "",
             }
 
             # 阶段判断 + 危险信号（轻量，每次执行）
@@ -320,6 +369,7 @@ class SignalPipeline:
                 # P0 修复：调用 Wisdom 硬编码 fallback 获取止损价/止盈价/仓位建议
                 # 不调用 LLM 异步接口，避免 cost 和阻塞，但保留风控关键字段
                 try:
+                    signal["_exec_mode"] = self._exec_mode
                     fallback = self._wisdom._advise_fallback(signal)
                     _wisdom_keys = (
                         "wisdom_decision",
@@ -359,6 +409,14 @@ class SignalPipeline:
                     f"置信度 {signal['confidence']} 策略 {signal['strategies']} "
                     f"止损={signal.get('stop_loss_price', 0)}"
                 )
+                # P1修复：signal_only模式止损价有效性校验（强制止损铁律）
+                sl = signal.get("stop_loss_price", 0)
+                price = signal.get("price", 0)
+                if price > 0 and (sl <= 0 or sl >= price):
+                    signal["stop_loss_price"] = round(price * 0.93, 2)  # 默认7%止损
+                    logger.warning(
+                        f"signal_only {signal['symbol']} 止损价无效(={sl})，已设为默认7%: {signal['stop_loss_price']}"
+                    )
                 return signal
 
             # ===== 以下为 paper/live 模式完整过滤链 =====
@@ -561,19 +619,31 @@ class SignalPipeline:
                 "conflict_resolution",
                 "mentor_perspectives",
             )
+            already_filtered = bool(signal.get("wisdom_filtered", False))
+            signal["_exec_mode"] = self._exec_mode
             try:
-                wisdom_signal = await asyncio.wait_for(
-                    self._wisdom.advise_async(signal), timeout=15.0
-                )
-                for _k in _wisdom_keys:
-                    if _k in wisdom_signal:
-                        signal[_k] = wisdom_signal[_k]
+                if not already_filtered:
+                    wisdom_signal = await asyncio.wait_for(
+                        self._wisdom.advise_async(signal), timeout=15.0
+                    )
+                    for _k in _wisdom_keys:
+                        if _k in wisdom_signal:
+                            if _k == "wisdom_filtered" and already_filtered:
+                                continue
+                            signal[_k] = wisdom_signal[_k]
+                else:
+                    fallback = self._wisdom._advise_fallback(signal)
+                    for _k in ("stop_loss_price", "take_profit", "suggested_position_ratio"):
+                        if _k in fallback:
+                            signal[_k] = fallback[_k]
                 signal["llm_pending"] = False
             except TimeoutError:
                 logger.warning(f"[wisdom] {symbol} LLM 决策超时(15s)，降级到硬编码 fallback")
                 fallback = self._wisdom._advise_fallback(signal)
                 for _k in _wisdom_keys:
                     if _k in fallback:
+                        if _k == "wisdom_filtered" and already_filtered:
+                            continue
                         signal[_k] = fallback[_k]
                 signal["llm_pending"] = False
             except Exception as e:
@@ -581,6 +651,8 @@ class SignalPipeline:
                 fallback = self._wisdom._advise_fallback(signal)
                 for _k in _wisdom_keys:
                     if _k in fallback:
+                        if _k == "wisdom_filtered" and already_filtered:
+                            continue
                         signal[_k] = fallback[_k]
                 signal["llm_pending"] = False
 
@@ -772,7 +844,7 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                     }
                 )
 
-            chip_info = signal.get("chip_check", {})
+            chip_info = signal.get("holder_concentration", {})
             if chip_info:
                 decision_chain.append(
                     {
@@ -780,7 +852,7 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                         "name": "筹码结构过滤",
                         "result": chip_info.get("label", "unknown"),
                         "chip_score": chip_info.get("chip_score", 0.5),
-                        "passed": chip_info.get("label") != "避雷针",
+                        "passed": chip_info.get("pass", True),
                     }
                 )
 

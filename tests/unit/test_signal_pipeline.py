@@ -3,6 +3,7 @@
 测试过滤链各阶段的行为：基本面过滤、资金流过滤、行业约束、Wisdom 决策。
 全部 mock 外部依赖，只测试 SignalPipeline 的编排逻辑。
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
@@ -16,16 +17,18 @@ from gugu.engine.signal_pipeline import SignalPipeline, record_signal_history
 
 @pytest.fixture
 def sample_df() -> pd.DataFrame:
-    return pd.DataFrame({
-        "date": pd.bdate_range("2024-01-01", periods=10),
-        "open": [100.0] * 10,
-        "high": [101.0] * 10,
-        "low": [99.0] * 10,
-        "close": [100.0] * 10,
-        "volume": [1000000] * 10,
-        "signal": [1] + [0] * 9,
-        "confidence": [0.8] + [0.0] * 9,
-    })
+    return pd.DataFrame(
+        {
+            "date": pd.bdate_range("2024-01-01", periods=10),
+            "open": [100.0] * 10,
+            "high": [101.0] * 10,
+            "low": [99.0] * 10,
+            "close": [100.0] * 10,
+            "volume": [1000000] * 10,
+            "signal": [1] + [0] * 9,
+            "confidence": [0.8] + [0.0] * 9,
+        }
+    )
 
 
 @pytest.fixture
@@ -55,14 +58,16 @@ def mock_account() -> MagicMock:
 @pytest.fixture
 def rt_all() -> pd.DataFrame:
     """Mock realtime data with price for 600519."""
-    return pd.DataFrame({
-        "symbol": ["600519"],
-        "name": ["贵州茅台"],
-        "price": [100.0],
-        "change_pct": [0.0],
-        "volume": [1000000],
-        "amount": [100000000],
-    })
+    return pd.DataFrame(
+        {
+            "symbol": ["600519"],
+            "name": ["贵州茅台"],
+            "price": [100.0],
+            "change_pct": [0.0],
+            "volume": [1000000],
+            "amount": [100000000],
+        }
+    )
 
 
 @pytest.fixture
@@ -93,7 +98,12 @@ def pipeline() -> SignalPipeline:
     pl._dm.is_degraded = False
     # Mock sector rotation: detect is async
     pl._sector_rotation = MagicMock()
-    pl._sector_rotation.SW_INDUSTRY_MAP = {"白酒": "消费", "半导体": "科技", "银行": "金融", "房地产": "周期"}
+    pl._sector_rotation.SW_INDUSTRY_MAP = {
+        "白酒": "消费",
+        "半导体": "科技",
+        "银行": "金融",
+        "房地产": "周期",
+    }
     pl._hot_sectors_cache = None
     return pl
 
@@ -103,37 +113,65 @@ class TestSignalPipeline:
 
     @pytest.mark.asyncio
     async def test_basic_signal_passes_through(
-        self, pipeline: SignalPipeline, sample_df: pd.DataFrame,
-        budget: PositionBudget, mock_portfolio: dict, mock_account: MagicMock,
+        self,
+        pipeline: SignalPipeline,
+        sample_df: pd.DataFrame,
+        budget: PositionBudget,
+        mock_portfolio: dict,
+        mock_account: MagicMock,
         rt_all: pd.DataFrame,
     ) -> None:
         """正常买入信号应通过所有过滤层。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519",
-            "direction": "buy",
-            "strategy": "turtle",
-            "strategies": ["turtle"],
-            "reason": "突破",
-            "confidence": 0.8,
-        })
-        pipeline._fundamental_filter.check = MagicMock(return_value={
-            "pass": True, "reasons": [], "industry": "白酒",
-        })
-        pipeline._money_flow_filter.check = AsyncMock(return_value={
-            "pass": True, "reasons": [], "score": 0.5,
-        })
-        pipeline._industry_constraint.check_buy = MagicMock(return_value={
-            "allowed": True, "reason": "",
-        })
-        pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s, **{
-            "wisdom": {}, "wisdom_decision": {"source": "mock"},
-        }))
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
+        pipeline._fundamental_filter.check = MagicMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "industry": "白酒",
+            }
+        )
+        pipeline._money_flow_filter.check = AsyncMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "score": 0.5,
+            }
+        )
+        pipeline._industry_constraint.check_buy = MagicMock(
+            return_value={
+                "allowed": True,
+                "reason": "",
+            }
+        )
+        pipeline._wisdom.advise_async = AsyncMock(
+            side_effect=lambda s: dict(
+                s,
+                **{
+                    "wisdom": {},
+                    "wisdom_decision": {"source": "mock"},
+                },
+            )
+        )
 
         meta = {"name": "贵州茅台", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=["600519"],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=["600519"],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         assert signal is not None
@@ -142,26 +180,44 @@ class TestSignalPipeline:
 
     @pytest.mark.asyncio
     async def test_fundamental_filter_blocks_buy(
-        self, pipeline: SignalPipeline, sample_df: pd.DataFrame,
-        budget: PositionBudget, mock_portfolio: dict, mock_account: MagicMock,
+        self,
+        pipeline: SignalPipeline,
+        sample_df: pd.DataFrame,
+        budget: PositionBudget,
+        mock_portfolio: dict,
+        mock_account: MagicMock,
         rt_all: pd.DataFrame,
     ) -> None:
         """基本面过滤失败应阻止买入信号。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.8,
-        })
-        pipeline._fundamental_filter.check = MagicMock(return_value={
-            "pass": False, "reasons": ["PE 过高"], "industry": "",
-        })
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
+        pipeline._fundamental_filter.check = MagicMock(
+            return_value={
+                "pass": False,
+                "reasons": ["PE 过高"],
+                "industry": "",
+            }
+        )
         pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         assert signal is not None
@@ -170,29 +226,51 @@ class TestSignalPipeline:
 
     @pytest.mark.asyncio
     async def test_money_flow_blocks_after_fundamental_pass(
-        self, pipeline: SignalPipeline, sample_df: pd.DataFrame,
-        budget: PositionBudget, mock_portfolio: dict, mock_account: MagicMock,
+        self,
+        pipeline: SignalPipeline,
+        sample_df: pd.DataFrame,
+        budget: PositionBudget,
+        mock_portfolio: dict,
+        mock_account: MagicMock,
         rt_all: pd.DataFrame,
     ) -> None:
         """资金流过滤失败应阻止买入信号。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.8,
-        })
-        pipeline._fundamental_filter.check = MagicMock(return_value={
-            "pass": True, "reasons": [], "industry": "白酒",
-        })
-        pipeline._money_flow_filter.check = AsyncMock(return_value={
-            "pass": False, "reasons": ["主力净流出"], "score": 0.0,
-        })
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
+        pipeline._fundamental_filter.check = MagicMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "industry": "白酒",
+            }
+        )
+        pipeline._money_flow_filter.check = AsyncMock(
+            return_value={
+                "pass": False,
+                "reasons": ["主力净流出"],
+                "score": 0.0,
+            }
+        )
         pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         assert signal is not None
@@ -201,31 +279,54 @@ class TestSignalPipeline:
 
     @pytest.mark.asyncio
     async def test_industry_constraint_blocks_buy(
-        self, pipeline: SignalPipeline, sample_df: pd.DataFrame,
-        budget: PositionBudget, mock_account: MagicMock,
+        self,
+        pipeline: SignalPipeline,
+        sample_df: pd.DataFrame,
+        budget: PositionBudget,
+        mock_account: MagicMock,
         rt_all: pd.DataFrame,
     ) -> None:
         """行业约束应在新建仓位时阻止。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.8,
-        })
-        pipeline._fundamental_filter.check = MagicMock(return_value={
-            "pass": True, "reasons": [], "industry": "白酒",
-        })
-        pipeline._money_flow_filter.check = AsyncMock(return_value={
-            "pass": True, "reasons": [], "score": 0.5,
-        })
-        pipeline._industry_constraint.check_buy = MagicMock(return_value={
-            "allowed": False, "reason": "同行业持仓已达上限",
-        })
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
+        pipeline._fundamental_filter.check = MagicMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "industry": "白酒",
+            }
+        )
+        pipeline._money_flow_filter.check = AsyncMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "score": 0.5,
+            }
+        )
+        pipeline._industry_constraint.check_buy = MagicMock(
+            return_value={
+                "allowed": False,
+                "reason": "同行业持仓已达上限",
+            }
+        )
         pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
             portfolio={},  # 空持仓
             account=mock_account,
         )
@@ -235,55 +336,132 @@ class TestSignalPipeline:
 
     @pytest.mark.asyncio
     async def test_sell_signals_skip_filters(
-        self, pipeline: SignalPipeline, sample_df: pd.DataFrame,
-        budget: PositionBudget, mock_portfolio: dict, mock_account: MagicMock,
+        self,
+        pipeline: SignalPipeline,
+        sample_df: pd.DataFrame,
+        budget: PositionBudget,
+        mock_account: MagicMock,
         rt_all: pd.DataFrame,
     ) -> None:
         """卖出信号应跳过基本面/资金流/行业过滤。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "sell",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "止损", "confidence": 0.9,
-        })
-        pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s, **{
-            "wisdom": {}, "wisdom_decision": {"source": "mock"},
-        }))
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "sell",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "止损",
+                "confidence": 0.9,
+            }
+        )
+        pipeline._wisdom.advise_async = AsyncMock(
+            side_effect=lambda s: dict(
+                s,
+                **{
+                    "wisdom": {},
+                    "wisdom_decision": {"source": "mock"},
+                },
+            )
+        )
 
+        from gugu.models.position import Position
+
+        pos = Position(
+            symbol="600519", quantity=100, available=100, avg_cost=1800.0, current_price=1900.0
+        )
+        portfolio_with_pos = {"600519": pos}
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=portfolio_with_pos,
+            account=mock_account,
         )
 
         assert signal is not None
-        # 基本面过滤不应被调用
         pipeline._fundamental_filter.check.assert_not_called()
-        # wisdom 应被调用
         pipeline._wisdom.advise_async.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_sell_without_position_is_blocked(
+        self,
+        pipeline: SignalPipeline,
+        sample_df: pd.DataFrame,
+        budget: PositionBudget,
+        mock_portfolio: dict,
+        mock_account: MagicMock,
+        rt_all: pd.DataFrame,
+    ) -> None:
+        """P0修复验证：无持仓时卖出信号必须被拦截。"""
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "sell",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "止损",
+                "confidence": 0.9,
+            }
+        )
+        meta = {"name": "测试", "is_st": False, "is_suspended": False}
+        signal = await pipeline.process(
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=mock_portfolio,
+            account=mock_account,
+        )
+        assert signal is None
+
+    @pytest.mark.asyncio
     async def test_skip_if_already_filtered(
-        self, pipeline: SignalPipeline, sample_df: pd.DataFrame,
-        budget: PositionBudget, mock_portfolio: dict, mock_account: MagicMock,
+        self,
+        pipeline: SignalPipeline,
+        sample_df: pd.DataFrame,
+        budget: PositionBudget,
+        mock_portfolio: dict,
+        mock_account: MagicMock,
         rt_all: pd.DataFrame,
     ) -> None:
         """已过滤的信号应跳过后续过滤层。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.8,
-        })
-        pipeline._fundamental_filter.check = MagicMock(return_value={
-            "pass": False, "reasons": ["PE 过高"], "industry": "",
-        })
-        pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s, wisdom_filtered=True))
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
+        pipeline._fundamental_filter.check = MagicMock(
+            return_value={
+                "pass": False,
+                "reasons": ["PE 过高"],
+                "industry": "",
+            }
+        )
+        pipeline._wisdom.advise_async = AsyncMock(
+            side_effect=lambda s: dict(s, wisdom_filtered=True)
+        )
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         assert signal is not None
@@ -293,69 +471,114 @@ class TestSignalPipeline:
 
     @pytest.mark.asyncio
     async def test_router_returns_none(
-        self, pipeline: SignalPipeline, sample_df: pd.DataFrame,
-        budget: PositionBudget, mock_portfolio: dict, mock_account: MagicMock,
+        self,
+        pipeline: SignalPipeline,
+        sample_df: pd.DataFrame,
+        budget: PositionBudget,
+        mock_portfolio: dict,
+        mock_account: MagicMock,
     ) -> None:
         """路由无信号返回 None。"""
         pipeline._router.route = MagicMock(return_value=None)
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=None, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=None,
+            watchlist=[],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         assert signal is None
 
     @pytest.mark.asyncio
     async def test_exception_isolation(
-        self, pipeline: SignalPipeline, sample_df: pd.DataFrame,
-        budget: PositionBudget, mock_portfolio: dict, mock_account: MagicMock,
+        self,
+        pipeline: SignalPipeline,
+        sample_df: pd.DataFrame,
+        budget: PositionBudget,
+        mock_portfolio: dict,
+        mock_account: MagicMock,
     ) -> None:
         """单个股票异常不影响整个流水线。"""
         pipeline._router.route = MagicMock(side_effect=Exception("路由异常"))
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=None, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=None,
+            watchlist=[],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         assert signal is None  # 异常被捕获，返回 None
 
     @pytest.mark.asyncio
     async def test_realtime_price_override(
-        self, pipeline: SignalPipeline, sample_df: pd.DataFrame,
-        budget: PositionBudget, mock_portfolio: dict, mock_account: MagicMock,
+        self,
+        pipeline: SignalPipeline,
+        sample_df: pd.DataFrame,
+        budget: PositionBudget,
+        mock_portfolio: dict,
+        mock_account: MagicMock,
     ) -> None:
         """实时行情应覆盖历史收盘价。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.8,
-        })
-        pipeline._fundamental_filter.check = MagicMock(return_value={
-            "pass": True, "reasons": [], "industry": "",
-        })
-        pipeline._money_flow_filter.check = AsyncMock(return_value={
-            "pass": True, "reasons": [], "score": 0.5,
-        })
-        pipeline._industry_constraint.check_buy = MagicMock(return_value={
-            "allowed": True, "reason": "",
-        })
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
+        pipeline._fundamental_filter.check = MagicMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "industry": "",
+            }
+        )
+        pipeline._money_flow_filter.check = AsyncMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "score": 0.5,
+            }
+        )
+        pipeline._industry_constraint.check_buy = MagicMock(
+            return_value={
+                "allowed": True,
+                "reason": "",
+            }
+        )
         pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
-        rt_all = pd.DataFrame({
-            "symbol": ["600519"],
-            "price": [1500.0],
-        })
+        rt_all = pd.DataFrame(
+            {
+                "symbol": ["600519"],
+                "price": [1500.0],
+            }
+        )
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         assert signal is not None
@@ -370,14 +593,16 @@ class TestMultiPeriodTrend:
         # 构造 60 天稳定上升行情
         dates = pd.bdate_range("2024-01-01", periods=60)
         close = [100.0 + i * 0.5 for i in range(60)]
-        df = pd.DataFrame({
-            "date": dates,
-            "open": close,
-            "high": [c * 1.01 for c in close],
-            "low": [c * 0.99 for c in close],
-            "close": close,
-            "volume": [1_000_000] * 60,
-        })
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": close,
+                "high": [c * 1.01 for c in close],
+                "low": [c * 0.99 for c in close],
+                "close": close,
+                "volume": [1_000_000] * 60,
+            }
+        )
         result = SignalPipeline._check_weekly_trend(df)
         assert result["weekly_trend"] == "up"
         assert result["weekly_aligned"] is True
@@ -386,24 +611,28 @@ class TestMultiPeriodTrend:
         """下降趋势应返回 aligned=False。"""
         dates = pd.bdate_range("2024-01-01", periods=60)
         close = [100.0 - i * 0.5 for i in range(60)]
-        df = pd.DataFrame({
-            "date": dates,
-            "open": close,
-            "high": [c * 1.01 for c in close],
-            "low": [c * 0.99 for c in close],
-            "close": close,
-            "volume": [1_000_000] * 60,
-        })
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": close,
+                "high": [c * 1.01 for c in close],
+                "low": [c * 0.99 for c in close],
+                "close": close,
+                "volume": [1_000_000] * 60,
+            }
+        )
         result = SignalPipeline._check_weekly_trend(df)
         assert result["weekly_trend"] == "down"
         assert result["weekly_aligned"] is False
 
     def test_weekly_trend_short_df(self):
         """数据不足时返回 unknown 且 aligned=True。"""
-        df = pd.DataFrame({
-            "date": pd.bdate_range("2024-01-01", periods=5),
-            "close": [100.0] * 5,
-        })
+        df = pd.DataFrame(
+            {
+                "date": pd.bdate_range("2024-01-01", periods=5),
+                "close": [100.0] * 5,
+            }
+        )
         result = SignalPipeline._check_weekly_trend(df)
         assert result["weekly_trend"] == "unknown"
         assert result["weekly_aligned"] is True
@@ -417,58 +646,89 @@ class TestMultiPeriodTrend:
 class TestSectorRotationCheck:
     """板块轮动感知测试。"""
 
-    async def _run_with_sector(self, pipeline, sample_df, budget, mock_account,
-                                symbol, industry, hot_sectors, categories):
+    async def _run_with_sector(
+        self, pipeline, sample_df, budget, mock_account, symbol, industry, hot_sectors, categories
+    ):
         """辅助方法：运行完整的 signal process 测试。"""
         from unittest.mock import AsyncMock, MagicMock
 
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": symbol, "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.8,
-        })
-        pipeline._fundamental_filter.check = MagicMock(return_value={
-            "pass": True, "reasons": [], "industry": industry,
-        })
-        pipeline._money_flow_filter.check = AsyncMock(return_value={
-            "pass": True, "reasons": [], "score": 0.5,
-        })
-        pipeline._industry_constraint.check_buy = MagicMock(return_value={
-            "allowed": True, "reason": "",
-        })
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": symbol,
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
+        pipeline._fundamental_filter.check = MagicMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "industry": industry,
+            }
+        )
+        pipeline._money_flow_filter.check = AsyncMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "score": 0.5,
+            }
+        )
+        pipeline._industry_constraint.check_buy = MagicMock(
+            return_value={
+                "allowed": True,
+                "reason": "",
+            }
+        )
         pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
         # Mock sector rotation detect as async
-        pipeline._sector_rotation.detect = AsyncMock(return_value={
-            "hot_sectors": hot_sectors,
-            "categories": categories,
-            "reason": f"热点: {', '.join(hot_sectors[:3])}",
-        })
+        pipeline._sector_rotation.detect = AsyncMock(
+            return_value={
+                "hot_sectors": hot_sectors,
+                "categories": categories,
+                "reason": f"热点: {', '.join(hot_sectors[:3])}",
+            }
+        )
         pipeline._industry_constraint.get_industry.return_value = industry
         pipeline._hot_sectors_cache = None
 
         meta = {"name": "Test", "is_st": False, "is_suspended": False}
-        rt_all = pd.DataFrame({
-            "symbol": [symbol],
-            "name": ["Test"],
-            "price": [100.0],
-            "change_pct": [0.0],
-            "volume": [1000000],
-            "amount": [100000000],
-        })
+        rt_all = pd.DataFrame(
+            {
+                "symbol": [symbol],
+                "name": ["Test"],
+                "price": [100.0],
+                "change_pct": [0.0],
+                "volume": [1000000],
+                "amount": [100000000],
+            }
+        )
         return await pipeline.process(
-            symbol=symbol, df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio={}, account=mock_account,
+            symbol=symbol,
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio={},
+            account=mock_account,
         )
 
     @pytest.mark.asyncio
     async def test_sector_hot(self, pipeline, sample_df, budget, mock_account):
         """热点板块的股票 should be marked is_hot=True。"""
         signal = await self._run_with_sector(
-            pipeline, sample_df, budget, mock_account,
-            symbol="600519", industry="白酒",
-            hot_sectors=["白酒", "半导体"], categories=["消费", "科技"],
+            pipeline,
+            sample_df,
+            budget,
+            mock_account,
+            symbol="600519",
+            industry="白酒",
+            hot_sectors=["白酒", "半导体"],
+            categories=["消费", "科技"],
         )
         assert signal is not None
         sector = signal.get("sector_check", {})
@@ -479,9 +739,14 @@ class TestSectorRotationCheck:
     async def test_sector_cold(self, pipeline, sample_df, budget, mock_account):
         """冷门板块的股票 should be marked is_cold=True。"""
         signal = await self._run_with_sector(
-            pipeline, sample_df, budget, mock_account,
-            symbol="601398", industry="银行",
-            hot_sectors=["白酒", "半导体"], categories=["消费", "科技"],
+            pipeline,
+            sample_df,
+            budget,
+            mock_account,
+            symbol="601398",
+            industry="银行",
+            hot_sectors=["白酒", "半导体"],
+            categories=["消费", "科技"],
         )
         assert signal is not None
         sector = signal.get("sector_check", {})
@@ -560,7 +825,12 @@ class TestSignalOnlyMode:
 
     @pytest.mark.asyncio
     async def test_signal_only_skips_wisdom_llm(
-        self, sample_df, budget, mock_portfolio, mock_account, rt_all,
+        self,
+        sample_df,
+        budget,
+        mock_portfolio,
+        mock_account,
+        rt_all,
     ) -> None:
         """signal_only 模式应跳过 Wisdom LLM 调用。"""
         dm = MagicMock()
@@ -571,9 +841,12 @@ class TestSignalOnlyMode:
         pos_ctrl = MagicMock()
 
         pl = SignalPipeline(
-            data_manager=dm, signal_router=router,
-            wisdom_advisor=wisdom, regime_detector=regime,
-            position_controller=pos_ctrl, exec_mode="signal_only",
+            data_manager=dm,
+            signal_router=router,
+            wisdom_advisor=wisdom,
+            regime_detector=regime,
+            position_controller=pos_ctrl,
+            exec_mode="signal_only",
         )
         pl._fundamental_filter = MagicMock()
         pl._money_flow_filter = MagicMock()
@@ -584,24 +857,41 @@ class TestSignalOnlyMode:
         pl._sector_rotation = MagicMock()
         pl._wisdom = MagicMock()
 
-        pl._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.8,
-        })
-        pl._fundamental_filter.check = MagicMock(return_value={
-            "pass": True, "reasons": [], "industry": "白酒",
-        })
+        pl._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
+        pl._fundamental_filter.check = MagicMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "industry": "白酒",
+            }
+        )
         # signal_only 模式下 Wisdom.advise_async 不应被调用
-        pl._wisdom._advise_fallback = MagicMock(return_value={
-            "stop_loss_price": 95.0, "suggested_position_ratio": 0.2,
-        })
+        pl._wisdom._advise_fallback = MagicMock(
+            return_value={
+                "stop_loss_price": 95.0,
+                "suggested_position_ratio": 0.2,
+            }
+        )
 
         meta = {"name": "贵州茅台", "is_st": False, "is_suspended": False}
         signal = await pl.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=["600519"],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=["600519"],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         assert signal is not None
@@ -615,7 +905,12 @@ class TestSignalOnlyMode:
 
     @pytest.mark.asyncio
     async def test_signal_only_does_not_hard_filter(
-        self, sample_df, budget, mock_portfolio, mock_account, rt_all,
+        self,
+        sample_df,
+        budget,
+        mock_portfolio,
+        mock_account,
+        rt_all,
     ) -> None:
         """signal_only 模式下基本面过滤失败不应阻止信号（仅标记）。"""
         dm = MagicMock()
@@ -626,9 +921,12 @@ class TestSignalOnlyMode:
         pos_ctrl = MagicMock()
 
         pl = SignalPipeline(
-            data_manager=dm, signal_router=router,
-            wisdom_advisor=wisdom, regime_detector=regime,
-            position_controller=pos_ctrl, exec_mode="signal_only",
+            data_manager=dm,
+            signal_router=router,
+            wisdom_advisor=wisdom,
+            regime_detector=regime,
+            position_controller=pos_ctrl,
+            exec_mode="signal_only",
         )
         pl._fundamental_filter = MagicMock()
         pl._money_flow_filter = MagicMock()
@@ -639,20 +937,32 @@ class TestSignalOnlyMode:
         pl._sector_rotation = MagicMock()
         pl._wisdom = MagicMock()
 
-        pl._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.8,
-        })
-        pl._wisdom._advise_fallback = MagicMock(return_value={
-            "stop_loss_price": 95.0,
-        })
+        pl._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
+        pl._wisdom._advise_fallback = MagicMock(
+            return_value={
+                "stop_loss_price": 95.0,
+            }
+        )
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pl.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         # signal_only 模式下信号应通过（不硬过滤）
@@ -665,37 +975,68 @@ class TestDangerSignalFilter:
 
     @pytest.mark.asyncio
     async def test_danger_signal_blocks_buy(
-        self, pipeline, sample_df, budget, mock_portfolio, mock_account, rt_all,
+        self,
+        pipeline,
+        sample_df,
+        budget,
+        mock_portfolio,
+        mock_account,
+        rt_all,
     ) -> None:
         """危险信号应阻止买入。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.8,
-        })
-        pipeline._fundamental_filter.check = MagicMock(return_value={
-            "pass": True, "reasons": [], "industry": "白酒",
-        })
-        pipeline._money_flow_filter.check = AsyncMock(return_value={
-            "pass": True, "reasons": [], "score": 0.5,
-        })
-        pipeline._industry_constraint.check_buy = MagicMock(return_value={
-            "allowed": True, "reason": "",
-        })
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
+        pipeline._fundamental_filter.check = MagicMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "industry": "白酒",
+            }
+        )
+        pipeline._money_flow_filter.check = AsyncMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "score": 0.5,
+            }
+        )
+        pipeline._industry_constraint.check_buy = MagicMock(
+            return_value={
+                "allowed": True,
+                "reason": "",
+            }
+        )
         pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
         # Mock danger detector 返回危险信号
-        pipeline._danger_detector.detect = MagicMock(return_value=MagicMock(
-            has_signal=True, severity="high",
-            signals=["放量下跌"], description="放量下跌危险信号",
-            action="卖出",
-        ))
+        pipeline._danger_detector.detect = MagicMock(
+            return_value=MagicMock(
+                has_signal=True,
+                severity="high",
+                signals=["放量下跌"],
+                description="放量下跌危险信号",
+                action="卖出",
+            )
+        )
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         assert signal is not None
@@ -704,32 +1045,56 @@ class TestDangerSignalFilter:
 
     @pytest.mark.asyncio
     async def test_danger_signal_does_not_block_sell(
-        self, pipeline, sample_df, budget, mock_portfolio, mock_account, rt_all,
+        self,
+        pipeline,
+        sample_df,
+        budget,
+        mock_account,
+        rt_all,
     ) -> None:
         """危险信号不应阻止卖出（卖出信号增强）。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "sell",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "止损", "confidence": 0.8,
-        })
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "sell",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "止损",
+                "confidence": 0.8,
+            }
+        )
         pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
-        # Mock danger detector 返回危险信号
-        pipeline._danger_detector.detect = MagicMock(return_value=MagicMock(
-            has_signal=True, severity="high",
-            signals=["放量下跌"], description="放量下跌危险信号",
-            action="卖出",
-        ))
+        from gugu.models.position import Position
+
+        pos = Position(
+            symbol="600519", quantity=100, available=100, avg_cost=1800.0, current_price=1900.0
+        )
+        portfolio_with_pos = {"600519": pos}
+
+        pipeline._danger_detector.detect = MagicMock(
+            return_value=MagicMock(
+                has_signal=True,
+                severity="high",
+                signals=["放量下跌"],
+                description="放量下跌危险信号",
+                action="卖出",
+            )
+        )
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=portfolio_with_pos,
+            account=mock_account,
         )
 
         assert signal is not None
-        # 卖出信号不应被危险信号过滤
         assert signal.get("wisdom_filtered") is not True
 
 
@@ -738,35 +1103,65 @@ class TestDivergenceFilter:
 
     @pytest.mark.asyncio
     async def test_divergence_blocks_buy(
-        self, pipeline, sample_df, budget, mock_portfolio, mock_account, rt_all,
+        self,
+        pipeline,
+        sample_df,
+        budget,
+        mock_portfolio,
+        mock_account,
+        rt_all,
     ) -> None:
         """量价背离应阻止买入。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.8,
-        })
-        pipeline._fundamental_filter.check = MagicMock(return_value={
-            "pass": True, "reasons": [], "industry": "白酒",
-        })
-        pipeline._money_flow_filter.check = AsyncMock(return_value={
-            "pass": True, "reasons": [], "score": 0.5,
-        })
-        pipeline._industry_constraint.check_buy = MagicMock(return_value={
-            "allowed": True, "reason": "",
-        })
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
+        pipeline._fundamental_filter.check = MagicMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "industry": "白酒",
+            }
+        )
+        pipeline._money_flow_filter.check = AsyncMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "score": 0.5,
+            }
+        )
+        pipeline._industry_constraint.check_buy = MagicMock(
+            return_value={
+                "allowed": True,
+                "reason": "",
+            }
+        )
         pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
         # Mock divergence detector 返回背离信号
-        pipeline._divergence_detector.detect = MagicMock(return_value={
-            "signals": ["顶背离"], "severity": "high",
-        })
+        pipeline._divergence_detector.detect = MagicMock(
+            return_value={
+                "signals": ["顶背离"],
+                "severity": "high",
+            }
+        )
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         assert signal is not None
@@ -775,30 +1170,53 @@ class TestDivergenceFilter:
 
     @pytest.mark.asyncio
     async def test_divergence_boosts_sell(
-        self, pipeline, sample_df, budget, mock_portfolio, mock_account, rt_all,
+        self,
+        pipeline,
+        sample_df,
+        budget,
+        mock_account,
+        rt_all,
     ) -> None:
         """量价背离应增强卖出信号置信度。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "sell",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "止损", "confidence": 0.6,
-        })
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "sell",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "止损",
+                "confidence": 0.6,
+            }
+        )
         pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
-        # Mock divergence detector 返回背离信号
-        pipeline._divergence_detector.detect = MagicMock(return_value={
-            "signals": ["顶背离"], "severity": "high",
-        })
+        from gugu.models.position import Position
+
+        pos = Position(
+            symbol="600519", quantity=100, available=100, avg_cost=1800.0, current_price=1900.0
+        )
+        portfolio_with_pos = {"600519": pos}
+
+        pipeline._divergence_detector.detect = MagicMock(
+            return_value={
+                "signals": ["顶背离"],
+                "severity": "high",
+            }
+        )
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=portfolio_with_pos,
+            account=mock_account,
         )
 
         assert signal is not None
-        # 卖出信号置信度应被增强
         assert signal.get("confidence", 0) > 0.6
 
 
@@ -807,38 +1225,70 @@ class TestStageEntryFilter:
 
     @pytest.mark.asyncio
     async def test_frenzy_stage_blocks_buy(
-        self, pipeline, sample_df, budget, mock_portfolio, mock_account, rt_all,
+        self,
+        pipeline,
+        sample_df,
+        budget,
+        mock_portfolio,
+        mock_account,
+        rt_all,
     ) -> None:
         """疯狂阶段应阻止买入。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.8,
-        })
-        pipeline._fundamental_filter.check = MagicMock(return_value={
-            "pass": True, "reasons": [], "industry": "白酒",
-        })
-        pipeline._money_flow_filter.check = AsyncMock(return_value={
-            "pass": True, "reasons": [], "score": 0.5,
-        })
-        pipeline._industry_constraint.check_buy = MagicMock(return_value={
-            "allowed": True, "reason": "",
-        })
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
+        pipeline._fundamental_filter.check = MagicMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "industry": "白酒",
+            }
+        )
+        pipeline._money_flow_filter.check = AsyncMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "score": 0.5,
+            }
+        )
+        pipeline._industry_constraint.check_buy = MagicMock(
+            return_value={
+                "allowed": True,
+                "reason": "",
+            }
+        )
         pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
         # Mock stage detector 返回疯狂阶段
         from gugu.analysis.stage_detector import MarketStage, StageResult
-        pipeline._stage_detector.detect = MagicMock(return_value=StageResult(
-            stage=MarketStage.FRENZY, confidence=0.8,
-            description="疯狂上涨阶段", suggestion="谨慎持有",
-            metrics={},
-        ))
+
+        pipeline._stage_detector.detect = MagicMock(
+            return_value=StageResult(
+                stage=MarketStage.FRENZY,
+                confidence=0.8,
+                description="疯狂上涨阶段",
+                suggestion="谨慎持有",
+                metrics={},
+            )
+        )
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         assert signal is not None
@@ -847,37 +1297,69 @@ class TestStageEntryFilter:
 
     @pytest.mark.asyncio
     async def test_downtrend_stage_blocks_buy(
-        self, pipeline, sample_df, budget, mock_portfolio, mock_account, rt_all,
+        self,
+        pipeline,
+        sample_df,
+        budget,
+        mock_portfolio,
+        mock_account,
+        rt_all,
     ) -> None:
         """下降趋势阶段应阻止买入（不接飞刀）。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.8,
-        })
-        pipeline._fundamental_filter.check = MagicMock(return_value={
-            "pass": True, "reasons": [], "industry": "白酒",
-        })
-        pipeline._money_flow_filter.check = AsyncMock(return_value={
-            "pass": True, "reasons": [], "score": 0.5,
-        })
-        pipeline._industry_constraint.check_buy = MagicMock(return_value={
-            "allowed": True, "reason": "",
-        })
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
+        pipeline._fundamental_filter.check = MagicMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "industry": "白酒",
+            }
+        )
+        pipeline._money_flow_filter.check = AsyncMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "score": 0.5,
+            }
+        )
+        pipeline._industry_constraint.check_buy = MagicMock(
+            return_value={
+                "allowed": True,
+                "reason": "",
+            }
+        )
         pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
         from gugu.analysis.stage_detector import MarketStage, StageResult
-        pipeline._stage_detector.detect = MagicMock(return_value=StageResult(
-            stage=MarketStage.DOWNTREND, confidence=0.8,
-            description="下降趋势阶段", suggestion="空仓观望",
-            metrics={},
-        ))
+
+        pipeline._stage_detector.detect = MagicMock(
+            return_value=StageResult(
+                stage=MarketStage.DOWNTREND,
+                confidence=0.8,
+                description="下降趋势阶段",
+                suggestion="空仓观望",
+                metrics={},
+            )
+        )
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         assert signal is not None
@@ -890,30 +1372,54 @@ class TestNoAverageDown:
 
     @pytest.mark.asyncio
     async def test_avg_down_blocks_buy(
-        self, pipeline, sample_df, budget, mock_account, rt_all,
+        self,
+        pipeline,
+        sample_df,
+        budget,
+        mock_account,
+        rt_all,
     ) -> None:
         """向下摊平应阻止加仓买入。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.8,
-        })
-        pipeline._fundamental_filter.check = MagicMock(return_value={
-            "pass": True, "reasons": [], "industry": "白酒",
-        })
-        pipeline._money_flow_filter.check = AsyncMock(return_value={
-            "pass": True, "reasons": [], "score": 0.5,
-        })
-        pipeline._industry_constraint.check_buy = MagicMock(return_value={
-            "allowed": True, "reason": "",
-        })
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
+        pipeline._fundamental_filter.check = MagicMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "industry": "白酒",
+            }
+        )
+        pipeline._money_flow_filter.check = AsyncMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "score": 0.5,
+            }
+        )
+        pipeline._industry_constraint.check_buy = MagicMock(
+            return_value={
+                "allowed": True,
+                "reason": "",
+            }
+        )
         pipeline._wisdom.advise_async = AsyncMock(side_effect=lambda s: dict(s))
 
         # Mock no_avg_down 返回不允许
-        pipeline._no_avg_down_checker.check = MagicMock(return_value=MagicMock(
-            allowed=False, reason="当前价格低于成本价，禁止向下摊平",
-            profit_pct=-5.0,
-        ))
+        pipeline._no_avg_down_checker.check = MagicMock(
+            return_value=MagicMock(
+                allowed=False,
+                reason="当前价格低于成本价，禁止向下摊平",
+                profit_pct=-5.0,
+            )
+        )
 
         # 模拟已有持仓
         pos = MagicMock()
@@ -925,9 +1431,14 @@ class TestNoAverageDown:
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio=portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=portfolio,
+            account=mock_account,
         )
 
         assert signal is not None
@@ -940,21 +1451,36 @@ class TestPriceValidation:
 
     @pytest.mark.asyncio
     async def test_price_too_low_rejected(
-        self, pipeline, sample_df, budget, mock_portfolio, mock_account,
+        self,
+        pipeline,
+        sample_df,
+        budget,
+        mock_portfolio,
+        mock_account,
     ) -> None:
         """价格 <= 1.0 的信号应被拒绝。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.8,
-        })
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
 
         # 无实时行情，价格来自历史K线（100.0），但无实时数据
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=None, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=None,
+            watchlist=[],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         # 无实时行情时信号应被拒绝
@@ -962,20 +1488,36 @@ class TestPriceValidation:
 
     @pytest.mark.asyncio
     async def test_confidence_zero_rejected(
-        self, pipeline, sample_df, budget, mock_portfolio, mock_account, rt_all,
+        self,
+        pipeline,
+        sample_df,
+        budget,
+        mock_portfolio,
+        mock_account,
+        rt_all,
     ) -> None:
         """置信度为 0 的信号应被拒绝。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.0,
-        })
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.0,
+            }
+        )
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         assert signal is None
@@ -986,23 +1528,45 @@ class TestWisdomTimeout:
 
     @pytest.mark.asyncio
     async def test_wisdom_timeout_fallback(
-        self, pipeline, sample_df, budget, mock_portfolio, mock_account, rt_all,
+        self,
+        pipeline,
+        sample_df,
+        budget,
+        mock_portfolio,
+        mock_account,
+        rt_all,
     ) -> None:
         """Wisdom 超时应降级到硬编码 fallback。"""
-        pipeline._router.route = MagicMock(return_value={
-            "symbol": "600519", "direction": "buy",
-            "strategy": "turtle", "strategies": ["turtle"],
-            "reason": "突破", "confidence": 0.8,
-        })
-        pipeline._fundamental_filter.check = MagicMock(return_value={
-            "pass": True, "reasons": [], "industry": "白酒",
-        })
-        pipeline._money_flow_filter.check = AsyncMock(return_value={
-            "pass": True, "reasons": [], "score": 0.5,
-        })
-        pipeline._industry_constraint.check_buy = MagicMock(return_value={
-            "allowed": True, "reason": "",
-        })
+        pipeline._router.route = MagicMock(
+            return_value={
+                "symbol": "600519",
+                "direction": "buy",
+                "strategy": "turtle",
+                "strategies": ["turtle"],
+                "reason": "突破",
+                "confidence": 0.8,
+            }
+        )
+        pipeline._fundamental_filter.check = MagicMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "industry": "白酒",
+            }
+        )
+        pipeline._money_flow_filter.check = AsyncMock(
+            return_value={
+                "pass": True,
+                "reasons": [],
+                "score": 0.5,
+            }
+        )
+        pipeline._industry_constraint.check_buy = MagicMock(
+            return_value={
+                "allowed": True,
+                "reason": "",
+            }
+        )
 
         # Wisdom 超时
         async def _timeout(*args, **kwargs):
@@ -1010,18 +1574,27 @@ class TestWisdomTimeout:
             return {}
 
         pipeline._wisdom.advise_async = AsyncMock(side_effect=_timeout)
-        pipeline._wisdom._advise_fallback = MagicMock(return_value={
-            "stop_loss_price": 95.0, "suggested_position_ratio": 0.2,
-            "wisdom_decision": {"source": "fallback", "action": "buy"},
-        })
+        pipeline._wisdom._advise_fallback = MagicMock(
+            return_value={
+                "stop_loss_price": 95.0,
+                "suggested_position_ratio": 0.2,
+                "wisdom_decision": {"source": "fallback", "action": "buy"},
+            }
+        )
 
         meta = {"name": "测试", "is_st": False, "is_suspended": False}
         # 使用短超时模拟
         import asyncio as _asyncio
+
         signal = await pipeline.process(
-            symbol="600519", df=sample_df, meta=meta, budget=budget,
-            rt_all=rt_all, watchlist=[],
-            portfolio=mock_portfolio, account=mock_account,
+            symbol="600519",
+            df=sample_df,
+            meta=meta,
+            budget=budget,
+            rt_all=rt_all,
+            watchlist=[],
+            portfolio=mock_portfolio,
+            account=mock_account,
         )
 
         assert signal is not None

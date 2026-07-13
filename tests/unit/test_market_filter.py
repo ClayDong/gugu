@@ -1,4 +1,5 @@
 """大市过滤模块 MarketFilter 单元测试。"""
+
 from __future__ import annotations
 
 from unittest import mock
@@ -13,28 +14,32 @@ def _make_bullish_index_data(n: int = 300) -> pd.DataFrame:
     """构造牛市指数数据：价格持续上涨，成交量放大。"""
     dates = pd.date_range("2025-01-01", periods=n, freq="D")
     close = [3000 + i * 5 for i in range(n)]  # 线性上涨
-    return pd.DataFrame({
-        "date": dates,
-        "open": close,
-        "high": [c + 20 for c in close],
-        "low": [c - 20 for c in close],
-        "close": close,
-        "volume": [100_000_000 + i * 1_000_000 for i in range(n)],  # 成交量递增
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": close,
+            "high": [c + 20 for c in close],
+            "low": [c - 20 for c in close],
+            "close": close,
+            "volume": [100_000_000 + i * 1_000_000 for i in range(n)],  # 成交量递增
+        }
+    )
 
 
 def _make_bearish_index_data(n: int = 300) -> pd.DataFrame:
     """构造熊市指数数据：价格持续下跌。"""
     dates = pd.date_range("2025-01-01", periods=n, freq="D")
     close = [4000 - i * 5 for i in range(n)]  # 线性下跌
-    return pd.DataFrame({
-        "date": dates,
-        "open": close,
-        "high": [c + 20 for c in close],
-        "low": [c - 20 for c in close],
-        "close": close,
-        "volume": [200_000_000 - i * 500_000 for i in range(n)],  # 成交量递减
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": close,
+            "high": [c + 20 for c in close],
+            "low": [c - 20 for c in close],
+            "close": close,
+            "volume": [200_000_000 - i * 500_000 for i in range(n)],  # 成交量递减
+        }
+    )
 
 
 class TestMarketFilter:

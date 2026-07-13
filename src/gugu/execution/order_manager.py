@@ -254,9 +254,7 @@ class OrderManager:
 
                 # 初始化移动止损状态
                 df_for_stop = (
-                    signal.pop("_df", None)
-                    if isinstance(signal.get("_df"), pd.DataFrame)
-                    else None
+                    signal.pop("_df", None) if isinstance(signal.get("_df"), pd.DataFrame) else None
                 )
                 trailing_state = self._trailing_stop_engine.init_stop(
                     entry_price=result.price,

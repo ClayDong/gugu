@@ -117,9 +117,7 @@ class MACDStrategy(Strategy):
 
     name = "macd"
 
-    def _detect_divergence(
-        self, df: pd.DataFrame, n: int = 20
-    ) -> pd.Series:
+    def _detect_divergence(self, df: pd.DataFrame, n: int = 20) -> pd.Series:
         """检测 MACD 顶背离和底背离。
 
         顶背离：价格创新高但 MACD DIF 值未创新高 → 强卖出信号。

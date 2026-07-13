@@ -107,10 +107,7 @@ class PullbackLowStrategy(Strategy):
         cond_trend_up = df["ma_short"] > df["ma_long"]
 
         # 综合买入信号
-        buy_cond = (
-            cond_pullback & cond_recent_strong & cond_shrink
-            & cond_above_ma & cond_trend_up
-        )
+        buy_cond = cond_pullback & cond_recent_strong & cond_shrink & cond_above_ma & cond_trend_up
 
         # ── 卖出条件（震荡市专用）──────────────────────
         # 1. 止损：跌破 MA20 × (1 - stop_loss_pct)

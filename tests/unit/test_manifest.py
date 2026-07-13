@@ -1,4 +1,5 @@
 """策略注册中心测试。"""
+
 from __future__ import annotations
 
 import sys
@@ -33,7 +34,12 @@ class TestManifestLoading:
     def test_contains_expected_categories(self, manifest):
         """应包含预期的策略类别。"""
         data = manifest.list_all()
-        expected = {"signal_strategies", "risk_strategies", "skill_strategies", "dynamic_strategies"}
+        expected = {
+            "signal_strategies",
+            "risk_strategies",
+            "skill_strategies",
+            "dynamic_strategies",
+        }
         actual = {k for k in data if isinstance(data[k], dict)}
         assert expected.issubset(actual), f"缺失类别: {expected - actual}"
 
@@ -222,7 +228,8 @@ class TestManifestSettingsConsistency:
         settings_enabled = set(get_config().strategy.enabled)
         manifest_signal = manifest.list_by_category("signal_strategies")
         manifest_enabled_signal = {
-            key for key, info in manifest_signal.items()
+            key
+            for key, info in manifest_signal.items()
             if isinstance(info, dict) and info.get("enabled", False)
         }
 

@@ -3,6 +3,7 @@
 补足现有 test_data_manager.py 未覆盖的 async 路径。
 使用 patch 避免 asyncio.to_thread 和内部锁的复杂交互。
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -61,6 +62,7 @@ class TestDataManagerDegradation:
     @pytest.mark.asyncio
     async def test_degraded_expired(self, dm: DataManager) -> None:
         import time
+
         dm._degraded_until = time.time() - 1
         assert not dm.is_degraded
 
@@ -70,10 +72,14 @@ class TestDataManagerMeta:
 
     @pytest.mark.asyncio
     async def test_fetch_meta_with_realtime(self, dm: DataManager) -> None:
-        rt_df = pd.DataFrame({
-            "symbol": ["600519"], "name": ["贵州茅台"],
-            "price": [1500.0], "volume": [5000000],
-        })
+        rt_df = pd.DataFrame(
+            {
+                "symbol": ["600519"],
+                "name": ["贵州茅台"],
+                "price": [1500.0],
+                "volume": [5000000],
+            }
+        )
         dm.fetch_stock_realtime = AsyncMock(return_value=rt_df)
         dm.fetch_stock_history = AsyncMock(return_value=pd.DataFrame())
 
@@ -82,10 +88,14 @@ class TestDataManagerMeta:
 
     @pytest.mark.asyncio
     async def test_fetch_meta_suspended(self, dm: DataManager) -> None:
-        rt_df = pd.DataFrame({
-            "symbol": ["600519"], "name": ["茅台"],
-            "price": [0.0], "volume": [0],
-        })
+        rt_df = pd.DataFrame(
+            {
+                "symbol": ["600519"],
+                "name": ["茅台"],
+                "price": [0.0],
+                "volume": [0],
+            }
+        )
         dm.fetch_stock_realtime = AsyncMock(return_value=rt_df)
         dm.fetch_stock_history = AsyncMock(return_value=pd.DataFrame())
 
@@ -94,10 +104,14 @@ class TestDataManagerMeta:
 
     @pytest.mark.asyncio
     async def test_fetch_meta_st_stock(self, dm: DataManager) -> None:
-        rt_df = pd.DataFrame({
-            "symbol": ["600519"], "name": ["ST贵州"],
-            "price": [10.0], "volume": [1000000],
-        })
+        rt_df = pd.DataFrame(
+            {
+                "symbol": ["600519"],
+                "name": ["ST贵州"],
+                "price": [10.0],
+                "volume": [1000000],
+            }
+        )
         dm.fetch_stock_realtime = AsyncMock(return_value=rt_df)
         dm.fetch_stock_history = AsyncMock(return_value=pd.DataFrame())
 
@@ -106,18 +120,24 @@ class TestDataManagerMeta:
 
     @pytest.mark.asyncio
     async def test_fetch_meta_prev_close(self, dm: DataManager) -> None:
-        hist_df = pd.DataFrame({
-            "date": ["2024-01-01", "2024-01-02"],
-            "close": [1490.0, 1500.0],
-            "open": [1485.0, 1495.0],
-            "high": [1495.0, 1505.0],
-            "low": [1485.0, 1495.0],
-            "volume": [1000000, 1000000],
-        })
-        rt_df = pd.DataFrame({
-            "symbol": ["600519"], "name": ["茅台"],
-            "price": [1500.0], "volume": [5000000],
-        })
+        hist_df = pd.DataFrame(
+            {
+                "date": ["2024-01-01", "2024-01-02"],
+                "close": [1490.0, 1500.0],
+                "open": [1485.0, 1495.0],
+                "high": [1495.0, 1505.0],
+                "low": [1485.0, 1495.0],
+                "volume": [1000000, 1000000],
+            }
+        )
+        rt_df = pd.DataFrame(
+            {
+                "symbol": ["600519"],
+                "name": ["茅台"],
+                "price": [1500.0],
+                "volume": [5000000],
+            }
+        )
         dm.fetch_stock_realtime = AsyncMock(return_value=rt_df)
         dm.fetch_stock_history = AsyncMock(return_value=hist_df)
         meta = await dm.fetch_stock_meta("600519")
@@ -131,18 +151,24 @@ class TestDataManagerConcurrentFallback:
     async def test_concurrent_fastest_wins(self, dm: DataManager) -> None:
         """并发降级时最快 collector 返回。"""
         from datetime import date, timedelta
+
         today = date.today()
-        dates = [(today - timedelta(days=9-i)).isoformat() for i in range(10)]
-        sample_df = pd.DataFrame({
-            "date": dates,
-            "open": [10.0] * 10, "high": [11.0] * 10,
-            "low": [9.0] * 10, "close": [10.0] * 10,
-            "volume": [1000000] * 10,
-        })
+        dates = [(today - timedelta(days=9 - i)).isoformat() for i in range(10)]
+        sample_df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": [10.0] * 10,
+                "high": [11.0] * 10,
+                "low": [9.0] * 10,
+                "close": [10.0] * 10,
+                "volume": [1000000] * 10,
+            }
+        )
         dm._fail_threshold = 1
 
         class FastCollector:
             source = "fast"
+
             def fetch_stock_history(self, symbol, days=60):
                 return sample_df
 

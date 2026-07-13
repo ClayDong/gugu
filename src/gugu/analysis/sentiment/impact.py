@@ -25,9 +25,16 @@ _DEFAULT_HISTORY = {
         "negative": {"day_1": -0.012, "day_3": -0.022, "day_5": -0.030, "day_10": -0.035},
     },
     "media_weights": {
-        "证券时报": 1.5, "中国证券报": 1.5, "上海证券报": 1.5,
-        "证券日报": 1.5, "21世纪经济报道": 1.4, "第一财经": 1.4,
-        "东方财富网": 1.2, "新浪财经": 1.1, "搜狐财经": 1.0, "网易财经": 1.0,
+        "证券时报": 1.5,
+        "中国证券报": 1.5,
+        "上海证券报": 1.5,
+        "证券日报": 1.5,
+        "21世纪经济报道": 1.4,
+        "第一财经": 1.4,
+        "东方财富网": 1.2,
+        "新浪财经": 1.1,
+        "搜狐财经": 1.0,
+        "网易财经": 1.0,
     },
 }
 
@@ -77,7 +84,9 @@ class ImpactAnalyzer:
         return {
             "overall_impact_score": round(overall, 4),
             "media_weight": media_weight,
-            "time_horizon_impact": {f"day_{d}": round(overall * h.get(f"day_{d}", 0), 4) for d in [1, 3, 5, 10]},
+            "time_horizon_impact": {
+                f"day_{d}": round(overall * h.get(f"day_{d}", 0), 4) for d in [1, 3, 5, 10]
+            },
             "time_decay_factors": decay,
         }
 
@@ -85,14 +94,16 @@ class ImpactAnalyzer:
         """添加历史案例。"""
         data = self._load()
         cases = data.setdefault("historical_cases", [])
-        cases.append({
-            "id": len(cases) + 1,
-            "date": str(__import__("datetime").date.today()),
-            "title": news.get("title", ""),
-            "source": news.get("source", ""),
-            "sentiment": sentiment.get("sentiment", "neutral"),
-            "sentiment_score": sentiment.get("sentiment_score", 0),
-            "key_words": sentiment.get("key_words", []),
-        })
+        cases.append(
+            {
+                "id": len(cases) + 1,
+                "date": str(__import__("datetime").date.today()),
+                "title": news.get("title", ""),
+                "source": news.get("source", ""),
+                "sentiment": sentiment.get("sentiment", "neutral"),
+                "sentiment_score": sentiment.get("sentiment_score", 0),
+                "key_words": sentiment.get("key_words", []),
+            }
+        )
         data["historical_cases"] = cases[-100:]
         self._save(data)

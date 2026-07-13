@@ -5,6 +5,7 @@
 - 边界条件：空输入、不足3只股票、数据不足
 - 对抗性审查：验证多股聚合 vs 单股的差异
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -37,15 +38,17 @@ def _make_stock_df(symbol: str, n: int = 200, seed: int = 42, trend: str = "up")
     prices = np.cumprod(1 + rets) * 10
     volumes = np.random.uniform(1e6, 5e6, n).astype(float)
 
-    return pd.DataFrame({
-        "date": dates,
-        "open": prices * 0.99,
-        "high": prices * 1.02,
-        "low": prices * 0.98,
-        "close": prices,
-        "volume": volumes,
-        "amount": prices * volumes,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": prices * 0.99,
+            "high": prices * 1.02,
+            "low": prices * 0.98,
+            "close": prices,
+            "volume": volumes,
+            "amount": prices * volumes,
+        }
+    )
 
 
 class TestMultiStockWalkForwardBasic:

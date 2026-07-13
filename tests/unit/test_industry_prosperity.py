@@ -2,6 +2,7 @@
 
 覆盖 IndustryProsperityChecker 的评分算法、匹配策略、阈值判断和数据缺失处理。
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -17,6 +18,7 @@ from gugu.filters.fundamental import IndustryProsperityChecker
 # 辅助函数
 # ============================================================
 
+
 def _make_board_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
     """生成模拟的 akshare 行业板块 DataFrame。"""
     return pd.DataFrame(rows)
@@ -24,46 +26,53 @@ def _make_board_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
 
 def _make_hot_board() -> pd.DataFrame:
     """生成强势行业板块（高景气度）。"""
-    return _make_board_df([
-        {
-            "板块名称": "电子",
-            "板块涨跌幅": 3.5,
-            "主力净流入": 15e8,  # 15 亿
-            "换手率": 3.0,
-            "量比": 1.8,
-        },
-    ])
+    return _make_board_df(
+        [
+            {
+                "板块名称": "电子",
+                "板块涨跌幅": 3.5,
+                "主力净流入": 15e8,  # 15 亿
+                "换手率": 3.0,
+                "量比": 1.8,
+            },
+        ]
+    )
 
 
 def _make_cold_board() -> pd.DataFrame:
     """生成衰退行业板块（低景气度）。"""
-    return _make_board_df([
-        {
-            "板块名称": "房地产",
-            "板块涨跌幅": -4.2,
-            "主力净流入": -12e8,  # -12 亿
-            "换手率": 0.5,
-            "量比": 0.3,
-        },
-    ])
+    return _make_board_df(
+        [
+            {
+                "板块名称": "房地产",
+                "板块涨跌幅": -4.2,
+                "主力净流入": -12e8,  # -12 亿
+                "换手率": 0.5,
+                "量比": 0.3,
+            },
+        ]
+    )
 
 
 def _make_neutral_board() -> pd.DataFrame:
     """生成中等景气度板块。"""
-    return _make_board_df([
-        {
-            "板块名称": "银行",
-            "板块涨跌幅": 0.3,
-            "主力净流入": 0.5e8,  # 0.5 亿
-            "换手率": 1.0,
-            "量比": 0.9,
-        },
-    ])
+    return _make_board_df(
+        [
+            {
+                "板块名称": "银行",
+                "板块涨跌幅": 0.3,
+                "主力净流入": 0.5e8,  # 0.5 亿
+                "换手率": 1.0,
+                "量比": 0.9,
+            },
+        ]
+    )
 
 
 # ============================================================
 # TestIndustryProsperityChecker 评分算法
 # ============================================================
+
 
 class TestIndustryProsperityScoring:
     """评分算法单元测试。"""
@@ -98,32 +107,57 @@ class TestIndustryProsperityScoring:
 # TestIndustryProsperityChecker 匹配策略
 # ============================================================
 
+
 class TestIndustryProsperityMatching:
     """行业匹配策略测试。"""
 
     def test_exact_match(self) -> None:
         """精确匹配「板块名称」。"""
-        df = _make_board_df([
-            {"板块名称": "半导体", "板块涨跌幅": 2.0, "主力净流入": 5e8, "换手率": 2.0, "量比": 1.5},
-        ])
+        df = _make_board_df(
+            [
+                {
+                    "板块名称": "半导体",
+                    "板块涨跌幅": 2.0,
+                    "主力净流入": 5e8,
+                    "换手率": 2.0,
+                    "量比": 1.5,
+                },
+            ]
+        )
         row = IndustryProsperityChecker._match_industry_row(df, "半导体")
         assert row is not None
         assert row["板块名称"] == "半导体"
 
     def test_contains_match(self) -> None:
         """包含匹配：「半导体」匹配「半导体及元件」。"""
-        df = _make_board_df([
-            {"板块名称": "半导体及元件", "板块涨跌幅": 2.0, "主力净流入": 5e8, "换手率": 2.0, "量比": 1.5},
-        ])
+        df = _make_board_df(
+            [
+                {
+                    "板块名称": "半导体及元件",
+                    "板块涨跌幅": 2.0,
+                    "主力净流入": 5e8,
+                    "换手率": 2.0,
+                    "量比": 1.5,
+                },
+            ]
+        )
         row = IndustryProsperityChecker._match_industry_row(df, "半导体")
         assert row is not None
         assert "半导体" in row["板块名称"]
 
     def test_no_match(self) -> None:
         """无匹配行业返回 None。"""
-        df = _make_board_df([
-            {"板块名称": "银行", "板块涨跌幅": 0.5, "主力净流入": 1e8, "换手率": 1.0, "量比": 0.8},
-        ])
+        df = _make_board_df(
+            [
+                {
+                    "板块名称": "银行",
+                    "板块涨跌幅": 0.5,
+                    "主力净流入": 1e8,
+                    "换手率": 1.0,
+                    "量比": 0.8,
+                },
+            ]
+        )
         row = IndustryProsperityChecker._match_industry_row(df, "航天")
         assert row is None
 
@@ -137,6 +171,7 @@ class TestIndustryProsperityMatching:
 # ============================================================
 # TestIndustryProsperityChecker 完整流程
 # ============================================================
+
 
 class TestIndustryProsperityScore:
     """完整评分流程测试。"""
@@ -181,15 +216,17 @@ class TestIndustryProsperityScore:
     @patch("gugu.filters.fundamental.ak.stock_board_industry_name_em")
     def test_extreme_low_prosperity_hard_fail(self, mock_board: MagicMock) -> None:
         """极端低景气度（< 10）应触发硬拦截判定。"""
-        mock_board.return_value = _make_board_df([
-            {
-                "板块名称": "衰退行业",
-                "板块涨跌幅": -5.0,  # 满分下限
-                "主力净流入": -10e8,  # 满分下限
-                "换手率": 0.0,
-                "量比": 0.0,
-            },
-        ])
+        mock_board.return_value = _make_board_df(
+            [
+                {
+                    "板块名称": "衰退行业",
+                    "板块涨跌幅": -5.0,  # 满分下限
+                    "主力净流入": -10e8,  # 满分下限
+                    "换手率": 0.0,
+                    "量比": 0.0,
+                },
+            ]
+        )
         checker = IndustryProsperityChecker()
         result = checker.score("衰退行业")
 
@@ -204,6 +241,7 @@ class TestIndustryProsperityScore:
 # ============================================================
 # TestIndustryProsperityChecker 数据缺失处理
 # ============================================================
+
 
 class TestIndustryProsperityMissingData:
     """数据缺失场景测试。"""
@@ -238,9 +276,17 @@ class TestIndustryProsperityMissingData:
     @patch("gugu.filters.fundamental.ak.stock_board_industry_name_em")
     def test_industry_not_in_board(self, mock_board: MagicMock) -> None:
         """行业不在板块数据中 → 返回空结果。"""
-        mock_board.return_value = _make_board_df([
-            {"板块名称": "银行", "板块涨跌幅": 0.5, "主力净流入": 1e8, "换手率": 1.0, "量比": 0.8},
-        ])
+        mock_board.return_value = _make_board_df(
+            [
+                {
+                    "板块名称": "银行",
+                    "板块涨跌幅": 0.5,
+                    "主力净流入": 1e8,
+                    "换手率": 1.0,
+                    "量比": 0.8,
+                },
+            ]
+        )
         checker = IndustryProsperityChecker()
         result = checker.score("航天")
 
@@ -251,6 +297,7 @@ class TestIndustryProsperityMissingData:
 # ============================================================
 # TestIndustryProsperityChecker 缓存
 # ============================================================
+
 
 class TestIndustryProsperityCache:
     """日内缓存测试。"""

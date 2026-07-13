@@ -14,6 +14,7 @@ A股板块轮动规律：
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import akshare as ak
@@ -95,7 +96,9 @@ class SectorRotation:
 
         try:
             # 获取行业板块行情
-            df = ak.stock_board_industry_name_em()
+            df = await asyncio.wait_for(
+                asyncio.to_thread(ak.stock_board_industry_name_em), timeout=30.0
+            )
             if df.empty:
                 return self._fallback()
 
@@ -209,8 +212,8 @@ class SectorRotation:
     #   - 资金从高位流向低位时 → 板块轮动信号
 
     # 高位板块判定阈值
-    HIGH_SECTOR_PCT_THRESHOLD = 5.0   # 20日涨幅 > 5% 视为高位
-    LOW_SECTOR_PCT_THRESHOLD = -3.0   # 20日涨幅 < -3% 视为低位
+    HIGH_SECTOR_PCT_THRESHOLD = 5.0  # 20日涨幅 > 5% 视为高位
+    LOW_SECTOR_PCT_THRESHOLD = -3.0  # 20日涨幅 < -3% 视为低位
 
     async def detect_high_low_rotation(self) -> dict[str, Any]:
         """检测高低切换板块轮动。
@@ -231,7 +234,9 @@ class SectorRotation:
             return self._cache[cache_key]
 
         try:
-            df = ak.stock_board_industry_name_em()
+            df = await asyncio.wait_for(
+                asyncio.to_thread(ak.stock_board_industry_name_em), timeout=30.0
+            )
             if df.empty:
                 return self._highlow_fallback()
 
@@ -245,21 +250,25 @@ class SectorRotation:
 
                 # 高位板块：涨幅大 + 主力净流出（资金撤退信号）
                 if pct > self.HIGH_SECTOR_PCT_THRESHOLD and flow < 0:
-                    overextended.append({
-                        "sector": name,
-                        "pct_change": pct,
-                        "main_net_billion": flow,
-                        "category": SW_INDUSTRY_MAP.get(name, "其他"),
-                    })
+                    overextended.append(
+                        {
+                            "sector": name,
+                            "pct_change": pct,
+                            "main_net_billion": flow,
+                            "category": SW_INDUSTRY_MAP.get(name, "其他"),
+                        }
+                    )
 
                 # 低位板块：跌幅深 + 主力净流入（资金抄底信号）
                 elif pct < self.LOW_SECTOR_PCT_THRESHOLD and flow > 0:
-                    undervalued.append({
-                        "sector": name,
-                        "pct_change": pct,
-                        "main_net_billion": flow,
-                        "category": SW_INDUSTRY_MAP.get(name, "其他"),
-                    })
+                    undervalued.append(
+                        {
+                            "sector": name,
+                            "pct_change": pct,
+                            "main_net_billion": flow,
+                            "category": SW_INDUSTRY_MAP.get(name, "其他"),
+                        }
+                    )
 
             # 按涨幅排序
             overextended.sort(key=lambda x: x["pct_change"], reverse=True)

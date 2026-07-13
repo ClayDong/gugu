@@ -3,6 +3,7 @@
 每个测试类验证一项优化功能的完整端到端链路，
 不 mock 业务逻辑，仅 mock 外部 IO（飞书、数据源、交易日历）。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,13 +34,14 @@ from gugu.wisdom import BookPerspectiveRouter, WisdomAdvisor
 # 测试数据构造（复用 test_e2e_pipeline.py 的 fixture 风格）
 # =============================================================================
 
+
 def make_bollinger_buy_df(days: int = 60, base_price: float = 100.0) -> pd.DataFrame:
     """触发布林带买入信号的数据。"""
     np.random.seed(42)
     dates = pd.bdate_range("2024-01-01", periods=days)
-    up = [base_price * (1.0068 ** i) for i in range(50)]
+    up = [base_price * (1.0068**i) for i in range(50)]
     flat = [up[-1]] * 5
-    pullback = [flat[-1] * (0.975 ** i) for i in range(1, 6)]
+    pullback = [flat[-1] * (0.975**i) for i in range(1, 6)]
     prices = up + flat + pullback
     close = pd.Series(prices[:days], dtype=float)
     high = close * 1.015
@@ -47,20 +49,26 @@ def make_bollinger_buy_df(days: int = 60, base_price: float = 100.0) -> pd.DataF
     open_ = close * 0.999
     volume = pd.Series([1_000_000] * days, dtype=float)
     amount = close * volume
-    return pd.DataFrame({
-        "date": dates[:days], "open": open_.values, "high": high.values,
-        "low": low.values, "close": close.values, "volume": volume.values,
-        "amount": amount.values,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates[:days],
+            "open": open_.values,
+            "high": high.values,
+            "low": low.values,
+            "close": close.values,
+            "volume": volume.values,
+            "amount": amount.values,
+        }
+    )
 
 
 def make_turtle_sell_df(days: int = 60, base_price: float = 100.0) -> pd.DataFrame:
     """触发海龟卖出信号的数据。"""
     np.random.seed(43)
     dates = pd.bdate_range("2024-01-01", periods=days)
-    up = [base_price * (1.003 ** i) for i in range(40)]
+    up = [base_price * (1.003**i) for i in range(40)]
     flat = [up[-1]] * 10
-    crash = [flat[-1] * (0.94 ** i) for i in range(10)]
+    crash = [flat[-1] * (0.94**i) for i in range(10)]
     prices = up + flat + crash
     close = pd.Series(prices[:days], dtype=float)
     high = close * 1.005
@@ -68,11 +76,17 @@ def make_turtle_sell_df(days: int = 60, base_price: float = 100.0) -> pd.DataFra
     open_ = close * 0.999
     volume = pd.Series([1_000_000] * days, dtype=float)
     amount = close * volume
-    return pd.DataFrame({
-        "date": dates[:days], "open": open_.values, "high": high.values,
-        "low": low.values, "close": close.values, "volume": volume.values,
-        "amount": amount.values,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates[:days],
+            "open": open_.values,
+            "high": high.values,
+            "low": low.values,
+            "close": close.values,
+            "volume": volume.values,
+            "amount": amount.values,
+        }
+    )
 
 
 def make_sideways_df(days: int = 120, base_price: float = 100.0) -> pd.DataFrame:
@@ -89,11 +103,17 @@ def make_sideways_df(days: int = 120, base_price: float = 100.0) -> pd.DataFrame
     open_ = close * 0.998
     volume = pd.Series([2_000_000] * days, dtype=float)
     amount = close * volume
-    return pd.DataFrame({
-        "date": dates[:days], "open": open_.values, "high": high.values,
-        "low": low.values, "close": close.values, "volume": volume.values,
-        "amount": amount.values,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates[:days],
+            "open": open_.values,
+            "high": high.values,
+            "low": low.values,
+            "close": close.values,
+            "volume": volume.values,
+            "amount": amount.values,
+        }
+    )
 
 
 def make_mock_notifier():
@@ -120,15 +140,17 @@ def make_flat_data_mgr(base_price=150.0, days=120):
     np.random.seed(42)
     dates = pd.bdate_range("2024-01-01", periods=days)
     close = pd.Series([base_price] * days, dtype=float) + np.random.randn(days) * 0.1
-    df = pd.DataFrame({
-        "date": dates,
-        "open": close * 0.999,
-        "high": close * 1.002,
-        "low": close * 0.998,
-        "close": close,
-        "volume": pd.Series([1_000_000] * days, dtype=float),
-        "amount": close * 1_000_000,
-    })
+    df = pd.DataFrame(
+        {
+            "date": dates,
+            "open": close * 0.999,
+            "high": close * 1.002,
+            "low": close * 0.998,
+            "close": close,
+            "volume": pd.Series([1_000_000] * days, dtype=float),
+            "amount": close * 1_000_000,
+        }
+    )
     dm.fetch_stock_history.return_value = df
     dm.fetch_stock_history_batch.return_value = {"000858": df}
     return dm
@@ -138,15 +160,18 @@ def make_flat_data_mgr(base_price=150.0, days=120):
 # T1: 回测报告端到端
 # =============================================================================
 
+
 class TestBacktestReportE2E:
     """T1: 用 BacktestEngine 跑回测后生成报告，验证报告内容完整。"""
 
     def test_generate_report_with_multiple_stocks_and_strategies(self):
         """对3只股票跑2个策略，生成报告，验证含策略名/指标/排序表/t检验。"""
         # ── 1. 准备 3 只股票的 OHLCV 数据 ──
-        symbols = {"600519": make_bollinger_buy_df(60, 100.0),
-                   "000858": make_sideways_df(120, 50.0),
-                   "002415": make_turtle_sell_df(60, 200.0)}
+        symbols = {
+            "600519": make_bollinger_buy_df(60, 100.0),
+            "000858": make_sideways_df(120, 50.0),
+            "002415": make_turtle_sell_df(60, 200.0),
+        }
 
         # ── 2. 用 BacktestEngine 跑 2 个策略 ──
         engine = BacktestEngine(initial_capital=1_000_000)
@@ -201,15 +226,40 @@ class TestBacktestReportE2E:
         from scripts.backtest_report_generator import generate_report_from_metrics_dict
 
         per_strategy = {
-            "strategy_a": [{"total_return": 0.15, "sharpe": 1.2, "max_drawdown": 0.08,
-                            "win_rate": 0.6, "profit_factor": 2.0, "total_trades": 20,
-                            "avg_hold_days": 5, "annual_return": 0.12},
-                           {"total_return": 0.08, "sharpe": 0.9, "max_drawdown": 0.10,
-                            "win_rate": 0.55, "profit_factor": 1.5, "total_trades": 15,
-                            "avg_hold_days": 4, "annual_return": 0.07}],
-            "strategy_b": [{"total_return": 0.22, "sharpe": 1.8, "max_drawdown": 0.12,
-                            "win_rate": 0.65, "profit_factor": 2.5, "total_trades": 30,
-                            "avg_hold_days": 6, "annual_return": 0.18}],
+            "strategy_a": [
+                {
+                    "total_return": 0.15,
+                    "sharpe": 1.2,
+                    "max_drawdown": 0.08,
+                    "win_rate": 0.6,
+                    "profit_factor": 2.0,
+                    "total_trades": 20,
+                    "avg_hold_days": 5,
+                    "annual_return": 0.12,
+                },
+                {
+                    "total_return": 0.08,
+                    "sharpe": 0.9,
+                    "max_drawdown": 0.10,
+                    "win_rate": 0.55,
+                    "profit_factor": 1.5,
+                    "total_trades": 15,
+                    "avg_hold_days": 4,
+                    "annual_return": 0.07,
+                },
+            ],
+            "strategy_b": [
+                {
+                    "total_return": 0.22,
+                    "sharpe": 1.8,
+                    "max_drawdown": 0.12,
+                    "win_rate": 0.65,
+                    "profit_factor": 2.5,
+                    "total_trades": 30,
+                    "avg_hold_days": 6,
+                    "annual_return": 0.18,
+                }
+            ],
         }
 
         md = generate_report_from_metrics_dict(per_strategy)
@@ -241,6 +291,7 @@ class TestBacktestReportE2E:
 # T2: 宏观数据硬连接 RegimeDetector
 # =============================================================================
 
+
 class TestMacroRegimeEnhancerE2E:
     """T2: MacroRegimeEnhancer + RegimeDetector 端到端。"""
 
@@ -250,8 +301,14 @@ class TestMacroRegimeEnhancerE2E:
         enhancer = MacroRegimeEnhancer()
         # 直接注入 macro_snapshot（绕过 _collect_macro_data 的网络 IO）
         enhancer._macro_snapshot = {
-            "gold": {"gold_price": 3200.0, "gold_change_pct": 1.5, "silver_price": 28.0,
-                     "silver_change_pct": 0.5, "gold_silver_ratio": 114.2, "valid": True},
+            "gold": {
+                "gold_price": 3200.0,
+                "gold_change_pct": 1.5,
+                "silver_price": 28.0,
+                "silver_change_pct": 0.5,
+                "gold_silver_ratio": 114.2,
+                "valid": True,
+            },
             "fx": {"usd_index": 104.0, "usd_cny": 7.1, "eur_usd": 1.08, "valid": True},
             "bond": {"us10y_yield": 4.0, "us2y_yield": 3.5, "inverted": False, "valid": True},
             "derivative": {"vix": 18.0, "bdi": 1500, "valid": True},
@@ -414,8 +471,14 @@ class TestMacroRegimeEnhancerE2E:
         enhancer = MacroRegimeEnhancer()
         # 注入宏观数据（黄金暴涨触发避险）
         enhancer._macro_snapshot = {
-            "gold": {"gold_price": 3200.0, "gold_change_pct": 1.0, "silver_price": 28.0,
-                     "silver_change_pct": 0.5, "gold_silver_ratio": 114.2, "valid": True},
+            "gold": {
+                "gold_price": 3200.0,
+                "gold_change_pct": 1.0,
+                "silver_price": 28.0,
+                "silver_change_pct": 0.5,
+                "gold_silver_ratio": 114.2,
+                "valid": True,
+            },
             "fx": {"usd_cny": 7.1, "valid": True},
             "bond": {"us10y_yield": 4.0, "inverted": False, "valid": True},
             "derivative": {"vix": 18.0, "valid": True},
@@ -431,15 +494,17 @@ class TestMacroRegimeEnhancerE2E:
         np.random.seed(123)
         dates = pd.bdate_range("2024-01-01", periods=250)
         close = pd.Series(3000.0 * (1 + np.cumsum(np.random.randn(250) * 0.005)), dtype=float)
-        df = pd.DataFrame({
-            "date": dates,
-            "open": close * 0.998,
-            "high": close * 1.01,
-            "low": close * 0.99,
-            "close": close,
-            "volume": pd.Series([5_000_000] * 250, dtype=float),
-            "amount": close * 5_000_000,
-        })
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": close * 0.998,
+                "high": close * 1.01,
+                "low": close * 0.99,
+                "close": close,
+                "volume": pd.Series([5_000_000] * 250, dtype=float),
+                "amount": close * 5_000_000,
+            }
+        )
         dm.fetch_stock_history.return_value = df
         detector._dm = dm
 
@@ -457,6 +522,7 @@ class TestMacroRegimeEnhancerE2E:
 # =============================================================================
 # T3A: OrderManager 端到端
 # =============================================================================
+
 
 class TestOrderManagerE2E:
     """T3: OrderManager.execute() 端到端测试。"""
@@ -633,6 +699,7 @@ class TestOrderManagerE2E:
 # T3B: StopLossManager 端到端
 # =============================================================================
 
+
 class TestStopLossManagerE2E:
     """T3: StopLossManager.execute() 端到端测试。"""
 
@@ -743,6 +810,7 @@ class TestStopLossManagerE2E:
 # T4: 多视角信号端到端
 # =============================================================================
 
+
 class TestMultiPerspectiveSignalE2E:
     """T4: WisdomAdvisor 集成 BookPerspectiveRouter 端到端。"""
 
@@ -818,8 +886,9 @@ class TestMultiPerspectiveSignalE2E:
         sell_pct = mp.get("sell_agreement_pct", 0)
 
         # buy 信号应得到 buy_pct > sell_pct（各视角综合判断）
-        assert buy_pct >= sell_pct or mp.get("consensus") == "buy", \
+        assert buy_pct >= sell_pct or mp.get("consensus") == "buy", (
             f"买入信号应偏向买入共识: buy={buy_pct}, sell={sell_pct}, consensus={mp.get('consensus')}"
+        )
 
         # buy + sell + hold ≈ 1.0
         hold_pct = mp.get("hold_agreement_pct", 0)
@@ -892,6 +961,7 @@ class TestMultiPerspectiveSignalE2E:
 # =============================================================================
 # T5: 完整流水线端到端
 # =============================================================================
+
 
 class TestCompletePipelineE2E:
     """T5: TradingEngine.run_daily_cycle 完整循环端到端。"""
@@ -1061,6 +1131,7 @@ class TestCompletePipelineE2E:
         monkeypatch.setattr("gugu.config.PROJECT_ROOT", tmp_path)
 
         from gugu.config import get_config
+
         original_mode = get_config().execution.mode
         if original_mode != "signal_only":
             pytest.skip("execution.mode 不是 signal_only，跳过")
@@ -1103,6 +1174,7 @@ class TestCompletePipelineE2E:
 # 辅助测试：确保所有关键模块可导入
 # =============================================================================
 
+
 class TestImports:
     """验证优化路径的所有关键模块可正确导入。"""
 
@@ -1112,31 +1184,38 @@ class TestImports:
             generate_report_from_metrics_dict,
             save_report,
         )
+
         assert callable(generate_report)
         assert callable(generate_report_from_metrics_dict)
         assert callable(save_report)
 
     def test_macro_regime_enhancer_importable(self):
         from gugu.analysis.macro_regime_enhancer import MacroRegimeEnhancer
+
         assert MacroRegimeEnhancer is not None
 
     def test_order_manager_importable(self):
         from gugu.execution import OrderManager
+
         assert OrderManager is not None
 
     def test_stop_loss_manager_importable(self):
         from gugu.execution import StopLossManager
+
         assert StopLossManager is not None
 
     def test_book_router_importable(self):
         from gugu.wisdom import BookPerspectiveRouter
+
         assert BookPerspectiveRouter is not None
 
     def test_regime_detector_with_enhancer(self):
         from gugu.analysis.regime_detector import MultiPeriodRegimeDetector
+
         assert MultiPeriodRegimeDetector is not None
         # 验证 enhancer 参数
         import inspect
+
         sig = inspect.signature(MultiPeriodRegimeDetector.__init__)
         params = list(sig.parameters.keys())
         assert "enhancer" in params, "MultiPeriodRegimeDetector.__init__ 应接受 enhancer 参数"

@@ -1,4 +1,5 @@
 """风控模块测试。"""
+
 from __future__ import annotations
 
 import pytest
@@ -27,16 +28,12 @@ def empty_portfolio() -> dict[str, Position]:
 
 
 def test_buy_allow(manager: RiskManager, empty_portfolio: dict) -> None:
-    res = manager.check_order(
-        "600519", "buy", 100, 1500.0, empty_portfolio, cash=1_000_000
-    )
+    res = manager.check_order("600519", "buy", 100, 1500.0, empty_portfolio, cash=1_000_000)
     assert res.action == RiskAction.ALLOW
 
 
 def test_buy_exceeds_position_limit(manager: RiskManager, empty_portfolio: dict) -> None:
-    res = manager.check_order(
-        "600519", "buy", 900, 1500.0, empty_portfolio, cash=1_000_000
-    )
+    res = manager.check_order("600519", "buy", 900, 1500.0, empty_portfolio, cash=1_000_000)
     assert res.action == RiskAction.HALT
     assert res.level == RiskLevel.L1_POSITION
 
@@ -58,17 +55,13 @@ def test_buy_invalid_price(manager: RiskManager, empty_portfolio: dict) -> None:
 
 
 def test_buy_suspended(manager: RiskManager, empty_portfolio: dict) -> None:
-    res = manager.check_order(
-        "600519", "buy", 100, 1500.0, empty_portfolio, is_suspended=True
-    )
+    res = manager.check_order("600519", "buy", 100, 1500.0, empty_portfolio, is_suspended=True)
     assert res.action == RiskAction.HALT
     assert "suspended" in res.message or "停牌" in res.message
 
 
 def test_buy_price_limit_up(manager: RiskManager, empty_portfolio: dict) -> None:
-    res = manager.check_order(
-        "600519", "buy", 100, 11.0, empty_portfolio, prev_close=10.0
-    )
+    res = manager.check_order("600519", "buy", 100, 11.0, empty_portfolio, prev_close=10.0)
     assert res.action == RiskAction.HALT
 
 
@@ -77,17 +70,13 @@ def test_buy_max_total_positions(manager: RiskManager) -> None:
         "000001": Position("000001", 100, 100, 10.0, 10.0),
         "000002": Position("000002", 100, 100, 10.0, 10.0),
     }
-    res = manager.check_order(
-        "600519", "buy", 100, 10.0, portfolio, cash=1_000_000
-    )
+    res = manager.check_order("600519", "buy", 100, 10.0, portfolio, cash=1_000_000)
     assert res.action == RiskAction.HALT
     assert "Max total positions" in res.message
 
 
 def test_sell_no_position(manager: RiskManager, empty_portfolio: dict) -> None:
-    res = manager.check_order(
-        "600519", "sell", 100, 1500.0, empty_portfolio
-    )
+    res = manager.check_order("600519", "sell", 100, 1500.0, empty_portfolio)
     assert res.action == RiskAction.HALT
 
 
@@ -129,9 +118,7 @@ def test_check_daily_loss_halt(manager: RiskManager) -> None:
 
 def test_halt_blocks_all_orders(manager: RiskManager, empty_portfolio: dict) -> None:
     manager.check_daily_loss(0.05)
-    res = manager.check_order(
-        "600519", "buy", 100, 1500.0, empty_portfolio, cash=1_000_000
-    )
+    res = manager.check_order("600519", "buy", 100, 1500.0, empty_portfolio, cash=1_000_000)
     assert res.action == RiskAction.HALT
     assert "halt" in res.message.lower() or "熔断" in res.message
 

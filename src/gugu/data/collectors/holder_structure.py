@@ -58,10 +58,10 @@ _AK_COL_MAP: dict[str, str] = {
     "股东户数": "holder_num",
     "股东户数-增减": "holder_num_change",
     "股东户数-增减比例": "holder_num_pct",
-    "环比变化": "holder_num_change",        # 别名（部分 akshare 版本）
-    "环比变化率": "holder_num_pct",          # 别名
+    "环比变化": "holder_num_change",  # 别名（部分 akshare 版本）
+    "环比变化率": "holder_num_pct",  # 别名
     "户均持股": "avg_hold_amount",
-    "户均流通股": "avg_hold_amount",          # 别名
+    "户均流通股": "avg_hold_amount",  # 别名
     "户均持股-增减": "avg_hold_change",
     "截止日期": "end_date",
     "机构持股比例": "org_hold_pct",
@@ -131,9 +131,7 @@ class HolderStructureCollector:
             self._client = httpx.AsyncClient(timeout=15.0, headers=_EM_HEADERS)
         return self._client
 
-    async def fetch_holder_structure(
-        self, symbol: str | None = None
-    ) -> pd.DataFrame | None:
+    async def fetch_holder_structure(self, symbol: str | None = None) -> pd.DataFrame | None:
         """获取全市场（或单股）股东户数及筹码结构快照。
 
         Args:
@@ -172,9 +170,7 @@ class HolderStructureCollector:
 
         return df.reset_index(drop=True) if not df.empty else df
 
-    async def fetch_holder_history(
-        self, symbol: str, quarters: int = 4
-    ) -> pd.DataFrame | None:
+    async def fetch_holder_history(self, symbol: str, quarters: int = 4) -> pd.DataFrame | None:
         """获取单股最近 N 个季度的股东户数历史数据。
 
         用于过滤器判断"连续 2 季度"趋势。
@@ -193,9 +189,7 @@ class HolderStructureCollector:
             # akshare stock_zh_a_gdhs_detail_em 返回单股历史股东户数
             # 同步函数，用 asyncio.to_thread 包装
             try:
-                raw = await asyncio.to_thread(
-                    ak.stock_zh_a_gdhs_detail_em, symbol=code
-                )
+                raw = await asyncio.to_thread(ak.stock_zh_a_gdhs_detail_em, symbol=code)
             except AttributeError:
                 # 部分 akshare 版本无此函数
                 logger.debug("akshare 无 stock_zh_a_gdhs_detail_em，历史数据不可用")
@@ -298,9 +292,7 @@ class HolderStructureCollector:
     def _normalize_eastmoney(self, raw: pd.DataFrame) -> pd.DataFrame | None:
         """归一化东方财富 datacenter 返回的英文列名为统一 schema。"""
         try:
-            df = raw.rename(
-                columns={k: v for k, v in _EM_COL_MAP.items() if k in raw.columns}
-            )
+            df = raw.rename(columns={k: v for k, v in _EM_COL_MAP.items() if k in raw.columns})
         except Exception as e:
             logger.error(f"东方财富 datacenter 列名映射失败: {e}")
             return None
@@ -331,7 +323,9 @@ class HolderStructureCollector:
                     axis=1,
                 )
             else:
-                df["holder_num_pct"] = pd.to_numeric(df["holder_num_pct"], errors="coerce").fillna(0.0)
+                df["holder_num_pct"] = pd.to_numeric(df["holder_num_pct"], errors="coerce").fillna(
+                    0.0
+                )
 
             # holder_num_change 缺失时补 0
             if "holder_num_change" not in df.columns:

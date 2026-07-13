@@ -1,4 +1,5 @@
 """错误消息友好化测试。"""
+
 from __future__ import annotations
 
 from gugu.notifier.feishu import _humanize_error_message

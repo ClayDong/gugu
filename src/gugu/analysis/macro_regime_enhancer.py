@@ -58,9 +58,14 @@ class MacroRegimeEnhancer:
             await self._collect_macro_data()
         if not self._macro_snapshot:
             # 无宏观数据可用时，返回原始结果并标注原因
-            return {**regime_result, "macro_adjustment": {
-                "reasons": [], "reduction": 0.0, "note": "宏观数据不可用",
-            }}
+            return {
+                **regime_result,
+                "macro_adjustment": {
+                    "reasons": [],
+                    "reduction": 0.0,
+                    "note": "宏观数据不可用",
+                },
+            }
 
         reasons: list[str] = []
         total_reduction = 0.0
@@ -79,9 +84,7 @@ class MacroRegimeEnhancer:
                 triggered = False
 
             if triggered:
-                formatted_desc = desc.format(
-                    val=float(val) if not isinstance(val, bool) else val
-                )
+                formatted_desc = desc.format(val=float(val) if not isinstance(val, bool) else val)
                 reasons.append(formatted_desc)
                 total_reduction = max(total_reduction, reduction)
 
@@ -92,8 +95,7 @@ class MacroRegimeEnhancer:
             old_limit = regime_result.get("total_position_limit", 0.40)
             new_limit = max(old_limit - total_reduction, 0.0)
             logger.info(
-                f"宏观增强: 仓位上限 {old_limit:.0%} → {new_limit:.0%}"
-                f" ({'; '.join(reasons)})"
+                f"宏观增强: 仓位上限 {old_limit:.0%} → {new_limit:.0%} ({'; '.join(reasons)})"
             )
 
             return {

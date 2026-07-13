@@ -1,4 +1,5 @@
 """资金流日报模块单元测试。"""
+
 from __future__ import annotations
 
 import math
@@ -311,6 +312,7 @@ class TestAnalyzeSectors:
     def test_empty_data(self):
         """空数据返回空结果。"""
         from gugu.notifier.flow_report import analyze_sectors
+
         result = analyze_sectors([])
         assert result["inflow_top"] == []
         assert result["outflow_top"] == []
@@ -320,6 +322,7 @@ class TestAnalyzeSectors:
     def test_inflow_top(self):
         """应正确排序流入TOP。"""
         from gugu.notifier.flow_report import analyze_sectors
+
         data = [
             {"名称": "白酒", "主力净流入-净额": 500_000_000, "涨跌幅": 2.0},
             {"名称": "半导体", "主力净流入-净额": 300_000_000, "涨跌幅": 1.5},
@@ -333,6 +336,7 @@ class TestAnalyzeSectors:
     def test_outflow_top(self):
         """应正确排序流出TOP。"""
         from gugu.notifier.flow_report import analyze_sectors
+
         data = [
             {"名称": "白酒", "主力净流入-净额": 500_000_000, "涨跌幅": 2.0},
             {"名称": "银行", "主力净流入-净额": -200_000_000, "涨跌幅": -1.0},
@@ -345,6 +349,7 @@ class TestAnalyzeSectors:
     def test_divergence_detection(self):
         """应检测资金流背离。"""
         from gugu.notifier.flow_report import analyze_sectors
+
         data = [
             # 底背离：主力流入 > 1亿 但 跌 > 1%
             {"名称": "白酒", "主力净流入-净额": 200_000_000, "涨跌幅": -2.0},
@@ -360,6 +365,7 @@ class TestAnalyzeSectors:
     def test_rotation_score(self):
         """应计算轮动强度。"""
         from gugu.notifier.flow_report import analyze_sectors
+
         data = [
             {"名称": "A", "主力净流入-净额": 500_000_000, "涨跌幅": 2.0},
             {"名称": "B", "主力净流入-净额": 400_000_000, "涨跌幅": 1.5},
@@ -377,6 +383,7 @@ class TestAnalyzeKeyIndustries:
     def test_match_key_industries(self):
         """应正确匹配重点行业关键词。"""
         from gugu.notifier.flow_report import analyze_key_industries
+
         data = [
             {"行业名称": "半导体", "主力净流入-净额": 500_000_000, "涨跌幅": 2.0},
             {"行业名称": "白酒", "主力净流入-净额": 300_000_000, "涨跌幅": 1.0},
@@ -391,12 +398,14 @@ class TestAnalyzeKeyIndustries:
     def test_empty_data(self):
         """空数据返回空列表。"""
         from gugu.notifier.flow_report import analyze_key_industries
+
         assert analyze_key_industries(None) == []
         assert analyze_key_industries([]) == []
 
     def test_no_match_shows_nodata(self):
         """未匹配的行业应显示暂无数据。"""
         from gugu.notifier.flow_report import analyze_key_industries
+
         data = [{"行业名称": "未知行业", "主力净流入-净额": 0, "涨跌幅": 0}]
         result = analyze_key_industries(data)
         # 至少有一个类别显示暂无数据
@@ -410,6 +419,7 @@ class TestAnalyzeConcepts:
     def test_top_concepts(self):
         """应返回流入TOP概念。"""
         from gugu.notifier.flow_report import analyze_concepts
+
         data = [
             {"概念名称": "AI", "主力净流入-净额": 500_000_000},
             {"概念名称": "新能源", "主力净流入-净额": 300_000_000},
@@ -422,6 +432,7 @@ class TestAnalyzeConcepts:
     def test_empty_data(self):
         """空数据返回空列表。"""
         from gugu.notifier.flow_report import analyze_concepts
+
         assert analyze_concepts([]) == []
 
 
@@ -431,11 +442,22 @@ class TestAnalyzeStrongStocks:
     def test_strong_stocks_filter(self):
         """应过滤主力净占比 > 5% 的个股。"""
         from gugu.notifier.flow_report import analyze_strong_stocks
+
         data = [
-            {"代码": "600519", "名称": "茅台", "主力净流入-净占比": 8.0,
-             "主力净流入-净额": 500_000_000, "涨跌幅": 2.0},
-            {"代码": "000001", "名称": "平安", "主力净流入-净占比": 3.0,
-             "主力净流入-净额": 100_000_000, "涨跌幅": 0.5},
+            {
+                "代码": "600519",
+                "名称": "茅台",
+                "主力净流入-净占比": 8.0,
+                "主力净流入-净额": 500_000_000,
+                "涨跌幅": 2.0,
+            },
+            {
+                "代码": "000001",
+                "名称": "平安",
+                "主力净流入-净占比": 3.0,
+                "主力净流入-净额": 100_000_000,
+                "涨跌幅": 0.5,
+            },
         ]
         result = analyze_strong_stocks(data, top_n=5)
         assert len(result) == 1
@@ -444,6 +466,7 @@ class TestAnalyzeStrongStocks:
     def test_empty_data(self):
         """空数据返回空列表。"""
         from gugu.notifier.flow_report import analyze_strong_stocks
+
         assert analyze_strong_stocks([]) == []
 
 
@@ -453,6 +476,7 @@ class TestAnalyzeMarketOverview:
     def test_main_buy_retail_sell(self):
         """主力买入散户卖出。"""
         from gugu.notifier.flow_report import analyze_market_overview
+
         market = {"main_net_inflow": 50, "small_inflow": -30}
         result = analyze_market_overview(market, None)
         assert "主力买入" in result["main_vs_retail"]
@@ -460,6 +484,7 @@ class TestAnalyzeMarketOverview:
     def test_main_sell_retail_buy(self):
         """主力卖出散户接盘。"""
         from gugu.notifier.flow_report import analyze_market_overview
+
         market = {"main_net_inflow": -50, "small_inflow": 30}
         result = analyze_market_overview(market, None)
         assert "主力卖出" in result["main_vs_retail"]
@@ -467,6 +492,7 @@ class TestAnalyzeMarketOverview:
     def test_north_bound_analysis(self):
         """北向资金分析。"""
         from gugu.notifier.flow_report import analyze_market_overview
+
         north = {"total": 50}
         result = analyze_market_overview(None, north)
         assert result["north_analysis"]["direction"] == "流入"
@@ -475,6 +501,7 @@ class TestAnalyzeMarketOverview:
     def test_north_bound_none(self):
         """北向资金获取不到。"""
         from gugu.notifier.flow_report import analyze_market_overview
+
         north = {"total": None}
         result = analyze_market_overview(None, north)
         assert result["north_analysis"]["direction"] == "获取不到"
@@ -486,9 +513,14 @@ class TestBuildCards:
     def test_build_morning_card(self):
         """盘前复盘卡片应包含关键信息。"""
         from gugu.notifier.flow_report import build_morning_card
+
         data = {
-            "market": {"date": "2026-07-07", "sh_change": 0.5, "sz_change": 0.3,
-                       "main_net_inflow": 30},
+            "market": {
+                "date": "2026-07-07",
+                "sh_change": 0.5,
+                "sz_change": 0.3,
+                "main_net_inflow": 30,
+            },
             "north_bound": {"total": 20},
             "market_overview": {"main_vs_retail": "主力买入，散户卖出"},
             "sectors": {
@@ -497,11 +529,19 @@ class TestBuildCards:
                 "rotation_score": 2.5,
                 "divergence": [],
             },
-            "key_industries": [{"category": "消费", "name": "白酒",
-                                "main_inflow": 5.0, "price_change": 2.0}],
+            "key_industries": [
+                {"category": "消费", "name": "白酒", "main_inflow": 5.0, "price_change": 2.0}
+            ],
             "concepts": [{"name": "AI", "main_inflow": 10.0}],
-            "strong_stocks": [{"name": "茅台", "code": "600519",
-                               "main_ratio": 8.0, "main_inflow": 5.0, "price_change": 2.0}],
+            "strong_stocks": [
+                {
+                    "name": "茅台",
+                    "code": "600519",
+                    "main_ratio": 8.0,
+                    "main_inflow": 5.0,
+                    "price_change": 2.0,
+                }
+            ],
             "timestamp": "2026-07-07 08:00",
         }
         card = build_morning_card(data)
@@ -514,6 +554,7 @@ class TestBuildCards:
     def test_build_morning_card_unavailable(self):
         """数据源不可用时应发送告警卡片。"""
         from gugu.notifier.flow_report import build_morning_card
+
         card = build_morning_card({"sources_unavailable": True})
         assert "card" in card
         assert "数据源不可用" in card["card"]["header"]["title"]["content"]
@@ -522,22 +563,35 @@ class TestBuildCards:
     def test_build_close_card(self):
         """收盘日报卡片应包含关键信息。"""
         from gugu.notifier.flow_report import build_close_card
+
         data = {
-            "market": {"date": "2026-07-07", "sh_change": 0.5, "sz_change": 0.3,
-                       "main_net_inflow": 30},
+            "market": {
+                "date": "2026-07-07",
+                "sh_change": 0.5,
+                "sz_change": 0.3,
+                "main_net_inflow": 30,
+            },
             "north_bound": {"total": 20},
             "market_overview": {"main_vs_retail": "主力买入，散户卖出"},
             "sectors": {
                 "inflow_top": [{"name": "白酒", "main_inflow": 5.0, "price_change": 2.0}],
                 "outflow_top": [{"name": "银行", "main_inflow": -3.0, "price_change": -1.0}],
                 "rotation_score": 2.5,
-                "divergence": [{"name": "白酒", "type": "底背离",
-                                "detail": "主力+5亿但跌2%", "action": "观察"}],
+                "divergence": [
+                    {"name": "白酒", "type": "底背离", "detail": "主力+5亿但跌2%", "action": "观察"}
+                ],
             },
             "key_industries": [],
             "concepts": [{"name": "AI", "main_inflow": 10.0}],
-            "strong_stocks": [{"name": "茅台", "code": "600519",
-                               "main_ratio": 8.0, "main_inflow": 5.0, "price_change": 2.0}],
+            "strong_stocks": [
+                {
+                    "name": "茅台",
+                    "code": "600519",
+                    "main_ratio": 8.0,
+                    "main_inflow": 5.0,
+                    "price_change": 2.0,
+                }
+            ],
             "timestamp": "2026-07-07 15:10",
         }
         card = build_close_card(data)
@@ -548,9 +602,14 @@ class TestBuildCards:
     def test_build_afternoon_card(self):
         """盘后决策报告卡片应包含决策指导。"""
         from gugu.notifier.flow_report import build_afternoon_card
+
         data = {
-            "market": {"date": "2026-07-07", "sh_change": 0.5, "sz_change": 0.3,
-                       "main_net_inflow": 30},
+            "market": {
+                "date": "2026-07-07",
+                "sh_change": 0.5,
+                "sz_change": 0.3,
+                "main_net_inflow": 30,
+            },
             "north_bound": {"total": 20},
             "market_overview": {"main_vs_retail": "主力买入，散户卖出"},
             "sectors": {
@@ -559,8 +618,15 @@ class TestBuildCards:
                 "divergence": [],
             },
             "key_industries": [],
-            "strong_stocks": [{"name": "茅台", "code": "600519",
-                               "main_ratio": 8.0, "main_inflow": 5.0, "price_change": 2.0}],
+            "strong_stocks": [
+                {
+                    "name": "茅台",
+                    "code": "600519",
+                    "main_ratio": 8.0,
+                    "main_inflow": 5.0,
+                    "price_change": 2.0,
+                }
+            ],
             "timestamp": "2026-07-07 14:30",
         }
         card = build_afternoon_card(data)
@@ -571,9 +637,13 @@ class TestBuildCards:
     def test_build_unavailable_card(self):
         """不可用状态卡片。"""
         from gugu.notifier.flow_report import build_unavailable_card
+
         card = build_unavailable_card("资金流复盘")
         assert "card" in card
-        assert "数据暂不可用" in card["card"]["header"]["title"]["content"] or "数据源不可用" in card["card"]["header"]["title"]["content"]
+        assert (
+            "数据暂不可用" in card["card"]["header"]["title"]["content"]
+            or "数据源不可用" in card["card"]["header"]["title"]["content"]
+        )
 
 
 class TestFormatDecisionGuidance:
@@ -582,6 +652,7 @@ class TestFormatDecisionGuidance:
     def test_strong_market(self):
         """主力大幅流入应提示偏强。"""
         from gugu.notifier.flow_report import _format_decision_guidance
+
         data = {
             "market": {"main_net_inflow": 50},
             "sectors": {"divergence": []},
@@ -593,6 +664,7 @@ class TestFormatDecisionGuidance:
     def test_weak_market(self):
         """主力大幅流出应提示偏弱。"""
         from gugu.notifier.flow_report import _format_decision_guidance
+
         data = {
             "market": {"main_net_inflow": -50},
             "sectors": {"divergence": []},
@@ -604,12 +676,17 @@ class TestFormatDecisionGuidance:
     def test_divergence_warning(self):
         """背离预警应显示。"""
         from gugu.notifier.flow_report import _format_decision_guidance
+
         data = {
             "market": {"main_net_inflow": 10},
             "sectors": {
                 "divergence": [
-                    {"name": "白酒", "type": "顶背离",
-                     "detail": "主力-5亿但涨3%", "action": "警惕出货"},
+                    {
+                        "name": "白酒",
+                        "type": "顶背离",
+                        "detail": "主力-5亿但涨3%",
+                        "action": "警惕出货",
+                    },
                 ]
             },
             "strong_stocks": [],
@@ -620,6 +697,7 @@ class TestFormatDecisionGuidance:
     def test_strong_stock_highlight(self):
         """强流入个股应高亮。"""
         from gugu.notifier.flow_report import _format_decision_guidance
+
         data = {
             "market": {"main_net_inflow": 10},
             "sectors": {"divergence": []},

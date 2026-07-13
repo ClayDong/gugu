@@ -31,6 +31,7 @@ from gugu.wisdom.advisor import (
 # wisdom/advisor.py — helper functions
 # ==============================================================================
 
+
 class TestComputeTakeProfit:
     """_compute_take_profit — ATR calibration paths."""
 
@@ -68,7 +69,9 @@ class TestIsProfitableSignal:
         assert _is_profitable_signal({"direction": "buy", "order_success": True}) is True
 
     def test_sell_with_success(self):
-        assert _is_profitable_signal({"direction": "sell", "order_success": True}) is False  # not buy
+        assert (
+            _is_profitable_signal({"direction": "sell", "order_success": True}) is False
+        )  # not buy
 
     def test_empty_record(self):
         assert _is_profitable_signal({}) is False
@@ -77,6 +80,7 @@ class TestIsProfitableSignal:
 # ==============================================================================
 # wisdom/advisor.py — WisdomAdvisor instance tests
 # ==============================================================================
+
 
 class TestWisdomAdvisorConstructor:
     """Constructor with different config scenarios."""
@@ -167,6 +171,7 @@ class TestWisdomAdvisorMethods:
     def test_as_dict_from_signal(self, advisor):
         """_as_dict should convert Signal-like objects."""
         from gugu.models.signal import Signal
+
         sig = Signal(symbol="000001", direction="buy", price=10.0, confidence=0.8)
         result = advisor._as_dict(sig)
         assert result["symbol"] == "000001"
@@ -205,10 +210,18 @@ class TestWisdomAdvisorMethods:
         router = MagicMock()
         router.get_advice.return_value = {
             "perspectives": [
-                {"name": "chen-jiang-ting-perspective", "action": "buy",
-                 "reason": "good setup", "confidence": 0.8},
-                {"name": "jesse-livermore-perspective", "action": "buy",
-                 "reason": "trend is friend", "confidence": 0.7},
+                {
+                    "name": "chen-jiang-ting-perspective",
+                    "action": "buy",
+                    "reason": "good setup",
+                    "confidence": 0.8,
+                },
+                {
+                    "name": "jesse-livermore-perspective",
+                    "action": "buy",
+                    "reason": "trend is friend",
+                    "confidence": 0.7,
+                },
             ],
             "consensus": {"buy_pct": 0.8, "sell_pct": 0.1, "hold_pct": 0.1},
             "conflicts": [],
@@ -225,8 +238,12 @@ class TestWisdomAdvisorMethods:
         router = MagicMock()
         router.get_advice.return_value = {
             "perspectives": [
-                {"name": "chen-jiang-ting-perspective", "action": "sell",
-                 "reason": "danger", "confidence": 0.8},
+                {
+                    "name": "chen-jiang-ting-perspective",
+                    "action": "sell",
+                    "reason": "danger",
+                    "confidence": 0.8,
+                },
             ],
             "consensus": {"buy_pct": 0.2, "sell_pct": 0.6, "hold_pct": 0.2},
             "conflicts": [],
@@ -268,9 +285,7 @@ class TestWisdomAdvisorMethods:
         assert result is None
 
     def test_parse_llm_response_code_block(self, advisor):
-        result = advisor._parse_llm_response(
-            "```json\n{\"action\": \"hold\", \"reason\": \"test\"}\n```"
-        )
+        result = advisor._parse_llm_response('```json\n{"action": "hold", "reason": "test"}\n```')
         assert result is not None
         assert result["action"] == "hold"
 
@@ -284,20 +299,32 @@ class TestWisdomAdvisorMethods:
         assert result is None
 
     def test_build_interpret_prompt(self, advisor):
-        prompt = advisor._build_interpret_prompt({
-            "symbol": "000001", "name": "平安银行", "direction": "buy",
-            "strategy": "breakout", "reason": "新高突破", "price": "15.0",
-            "wisdom_decision": {"action": "buy", "llm_reason": "good signal",
-                                "stop_loss_price": 14.0},
-        })
+        prompt = advisor._build_interpret_prompt(
+            {
+                "symbol": "000001",
+                "name": "平安银行",
+                "direction": "buy",
+                "strategy": "breakout",
+                "reason": "新高突破",
+                "price": "15.0",
+                "wisdom_decision": {
+                    "action": "buy",
+                    "llm_reason": "good signal",
+                    "stop_loss_price": 14.0,
+                },
+            }
+        )
         assert "平安银行" in prompt
         assert "buy" in prompt
         assert "14.0" in prompt
 
     def test_build_interpret_prompt_no_decision(self, advisor):
-        prompt = advisor._build_interpret_prompt({
-            "symbol": "000001", "direction": "buy",
-        })
+        prompt = advisor._build_interpret_prompt(
+            {
+                "symbol": "000001",
+                "direction": "buy",
+            }
+        )
         assert "000001" in prompt
 
     def test_build_system_prompt(self, advisor):
@@ -312,11 +339,7 @@ class TestWisdomAdvisorMethods:
 
     def test_extract_decision_rules(self, advisor):
         content = (
-            "## I — 方法论骨架\n"
-            "rule1\n"
-            "## R — 原文引用\nskip this\n"
-            "## E — 执行步骤\n"
-            "step1\nstep2\n"
+            "## I — 方法论骨架\nrule1\n## R — 原文引用\nskip this\n## E — 执行步骤\nstep1\nstep2\n"
         )
         result = advisor._extract_decision_rules(content)
         assert "方法论" in result or "I" in result
@@ -523,7 +546,11 @@ class TestWisdomAdvisorMethods:
             "fundamental": {"pe": 25.0},
         }
         advice = advisor._build_data_driven_advice(signal, "buy")
-        assert "danger_signals" in str(advice) or "危险信号" in str(advice) or "量价背离" in str(advice)
+        assert (
+            "danger_signals" in str(advice)
+            or "危险信号" in str(advice)
+            or "量价背离" in str(advice)
+        )
 
     def test_get_skill_advice_empty(self, advisor):
         result = advisor._get_skill_advice("nonexistent")
@@ -557,7 +584,12 @@ class TestWisdomAdvisorMethods:
         assert result["wisdom_filtered"] is True
 
     def test_apply_llm_decision_buy(self, advisor):
-        signal = {"symbol": "000001", "direction": "buy", "price": 10.0, "current_position_ratio": 0}
+        signal = {
+            "symbol": "000001",
+            "direction": "buy",
+            "price": 10.0,
+            "current_position_ratio": 0,
+        }
         llm_decision = {
             "action": "buy",
             "position_ratio": 0.1,
@@ -572,9 +604,17 @@ class TestWisdomAdvisorMethods:
 
     def test_apply_llm_decision_position_ratio_out_of_range(self, advisor):
         """Position ratio > 1.0 should be clamped."""
-        signal = {"symbol": "000001", "direction": "buy", "price": 10.0, "current_position_ratio": 0}
+        signal = {
+            "symbol": "000001",
+            "direction": "buy",
+            "price": 10.0,
+            "current_position_ratio": 0,
+        }
         llm_decision = {
-            "action": "buy", "position_ratio": 5.0, "stop_loss_price": 9.5, "reason": "test",
+            "action": "buy",
+            "position_ratio": 5.0,
+            "stop_loss_price": 9.5,
+            "reason": "test",
         }
         result = advisor._apply_llm_decision(signal, llm_decision)
         # Should be clamped to max
@@ -582,10 +622,18 @@ class TestWisdomAdvisorMethods:
 
     def test_apply_llm_decision_stop_loss_too_close(self, advisor):
         """Stop loss too close to price should be adjusted."""
-        signal = {"symbol": "000001", "direction": "buy", "price": 10.0, "current_position_ratio": 0}
+        signal = {
+            "symbol": "000001",
+            "direction": "buy",
+            "price": 10.0,
+            "current_position_ratio": 0,
+        }
         # stop_loss_price at 9.9, only 1% below price (< 2%)
         llm_decision = {
-            "action": "buy", "position_ratio": 0.1, "stop_loss_price": 9.9, "reason": "test",
+            "action": "buy",
+            "position_ratio": 0.1,
+            "stop_loss_price": 9.9,
+            "reason": "test",
         }
         result = advisor._apply_llm_decision(signal, llm_decision)
         # The decision dict won't have stop_loss_price until later; but signal should
@@ -596,12 +644,15 @@ class TestWisdomAdvisorMethods:
 # wisdom/book_router.py — BookPerspectiveRouter (remaining paths)
 # ==============================================================================
 
+
 class TestBookPerspectiveRouter:
     """Additional tests for BookPerspectiveRouter beyond test_p0_wisdom.py."""
 
     @pytest.fixture
     def router(self):
-        return __import__("gugu.wisdom.book_router", fromlist=["BookPerspectiveRouter"]).BookPerspectiveRouter()
+        return __import__(
+            "gugu.wisdom.book_router", fromlist=["BookPerspectiveRouter"]
+        ).BookPerspectiveRouter()
 
     def test_available_perspectives(self, router):
         names = router.available_perspectives
@@ -691,6 +742,7 @@ class TestBookPerspectiveRouterCore:
     def test_extract_core_wisdom_beliefs_nevers_habits(self):
         """Extract beliefs section."""
         from gugu.wisdom.book_router import BookPerspectiveRouter
+
         router = BookPerspectiveRouter()
         content = (
             "## 核心理念\n"
@@ -716,6 +768,7 @@ class TestBookPerspectiveRouterCore:
     def test_extract_core_wisdom_no_sections(self):
         """Content with no matching sections returns empty."""
         from gugu.wisdom.book_router import BookPerspectiveRouter
+
         router = BookPerspectiveRouter()
         content = "## Some random section\nrandom content\n"
         result = router._extract_core_wisdom(content, "test")
@@ -724,6 +777,7 @@ class TestBookPerspectiveRouterCore:
     def test_get_perspective_summary_with_intro(self):
         """Extract summary from '我是谁' intro section."""
         from gugu.wisdom.book_router import BookPerspectiveRouter
+
         content = (
             "## 我是谁\n"
             "I am a wise investor who follows value principles.\n"
@@ -741,6 +795,7 @@ class TestBookPerspectiveRouterCore:
 # ==============================================================================
 # screener/report.py — Screener report formatting
 # ==============================================================================
+
 
 class TestScreenerReport:
     """format_screener_report and format_range_watchlist."""
@@ -827,8 +882,20 @@ class TestScreenerReport:
 
         mock_dt.now.return_value.strftime.return_value = "07-06 11:00"
         candidates = [
-            {"symbol": "600519", "name": "贵州茅台", "price": 1500.0, "ma20": 1490.0, "distance_pct": 0.67},
-            {"symbol": "000858", "name": "五粮液", "price": 150.0, "ma20": 155.0, "distance_pct": -3.33},
+            {
+                "symbol": "600519",
+                "name": "贵州茅台",
+                "price": 1500.0,
+                "ma20": 1490.0,
+                "distance_pct": 0.67,
+            },
+            {
+                "symbol": "000858",
+                "name": "五粮液",
+                "price": 150.0,
+                "ma20": 155.0,
+                "distance_pct": -3.33,
+            },
         ]
         result = format_range_watchlist(candidates=candidates, market_regime="range")
         assert result["msg_type"] == "interactive"
@@ -840,6 +907,7 @@ class TestScreenerReport:
 # ==============================================================================
 # edge case: empty/none handling
 # ==============================================================================
+
 
 class TestEdgeCases:
     """Edge case handling for robust coverage."""

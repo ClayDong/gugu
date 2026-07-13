@@ -347,7 +347,9 @@ async def _collect_stock_index() -> StockIndexData:
                             if attempt < 2:
                                 await asyncio.sleep(0.5 * (attempt + 1))
                                 continue
-                            logger.warning(f"[macro] 指数 {secid} 返回空数据 (attempt {attempt+1})")
+                            logger.warning(
+                                f"[macro] 指数 {secid} 返回空数据 (attempt {attempt + 1})"
+                            )
                             break
 
                         d = data["data"]
@@ -380,9 +382,11 @@ async def _collect_stock_index() -> StockIndexData:
                             await asyncio.sleep(0.5 * (attempt + 1))
                             continue
                         else:
-                            logger.warning(f"[macro] 指数 {secid} price=0 (attempt {attempt+1})")
+                            logger.warning(f"[macro] 指数 {secid} price=0 (attempt {attempt + 1})")
                     except Exception as e:
-                        logger.warning(f"[macro] 指数 {secid} 采集异常 (attempt {attempt+1}): {e}")
+                        logger.warning(
+                            f"[macro] 指数 {secid} 采集异常 (attempt {attempt + 1}): {e}"
+                        )
                         if attempt < 2:
                             await asyncio.sleep(0.5 * (attempt + 1))
                             continue

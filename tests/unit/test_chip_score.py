@@ -8,6 +8,7 @@
 - 散户化 → 低分
 - 流通市值分档评分
 """
+
 from __future__ import annotations
 
 import pytest
@@ -75,7 +76,7 @@ class TestChipScoreLurker:
             label="潜伏者",
             holder_num_pct=-25.0,  # 户数下降>20% → 0.4
             avg_hold_change=20.0,  # 户均+20% → 0.3
-            org_hold_pct=50.0,     # 机构>40% → 0.2
+            org_hold_pct=50.0,  # 机构>40% → 0.2
         )
         score = ranker._compute_chip_score(hc, circ_mv=100.0)  # 50-500亿 → 0.1
         assert score == pytest.approx(1.0, abs=0.01)
@@ -87,7 +88,7 @@ class TestChipScoreLurker:
             label="潜伏者",
             holder_num_pct=-10.0,  # 单季下降>5% → 0.3
             avg_hold_change=10.0,  # 上升5-15% → 0.2
-            org_hold_pct=25.0,     # 20-40% → 0.15
+            org_hold_pct=25.0,  # 20-40% → 0.15
         )
         score = ranker._compute_chip_score(hc, circ_mv=100.0)  # 50-500亿 → 0.1
         # 0.3 + 0.2 + 0.15 + 0.1 = 0.75
@@ -102,9 +103,9 @@ class TestChipScoreNeutral:
         ranker = StockRanker()
         hc = _make_hc_result(
             label="中性",
-            holder_num_pct=-3.0,   # ±5% → 0.2
-            avg_hold_change=2.0,   # ±5% → 0.15
-            org_hold_pct=15.0,     # 10-20% → 0.1
+            holder_num_pct=-3.0,  # ±5% → 0.2
+            avg_hold_change=2.0,  # ±5% → 0.15
+            org_hold_pct=15.0,  # 10-20% → 0.1
         )
         score = ranker._compute_chip_score(hc, circ_mv=100.0)  # 50-500亿 → 0.1
         # 0.2 + 0.15 + 0.1 + 0.1 = 0.55
@@ -119,9 +120,9 @@ class TestChipScoreRetailDominated:
         ranker = StockRanker()
         hc = _make_hc_result(
             label="中性",
-            holder_num_pct=25.0,   # 连续上升>20% → 0.0
-            avg_hold_change=-25.0, # 下降>20% → 0.0
-            org_hold_pct=5.0,      # <10% → 0.05
+            holder_num_pct=25.0,  # 连续上升>20% → 0.0
+            avg_hold_change=-25.0,  # 下降>20% → 0.0
+            org_hold_pct=5.0,  # <10% → 0.05
         )
         score = ranker._compute_chip_score(hc, circ_mv=100.0)  # 50-500亿 → 0.1
         # 0.0 + 0.0 + 0.05 + 0.1 = 0.15
@@ -187,9 +188,15 @@ class TestChipScoreRange:
         scenarios = [
             _make_hc_result(label="避雷针", holder_num_pct=100.0),
             _make_hc_result(data_missing=True),
-            _make_hc_result(label="潜伏者", holder_num_pct=-30.0, avg_hold_change=30.0, org_hold_pct=80.0),
-            _make_hc_result(label="中性", holder_num_pct=0.0, avg_hold_change=0.0, org_hold_pct=0.0),
-            _make_hc_result(label="中性", holder_num_pct=50.0, avg_hold_change=-30.0, org_hold_pct=0.0),
+            _make_hc_result(
+                label="潜伏者", holder_num_pct=-30.0, avg_hold_change=30.0, org_hold_pct=80.0
+            ),
+            _make_hc_result(
+                label="中性", holder_num_pct=0.0, avg_hold_change=0.0, org_hold_pct=0.0
+            ),
+            _make_hc_result(
+                label="中性", holder_num_pct=50.0, avg_hold_change=-30.0, org_hold_pct=0.0
+            ),
         ]
         for hc in scenarios:
             score = ranker._compute_chip_score(hc, circ_mv=100.0)

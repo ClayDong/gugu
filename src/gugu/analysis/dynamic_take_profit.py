@@ -138,6 +138,7 @@ class DynamicTakeProfitEngine:
             # P1-5 修复：原 write_text 在写入中途崩溃会导致状态文件截断
             # 改用 atomic_write_text（同目录 tmp → fsync → os.replace 原子替换）
             from gugu.utils.atomic import atomic_write_text
+
             atomic_write_text(
                 self._state_path,
                 json.dumps(data, ensure_ascii=False, indent=2),
@@ -210,7 +211,11 @@ class DynamicTakeProfitEngine:
 
         # ===== 第4步：大跌减半（最高优先级，保命优先）=====
         # 单日跌幅 = (current - prev_close) / prev_close
-        if prev_close > 0 and (current_price - prev_close) / prev_close <= BIG_DROP_THRESHOLD and state.last_big_drop_date != today:
+        if (
+            prev_close > 0
+            and (current_price - prev_close) / prev_close <= BIG_DROP_THRESHOLD
+            and state.last_big_drop_date != today
+        ):
             daily_change = (current_price - prev_close) / prev_close
             reduce_ratio = BIG_DROP_REDUCE_RATIO
             # 若尚未首减，大跌时直接减半（比 1/3 更狠）
@@ -219,8 +224,7 @@ class DynamicTakeProfitEngine:
             return TakeProfitSignal(
                 action="reduce",
                 reason=(
-                    f"单日大跌 {daily_change:.1%}（≤{BIG_DROP_THRESHOLD:.0%}），"
-                    f"触发第4步减半保命"
+                    f"单日大跌 {daily_change:.1%}（≤{BIG_DROP_THRESHOLD:.0%}），触发第4步减半保命"
                 ),
                 reduce_ratio=reduce_ratio,
                 trigger_step=4,

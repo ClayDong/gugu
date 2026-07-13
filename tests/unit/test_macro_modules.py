@@ -1,4 +1,5 @@
 """宏观模块测试：collectors / report / scheduler 的核心逻辑覆盖。"""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock

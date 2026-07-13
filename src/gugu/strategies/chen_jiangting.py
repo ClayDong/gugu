@@ -85,7 +85,7 @@ class ChenJiangtingStrategy(Strategy):
         trend_up = df["ma_short"] > df["ma_long"]
 
         # ── 条件4：阶段过滤（排除已疯涨）──
-        daily_gain = (df["close"] / df["close"].shift(1) - 1.0)
+        daily_gain = df["close"] / df["close"].shift(1) - 1.0
         not_crazy = daily_gain < max_daily_gain_pct
 
         # ── 买入信号：4 条件全部满足 ──
@@ -110,13 +110,19 @@ class ChenJiangtingStrategy(Strategy):
         # 突破幅度 + 量比 + 趋势强度 综合
         breakout_pct = (df["close"] - resistance) / resistance.where(resistance > 0, 1)
         vol_ratio_actual = (df["volume"] / vol_ma).where(vol_ma > 0, 0)
-        trend_strength = (df["ma_short"] - df["ma_long"]) / df["ma_long"].where(df["ma_long"] > 0, 1)
+        trend_strength = (df["ma_short"] - df["ma_long"]) / df["ma_long"].where(
+            df["ma_long"] > 0, 1
+        )
 
         confidence = (
-            0.4 * breakout_pct.clip(0, 0.1) / 0.1  # 突破幅度 0-10% 映射 0-0.4
-            + 0.3 * (vol_ratio_actual - 1.0).clip(0, 1)  # 量比超出部分映射 0-0.3
-            + 0.3 * trend_strength.clip(0, 0.1) / 0.1  # 趋势强度 0-10% 映射 0-0.3
-        ).fillna(0).clip(0, 1.0)
+            (
+                0.4 * breakout_pct.clip(0, 0.1) / 0.1  # 突破幅度 0-10% 映射 0-0.4
+                + 0.3 * (vol_ratio_actual - 1.0).clip(0, 1)  # 量比超出部分映射 0-0.3
+                + 0.3 * trend_strength.clip(0, 0.1) / 0.1  # 趋势强度 0-10% 映射 0-0.3
+            )
+            .fillna(0)
+            .clip(0, 1.0)
+        )
 
         df["confidence"] = confidence.where(buy_cond, 0.0)
 
