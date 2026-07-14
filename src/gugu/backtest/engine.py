@@ -993,28 +993,68 @@ def walk_forward_optimize_multi_stock(
         best_avg_sharpe = -999.0
 
         # Grid search：对每组参数，在所有股票上训练并取平均 Sharpe
+        # P2 修复：多核加速 — 用 ProcessPoolExecutor 并行多股回测
         keys = list(param_grid.keys())
         if keys:
-            for values in itertools.product(*param_grid.values()):
+            param_combos = list(itertools.product(*param_grid.values()))
+            # 过滤无效参数组合
+            valid_combos: list[dict[str, Any]] = []
+            for values in param_combos:
                 params = dict(zip(keys, values, strict=True))
-                # P1 修复：参数约束过滤（如 short_window >= long_window 跳过）
                 if param_constraints is not None and not param_constraints(params):
                     continue
-                try:
-                    train_sharpes: list[float] = []
-                    for sym, tdf in train_dfs.items():
-                        strategy = strategy_cls(params)
-                        engine = BacktestEngine()
-                        result = engine.run(strategy, tdf, symbol=sym)
-                        train_sharpes.append(result.metrics.get("sharpe", 0))
-                    # 聚合指标：平均 Sharpe（避免单股极端值影响）
-                    avg_train_sharpe = sum(train_sharpes) / len(train_sharpes)
-                    if avg_train_sharpe > best_avg_sharpe:
-                        best_avg_sharpe = avg_train_sharpe
-                        best_params = dict(params)
-                except Exception as e:
-                    logger.debug(f"多股 grid search failed for {params}: {e}")
-                    continue
+                valid_combos.append(params)
+
+            if valid_combos and len(stock_dfs) > 3:
+                # ProcessPoolExecutor 并行化：每个 worker 跑一组参数×多股
+                import concurrent.futures
+
+                def _eval_params(
+                    params: dict[str, Any],
+                ) -> tuple[dict[str, Any], float]:
+                    """评估一组参数的平均 Sharpe。"""
+                    sharpes: list[float] = []
+                    for tdf in train_dfs.values():
+                        try:
+                            s = strategy_cls(params)
+                            eng = BacktestEngine()
+                            r = eng.run(s, tdf, symbol="")
+                            sharpes.append(r.metrics.get("sharpe", 0))
+                        except Exception:
+                            sharpes.append(0.0)
+                    avg_sh = sum(sharpes) / max(len(sharpes), 1)
+                    return params, avg_sh
+
+                n_workers = min(len(valid_combos), 8)  # 限制最大 8 核
+                with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
+                    futures = {executor.submit(_eval_params, p): p for p in valid_combos}
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            p, avg_sh = future.result()
+                            if avg_sh > best_avg_sharpe:
+                                best_avg_sharpe = avg_sh
+                                best_params = dict(p)
+                        except Exception as e:
+                            logger.debug(f"多核 grid search 失败: {e}")
+                            continue
+            else:
+                # 参数太少或股票太少时保持串行（避免进程池开销 > 并行收益）
+                for params in valid_combos:
+                    try:
+                        train_sharpes: list[float] = []
+                        for sym, tdf in train_dfs.items():
+                            strategy = strategy_cls(params)
+                            engine = BacktestEngine()
+                            result = engine.run(strategy, tdf, symbol=sym)
+                            train_sharpes.append(result.metrics.get("sharpe", 0))
+                        # 聚合指标：平均 Sharpe
+                        avg_train_sharpe = sum(train_sharpes) / len(train_sharpes)
+                        if avg_train_sharpe > best_avg_sharpe:
+                            best_avg_sharpe = avg_train_sharpe
+                            best_params = dict(params)
+                    except Exception as e:
+                        logger.debug(f"多股 grid search failed for {params}: {e}")
+                        continue
         else:
             best_params = {}
             train_sharpes = []

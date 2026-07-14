@@ -41,6 +41,9 @@ class BoxBreakoutStrategy(Strategy):
         vol_ratio = float(self.params.get("volume_ratio", 1.5))
         # v2 新增参数
         trend_filter = bool(self.params.get("trend_filter", True))
+        # trend_mode: "crossover"（MA短 > MA长，滞后大但稳定）
+        #            "slope"（MA斜率正，响应快但噪声多，默认）
+        trend_mode = str(self.params.get("trend_mode", "slope"))
         ma_short = int(self.params.get("trend_ma_short", 20))
         ma_long = int(self.params.get("trend_ma_long", 60))
         max_hold_days = int(self.params.get("max_hold_days", 30))
@@ -63,9 +66,19 @@ class BoxBreakoutStrategy(Strategy):
             # vol_ma 为 NaN 的行（开箱期）跳过成交量确认，仅用价格突破判断
             vol_ok = vol_ok | df["vol_ma"].isna()
             breakout_up = breakout_up & vol_ok
-        # v2: 趋势过滤 — 仅在 MA20 > MA60（上升趋势）时允许买入
+        # v2: 趋势过滤 — 上升趋势才允许买入
+        # P2 优化：新增 slope 模式（均线斜率正 = MA20 斜率上行）
+        # 响应速度比 crossover 模式快 5-10 天
         if trend_filter:
-            trend_ok = df["ma_short"] > df["ma_long"]
+            if trend_mode == "slope":
+                ma = df["close"].rolling(ma_short).mean()
+                # 用当前 MA - N 天前 MA 的差值/MA 近似斜率
+                ma_slope = (ma - ma.shift(5)) / ma.shift(5).replace(0, 1e-10)
+                trend_ok = ma_slope > 0
+            else:  # crossover — MA短 > MA长
+                df["ma_short"] = df["close"].rolling(ma_short).mean()
+                df["ma_long"] = df["close"].rolling(ma_long).mean()
+                trend_ok = df["ma_short"] > df["ma_long"]
             breakout_up = breakout_up & trend_ok
         df.loc[breakout_up, "signal"] = 1
 

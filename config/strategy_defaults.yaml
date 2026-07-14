@@ -25,10 +25,11 @@ box_breakout:
   volume_confirm: True  # 成交量确认（仅买入，卖出不需要）
   volume_ratio: 1.2  # 量比阈值
   confirm_days: 1                # 突破后需 1 根 K 线确认（防假突破）
-  # v2 新增：趋势过滤 — 仅在 MA20 > MA60（上升趋势）时允许买入
+  # v2 新增：趋势过滤 — 仅在上升趋势时允许买入
   trend_filter: True
+  trend_mode: slope              # P2 优化：均线斜率模式（slope/crossover），响应更快
   trend_ma_short: 20              # 趋势短期均线
-  trend_ma_long: 60               # 趋势长期均线
+  trend_ma_long: 60               # 趋势长期均线（仅 crossover 模式使用）
   # v2 新增：最大持仓天数 — 超时强制卖出，防止资金被横盘股套牢
   max_hold_days: 30
 
