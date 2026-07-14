@@ -154,7 +154,12 @@ async def run_ic_analysis(symbols: list[str], days: int) -> dict:
     }
 
 
-async def run_ml_backtest(symbols: list[str], days: int, train_ratio: float = 0.6) -> dict:
+async def run_ml_backtest(
+    symbols: list[str],
+    days: int,
+    train_ratio: float = 0.6,
+    strategy_params: dict | None = None,
+) -> dict:
     """对多只股票跑 ML 策略回测（仅评估测试期）。
 
     第一性原理：
@@ -164,9 +169,13 @@ async def run_ml_backtest(symbols: list[str], days: int, train_ratio: float = 0.
       但只统计测试期内的 trades 和 equity_curve，重新计算 metrics
     """
     logger.info(f"开始 ML 策略回测，{len(symbols)} 只股票，{days} 天，train_ratio={train_ratio}")
+    if strategy_params:
+        logger.info(f"策略参数覆盖: {strategy_params}")
 
     engine = BacktestEngine()
     strategy = get_strategy("ml_factor")
+    if strategy_params:
+        strategy.params.update(strategy_params)
 
     all_metrics: list[dict] = []
     per_stock: list[dict] = []
@@ -405,7 +414,14 @@ async def train_global_model(symbols: list[str], days: int, train_ratio: float =
     return train_result
 
 
-async def main_async(max_stocks: int, days: int, output: str, report: bool, train_ratio: float = 0.6) -> None:
+async def main_async(
+    max_stocks: int,
+    days: int,
+    output: str,
+    report: bool,
+    train_ratio: float = 0.6,
+    strategy_params: dict | None = None,
+) -> None:
     """主入口。"""
     symbols = await fetch_stock_list(max_stocks)
     if not symbols:
@@ -434,7 +450,7 @@ async def main_async(max_stocks: int, days: int, output: str, report: bool, trai
     logger.info("=" * 60)
     logger.info(f"Step 3: ML 策略全市场回测（仅评估测试期，train_ratio={train_ratio}）")
     logger.info("=" * 60)
-    bt_result = await run_ml_backtest(symbols, days, train_ratio=train_ratio)
+    bt_result = await run_ml_backtest(symbols, days, train_ratio=train_ratio, strategy_params=strategy_params)
 
     # Step 4: 准入门禁评估
     logger.info("=" * 60)
@@ -488,9 +504,23 @@ def main() -> None:
     parser.add_argument("--output", type=str, default="", help="输出报告 JSON 路径")
     parser.add_argument("--report", action="store_true", help="打印文本报告")
     parser.add_argument("--train-ratio", type=float, default=0.6, help="训练集比例（默认 0.6，即 60%% 训练 40%% 测试）")
+    parser.add_argument("--buy-threshold", type=float, default=None, help="覆盖买入阈值（默认 0.66）")
+    parser.add_argument("--sell-threshold", type=float, default=None, help="覆盖卖出阈值（默认 0.34）")
+    parser.add_argument("--cooldown-days", type=int, default=None, help="覆盖冷却期天数（默认 16）")
     args = parser.parse_args()
 
-    asyncio.run(main_async(args.max_stocks, args.days, args.output, args.report, args.train_ratio))
+    strategy_params: dict = {}
+    if args.buy_threshold is not None:
+        strategy_params["buy_threshold"] = args.buy_threshold
+    if args.sell_threshold is not None:
+        strategy_params["sell_threshold"] = args.sell_threshold
+    if args.cooldown_days is not None:
+        strategy_params["cooldown_days"] = args.cooldown_days
+
+    asyncio.run(main_async(
+        args.max_stocks, args.days, args.output, args.report,
+        args.train_ratio, strategy_params or None,
+    ))
 
 
 if __name__ == "__main__":
