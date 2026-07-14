@@ -182,10 +182,19 @@ class MLFactorModel:
     def train(
         self,
         factor_df: pd.DataFrame,
-        close: pd.Series,
+        close: pd.Series | None = None,
         factor_columns: list[str] | None = None,
+        labels: pd.Series | None = None,
     ) -> dict[str, Any]:
-        """训练 LightGBM 模型。"""
+        """训练 LightGBM 模型。
+
+        Args:
+            factor_df: 因子矩阵。
+            close: 收盘价序列，用于计算 IC 和标签。当 labels 传入时可省略。
+            factor_columns: 因子列名列表。
+            labels: 预计算标签。传入时跳过 close 标签计算，
+                    用于多股票联合训练（按股票分别计算 forward returns 后合并）。
+        """
         import lightgbm as lgb
 
         if factor_columns is None:
@@ -195,14 +204,17 @@ class MLFactorModel:
                 and pd.api.types.is_numeric_dtype(factor_df[c])
             ]
 
-        # 优化1：因子方向处理
-        ic_means = _compute_factor_ic(factor_df, close, factor_columns, self.forward_days)
-        self.reversed_factors = [
-            name for name, ic in ic_means.items()
-            if ic < -0.02
-        ]
-        if self.reversed_factors:
-            logger.info(f"反转 {len(self.reversed_factors)} 个负 IC 因子: {self.reversed_factors}")
+        # 优化1：因子方向处理（需要 close 计算 IC）
+        if close is not None:
+            ic_means = _compute_factor_ic(factor_df, close, factor_columns, self.forward_days)
+            self.reversed_factors = [
+                name for name, ic in ic_means.items()
+                if ic < -0.02
+            ]
+            if self.reversed_factors:
+                logger.info(f"反转 {len(self.reversed_factors)} 个负 IC 因子: {self.reversed_factors}")
+        elif not self.reversed_factors:
+            logger.warning("close 为空且无预计算 reversed_factors，跳过因子方向处理")
 
         feature_df = factor_df[factor_columns].copy()
         for col in self.reversed_factors:
@@ -214,8 +226,12 @@ class MLFactorModel:
         enhanced_cols = list(enhanced_df.columns)
         self.feature_names = enhanced_cols
 
-        # 优化3：标签优化（分位数分类）
-        labels = self._prepare_labels_quantile(close)
+        # 优化3：标签
+        if labels is None:
+            if close is None:
+                logger.warning("close 和 labels 均为空，跳过训练")
+                return {"status": "skipped", "reason": "no_labels"}
+            labels = self._prepare_labels_quantile(close)
 
         # 对齐并丢弃中间标签
         aligned = enhanced_df.copy()

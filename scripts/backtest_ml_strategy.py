@@ -31,15 +31,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from gugu.analysis.alpha_factory import AlphaFactory  # noqa: E402
 from gugu.analysis.factor_ic import FactorICAnalyzer  # noqa: E402
 from gugu.analysis.ml_factor import MLFactorModel  # noqa: E402
-from gugu.backtest import BacktestEngine  # noqa: E402
+from gugu.backtest import BacktestEngine, calc_metrics  # noqa: E402
 from gugu.data.manager import data_manager  # noqa: E402
 from gugu.strategies.registry import get_strategy  # noqa: E402
 from gugu.utils.log import get_logger  # noqa: E402
 
 logger = get_logger()
 
-_STOCK_CONCURRENCY = 5
-_KLINE_TIMEOUT = 15
+_STOCK_CONCURRENCY = 10
+_KLINE_TIMEOUT = 30
 _MIN_DATA_DAYS = 200
 
 
@@ -67,13 +67,12 @@ async def fetch_stock_list(max_stocks: int) -> list[str]:
         cache_dir = Path("data/parquet_cache")
         if cache_dir.exists():
             codes = set()
-            for pattern in ("*_500d.parquet", "*_250d.parquet"):
+            # 累积所有可用的缓存文件，不 break（优先 365d 因为数据量最多）
+            for pattern in ("*_365d.parquet", "*_500d.parquet", "*_300d.parquet", "*_250d.parquet"):
                 for p in cache_dir.glob(pattern):
                     code = p.stem.split("_")[0]
                     if not code.startswith(("43", "83", "87", "88", "4", "8", "bj")):
                         codes.add(code)
-                if codes:
-                    break
             candidates = sorted(codes)
             logger.info(f"parquet_cache 降级读取: {len(candidates)} 只")
 
@@ -155,14 +154,22 @@ async def run_ic_analysis(symbols: list[str], days: int) -> dict:
     }
 
 
-async def run_ml_backtest(symbols: list[str], days: int) -> dict:
-    """对多只股票跑 ML 策略回测。"""
-    logger.info(f"开始 ML 策略回测，{len(symbols)} 只股票，{days} 天")
+async def run_ml_backtest(symbols: list[str], days: int, train_ratio: float = 0.6) -> dict:
+    """对多只股票跑 ML 策略回测（仅评估测试期）。
+
+    第一性原理：
+    - 模型用前 train_ratio 的数据训练，必须在后 (1-train_ratio) 的数据上测试
+    - 否则存在 train/test leak：模型见过测试期的数据，回测结果虚高
+    - 实现：engine 在全量数据上运行（保证因子有足够历史），
+      但只统计测试期内的 trades 和 equity_curve，重新计算 metrics
+    """
+    logger.info(f"开始 ML 策略回测，{len(symbols)} 只股票，{days} 天，train_ratio={train_ratio}")
 
     engine = BacktestEngine()
     strategy = get_strategy("ml_factor")
 
     all_metrics: list[dict] = []
+    per_stock: list[dict] = []
     sem = asyncio.Semaphore(_STOCK_CONCURRENCY)
 
     async def _one(symbol: str) -> dict | None:
@@ -173,8 +180,34 @@ async def run_ml_backtest(symbols: list[str], days: int) -> dict:
                 return None
             try:
                 result = engine.run(strategy, df, symbol)
-                logger.info(f"{symbol}: trades={result.metrics.get('total_trades', 0)}, return={result.metrics.get('total_return', 0):.4f}")
-                return result.metrics
+
+                # 仅评估测试期：过滤 trades 和 equity_curve
+                split_idx = int(len(df) * train_ratio)
+                if split_idx < len(df) - 10:
+                    split_date = pd.Timestamp(df.iloc[split_idx]["date"])
+                    test_trades = [
+                        t for t in result.trades
+                        if pd.Timestamp(t.date) >= split_date
+                    ]
+                    test_equity = result.equity_curve[
+                        result.equity_curve.index >= split_date
+                    ]
+                    if len(test_equity) > 1:
+                        test_metrics = calc_metrics(test_equity, test_trades)
+                    else:
+                        test_metrics = {
+                            "total_trades": 0, "total_return": 0.0,
+                            "sharpe": 0.0, "max_drawdown": 0.0,
+                            "win_rate": 0.0, "avg_hold_days": 0.0,
+                        }
+                else:
+                    test_metrics = result.metrics
+
+                logger.info(
+                    f"{symbol}: trades={test_metrics.get('total_trades', 0)}, "
+                    f"return={test_metrics.get('total_return', 0):.4f}"
+                )
+                return {"symbol": symbol, "metrics": test_metrics}
             except Exception as e:
                 logger.warning(f"{symbol} ML 回测失败: {e}")
                 return None
@@ -182,9 +215,17 @@ async def run_ml_backtest(symbols: list[str], days: int) -> dict:
     tasks = [_one(sym) for sym in symbols]
     t0 = time.time()
     for i, coro in enumerate(asyncio.as_completed(tasks)):
-        m = await coro
-        if m:
-            all_metrics.append(m)
+        r = await coro
+        if r:
+            all_metrics.append(r["metrics"])
+            per_stock.append({
+                "symbol": r["symbol"],
+                "trades": r["metrics"].get("total_trades", 0),
+                "return": round(r["metrics"].get("total_return", 0), 4),
+                "sharpe": round(r["metrics"].get("sharpe", 0), 4),
+                "max_drawdown": round(r["metrics"].get("max_drawdown", 0), 4),
+                "win_rate": round(r["metrics"].get("win_rate", 0), 4),
+            })
         if (i + 1) % 10 == 0:
             elapsed = time.time() - t0
             logger.info(f"回测进度: {i + 1}/{len(tasks)}, 已用 {elapsed:.0f}s")
@@ -214,6 +255,7 @@ async def run_ml_backtest(symbols: list[str], days: int) -> dict:
         "avg_win_rate": round(float(np.mean(win_rates)), 4),
         "profitable_ratio": round(profitable / len(returns), 4),
         "avg_hold_days": round(float(np.mean([m.get("avg_hold_days", 0) for m in all_metrics])), 1),
+        "per_stock": sorted(per_stock, key=lambda x: x["return"], reverse=True),
     }
 
     logger.info(f"ML 回测完成: {summary}")
@@ -250,7 +292,120 @@ def evaluate_gate(metrics: dict) -> dict:
     }
 
 
-async def main_async(max_stocks: int, days: int, output: str, report: bool) -> None:
+async def train_global_model(symbols: list[str], days: int, train_ratio: float = 0.6) -> dict:
+    """v4: 用多只股票数据联合训练全局 ML 模型。
+
+    第一性原理：
+    - v3 的问题：模型用第一只股票数据训练，对其他股票泛化差
+    - 20 只股票中大部分 0 买入信号，因为模型只见过 1 只股票的数据
+    - 修复：汇总所有股票的因子和标签，联合训练一个全局模型
+
+    v4.2 修复 train/test leak：
+    - 仅用前 train_ratio（默认 60%）的数据训练模型
+    - 后 40% 数据用于回测测试期，模型从未见过
+    - 对抗性审查：如果不做时间分割，模型训练时已看过测试期收益 → 回测虚高
+
+    对抗性审查：
+    - 副作用1：forward returns 不能跨股票计算（shift(-5) 会把股票 A 和 B 的价格混在一起）
+      修复：按股票分别计算标签，然后合并
+    - 副作用2：不同股票的因子分布不同，合并后可能引入噪声
+      缓解：用分位数标签（top 40%/bottom 40%），每只股票内部归一化
+    """
+    logger.info(f"开始全局模型训练，{len(symbols)} 只股票，{days} 天，train_ratio={train_ratio}")
+
+    factory = AlphaFactory()
+    model = MLFactorModel(forward_days=5)
+
+    stock_factors: list[pd.DataFrame] = []
+    stock_closes: list[pd.Series] = []
+
+    sem = asyncio.Semaphore(_STOCK_CONCURRENCY)
+
+    async def _one(symbol: str) -> None:
+        async with sem:
+            df = await fetch_stock_data(symbol, days)
+            if df is None:
+                return
+            # v4.2: 仅用前 train_ratio 的数据训练，防止 train/test leak
+            split_idx = int(len(df) * train_ratio)
+            df_train = df.iloc[:split_idx]
+            rows: list[dict[str, float]] = []
+            for i in range(len(df_train)):
+                chunk = df_train.iloc[: i + 1]
+                if len(chunk) < 30:
+                    rows.append({})
+                    continue
+                factors = factory.compute_all(chunk)
+                row = {name: f.value for name, f in factors.items()}
+                rows.append(row)
+            stock_factors.append(pd.DataFrame(rows))
+            stock_closes.append(df_train["close"].reset_index(drop=True))
+
+    tasks = [_one(sym) for sym in symbols]
+    for i, coro in enumerate(asyncio.as_completed(tasks)):
+        await coro
+        if (i + 1) % 10 == 0:
+            logger.info(f"全局模型训练进度: {i + 1}/{len(tasks)}")
+
+    if not stock_factors:
+        logger.warning("全局模型训练无数据")
+        return {"status": "no_data"}
+
+    # 按股票分别计算标签，然后合并
+    # 避免跨股票 shift(-5) 导致标签错误
+    all_labels: list[pd.Series] = []
+    for fdf, close in zip(stock_factors, stock_closes, strict=True):
+        if len(fdf) < 30 or len(close) < 30:
+            continue
+        stock_labels = model._prepare_labels_quantile(close)
+        # 截断到因子矩阵长度
+        all_labels.append(stock_labels.iloc[: len(fdf)])
+
+    if not all_labels:
+        logger.warning("全局模型训练无有效标签")
+        return {"status": "no_labels"}
+
+    combined_factors = pd.concat(stock_factors, ignore_index=True)
+    combined_labels = pd.concat(all_labels, ignore_index=True)
+
+    # 截断到相同长度
+    min_len = min(len(combined_factors), len(combined_labels))
+    combined_factors = combined_factors.iloc[:min_len]
+    combined_labels = combined_labels.iloc[:min_len]
+
+    factor_cols = [
+        c for c in combined_factors.columns
+        if c not in ("date", "close", "open", "high", "low", "volume", "amount")
+        and pd.api.types.is_numeric_dtype(combined_factors[c])
+    ]
+
+    if len(combined_factors) < 100 or not factor_cols:
+        logger.warning(f"全局模型训练样本不足: {len(combined_factors)}")
+        return {"status": "insufficient_samples"}
+
+    # 先用混合 close 计算 IC（近似，跨股票 IC 有噪声但方向仍有效）
+    all_close: list[float] = []
+    for close in stock_closes:
+        all_close.extend(close.tolist())
+    close_series = pd.Series(all_close[:min_len])
+
+    train_result = model.train(
+        combined_factors,
+        close=close_series,
+        factor_columns=factor_cols,
+        labels=combined_labels,
+    )
+
+    if train_result.get("status") == "trained":
+        model.save()
+        logger.info(f"全局 ML 模型训练完成并保存: {train_result}")
+    else:
+        logger.warning(f"全局模型训练失败: {train_result}")
+
+    return train_result
+
+
+async def main_async(max_stocks: int, days: int, output: str, report: bool, train_ratio: float = 0.6) -> None:
     """主入口。"""
     symbols = await fetch_stock_list(max_stocks)
     if not symbols:
@@ -263,15 +418,27 @@ async def main_async(max_stocks: int, days: int, output: str, report: bool) -> N
     logger.info("=" * 60)
     ic_result = await run_ic_analysis(symbols, days)
 
-    # Step 2: ML 策略回测
+    # Step 2: v4 全局模型训练（仅用前 train_ratio 数据）
     logger.info("=" * 60)
-    logger.info("Step 2: ML 策略全市场回测")
+    logger.info(f"Step 2: v4.2 全局模型训练（多股票联合训练，train_ratio={train_ratio}）")
     logger.info("=" * 60)
-    bt_result = await run_ml_backtest(symbols, days)
+    # 清除旧模型缓存，确保用新数据训练
+    from gugu.analysis.ml_factor import MLFactorModel as _MF
+    old_model = _MF()
+    if old_model.MODEL_PATH.exists():
+        old_model.MODEL_PATH.unlink()
+        logger.info(f"已清除旧模型缓存: {old_model.MODEL_PATH}")
+    train_result = await train_global_model(symbols, days, train_ratio=train_ratio)
 
-    # Step 3: 准入门禁评估
+    # Step 3: ML 策略回测（仅评估后 1-train_ratio 测试期）
     logger.info("=" * 60)
-    logger.info("Step 3: 准入门禁评估")
+    logger.info(f"Step 3: ML 策略全市场回测（仅评估测试期，train_ratio={train_ratio}）")
+    logger.info("=" * 60)
+    bt_result = await run_ml_backtest(symbols, days, train_ratio=train_ratio)
+
+    # Step 4: 准入门禁评估
+    logger.info("=" * 60)
+    logger.info("Step 4: 准入门禁评估")
     logger.info("=" * 60)
     gate = evaluate_gate(bt_result) if bt_result.get("status") == "ok" else {"passed": False}
 
@@ -279,17 +446,19 @@ async def main_async(max_stocks: int, days: int, output: str, report: bool) -> N
         "date": str(pd.Timestamp.now().date()),
         "max_stocks": max_stocks,
         "days": days,
+        "train_ratio": train_ratio,
         "ic_analysis": ic_result,
+        "global_model_training": train_result,
         "backtest": bt_result,
         "gate": gate,
     }
 
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=lambda o: int(o) if isinstance(o, np.integer) else float(o) if isinstance(o, np.floating) else str(o)))
 
     if output:
         out_path = Path(output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=lambda o: int(o) if isinstance(o, np.integer) else float(o) if isinstance(o, np.floating) else str(o)) + "\n", encoding="utf-8")
         logger.info(f"报告已保存: {out_path}")
 
     if report:
@@ -298,6 +467,7 @@ async def main_async(max_stocks: int, days: int, output: str, report: bool) -> N
         print("=" * 60)
         print(f"股票数: {max_stocks}")
         print(f"回测天数: {days}")
+        print(f"训练比例: {result.get('train_ratio', 0.6):.0%} 训练 / {1 - result.get('train_ratio', 0.6):.0%} 测试")
         if bt_result.get("status") == "ok":
             print(f"总交易数: {bt_result['total_trades']}")
             print(f"平均收益: {bt_result['avg_return']:.2%}")
@@ -317,9 +487,10 @@ def main() -> None:
     parser.add_argument("--days", type=int, default=500, help="回测天数（默认 500）")
     parser.add_argument("--output", type=str, default="", help="输出报告 JSON 路径")
     parser.add_argument("--report", action="store_true", help="打印文本报告")
+    parser.add_argument("--train-ratio", type=float, default=0.6, help="训练集比例（默认 0.6，即 60%% 训练 40%% 测试）")
     args = parser.parse_args()
 
-    asyncio.run(main_async(args.max_stocks, args.days, args.output, args.report))
+    asyncio.run(main_async(args.max_stocks, args.days, args.output, args.report, args.train_ratio))
 
 
 if __name__ == "__main__":
