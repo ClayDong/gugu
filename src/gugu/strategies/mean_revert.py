@@ -11,6 +11,7 @@ class BollingerStrategy(Strategy):
     """布林带策略：触及下轨买入，触及上轨卖出。"""
 
     name = "bollinger"
+    category = "mean_revert"
 
     def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         self._ensure_columns(df)
@@ -50,6 +51,7 @@ class RSIStrategy(Strategy):
     """RSI 均值回归：超卖买入，超买卖出。"""
 
     name = "rsi_reversal"
+    category = "mean_revert"
 
     def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         self._ensure_columns(df)
@@ -94,6 +96,7 @@ class KDJStrategy(Strategy):
     """KDJ 策略：K 线金叉 D 线买入，死叉卖出。"""
 
     name = "kdj"
+    category = "mean_revert"
 
     def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         self._ensure_columns(df)

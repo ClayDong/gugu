@@ -43,6 +43,7 @@ class PullbackLowStrategy(Strategy):
     """
 
     name = "pullback_low"
+    category = "breakout"
 
     def validate_params(self) -> None:
         """校验参数语义。"""

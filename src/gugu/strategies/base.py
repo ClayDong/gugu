@@ -32,9 +32,15 @@ class Strategy(ABC):
     """策略抽象基类。
 
     子类必须实现 `_generate_signals_impl` 方法。
+
+    Attributes:
+        name: 策略唯一标识名称。
+        category: 策略类别（trend / breakout / mean_revert / main_force / ml），
+                  用于 SignalRouter 跨类别投票平衡和 regime 自适应权重调整。
     """
 
     name: str = "base"
+    category: str = "unknown"
 
     @abstractmethod
     def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:

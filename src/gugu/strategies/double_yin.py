@@ -65,6 +65,7 @@ class DoubleYinMoneyBagStrategy(Strategy):
     """
 
     name = "double_yin"
+    category = "main_force"
 
     def validate_params(self) -> None:
         """校验参数语义。"""

@@ -63,6 +63,7 @@ class CapitalFlowAlertStrategy(Strategy):
     """
 
     name = "capital_flow_alert"
+    category = "main_force"
 
     def validate_params(self) -> None:
         """校验参数语义。"""

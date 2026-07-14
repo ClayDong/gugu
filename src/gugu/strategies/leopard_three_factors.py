@@ -56,6 +56,7 @@ class LeopardThreeFactorsStrategy(Strategy):
     """
 
     name = "leopard_three_factors"
+    category = "main_force"
 
     def validate_params(self) -> None:
         turnover_threshold = float(self.params.get("turnover_threshold", 0.15))

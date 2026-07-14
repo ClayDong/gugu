@@ -11,6 +11,7 @@ class TurtleStrategy(Strategy):
     """海龟交易系统：唐奇安通道突破 + ATR 动态止损。"""
 
     name = "turtle"
+    category = "trend"
 
     def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         self._ensure_columns(df)
@@ -60,6 +61,7 @@ class DualMAStrategy(Strategy):
     """
 
     name = "dual_ma"
+    category = "trend"
 
     def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         self._ensure_columns(df)

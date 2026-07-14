@@ -30,6 +30,7 @@ class BoxBreakoutStrategy(Strategy):
     """
 
     name = "box_breakout"
+    category = "breakout"
 
     def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         self._ensure_columns(df)
@@ -137,6 +138,7 @@ class DualThrustStrategy(Strategy):
     """
 
     name = "dual_thrust"
+    category = "breakout"
 
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         self._ensure_columns(df)

@@ -38,6 +38,7 @@ class MLFactorStrategy(Strategy):
     """LightGBM 多因子策略（v4.2，未通过 OOS 门禁）。"""
 
     name = "ml_factor"
+    category = "ml"
 
     def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         """生成 ML 信号。"""

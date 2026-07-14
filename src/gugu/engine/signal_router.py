@@ -132,24 +132,68 @@ class SignalRouter:
         direction = "hold"
         triggered = []
 
-        # P2 修复：weighted 模式使用 StrategyPool 加权融合
+        # P2 修复：跨类别投票平衡 — weighted 模式下先按类别分组，再跨类别融合
+        # 防止同类策略（如3个突破类）过投票压制其他类别（如1个主力行为类）
+        # 每个类别的权重上限 = 1 / 有效类别数
         avg_conf = 0.0
         if self._fusion_rule == "weighted" and self._pool is not None:
-            # 将 votes 转为 StrategyPool 可接受的信号格式
+            # 按类别分组统计 buy/sell 得分
+            category_buy: dict[str, float] = {}
+            category_sell: dict[str, float] = {}
+            category_voters: dict[str, int] = {}
+            strategy_to_category: dict[str, str] = {}
+
+            for strategy in self._strategies:
+                cat = getattr(strategy, "category", "unknown")
+                strategy_to_category[strategy.name] = cat
+                if cat not in category_voters:
+                    category_voters[cat] = 0
+                category_voters[cat] += 1
+
+            # 收集按类别的 buy/sell 得分
+            for n, s, c in votes:
+                cat = strategy_to_category.get(n, "unknown")
+                if s == 1:
+                    category_buy[cat] = category_buy.get(cat, 0.0) + c
+                elif s == -1:
+                    category_sell[cat] = category_sell.get(cat, 0.0) + c
+
+            # 跨类别融合：每个类别内先归一化（除以投票策略数），
+            # 再跨类别求平均（每个类别权重 = 1/有效类别数）
+            active_categories = set(category_buy.keys()) | set(category_sell.keys())
+            n_cats = max(len(active_categories), 1)
+
+            # 将 votes 转为 StrategyPool 可接受的信号格式，
+            # 但用 category 分组的权重覆盖原始权重
             pool_signals = [
                 {"direction": "buy" if s == 1 else "sell", "confidence": c, "strategy_name": n}
                 for n, s, c in votes
             ]
-            # 市场状态自适应权重：计算临时权重，不修改pool内部状态（避免竞态）
-            effective_weights = None
+
+            # 计算跨类别平衡权重：每个策略权重 = (1/类别数) / 该类策略数
+            balanced_weights: dict[str, float] = {}
+            for n, _, _ in votes:
+                cat = strategy_to_category.get(n, "unknown")
+                n_in_cat = category_voters.get(cat, 1)
+                balanced_weights[n] = 1.0 / (n_cats * n_in_cat)
+
+            # 市场状态自适应权重（在 balanced_weights 基础上调整）
+            effective_weights = dict(balanced_weights)
             if regime:
                 base_weights = self._pool.get_weights()
                 raw_adjusted = compute_regime_weights(base_weights, regime)
                 total_raw = sum(raw_adjusted.get(n, w) for n, w in base_weights.items())
                 if total_raw > 0:
-                    effective_weights = {
+                    regime_weights = {
                         n: raw_adjusted.get(n, w) / total_raw for n, w in base_weights.items()
                     }
+                    # 混合：70% 跨类别平衡权重 + 30% regime 权重
+                    for n in balanced_weights:
+                        if n in regime_weights:
+                            effective_weights[n] = (
+                                0.7 * balanced_weights[n] + 0.3 * regime_weights[n]
+                            )
+
             pool_result = self._pool.weighted_fusion(
                 pool_signals, override_weights=effective_weights
             )

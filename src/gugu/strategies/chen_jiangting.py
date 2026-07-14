@@ -40,6 +40,7 @@ class ChenJiangtingStrategy(Strategy):
     """
 
     name = "chen_jiangting"
+    category = "trend"
 
     def validate_params(self) -> None:
         rw = int(self.params.get("resistance_window", 20))

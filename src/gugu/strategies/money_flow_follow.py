@@ -49,6 +49,7 @@ class MoneyFlowFollowStrategy(Strategy):
     """
 
     name = "money_flow_follow"
+    category = "breakout"
 
     def validate_params(self) -> None:
         ma_periods = self.params.get("ma_periods", [5, 10, 20, 60])

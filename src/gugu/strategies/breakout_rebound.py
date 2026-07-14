@@ -72,6 +72,7 @@ class BreakoutReboundStrategy(Strategy):
     """
 
     name = "breakout_rebound"
+    category = "main_force"
 
     def validate_params(self) -> None:
         """校验参数语义。"""
