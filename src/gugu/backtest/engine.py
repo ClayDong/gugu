@@ -152,7 +152,8 @@ class BacktestEngine:
                 self._logger.warning(f"回测引擎加载认知引擎失败，回退到纯策略模式: {e}")
                 self.enable_cognitive_engine = False
 
-    def run(self, strategy: Strategy, df: pd.DataFrame, symbol: str) -> BacktestResult:
+    def run(self, strategy: Strategy, df: pd.DataFrame, symbol: str,
+            index_df: pd.DataFrame | None = None) -> BacktestResult:
         """Run backtest for a single symbol.
 
         Iterates row by row, generates signals on the expanding window
@@ -163,6 +164,10 @@ class BacktestEngine:
             strategy: Strategy instance with generate_signals method.
             df: OHLCV data with columns date, open, high, low, close, volume, amount.
             symbol: Stock code.
+            index_df: HS300 (or other index) OHLCV data for per-bar market filter.
+                      If provided, buy signals will be rejected when the market
+                      regime is not "bull" (三重验证: MA200 + trend + liquidity).
+                      Must have columns: date, close, high, low, volume.
 
         Returns:
             BacktestResult with trades, equity curve, and metrics.
@@ -235,6 +240,20 @@ class BacktestEngine:
             signal = int(signal_arr[i])
             # P0-5 修复：从信号 DataFrame 读取真实置信度，而非硬编码 1.0
             confidence = float(confidence_arr[i]) if confidence_arr is not None else 1.0
+
+            # Market Filter: 非空仓的买入信号前检查大市状态
+            # 基于指数 HS300 数据判断当前 bar 的市场 regime，
+            # range/非趋势状态下强制阻止买入（与生产环境 MarketFilter 行为一致）
+            if index_df is not None and signal == 1 and position_qty == 0:
+                idx_win = index_df.iloc[:i + 1]
+                if len(idx_win) >= 60:
+                    regime = self._check_market_regime(idx_win)
+                    if regime != "bull":
+                        self._logger.debug(
+                            f"MARKET_FILTER BLOCK BUY {symbol} @ {current_date}: "
+                            f"regime={regime}（非牛市跳过买入）"
+                        )
+                        signal = 0
 
             # P0-3/P0-4/P1-j/P1-k 修复：支持加仓，正确传递 has_position/current_position_ratio
             # ===== 认知引擎：移动止损检查（每日）=====
@@ -494,6 +513,74 @@ class BacktestEngine:
             metrics=metrics,
             cognitive_log=cognitive_log,
         )
+
+    @staticmethod
+    def _check_market_regime(
+        index_df: pd.DataFrame,
+        ma_window: int = 200,
+        min_conditions: int = 3,
+    ) -> str:
+        """基于 HS300 指数数据判断市场状态。
+
+        三重验证：
+        1. 收盘价 > N 日均线（默认 MA200，可配置 MA120）
+        2. 近 40 日低点抬高 + 高点抬高
+        3. 近 20 日均量 > 近 252 日均量
+
+        min_conditions 控制严格程度：
+        - 3（默认）= 全部满足才 bull（生产环境 MarketFilter 标准）
+        - 2 = 任 2 条满足即 bull（更宽松，适合震荡市）
+
+        Args:
+            index_df: HS300 OHLCV 数据，含 date, close, high, low, volume。
+            ma_window: 均线窗口（200=严格，120=宽松）。
+            min_conditions: bull 判定所需条件数（2 或 3）。
+
+        Returns:
+            "bull" / "bear" / "range"
+        """
+        _MA = ma_window
+        _TREND_WINDOW = 40
+        _VOL_SHORT = 20
+        _VOL_LONG = 252
+
+        df = index_df
+        close = df["close"]
+        volume = df["volume"]
+
+        if len(df) < _MA:
+            return "range"
+
+        ma = float(close.rolling(_MA).mean().iloc[-1])
+        cond_above_ma = float(close.iloc[-1]) > ma
+
+        cond_trend_up = False
+        if len(df) >= _TREND_WINDOW:
+            recent = df.tail(_TREND_WINDOW)
+            half = _TREND_WINDOW // 2
+            first_half = recent.head(half)
+            second_half = recent.tail(half)
+            cond_trend_up = (
+                float(second_half["low"].min()) > float(first_half["low"].min())
+                and float(second_half["high"].max()) > float(first_half["high"].max())
+            )
+
+        cond_liquidity = False
+        if len(df) >= _VOL_LONG:
+            vol_short = float(volume.tail(_VOL_SHORT).mean())
+            vol_long = float(volume.tail(_VOL_LONG).mean())
+            cond_liquidity = vol_short > vol_long
+        elif len(df) >= _VOL_SHORT:
+            vol_short = float(volume.tail(_VOL_SHORT).mean())
+            vol_long = float(volume.mean())
+            cond_liquidity = vol_short > vol_long
+
+        satisfied = sum([cond_above_ma, cond_trend_up, cond_liquidity])
+        if satisfied >= min_conditions:
+            return "bull"
+        elif satisfied == 0:
+            return "bear"
+        return "range"
 
     @staticmethod
     def _calc_transfer_fee(symbol: str, trade_value: float) -> float:

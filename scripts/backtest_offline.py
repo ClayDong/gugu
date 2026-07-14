@@ -117,13 +117,14 @@ def backtest_one_stock(
     df: pd.DataFrame,
     strategies: list[str],
     engine: BacktestEngine,
+    index_df: pd.DataFrame | None = None,
 ) -> dict[str, dict]:
     """对单股跑所有策略。"""
     results = {}
     for strategy_name in strategies:
         try:
             strategy = get_strategy(strategy_name)
-            bt_result = engine.run(strategy, df, code)
+            bt_result = engine.run(strategy, df, code, index_df=index_df)
             results[strategy_name] = bt_result.metrics
         except Exception as e:
             logger.debug(f"{code} 策略 {strategy_name} 失败: {e}")
@@ -135,6 +136,7 @@ def run_batch_backtest(
     stocks: list[tuple[str, int]],
     strategies: list[str],
     cache_dir: Path,
+    index_df: pd.DataFrame | None = None,
 ) -> dict[str, list[dict]]:
     """批量回测。"""
     all_results: dict[str, list[dict]] = {s: [] for s in strategies}
@@ -150,7 +152,7 @@ def run_batch_backtest(
             completed += 1
             continue
 
-        result = backtest_one_stock(code, df, strategies, engine)
+        result = backtest_one_stock(code, df, strategies, engine, index_df=index_df)
         for strategy_name, metrics in result.items():
             if metrics:
                 all_results[strategy_name].append(metrics)
@@ -329,9 +331,22 @@ def main() -> None:
 
     logger.info(f"可用缓存股票: {len(stocks)} 只 (min_days={args.min_days})")
 
+    # 加载 HS300 指数数据（用于 market filter 回测集成）
+    index_df = None
+    cache_dir_obj = Path("data/parquet_cache")
+    hs300_path = cache_dir_obj / "hs300_500d.parquet"
+    if hs300_path.exists():
+        try:
+            index_df = pd.read_parquet(hs300_path)
+            index_df["date"] = pd.to_datetime(index_df["date"])
+            index_df = index_df.sort_values("date").reset_index(drop=True)
+            logger.info(f"加载 HS300 指数数据: {len(index_df)} 行")
+        except Exception as e:
+            logger.warning(f"加载 HS300 指数数据失败: {e}")
+
     # 3. 批量回测
     logger.info(f"开始批量回测: {len(stocks)} 只股票 × {len(strategies)} 策略")
-    all_results = run_batch_backtest(stocks, strategies, cache_dir)
+    all_results = run_batch_backtest(stocks, strategies, cache_dir, index_df=index_df)
 
     # 4. 汇总
     all_summaries = {}

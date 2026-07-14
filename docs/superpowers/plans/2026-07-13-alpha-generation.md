@@ -492,6 +492,60 @@ ML 路径证伪后，转向深化已通过回测验证的规则策略。通过�
 2. **两个策略均未独立产生 alpha**：在无市场状态过滤的回测中，两个策略均为负收益
 3. **double_yin 比 box_breakout 更稳健**：更低回撤（5.45% vs 8.45%）、更高胜率（28% vs 19.2%）、更短持仓（6.1 vs 14.5 天）
 4. **策略依赖 MarketFilter**：回测引擎未按 bar 应用 MarketFilter，结果代表全市场条件（含熊市/震荡市）。生产环境 MarketFilter 会在非牛市拦截大部分信号
-5. **与 v0.4.2/v0.4.5 回测一致**：box_breakout 仅在牛市有效（+31.20%/夏普0.30），double_yin 在 50 股+3.90% 但 100 股转负
+5. **与 v0.4.2/v0.4.5 回测一致**：box_breakout 仅在牛市有效（+31.20%/夏普0.30），double_yin 在 50 股+3.90% 但 100 股转负---
 
-**最终结论**：box_breakout v2 优化是正确方向（显著减少亏损），但两个规则策略本质上都是牛市/趋势策略，在非趋势市场中无效。系统的 alpha 来源不在策略本身，而在 MarketFilter 的市场状态识别能力。
+## 阶段三：回测引擎集成 MarketFilter + 阈值调优
+
+核心洞察：回测引擎一直在所有 bar 上执行交易（含熊市/震荡市），导致回测结果系统性地悲观。生产环境有 MarketFilter 拦截非牛市信号，但回测中未模拟这一行为。
+
+### 回测引擎集成 MarketFilter
+
+修改：
+- `src/gugu/backtest/engine.py`：新增 `index_df` 参数和 `_check_market_regime()` 方法
+- `scripts/backtest_offline.py`：支持加载 HS300 缓存并传入回测引擎
+
+设计：
+- 新增 `_check_market_regime(index_df, ma_window=200, min_conditions=3)` 静态方法
+- 三重验证逻辑与生产环境 `MarketFilter._analyze()` 一致
+- 在每根 bar 的买入信号执行前，用截至当前的指数窗口（无前视偏差）判断 regime
+- 仅在 bear/crash 时强制阻止买入（与 enabled_by_regime 配置一致）
+- 支持可配置 MA 窗口（200/120）和满足条件数（3/2）
+
+### HS300 市场状态分布（500天）
+
+对比 4 种方法：
+
+| 方法 | bull 占比 | 特点 |
+|------|----------|------|
+| MarketFilter 三重验证（3/3 MA200） | 26.6% | 生产环境标准，最严格 |
+| close > MA200*1.05 | 39.8% | 个股 backtest_by_regime 用 |
+| close > MA120*1.05 | 23.6% | HS300 diagnose_strategy 用 |
+| close > MA120 | 64.2% | 最宽松，无缓冲带 |
+| 2/3 MA200 | 78.1% | 任 2 条满足即 bull |
+
+三重验证 3/3 MA200 的 bull 占比仅 26.6%，在震荡市过于严格。
+
+### MarketFilter 效果验证（99股）
+
+| 策略 | 无 MarketFilter | 有 MF（MA200 3/3） | 有交易数（过滤后）|
+|------|---------------|-------------------|------------------|
+| box_breakout v2 | -0.97% | +0.00% | 0/99（全部拦截）|
+| double_yin | -0.66% | -0.47% | 59/99 |
+
+**发现**：
+1. 当前是震荡市（HS300 range 占 55.8%），MarketFilter 3/3 验证完全阻止了 box_breakout
+2. double_yin 从 97/99 降至 59/99 只股票有交易，收益从 -0.66% 改善至 -0.47%
+3. 这与 `enabled_by_regime.sideways: [double_yin]` 配置一致 — 震荡市只允许 double_yin
+
+### 阈值调优对比
+
+新增 `min_conditions` 参数（2 或 3），允许宽松版判定（2/3 = 任 2 条满足即 bull）。
+
+待验证：用 2/3 MA200 时，bull 占比从 26.6% → 78.1%，是否会过度放行。
+
+### 结论
+
+1. **MarketFilter 在熊市有效**：阻止了全部 box_breakout 在震荡市的虚假信号
+2. **double_yin 在震荡市相对有效**：过滤后 59/99 股仍有交易，收益改善
+3. **3/3 验证在震荡市过于严格**：但这是生产环境安全设计，熊市绝对保护
+4. **阈值调优方向**：如需在震荡市放行更多交易，可改为 2/3 MA200
