@@ -85,15 +85,20 @@ class NonNegativeValuesRule(ValidationRule):
         self._columns = columns
 
     def check(self, df: pd.DataFrame, symbol: str = "") -> tuple:
+        result = df.copy()
+        total_removed = 0
         for col in self._columns:
-            if col not in df.columns:
+            if col not in result.columns:
                 continue
-            mask = df[col] < 0
+            mask = result[col] < 0
             if mask.any():
-                bad = df[mask]
-                logger.warning(f"{symbol} {col} 存在负值，已剔除: {len(bad)} 行")
-                df.drop(mask.index[mask], inplace=True)
-        return True, "non-negative check done"
+                n_removed = int(mask.sum())
+                total_removed += n_removed
+                logger.warning(f"{symbol} {col} 存在负值，已剔除: {n_removed} 行")
+                result = result[~mask].reset_index(drop=True)
+        if total_removed > 0:
+            return True, result, f"non-negative check done, removed {total_removed} rows"
+        return True, result, "non-negative check done"
 
 
 class ZeroPriceRule(ValidationRule):
@@ -104,12 +109,14 @@ class ZeroPriceRule(ValidationRule):
 
     def check(self, df: pd.DataFrame, symbol: str = "") -> tuple:
         if self._price_column not in df.columns:
-            return True, "price column not present, skip"
+            return True, df, "price column not present, skip"
         mask = df[self._price_column] == 0
         if mask.any():
-            logger.warning(f"{symbol} {self._price_column} 存在零价，已剔除: {mask.sum()} 行")
-            df.drop(mask.index[mask], inplace=True)
-        return True, "zero price check done"
+            n_removed = int(mask.sum())
+            logger.warning(f"{symbol} {self._price_column} 存在零价，已剔除: {n_removed} 行")
+            result = df[~mask].reset_index(drop=True)
+            return True, result, f"zero price check done, removed {n_removed} rows"
+        return True, df, "zero price check done"
 
 
 class PlausiblePriceRule(ValidationRule):
@@ -228,12 +235,14 @@ class HighLowConsistencyRule(ValidationRule):
 
     def check(self, df: pd.DataFrame, symbol: str = "") -> tuple:
         if "high" not in df.columns or "low" not in df.columns:
-            return True, "high/low columns not present, skip"
+            return True, df, "high/low columns not present, skip"
         mask = df["high"] < df["low"]
         if mask.any():
-            logger.warning(f"{symbol} high<low 异常，已剔除: {mask.sum()} 行")
-            df.drop(mask.index[mask], inplace=True)
-        return True, "high-low consistency check done"
+            n_removed = int(mask.sum())
+            logger.warning(f"{symbol} high<low 异常，已剔除: {n_removed} 行")
+            result = df[~mask].reset_index(drop=True)
+            return True, result, f"high-low consistency check done, removed {n_removed} rows"
+        return True, df, "high-low consistency check done"
 
 
 class FreshnessRule(ValidationRule):

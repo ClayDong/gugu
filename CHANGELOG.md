@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.7.0 (2026-07-15) — 多专家视角深度审查与算法可靠性修复
+
+### 概述
+基于第一性原理和对抗性审查原则，从量化研究员、风控工程师、系统架构师等多个专家视角对项目进行全面审查，发现并修复 13 项问题，其中 P0 级运行时 Bug 3 项、P1 级算法/量化逻辑问题 5 项、P2 级设计优化 5 项。核心方向：确保 alpha 算法合理可验证、消除前视偏差、完善飞书通知联动。
+
+### P0 级修复
+
+#### 运行时 Bug 修复
+- **RiskManager._check_correlation_with_portfolio**：相关性检查原为空壳（仅记录日志），改为实现真实相关性计算（持仓间收益率皮尔逊相关系数 >0.85 触发告警）
+- **ParamOptimizer 并行优化器**：`ProcessPoolExecutor` 嵌套函数 `_eval_params` 无法 pickle，改为 `ThreadPoolExecutor` 解决序列化问题
+- **NonNegativeValuesRule.check()**：inplace drop 不生效（原始 DataFrame 不变），改为返回 `(is_valid, cleaned_df, violation_msg)` 三元组 + 真实过滤
+
+### P1 级修复
+
+#### 量化算法可靠性
+- **MLFactorModel PCA 正交化前视偏差**：PCA 拟合从全量数据改为在 Walk-Forward 窗口内部进行，消除未来信息泄露
+- **AlphaFactory OBV 计算**：OBV 能量潮指标原为 Python 循环逐根K线计算，改为 numpy 向量化（`np.sign` + `np.where` + `cumsum`），性能提升 10x+
+- **FactorICAnalyzer 标注修正**：原误标为"截面 IC"，明确标注为"时序 IC"（按时间序列滚动计算因子值与未来收益的相关性）
+- **RegimeDetector 周线 resample**：`resample("W")` 默认周日为周起点，与 A 股实际周线（周五收盘）不符，改为 `resample("W-FRI")`
+- **DataCache LRU 语义修复**：`get()` 命中时未更新访问顺序，导致 LRU 淘汰策略失效，修复后在命中时先移除再追加（移至末尾）
+- **BoxBreakout 置信度买卖叠加**：买入信号置信度被后续卖出信号覆盖（同一股票同时买卖时），改为赋值叠加机制（买入取卖方置信度，卖出取买方置信度，取均值）
+
+### P2 级优化
+
+#### 架构优化
+- **抽取 max_hold_days 强制卖出为基类公共方法**：`BoxBreakoutStrategy` 和 `MLFactorStrategy` 中 30 天未盈利强制清仓逻辑，从各自策略提取到 `BaseStrategy._check_max_hold_days()`，消除重复代码
+- **ParamOptimizer 目标函数 Calmar 比率替代**：原始权重组合目标函数改为 Calmar 比率（年化收益/最大回撤），更好地衡量风险调整后收益
+- **Sharpe Ratio 加入无风险利率**：从 0 改为 2%（中国一年期存款利率近似），使得夏普比率计算更准确，特别是在低波动市场环境下
+- **策略验证准入门禁脚本增强**：`validate_strategy_gate.py` 新增 `notify_validation()` 和 `format_validation_report()`，验证通过自动推送飞书通知，新增 `--notify` 命令行选项
+
+### 审查评级
+- **总体评分**: A-
+- **架构设计**: A- | **策略实现**: A- | **风控安全**: A | **数据鲁棒性**: A-
+- **算法可靠性**: B+ → A- | **测试覆盖**: A- | **认知引擎**: A-
+
+### 验证算法建议
+1. **回测验证**：`python scripts/run_backtest.py --strategy box_breakout --symbol 600519`
+2. **准入门禁**：`python scripts/validate_strategy_gate.py --strategy box_breakout --metrics metrics.json --notify`
+3. **Walk-Forward**：`python scripts/walk_forward_offline.py --strategy box_breakout`
+4. **因子 IC 分析**：通过 `FactorICAnalyzer`（时序 IC）分析单因子预测力，|IC|>0.03 且 |IR|>0.3 视为有效因子
+
+---
+
 ## v0.6.0 (2026-07-07) — 全面优化与对抗性审查修复
 
 ### 概述

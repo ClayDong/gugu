@@ -42,12 +42,13 @@ def calc_metrics(equity_curve: pd.Series, trades: list[Any]) -> dict[str, float]
     }
 
 
-def _sharpe(returns: pd.Series, periods: int = _TRADING_DAYS) -> float:
-    """Annualized Sharpe ratio (risk-free rate = 0).
+def _sharpe(returns: pd.Series, periods: int = _TRADING_DAYS, rf_rate: float = 0.02) -> float:
+    """Annualized Sharpe ratio with risk-free rate.
 
     Args:
         returns: Daily returns series.
         periods: Annualization factor, default 252 trading days.
+        rf_rate: Annual risk-free rate (default 2% for A-share market).
 
     Returns:
         Sharpe ratio, 0.0 if not computable.
@@ -60,7 +61,10 @@ def _sharpe(returns: pd.Series, periods: int = _TRADING_DAYS) -> float:
     mean = float(returns.mean())
     if np.isnan(mean):
         return 0.0
-    return float(np.sqrt(periods) * mean / std)
+    # 日化无风险利率
+    daily_rf = rf_rate / periods
+    excess_mean = mean - daily_rf
+    return float(np.sqrt(periods) * excess_mean / std)
 
 
 def _max_drawdown(equity: pd.Series) -> float:

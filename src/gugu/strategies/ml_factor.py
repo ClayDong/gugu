@@ -150,25 +150,14 @@ class MLFactorStrategy(Strategy):
                 else:
                     last_buy_idx = i
 
-        # v4.1 时间止损：持仓超过 max_hold_days 强制卖出
+        # v4.1 时间止损：持仓超过 max_hold_days 强制卖出（复用基类方法）
         # ML 预测 5 日收益，超期说明预测已失效
         if max_hold_days > 0:
-            i = 0
-            while i < n:
-                if signal[i] == 1:
-                    exit_idx = min(i + max_hold_days, n - 1)
-                    # 检查 (i, exit_idx] 是否已有卖出信号
-                    has_sell = False
-                    for j in range(i + 1, exit_idx + 1):
-                        if signal[j] == -1:
-                            has_sell = True
-                            break
-                    # 仅当 exit_idx 无买入信号时才强制卖出（避免覆盖买入）
-                    if not has_sell and exit_idx > i and signal[exit_idx] != 1:
-                        signal[exit_idx] = -1
-                    i = exit_idx + 1
-                else:
-                    i += 1
+            temp_signal = np.zeros(len(result))
+            temp_signal[:n] = signal
+            result["signal"] = temp_signal
+            result = self._apply_max_hold_exit(result, max_hold_days=max_hold_days)
+            signal = result["signal"].to_numpy(dtype=int)
 
         # 置信度
         confidence = np.where(

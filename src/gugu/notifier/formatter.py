@@ -809,15 +809,71 @@ def format_backtest_report(report: dict[str, Any]) -> dict[str, Any]:
     max_drawdown = report.get("max_drawdown", 0)
     win_rate = report.get("win_rate", 0)
     trades_count = report.get("trades_count", 0)
+    annual_return = report.get("annual_return", 0)
+    profit_factor = report.get("profit_factor", 0)
+    avg_hold_days = report.get("avg_hold_days", 0)
+    symbol = report.get("symbol", "")
 
     title = f"回测报告 · {strategy}"
+    if symbol:
+        title += f" · {symbol}"
 
     sections = [
-        f"**策略**：{strategy}\n**总收益**：{total_return}\n**夏普比率**：{sharpe}",
-        f"**最大回撤**：{max_drawdown}\n**胜率**：{win_rate}\n**交易次数**：{trades_count}",
+        f"**策略**：{strategy}\n**标的**：{symbol if symbol else '多股聚合'}\n"
+        f"**总收益**：{total_return}\n**年化收益**：{annual_return}",
+        f"**夏普比率**：{sharpe}\n**最大回撤**：{max_drawdown}\n"
+        f"**胜率**：{win_rate}\n**盈亏比**：{profit_factor}",
+        f"**交易次数**：{trades_count}\n**平均持仓**：{avg_hold_days} 天",
     ]
 
     return _card(title, template, sections, note="明策 · gugu · 回测报告")
+
+
+def format_validation_report(report: dict[str, Any]) -> dict[str, Any]:
+    """Format a strategy validation/gate report into a Feishu card.
+
+    Args:
+        report: Dict with keys strategy_name, gate_status, metrics (dict),
+                issues (list), recommendations (list).
+
+    Returns:
+        Feishu interactive card message dict.
+    """
+    strategy_name = report.get("strategy_name", "")
+    gate_status = report.get("gate_status", "unknown")
+    metrics = report.get("metrics", {})
+    issues = report.get("issues", [])
+    recs = report.get("recommendations", [])
+
+    # 门禁状态颜色
+    status_colors = {"passed": "red", "failed": "green", "partial": "yellow", "unknown": "grey"}
+    template = status_colors.get(gate_status, "grey")
+
+    title = f"策略验证 · {strategy_name}"
+    if gate_status == "passed":
+        title += " ✅"
+    elif gate_status == "failed":
+        title += " ❌"
+
+    sections = [f"**策略**：{strategy_name}\n**门禁状态**：{gate_status}"]
+
+    if metrics:
+        metric_lines = []
+        for k, v in metrics.items():
+            metric_lines.append(f"{k}: {v}")
+        sections.append("**核心指标**：\n" + "\n".join(metric_lines))
+
+    if issues:
+        sections.append("**发现问题**：\n" + "\n".join(f"- {i}" for i in issues[:5]))
+        if len(issues) > 5:
+            sections[-1] += f"\n...及 {len(issues) - 5} 项其他问题"
+
+    if recs:
+        sections.append("**优化建议**：\n" + "\n".join(f"- {r}" for r in recs[:3]))
+        if len(recs) > 3:
+            sections[-1] += f"\n...及 {len(recs) - 3} 项其他建议"
+
+    return _card(title, template, sections, note="明策 · gugu · 策略验证")
 
 
 def format_system_error(error: dict[str, Any]) -> dict[str, Any]:

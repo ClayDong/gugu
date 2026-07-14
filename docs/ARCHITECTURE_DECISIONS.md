@@ -348,3 +348,94 @@ analysis/perspectives/
   "flow_source_status": "active|unavailable|partial"
 }
 ```
+
+---
+
+## ADR-015: Walk-Forward 窗口内 PCA 正交化
+
+**状态**: 已采纳（v0.7.0）
+**影响范围**: analysis/ml_factor.py
+
+### 背景
+MLFactorModel 在因子正交化时对全量数据拟合 PCA，导致 Walk-Forward 训练时用到未来信息（前视偏差），回测结果不可靠。
+
+### 决策
+将 PCA 拟合从全量数据改为在 Walk-Forward 窗口内部进行。每个训练窗口独立拟合 PCA，用该窗口的因子协方差矩阵做正交化，仅将拟合好的 PCA 应用于验证集。
+
+### 理由
+1. **消除前视偏差**：正交化矩阵只来自训练期因子数据，不泄露验证期信息
+2. **适应因子结构变化**： A 股因子间相关性随时间变化，窗口内拟合更准确反映当期因子关系
+3. **与 Walk-Forward 一致**：自始就使用 Walk-Forward，只是在正交化步骤遗漏了窗口隔离
+
+### 参考
+- `src/gugu/analysis/ml_factor.py` — `_train_single_window()` 方法
+
+---
+
+## ADR-016: 策略准入门禁与飞书通知联动
+
+**状态**: 已采纳（v0.7.0）
+**影响范围**: scripts/validate_strategy_gate.py
+
+### 背景
+策略准入门禁验证（`validate_strategy_gate.py`）原本仅输出 CLI 结果，验证通过或失败后用户需要手动查看飞书通知，反馈链路不闭环。
+
+### 决策
+新增 `notify_validation()` 和 `format_validation_report()` 函数，验证结果自动推送飞书卡片，新增 `--notify` 命令行选项统一控制。
+
+### 理由
+1. **闭环反馈**：验证通过/失败自动飞书推送，用户无需主动查看 CLI 输出
+2. **记录归档**：飞书通知历史可追溯，方便后续审查策略演进
+3. **低侵入**：新增 `--notify` 选项，不改变默认 CLI 行为
+
+### 实现
+- `notify_validation(result)` — 通过已有 FeishuNotifier 推送验证卡片
+- `format_validation_report(result)` — 格式化验证报告为飞书卡片内容
+- `--notify` 参数解析后调用通知函数
+
+---
+
+## ADR-017: Sharpe Ratio 含无风险利率
+
+**状态**: 已采纳（v0.7.0）
+**影响范围**: backtest/metrics.py
+
+### 背景
+Sharpe Ratio 计算时假设无风险利率为 0，导致低波动市场环境下 Sharpe 值虚高，误导策略比较决策。
+
+### 决策
+引入 2% 无风险利率（中国一年期存款利率近似），计算超额收益时减去无风险利率。
+
+### 理由
+1. **更准确的收益风险比**：零无风险利率假设在低波动环境下严重高估 Sharpe
+2. **行业可比性**：主流量化平台（聚宽、米筐）默认使用 2-3% 无风险利率
+3. **A 股市场适配**：2% 接近中国一年期存款基准利率
+
+### 计算
+```
+Sharpe = (mean_daily_return - risk_free_daily) / std_daily_return * sqrt(252)
+risk_free_daily = (1 + 0.02) ** (1/252) - 1
+```
+
+---
+
+## ADR-018: 持仓时间风控基类抽象
+
+**状态**: 已采纳（v0.7.0）
+**影响范围**: strategies/base.py、strategies/breakout.py、strategies/ml_factor.py
+
+### 背景
+BoxBreakoutStrategy 和 MLFactorStrategy 各自实现 max_hold_days 强制卖出逻辑（30 天未盈利警告/60 天强制清仓），存在代码重复，后续新增策略无法复用。
+
+### 决策
+将 max_hold_days 强制卖出逻辑抽取到 `BaseStrategy._check_max_hold_days()` 方法，所有策略继承复用。
+
+### 理由
+1. **消除重复**：30 天/60 天规则统一在一处维护
+2. **可扩展**：新增策略只需在 settings 中配置 max_hold_days 即可启用
+3. **一致性**：所有策略使用相同的持有时间风控标准
+
+### 实现
+- `BaseStrategy._check_max_hold_days(positions)` — 检查所有持仓的持有天数
+- 30 天未盈利：记录警告，标记减半仓建议
+- 60 天未盈利：强制清仓

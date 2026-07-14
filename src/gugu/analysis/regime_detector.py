@@ -85,7 +85,7 @@ class MultiPeriodRegimeDetector:
             # P0 修复：closed="left", label="left" 确保不包含当前不完整周的数据
             daily_indexed = daily.set_index("date")
             weekly = (
-                daily_indexed.resample("W", closed="left", label="left")
+                daily_indexed.resample("W-FRI", closed="left", label="left")
                 .agg(
                     {
                         "open": "first",

@@ -88,38 +88,18 @@ class BoxBreakoutStrategy(Strategy):
         breakout_down = df["close"] < df["box_low"]
         df.loc[breakout_down, "signal"] = -1
 
-        # v2: 最大持仓天数强制卖出
-        # 突破后 max_hold_days 内未触发卖出信号 → 趋势未如期发展，退出
-        if max_hold_days > 0:
-            signal = df["signal"].to_numpy(dtype=int, copy=True)
-            n = len(signal)
-            i = 0
-            while i < n:
-                if signal[i] == 1:
-                    exit_idx = min(i + max_hold_days, n - 1)
-                    # 检查 (i, exit_idx] 是否已有卖出信号
-                    has_sell = False
-                    for j in range(i + 1, exit_idx + 1):
-                        if signal[j] == -1:
-                            has_sell = True
-                            break
-                    # 仅当 exit_idx 无买入信号时才强制卖出（避免覆盖买入）
-                    if not has_sell and exit_idx > i and signal[exit_idx] != 1:
-                        signal[exit_idx] = -1
-                    i = exit_idx + 1
-                else:
-                    i += 1
-            df["signal"] = signal
+        # v2: 最大持仓天数强制卖出（抽取为基类公共方法）
+        df = self._apply_max_hold_exit(df, max_hold_days=max_hold_days)
 
-        # 置信度：突破幅度 / ATR(15)，避免 close 同时做信号和置信度分母
+        # 置信度：根据信号方向分别计算
+        # 修复：买入用突破幅度/ATR，卖出用跌破幅度/ATR，避免两者同时非零时叠加
         atr_val = self._atr(df, int(self.params.get("box_window", 15)))
         atr_safe = atr_val.clip(lower=df["close"] * 0.01)
-        df["confidence"] = (
-            (df["close"] - df["box_high"]).clip(lower=0) / atr_safe
-            + (df["box_low"] - df["close"]).clip(lower=0) / atr_safe
-        ).clip(0, 1)
-        # 无信号时置信度为 0
-        df.loc[df["signal"] == 0, "confidence"] = 0.0
+        buy_conf = ((df["close"] - df["box_high"]) / atr_safe).clip(lower=0).clip(upper=1)
+        sell_conf = ((df["box_low"] - df["close"]) / atr_safe).clip(lower=0).clip(upper=1)
+        df["confidence"] = 0.0
+        df.loc[df["signal"] == 1, "confidence"] = buy_conf
+        df.loc[df["signal"] == -1, "confidence"] = sell_conf
 
         buy_count = int(np.sum(df["signal"] == 1))
         sell_count = int(np.sum(df["signal"] == -1))

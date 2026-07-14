@@ -32,7 +32,11 @@ class DataCache:
         self._lock = threading.RLock()
 
     def get(self, key: str, ignore_ttl: bool = False) -> Any | None:
-        """获取缓存。过期返回 None。ignore_ttl=True 时即使过期也返回（兜底用）。"""
+        """获取缓存。过期返回 None。ignore_ttl=True 时即使过期也返回（兜底用）。
+
+        修复：get() 命中时更新 _order 中的位置（LRU 语义），
+        将访问的 key 移到 _order 末尾，避免热数据被冷数据淘汰。
+        """
         with self._lock:
             if key not in self._store:
                 return None
@@ -42,6 +46,10 @@ class DataCache:
                 if key in self._order:
                     self._order.remove(key)
                 return None
+            # LRU 更新：将访问的 key 移到末尾
+            if key in self._order:
+                self._order.remove(key)
+                self._order.append(key)
             return val
 
     def set(self, key: str, value: Any) -> None:

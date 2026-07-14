@@ -238,37 +238,57 @@ class MLFactorModel:
         aligned["_label"] = labels.values[: len(aligned)] if len(labels) >= len(aligned) else 0
         aligned = aligned[aligned["_label"] >= 0].dropna(subset=["_label"])
 
+        # 丢弃特征列含 NaN 的行（因子计算中的移动平均窗口期会产生 NaN）
+        aligned = aligned.dropna(subset=enhanced_cols)
+
         if len(aligned) < 100:
             logger.warning(f"训练样本不足: {len(aligned)}，跳过训练")
             return {"status": "skipped", "reason": "insufficient_samples", "samples": len(aligned)}
 
-        # 正交化
-        X = self.orthogonalizer.fit_transform(aligned[enhanced_cols])
-        y = aligned["_label"].values[: len(X)].astype(int)
+        # 准备数据
+        X_raw = aligned[enhanced_cols].values
+        y = aligned["_label"].values.astype(int)
 
-        if len(X) != len(y):
-            min_len = min(len(X), len(y))
-            X = X[:min_len]
-            y = y[:min_len]
+        n = len(X_raw)
+        if n < 100:
+            logger.warning(f"训练样本不足: {n}，跳过训练")
+            return {"status": "skipped", "reason": "insufficient_samples", "samples": n}
 
-        # 优化4：Walk-Forward 滚动窗口
-        # 使用 3 个滚动窗口，取最后一个模型
-        n = len(X)
+        # 优化4：Walk-Forward 滚动窗口（修复 PCA 前视偏差）
+        # 修复：将 PCA 正交化移入每个窗口内部，只在训练集上 fit_transform，
+        # 避免验证集数据参与 PCA 拟合（原代码在 WF 循环前全局正交化，存在前视偏差）
         window_size = max(100, n // 3)
         best_val_acc = 0.0
         best_model = None
+        best_orthogonalizer = None
 
-        for start in range(0, max(1, n - window_size - 20), max(20, window_size // 4)):
-            end = start + window_size
-            if end + 20 > n:
+        n_splits = 3
+        step = max(window_size // 4, 20)
+        for split_idx in range(n_splits):
+            train_start = split_idx * step
+            train_end = train_start + window_size
+            if train_end > n - 40:
                 break
-            X_w = X[start:end]
-            y_w = y[start:end]
-            if len(np.unique(y_w)) < 2:
+            val_start = train_end
+            val_end = min(val_start + 40, n)
+            if val_end - val_start < 20:
                 continue
 
-            X_val_w = X[end : min(end + 20, n)]
-            y_val_w = y[end : min(end + 20, n)]
+            # 在每个窗口内独立做正交化（防止前视偏差）
+            X_train_raw = X_raw[train_start:train_end]
+            y_train = y[train_start:train_end]
+            X_val_raw = X_raw[val_start:val_end]
+            y_val = y[val_start:val_end]
+
+            if len(np.unique(y_train)) < 2:
+                continue
+
+            # 使用 FactorOrthogonalizer 保持与预测路径一致（含 StandardScaler + PCA）
+            orth = FactorOrthogonalizer(n_components=min(20, X_train_raw.shape[1]))
+            train_df = pd.DataFrame(X_train_raw, columns=enhanced_cols)
+            val_df = pd.DataFrame(X_val_raw, columns=enhanced_cols)
+            X_w = orth.fit_transform(train_df)
+            X_val_w = orth.transform(val_df)
 
             m = lgb.LGBMClassifier(
                 objective="binary",
@@ -284,22 +304,28 @@ class MLFactorModel:
             )
             m.fit(
                 X_w,
-                y_w,
-                eval_set=[(X_val_w, y_val_w)] if len(X_val_w) > 0 else None,
+                y_train,
+                eval_set=[(X_val_w, y_val)] if len(X_val_w) > 0 else None,
                 callbacks=[lgb.log_evaluation(0)],
             )
-            val_acc = float(m.score(X_val_w, y_val_w)) if len(X_val_w) > 0 else 0.0
-            if val_acc >= best_val_acc:
+            val_acc = float(m.score(X_val_w, y_val)) if len(X_val_w) > 0 else 0.0
+            if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 best_model = m
+                best_orthogonalizer = orth
 
         if best_model is None:
-            # 降级到静态分割
-            split = int(len(X) * 0.8)
-            X_train, X_val = X[:split], X[split:]
+            # 降级到静态分割（同样在分割后独立做正交化）
+            split = int(n * 0.8)
+            X_train_raw, X_val_raw = X_raw[:split], X_raw[split:]
             y_train, y_val = y[:split], y[split:]
-            if len(X_train) < 50 or len(np.unique(y_train)) < 2:
+            if len(X_train_raw) < 50 or len(np.unique(y_train)) < 2:
                 return {"status": "skipped", "reason": "insufficient_train_data"}
+            orth = FactorOrthogonalizer(n_components=min(20, X_train_raw.shape[1]))
+            train_df = pd.DataFrame(X_train_raw, columns=enhanced_cols)
+            val_df = pd.DataFrame(X_val_raw, columns=enhanced_cols)
+            X_train = orth.fit_transform(train_df)
+            X_val = orth.transform(val_df)
             best_model = lgb.LGBMClassifier(
                 objective="binary",
                 n_estimators=80,
@@ -318,16 +344,20 @@ class MLFactorModel:
                 callbacks=[lgb.log_evaluation(0)],
             )
             best_val_acc = float(best_model.score(X_val, y_val)) if len(X_val) > 0 else 0.0
+            best_orthogonalizer = orth
 
         self.model = best_model
+        self.orthogonalizer = best_orthogonalizer
         self.is_trained = True
 
-        # 全量评估
-        train_acc = float(self.model.score(X, y))
+        # 全量评估（使用最佳窗口的正交izer对齐特征空间）
+        full_df = pd.DataFrame(X_raw, columns=enhanced_cols)
+        X_full_transformed = best_orthogonalizer.transform(full_df)
+        train_acc = float(best_model.score(X_full_transformed, y))
 
         result = {
             "status": "trained",
-            "samples": len(X),
+            "samples": len(X_raw),
             "features": len(enhanced_cols),
             "orthogonalized_features": self.orthogonalizer.n_kept,
             "train_accuracy": round(train_acc, 4),

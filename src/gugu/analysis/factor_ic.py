@@ -1,18 +1,21 @@
-"""因子 IC 分析模块：评估因子预测力。
+"""因子 IC 分析模块：评估单只股票内因子对自身未来收益的预测力。
 
-IC（Information Coefficient）= 因子值与未来收益的 Spearman 秩相关系数。
-IR（Information Ratio）= IC 均值 / IC 标准差，衡量因子稳定性。
+注意：本模块计算的是**时序 IC**（Time-Series IC），即单只股票内因子值
+与未来收益的 Spearman 秩相关系数。这与量化基金行业通用的**截面 IC**
+（Cross-Sectional IC，同一时点所有股票的因子排名与收益排名的秩相关）
+有本质区别：
 
-筛选标准：
-  |IC 均值| > 0.03 且 |IR| > 0.3 → 有效因子
-  |IC 均值| < 0.02 → 无效因子，剔除
+- 时序 IC：评估因子对单只股票未来走势的预测能力（样本 = 时间窗口）
+- 截面 IC：评估因子在全市场选股中的区分能力（样本 = 全市场股票）
+
+时序 IC 的统计显著性低于截面 IC（样本量小，存在序列自相关），
+筛选标准应更严格。建议使用时 |IC| > 0.08 为有效，|IC| < 0.05 为无效。
 
 使用方式：
     from gugu.analysis.factor_ic import FactorICAnalyzer
     analyzer = FactorICAnalyzer()
     result = analyzer.analyze(df, factor_values, forward_days=5)
-    effective = analyzer.get_effective_factors(result, ic_threshold=0.03, ir_threshold=0.3)
-"""
+    effective = analyzer.get_effective_factors(result, ic_threshold=0.03, ir_threshold=0.3)"""
 
 from __future__ import annotations
 

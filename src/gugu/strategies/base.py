@@ -172,3 +172,50 @@ class Strategy(ABC):
                     df.loc[df.index[i], signal_col] = 0
 
         return df
+
+    def _apply_max_hold_exit(
+        self,
+        df: pd.DataFrame,
+        max_hold_days: int | None = None,
+        signal_col: str = "signal",
+    ) -> pd.DataFrame:
+        """最大持仓天数强制卖出。
+
+        突破后 max_hold_days 内未触发卖出信号 → 趋势未如期发展，强制退出。
+        用于 break 类和 ml 类策略中，防止资金被横盘股套牢。
+
+        Args:
+            df: 含 signal 列的 DataFrame
+            max_hold_days: 最大持仓天数，None 时从 self.params 读取
+            signal_col: 信号列名，默认 "signal"
+
+        Returns:
+            添加了强制退出信号的 DataFrame（直接修改原 df）
+        """
+        if max_hold_days is None:
+            max_hold_days = int(self.params.get("max_hold_days", 0))
+        if max_hold_days <= 0:
+            return df
+
+        import numpy as np
+
+        signal = df[signal_col].to_numpy(dtype=int, copy=True)
+        n = len(signal)
+        i = 0
+        while i < n:
+            if signal[i] == 1:
+                exit_idx = min(i + max_hold_days, n - 1)
+                # 检查 (i, exit_idx] 是否已有卖出信号
+                has_sell = False
+                for j in range(i + 1, exit_idx + 1):
+                    if signal[j] == -1:
+                        has_sell = True
+                        break
+                # 仅当 exit_idx 无买入信号时才强制卖出（避免覆盖买入）
+                if not has_sell and exit_idx > i and signal[exit_idx] != 1:
+                    signal[exit_idx] = -1
+                i = exit_idx + 1
+            else:
+                i += 1
+        df[signal_col] = signal
+        return df

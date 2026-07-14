@@ -33,6 +33,7 @@ from gugu.notifier.formatter import (
     format_risk_alert,
     format_signal,
     format_system_error,
+    format_validation_report,
 )
 from gugu.screener.report import format_screener_report
 from gugu.utils.log import get_logger
@@ -601,6 +602,12 @@ class FeishuNotifier:
         if not self._backtest_enabled:
             return False
         return await self.send_card(format_backtest_report(report))
+
+    async def notify_validation(self, report: dict[str, Any]) -> bool:
+        """Format and send a strategy validation/gate report notification."""
+        if not self._backtest_enabled:
+            return False
+        return await self.send_card(format_validation_report(report))
 
     async def notify_screener(self, results: list, total_scanned: int) -> bool:
         """发送尾盘选股结果。"""

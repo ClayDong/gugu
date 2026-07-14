@@ -94,6 +94,7 @@ def main() -> None:
     parser.add_argument("--strategy", type=str, default="", help="策略名；为空时打印当前启用策略")
     parser.add_argument("--metrics", type=str, default="", help="包含结构化指标的 JSON 文件")
     parser.add_argument("--output", type=str, default="", help="输出验证报告 JSON 路径")
+    parser.add_argument("--notify", action="store_true", help="将验证结果推送到飞书")
     args = parser.parse_args()
 
     if not args.strategy:
@@ -111,6 +112,36 @@ def main() -> None:
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(text + "\n", encoding="utf-8")
+
+    # 飞书通知
+    if args.notify:
+        import asyncio
+        from gugu.notifier.feishu import FeishuNotifier
+
+        metrics = _load_metrics(args.metrics)
+        failed_checks = report.get("failed_checks", [])
+        issues = [f"{c}: {metrics.get(c, 'N/A')} (阈值: {GATE_THRESHOLDS.get(c, 'N/A')})" for c in failed_checks]
+        recs = []
+        if "avg_sharpe" in failed_checks:
+            recs.append("夏普比率过低，尝试优化参数或检查数据质量")
+        if "max_drawdown" in failed_checks:
+            recs.append("最大回撤超标，考虑加入止损或降低仓位")
+        if "total_trades" in failed_checks:
+            recs.append("交易次数不足，需要更长回测周期或更多标的")
+
+        validation_report = {
+            "strategy_name": args.strategy,
+            "gate_status": "passed" if report["passed"] else "failed",
+            "metrics": {k: v["value"] for k, v in report["checks"].items()},
+            "issues": issues,
+            "recommendations": recs,
+        }
+
+        async def _send():
+            notifier = FeishuNotifier()
+            await notifier.notify_validation(validation_report)
+
+        asyncio.run(_send())
 
     if not report["passed"]:
         raise SystemExit(1)

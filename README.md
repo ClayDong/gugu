@@ -21,9 +21,9 @@
 ### 📊 策略体系
 - **多策略信号融合** — 16 个注册策略（趋势/均值回归/突破/主力行为/ML 多因子），支持 weighted/majority/any 融合模式
 - **当前启用策略** — `box_breakout`（箱体突破）+ `double_yin`（双阴钱袋子），按市场状态分流启用
-- **ML 多因子策略** — `ml_factor`：LightGBM + PCA 正交化，用 26 个 Alpha 因子预测涨跌方向，Walk-Forward 训练避免前视偏差
-- **因子 IC 分析** — `FactorICAnalyzer` 计算因子 IC/IR，筛选 |IC|>0.03 且 |IR|>0.3 的有效因子
-- **策略准入门禁** — `scripts/validate_strategy_gate.py` 统一 9 项门槛（交易数/收益/夏普/回撤/盈利比/参数稳定性/paper 信号/paper 收益），结构化判断是否可启用
+- **ML 多因子策略** — `ml_factor`：LightGBM + PCA 正交化（窗口内拟合消除前视偏差），Walk-Forward 训练，用 26 个 Alpha 因子预测涨跌方向
+- **因子 IC 分析** — `FactorICAnalyzer` 计算因子时序 IC/IR，筛选 |IC|>0.03 且 |IR|>0.3 的有效因子
+- **策略准入门禁** — `scripts/validate_strategy_gate.py` 统一 9 项门槛（交易数/收益/夏普/回撤/盈利比/参数稳定性/paper 信号/paper 收益），结构化判断是否可启用，`--notify` 推送飞书验证报告
 - **策略注册中心** — 26 个策略统一登记到 `strategy_manifest.yaml`，启用策略必须包含 `validation_gate` 结构化验证记录
 - **市场状态自适应** — 4 类策略分类（趋势/均值回归/突破/主力行为），5 种市场状态动态调整权重乘数
 - **Walk-Forward 参数优化** — 滚动窗口网格搜索 + 多股聚合训练，4 项解锁条件门控自动写回
@@ -33,7 +33,7 @@
 - **三级风控** — L1 单股仓位上限（≤30%）、L2 日亏熔断（3%预警/5%熔断，持久化到磁盘）、L3 涨跌停+停牌+T+1
 - **组合回撤熔断** — 从高点回撤 ≥15% 自动熔断，仅允许减仓
 - **持仓时间风控** — 30 天未盈利警告减半仓，60 天未盈利强制清仓
-- **持仓相关性监控** — 检查持仓间高相关性风险（阈值 0.85）
+- **持仓相关性监控** — 检查持仓间高相关性风险（阈值 0.85，皮尔逊相关系数）
 - **熔断状态持久化** — 进程重启后自动恢复熔断状态，防止绕过铁律
 
 ### 📈 信号处理
@@ -69,11 +69,13 @@
 - **并发预取** — 批量预取股票历史数据使用 `asyncio.gather` 并发，大幅缩短扫描时间
 - **StockRanker 并发评分** — 多只股票评分使用 Semaphore 限制并发，避免串行 I/O 阻塞
 - **技术指标统一计算** — `technical.py` 集中提供 ATR/RSI/MACD/布林带/OBV，消除重复实现
-- **AlphaFactory 26 因子全覆盖** — 趋势(7)+动量(7)+波动(4)+成交量(4)+形态(4) 共 26 个技术因子，含 CCI/MFI/OBV 背离/VWAP 偏离/ADX/DI 交叉/跳空缺口/十字星/锤子线/三连阳阴，综合评分直接接入 StockRanker
+- **AlphaFactory 26 因子全覆盖** — 趋势(7)+动量(7)+波动(4)+成交量(4)+形态(4) 共 26 个技术因子，含 CCI/MFI/OBV 背离/VWAP 偏离/ADX/DI 交叉/跳空缺口/十字星/锤子线/三连阳阴，综合评分直接接入 StockRanker，OBV 使用 numpy 向量化（10x 性能提升）
 - **Kelly 资金管理** — 基于历史胜率+盈亏比的最优仓位计算，含金字塔加仓策略
 - **仓位总控** — 综合市场状态+账户风险+持仓集中度动态计算仓位预算
+- **Sharpe Ratio 含无风险利率** — 基于 2% 无风险利率（中国一年期存款利率近似）计算风险调整后收益
 - **状态原子写入** — heartbeat / take_profit_state / risk_state 使用原子写入防崩溃截断
 - **策略参数热加载** — 修改 `settings.yaml` 后无需重启，scheduler 每 5 分钟自动检测并重载配置
+- **Walk-Forward 参数优化** — 滚动窗口网格搜索 + Calmar 比率目标函数（年化收益/最大回撤），多股聚合训练
 - **数据源健康监控** — Web 仪表盘 `/api/health` 端点返回三通道数据源状态 + 资金流状态
 - **调度任务可配置** — `settings.yaml` 中可单独关闭不需要的推送（宏观/视角/信号/基金等 20 个开关）
 - **盘中扫描频率自适应** — 熊市/暴跌市自动跳过盘中扫描，仅保留开盘和尾盘
@@ -129,7 +131,7 @@ python scripts/verify_enabled_strategies.py --days 200         # 自定义回测
 python scripts/verify_enabled_strategies.py --output result.json  # 输出到 JSON
 
 # 策略准入门禁验证
-python scripts/validate_strategy_gate.py --strategy box_breakout --metrics metrics.json
+python scripts/validate_strategy_gate.py --strategy box_breakout --metrics metrics.json --notify
 python scripts/validate_strategy_gate.py                        # 查看当前启用策略
 ```
 

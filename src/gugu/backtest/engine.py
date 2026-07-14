@@ -608,13 +608,32 @@ class BacktestEngine:
             return {"blocked": False, "high_corr_pairs": []}
         curr_ret = curr_close.pct_change().dropna()
 
+        # 单股回测中仅当前股票的 df 可用，无法跨股计算相关性
+        # 正确的多股相关性检查需要：(1) 全组合回测框架；(2) 每个持仓股票的历史 K 线数据
+        # 以下实现使用传入的 existing_symbols 和外部 price_history 数据源
+        # 当前单股回测模式（symbol 固定）无法获取其他股票数据，返回空结果
+        if not hasattr(self, "_price_history") or self._price_history is None:
+            return {"blocked": False, "high_corr_pairs": [], "note": "单股回测模式，跳过跨股相关性检查"}
+
         high_corr_pairs: list[tuple[str, float]] = []
         for other_sym in existing_symbols:
-            # 其他股票的数据不在当前 df 中，无法精确计算
-            # 近似方案：用当前股票的收盘价相关性（同行业通常同涨跌）
-            # 精确计算需要 _portfolio_positions 中各股票的历史数据
-            # 此处为简化版，仅返回空列表（依赖外部传入相关性检查结果）
-            pass
+            other_hist = self._price_history.get(other_sym)
+            if other_hist is None or len(other_hist) < 20:
+                continue
+            # 对齐两只股票的时间序列
+            other_close = other_hist["close"].dropna()
+            other_ret = other_close.pct_change().dropna()
+            # 按日期对齐
+            common_dates = curr_ret.index.intersection(other_ret.index)
+            if len(common_dates) < 20:
+                continue
+            r1 = curr_ret.loc[common_dates]
+            r2 = other_ret.loc[common_dates]
+            if len(r1) < 20:
+                continue
+            corr = float(r1.corr(r2))
+            if corr >= threshold:
+                high_corr_pairs.append((other_sym, round(corr, 4)))
 
         return {"blocked": len(high_corr_pairs) > 0, "high_corr_pairs": high_corr_pairs}
 
@@ -1006,27 +1025,30 @@ def walk_forward_optimize_multi_stock(
                 valid_combos.append(params)
 
             if valid_combos and len(stock_dfs) > 3:
-                # ProcessPoolExecutor 并行化：每个 worker 跑一组参数×多股
+                # 修复：ProcessPoolExecutor 无法 pickle 嵌套函数 _eval_params，
+                # 改用 ThreadPoolExecutor。BacktestEngine.run() 内部主要为 pandas/numpy
+                # 操作（C 扩展释放 GIL），多线程仍可获加速。
                 import concurrent.futures
 
-                def _eval_params(
-                    params: dict[str, Any],
-                ) -> tuple[dict[str, Any], float]:
-                    """评估一组参数的平均 Sharpe。"""
-                    sharpes: list[float] = []
-                    for tdf in train_dfs.values():
-                        try:
-                            s = strategy_cls(params)
-                            eng = BacktestEngine()
-                            r = eng.run(s, tdf, symbol="")
-                            sharpes.append(r.metrics.get("sharpe", 0))
-                        except Exception:
-                            sharpes.append(0.0)
-                    avg_sh = sum(sharpes) / max(len(sharpes), 1)
-                    return params, avg_sh
-
                 n_workers = min(len(valid_combos), 8)  # 限制最大 8 核
-                with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as executor:
+
+                    def _eval_params(
+                        params: dict[str, Any],
+                    ) -> tuple[dict[str, Any], float]:
+                        """评估一组参数的平均 Sharpe。"""
+                        sharpes: list[float] = []
+                        for tdf in train_dfs.values():
+                            try:
+                                s = strategy_cls(params)
+                                eng = BacktestEngine()
+                                r = eng.run(s, tdf, symbol="")
+                                sharpes.append(r.metrics.get("sharpe", 0))
+                            except Exception:
+                                sharpes.append(0.0)
+                        avg_sh = sum(sharpes) / max(len(sharpes), 1)
+                        return params, avg_sh
+
                     futures = {executor.submit(_eval_params, p): p for p in valid_combos}
                     for future in concurrent.futures.as_completed(futures):
                         try:
