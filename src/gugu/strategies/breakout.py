@@ -97,11 +97,12 @@ class BoxBreakoutStrategy(Strategy):
                     i += 1
             df["signal"] = signal
 
-        # 置信度：突破幅度 / 箱体高度
-        box_height = (df["box_high"] - df["box_low"]).replace(0, 1)
+        # 置信度：突破幅度 / ATR(15)，避免 close 同时做信号和置信度分母
+        atr_val = self._atr(df, int(self.params.get("box_window", 15)))
+        atr_safe = atr_val.clip(lower=df["close"] * 0.01)
         df["confidence"] = (
-            (df["close"] - df["box_high"]).clip(lower=0) / box_height
-            + (df["box_low"] - df["close"]).clip(lower=0) / box_height
+            (df["close"] - df["box_high"]).clip(lower=0) / atr_safe
+            + (df["box_low"] - df["close"]).clip(lower=0) / atr_safe
         ).clip(0, 1)
         # 无信号时置信度为 0
         df.loc[df["signal"] == 0, "confidence"] = 0.0
@@ -145,14 +146,14 @@ class DualThrustStrategy(Strategy):
         k_up = float(self.params["k_up"])
         k_down = float(self.params["k_down"])
 
-        hh = df["high"].rolling(n).max()
-        hc = df["close"].rolling(n).max()
-        lc = df["close"].rolling(n).min()
-        ll = df["low"].rolling(n).min()
+        hh = df["high"].rolling(n).max().shift(1)
+        hc = df["close"].rolling(n).max().shift(1)
+        lc = df["close"].rolling(n).min().shift(1)
+        ll = df["low"].rolling(n).min().shift(1)
 
         range_val = np.maximum(hh - lc, hc - ll)
-        df["upper"] = df["open"] + k_up * range_val.shift(1)
-        df["lower"] = df["open"] - k_down * range_val.shift(1)
+        df["upper"] = df["open"] + k_up * range_val
+        df["lower"] = df["open"] - k_down * range_val
 
         df["signal"] = 0
         df.loc[df["close"] > df["upper"], "signal"] = 1

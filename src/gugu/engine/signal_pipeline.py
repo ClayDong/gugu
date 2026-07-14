@@ -110,9 +110,6 @@ class SignalPipeline:
         self._hot_sectors_cache: dict[str, Any] | None = None
         self._hot_sectors_ts: float = 0.0
         self._exec_mode = exec_mode
-        # signal_only 缓存：日内不变数据的检查结果（key=symbol, value=检查结果）
-        self._daily_cache: dict[str, dict[str, Any]] = {}
-        self._daily_cache_cleared = True
 
         self._stage_detector = StageDetector()
         self._danger_detector = DangerSignalDetector()
