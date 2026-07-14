@@ -28,7 +28,12 @@ from gugu.utils.log import get_logger
 logger = get_logger()
 
 # 默认数据源（用户提供的 word 版本）
-DEFAULT_BOOKS_DIR = Path("/Users/dong/workspace/pdf2word/知识库_docx")
+# 修复硬编码路径：通过环境变量 GUGU_KB_DIR 或 PROJECT_ROOT 下的相对路径
+# 可通过 build_kb_index.py --books-dir 参数覆盖
+DEFAULT_BOOKS_DIR = Path(
+    __import__("os").environ.get("GUGU_KB_DIR")
+    or str(PROJECT_ROOT.parent / "pdf2word" / "知识库_docx")
+)
 # 索引输出目录
 INDEX_DIR = PROJECT_ROOT / "data" / "kb_index"
 

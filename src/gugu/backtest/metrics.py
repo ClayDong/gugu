@@ -24,17 +24,21 @@ def calc_metrics(equity_curve: pd.Series, trades: list[Any]) -> dict[str, float]
                 direction ("buy"/"sell"), price, quantity, commission, profit, date.
 
     Returns:
-        Dict with total_return, annual_return, sharpe, max_drawdown,
+        Dict with total_return, annual_return, sharpe, max_drawdown, calmar_ratio,
         win_rate, profit_factor, total_trades, avg_hold_days.
     """
     returns = (
         equity_curve.pct_change().dropna() if len(equity_curve) > 1 else pd.Series(dtype=float)
     )
+    max_dd = _max_drawdown(equity_curve)
+    ann_ret = _annual_return(equity_curve)
     return {
         "total_return": _total_return(equity_curve),
-        "annual_return": _annual_return(equity_curve),
+        "annual_return": ann_ret,
         "sharpe": _sharpe(returns),
-        "max_drawdown": _max_drawdown(equity_curve),
+        "max_drawdown": max_dd,
+        "calmar_ratio": _calmar_ratio(ann_ret, max_dd),
+        "sortino_ratio": _sortino_ratio(returns, periods=_TRADING_DAYS, rf_rate=0.02),
         "win_rate": _win_rate(trades),
         "profit_factor": _profit_factor(trades),
         "total_trades": float(len(trades)),
@@ -178,3 +182,45 @@ def _to_timestamp(date: Any) -> pd.Timestamp | None:
         return pd.Timestamp(date)
     except (ValueError, TypeError):
         return None
+
+
+def _calmar_ratio(annual_return: float, max_drawdown: float) -> float:
+    """Calmar ratio = annual return / max drawdown.
+
+    Measures risk-adjusted return relative to maximum drawdown.
+    A higher Calmar ratio indicates better return per unit of drawdown risk.
+
+    Returns:
+        0.0 if max_drawdown is 0 or negative (no drawdown means undefined).
+    """
+    if max_drawdown <= 0 or annual_return == 0:
+        return 0.0
+    return annual_return / max_drawdown
+
+
+def _sortino_ratio(
+    returns: pd.Series, periods: int = _TRADING_DAYS, rf_rate: float = 0.02,
+) -> float:
+    """Sortino ratio — like Sharpe but uses only downside deviation.
+
+    Downside deviation only penalizes negative returns, making it a better
+    measure for strategies with asymmetric return distributions.
+
+    Returns:
+        0.0 if not computable.
+    """
+    if len(returns) < 2:
+        return 0.0
+    daily_rf = rf_rate / periods
+    excess = returns - daily_rf
+    # Only negative deviations
+    downside = returns[returns < 0]
+    if len(downside) == 0:
+        return 0.0
+    downside_std = float(downside.std())
+    if downside_std == 0 or np.isnan(downside_std):
+        return 0.0
+    mean_excess = float(excess.mean())
+    if np.isnan(mean_excess):
+        return 0.0
+    return float(np.sqrt(periods) * mean_excess / downside_std)

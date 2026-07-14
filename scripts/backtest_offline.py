@@ -308,6 +308,7 @@ def main() -> None:
     parser.add_argument("--min-days", type=int, default=60, help="最少缓存天数要求（默认 60）")
     parser.add_argument("--strategies", type=str, default=None, help="逗号分隔的策略名")
     parser.add_argument("--output", type=str, default="data/backtest_report.json", help="输出 JSON 路径")
+    parser.add_argument("--notify", action="store_true", help="回测完成后推送飞书报告")
     args = parser.parse_args()
 
     t0 = time.time()
@@ -372,6 +373,58 @@ def main() -> None:
         encoding="utf-8",
     )
     logger.info(f"报告已保存: {output_path}")
+
+    # 7. 飞书通知（v0.7.1 新增）
+    if args.notify:
+        _send_feishu_report(full_data, strategies)
+
+
+def _send_feishu_report(full_data: dict, strategies: list[str]) -> None:
+    """推送批量回测报告到飞书。"""
+    try:
+        import asyncio
+        from gugu.notifier.feishu import FeishuNotifier
+
+        summaries = full_data.get("strategies", {})
+        summary_lines = []
+        for s_name in strategies:
+            s = summaries.get(s_name, {})
+            if not s:
+                summary_lines.append(f"{s_name}: 无数据")
+                continue
+            ret = s.get("_return_mean", 0)
+            sharpe = s.get("_sharpe_mean", 0)
+            dd = s.get("_max_dd_mean", 0)
+            wr = s.get("_win_rate_mean", 0)
+            n = s.get("_sample_count", 0)
+            pf = s.get("_profitable_ratio", 0)
+            summary_lines.append(
+                f"{s_name}: 样本{n} 收益{ret*100:+.2f}% "
+                f"夏普{sharpe:.2f} 回撤{dd*100:.2f}% "
+                f"胜率{wr*100:.1f}% 盈利比{pf*100:.0f}%"
+            )
+
+        report_text = "\n".join(summary_lines)
+        feishu_report = {
+            "title": "全市场离线回测报告",
+            "date": full_data["date"],
+            "n_stocks": full_data["n_stocks"],
+            "elapsed_min": round(full_data["elapsed_sec"] / 60, 1),
+            "strategies": report_text,
+        }
+
+        async def _send():
+            notifier = FeishuNotifier()
+            # 复用回测报告模板
+            from gugu.notifier.formatter import format_backtest_report
+
+            card = format_backtest_report(feishu_report)
+            await notifier.send_card(card)
+
+        asyncio.run(_send())
+        logger.info("飞书回测报告推送成功")
+    except Exception as e:
+        logger.warning(f"飞书推送失败: {e}")
 
 
 if __name__ == "__main__":

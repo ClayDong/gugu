@@ -648,8 +648,9 @@ class RiskManager:
                     ret = df["close"].pct_change().dropna()
                     if len(ret) >= 30:
                         returns[sym] = ret
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"获取 {sym} 历史数据失败: {e}")
+                continue
 
         alerts: list[dict] = []
         syms = list(returns.keys())
@@ -663,6 +664,7 @@ class RiskManager:
                     corr = float(np.corrcoef(aligned.iloc[:, 0], aligned.iloc[:, 1])[0, 1])
                     if abs(corr) > threshold:
                         alerts.append({"pair": (s1, s2), "correlation": round(corr, 4)})
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"相关性计算失败 {s1}/{s2}: {e}")
                     continue
         return alerts

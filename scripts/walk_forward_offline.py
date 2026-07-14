@@ -318,6 +318,7 @@ async def main(
     write: bool,
     show: bool,
     force: bool,
+    notify: bool = False,
 ) -> None:
     """主入口。"""
     if show:
@@ -360,10 +361,29 @@ async def main(
         for s_name in enabled:
             try:
                 await run_offline_optimization(s_name, symbols, n_splits, write, force)
+                if notify:
+                    await _notify_optimization_result(s_name, symbols)
                 print()
             except Exception as e:
                 logger.error(f"策略 {s_name} 优化失败: {e}")
                 continue
+
+
+async def _notify_optimization_result(strategy_name: str, symbols: list[str]) -> None:
+    """推送 Walk-Forward 优化结果到飞书。"""
+    try:
+        from gugu.notifier.feishu import FeishuNotifier
+
+        report = {
+            "title": f"Walk-Forward 优化: {strategy_name}",
+            "strategy": strategy_name,
+            "symbols": ",".join(symbols),
+            "description": f"多股聚合 Walk-Forward 优化完成",
+        }
+        notifier = FeishuNotifier()
+        await notifier.notify_backtest(report)
+    except Exception as e:
+        logger.warning(f"飞书推送失败: {e}")
 
 
 if __name__ == "__main__":
@@ -377,7 +397,8 @@ if __name__ == "__main__":
     parser.add_argument("--force", action="store_true",
                         help="强制写回，跳过解锁条件检查（紧急情况使用）")
     parser.add_argument("--show", action="store_true", help="显示当前策略参数")
+    parser.add_argument("--notify", action="store_true", help="优化完成后推送飞书通知")
     parser.add_argument("--version", action="version", version="gugu 0.1.0")
     args = parser.parse_args()
 
-    asyncio.run(main(args.strategy, args.symbols, args.splits, args.write, args.show, args.force))
+    asyncio.run(main(args.strategy, args.symbols, args.splits, args.write, args.show, args.force, args.notify))

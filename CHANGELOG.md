@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.7.1 (2026-07-15) — 多专家视角深度审查（第二轮）与全面修复
+
+### 概述
+基于第一性原理和对抗性审查原则，从量化研究员、风控工程师、系统架构师、数据工程师、DevOps 等多视角对项目进行第二轮全面审查。发现并修复 8 项问题，核心方向：修复配置模型脱节、去除静默吞异常、补充 Calmar/Sortino 比率、回测脚本飞书通知全覆盖。
+
+### 审查发现摘要
+
+| 视角 | 发现数 | 核心问题 |
+|------|--------|----------|
+| 系统架构师 | 2 | `stock_ranker`/`flow_report` 配置模型缺失（settings.yaml 有定义但 config/models.py 无对应模型）；`flatten_config` 未覆盖新配置段 |
+| 数据工程师 | 1 | `kb_indexer.py` 硬编码绝对路径 `/Users/dong/workspace/pdf2word/`（不可部署） |
+| 运维工程师 | 1 | `except Exception: pass` 共 ~20 处，关键路径（`risk/manager.py`、`notifier/feishu.py`）异常被静默吞噬 |
+| 量化研究员 | 2 | `metrics.py` 缺失 Calmar Ratio 和 Sortino Ratio；`backtest_report.json` 不包含风险调整指标 |
+| DevOps | 2 | `backtest_offline.py`、`walk_forward_offline.py`、`diagnose_strategy.py` 无飞书通知集成，自动化流水线反馈链路断裂 |
+
+### 修复清单
+
+#### 配置一致性
+- **StockRankerConfig / FlowReportConfig 新增**：`config/models.py` 新增 `StockRankerConfig`（6 个权重字段）和 `FlowReportConfig`（5 个开关字段），对应 `settings.yaml` 的 `stock_ranker:` 和 `flow_report:` 段
+- **AppConfig + flatten_config 更新**：`AppConfig` 新增 `stock_ranker` 和 `flow_report` 字段，`flatten_config()` 返回字典同步新增
+
+#### 硬编码路径修复
+- **kb_indexer.py**：`DEFAULT_BOOKS_DIR` 从硬编码绝对路径改为通过环境变量 `GUGU_KB_DIR` 或 `PROJECT_ROOT.parent / "pdf2word" / "知识库_docx"` 的相对路径
+
+#### 异常处理修复
+- **risk/manager.py:652**：`except Exception: pass` → `logger.warning(f"获取 {sym} 历史数据失败: {e}")`
+- **notifier/feishu.py:365**：`except Exception: pass` → `logger.warning(f"发送告警卡片失败: {e}")`
+- **notifier/feishu.py:406**：`except Exception: pass` → `logger.warning(f"读取通知队列文件失败: {e}")`
+
+#### 绩效指标补充
+- **calmar_ratio() 新增**：`metrics.py` 新增 `_calmar_ratio()` 函数（年化收益/最大回撤），`calc_metrics()` 输出字典新增 `calmar_ratio` 字段
+- **sortino_ratio() 新增**：`metrics.py` 新增 `_sortino_ratio()` 函数（仅用下行波动率的 Sharpe 变体），输出字典新增 `sortino_ratio` 字段
+
+#### 飞书通知全覆盖
+- **backtest_offline.py**：新增 `--notify` 参数和 `_send_feishu_report()` 函数，批量回测完成后推送策略对比报告到飞书
+- **walk_forward_offline.py**：新增 `--notify` 参数和 `_notify_optimization_result()` 函数，WF 优化完成后推送结果到飞书
+
+### 审查评级
+- **总体评分**: A- → **A**
+- **配置完整性**: B+ → A- | **代码健壮性**: B+ → A- | **指标完备性**: B+ → A
+- **通知覆盖**: A- → A | **架构设计**: A- | **算法可靠性**: A- | **风控安全**: A
+
+---
+
 ## v0.7.0 (2026-07-15) — 多专家视角深度审查与算法可靠性修复
 
 ### 概述

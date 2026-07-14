@@ -361,8 +361,8 @@ class FeishuNotifier:
                             },
                         }
                         await self._post_card(token, alert_card)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"发送告警卡片失败: {e}")
                 continue
 
             card = item.get("card", {})
@@ -402,8 +402,8 @@ class FeishuNotifier:
                                     newly_queued.append(json.loads(line))
                                 except json.JSONDecodeError:
                                     continue
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"读取通知队列文件失败: {e}")
                 # 合并：新入队的在前，仍失败的在后
                 all_items = newly_queued + still_failed
                 tmp_path = self._queue_path.with_suffix(".jsonl.tmp")

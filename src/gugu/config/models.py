@@ -215,6 +215,38 @@ class FeishuConfig(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class StockRankerConfig(BaseModel):
+    """StockRanker 选股评分器配置.
+
+    settings.yaml 中 stock_ranker 段对应的强类型模型。
+    权重总和应等于 1.0（由配置一致性测试校验）。
+
+    v0.7.1 新增：对应 settings.yaml stock_ranker 段，修复配置脱节问题。
+    """
+
+    factor_weight: float = Field(default=0.25, ge=0.0, le=1.0, description="因子评分权重")
+    fundamental_weight: float = Field(default=0.20, ge=0.0, le=1.0, description="基本面评分权重")
+    money_flow_weight: float = Field(default=0.25, ge=0.0, le=1.0, description="资金流评分权重")
+    sector_weight: float = Field(default=0.15, ge=0.0, le=1.0, description="板块评分权重")
+    chip_score_weight: float = Field(default=0.15, ge=0.0, le=1.0, description="筹码画像评分权重")
+    chip_score_neutral: float = Field(default=0.5, ge=0.0, le=1.0, description="数据缺失时的中性评分")
+
+
+class FlowReportConfig(BaseModel):
+    """资金流报告配置.
+
+    settings.yaml 中 flow_report 段对应的强类型模型。
+
+    v0.7.1 新增：对应 settings.yaml flow_report 段，修复配置脱节问题。
+    """
+
+    enabled: bool = Field(default=True, description="资金流报告推送开关")
+    morning_time: str = Field(default="08:00", description="盘前资金流报告推送时间")
+    close_time: str = Field(default="15:10", description="收盘资金流报告推送时间")
+    sector_top_n: int = Field(default=5, ge=1, le=20, description="行业TOP N数量")
+    stock_strong_top_n: int = Field(default=5, ge=1, le=30, description="强流入个股TOP N数量")
+
+
 class SchedulerTasksConfig(BaseModel):
     """调度任务开关配置."""
 
@@ -415,6 +447,14 @@ class AppConfig(BaseModel):
         default_factory=IntradayMonitorConfig,
         description="盘中实时盯盘配置",
     )
+    stock_ranker: StockRankerConfig = Field(
+        default_factory=StockRankerConfig,
+        description="StockRanker 选股评分器配置（v0.7.1 新增）",
+    )
+    flow_report: FlowReportConfig = Field(
+        default_factory=FlowReportConfig,
+        description="资金流报告配置（v0.7.1 新增）",
+    )
 
     # ── classmethod factory ──────────────────────────────────────────
 
@@ -565,5 +605,20 @@ def flatten_config(app_config: AppConfig) -> dict[str, Any]:
             "performance_mode": app_config.intraday_monitor.performance_mode,
             "custom_watchlist": list(app_config.intraday_monitor.custom_watchlist),
             "alert_thresholds": dict(app_config.intraday_monitor.alert_thresholds),
+        },
+        "stock_ranker": {
+            "factor_weight": app_config.stock_ranker.factor_weight,
+            "fundamental_weight": app_config.stock_ranker.fundamental_weight,
+            "money_flow_weight": app_config.stock_ranker.money_flow_weight,
+            "sector_weight": app_config.stock_ranker.sector_weight,
+            "chip_score_weight": app_config.stock_ranker.chip_score_weight,
+            "chip_score_neutral": app_config.stock_ranker.chip_score_neutral,
+        },
+        "flow_report": {
+            "enabled": app_config.flow_report.enabled,
+            "morning_time": app_config.flow_report.morning_time,
+            "close_time": app_config.flow_report.close_time,
+            "sector_top_n": app_config.flow_report.sector_top_n,
+            "stock_strong_top_n": app_config.flow_report.stock_strong_top_n,
         },
     }
