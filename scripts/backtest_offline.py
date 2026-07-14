@@ -100,7 +100,7 @@ def load_cached_data(cache_dir: Path, code: str) -> pd.DataFrame | None:
 
     v0.4.2 修复: 加入 500 到搜索列表头部，否则 1786 个 _500d.parquet 文件不会被加载。
     """
-    for days in [500, 250, 200, 120, 60, 30, 2]:
+    for days in [500, 365, 250, 200, 120, 60, 30, 2]:
         f = cache_dir / f"{code}_{days}d.parquet"
         if f.exists():
             try:
