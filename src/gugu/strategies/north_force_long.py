@@ -72,7 +72,9 @@ class NorthForceLongStrategy(Strategy):
         # 均线与斜率
         df["ma_trend"] = df["close"].rolling(ma_trend_window).mean()
         df["ma_long"] = df["close"].rolling(ma_long_window).mean()
-        df["ma_slope"] = df["ma_trend"].diff(ma_slope_window) / df["ma_trend"].shift(ma_slope_window)
+        df["ma_slope"] = df["ma_trend"].diff(ma_slope_window) / df["ma_trend"].shift(
+            ma_slope_window
+        )
 
         # 量能
         df["vol_ma"] = df["volume"].rolling(vol_ma_window).mean().shift(1)
@@ -81,7 +83,9 @@ class NorthForceLongStrategy(Strategy):
         # 基础 K 线
         df["daily_return"] = df["close"].pct_change()
         df["is_yang"] = df["close"] > df["open"]
-        df["upper_shadow"] = (df["high"] - df[["open", "close"]].max(axis=1)) / df["open"].replace(0, np.nan)
+        df["upper_shadow"] = (df["high"] - df[["open", "close"]].max(axis=1)) / df["open"].replace(
+            0, np.nan
+        )
 
         # 买点硬条件
         cond_trend_up = (df["ma_trend"] > df["ma_long"]) & (df["ma_slope"] > 0)
@@ -91,7 +95,7 @@ class NorthForceLongStrategy(Strategy):
         cond_not_huge_vol = df["vol_ratio"] <= max_vol_ratio
 
         # 近期有资金关注
-        momentum = (df["close"] / df["close"].shift(recent_momentum_window) - 1.0)
+        momentum = df["close"] / df["close"].shift(recent_momentum_window) - 1.0
         cond_momentum = momentum >= recent_momentum_pct
         recent_spike = (
             df["daily_return"].rolling(recent_spike_window).max().shift(1) >= recent_spike_pct
@@ -108,11 +112,15 @@ class NorthForceLongStrategy(Strategy):
         )
 
         # 评分项
-        score_pullback = ((df["close"] - df["ma_trend"]) / df["ma_trend"]).clip(0, pullback_to_ma_pct)
+        score_pullback = ((df["close"] - df["ma_trend"]) / df["ma_trend"]).clip(
+            0, pullback_to_ma_pct
+        )
         score_pullback = (1 - score_pullback / pullback_to_ma_pct) * 0.25
         score_momentum = (momentum.clip(0, 0.20) / 0.20 * 0.25).fillna(0)
         score_trend_slope = (df["ma_slope"].clip(0, 0.05) / 0.05 * 0.25).fillna(0)
-        score_vol_healthy = ((1 - df["vol_ratio"].clip(0, max_vol_ratio) / max_vol_ratio) * 0.15).fillna(0)
+        score_vol_healthy = (
+            (1 - df["vol_ratio"].clip(0, max_vol_ratio) / max_vol_ratio) * 0.15
+        ).fillna(0)
         score_yang = df["is_yang"].astype(float) * 0.10
 
         df["confidence_score"] = (
@@ -133,8 +141,10 @@ class NorthForceLongStrategy(Strategy):
         # 卖点
         cond_stop_loss_1 = df["in_position"] & (df["close"] < df["entry_low"] * (1 - stop_loss_pct))
         cond_stop_loss_2 = df["in_position"] & (df["close"] < df["ma_trend"])
-        cond_ma_death_cross = df["in_position"] & (df["ma_trend"] < df["ma_long"]) & (
-            df["ma_trend"].shift(1) >= df["ma_long"].shift(1)
+        cond_ma_death_cross = (
+            df["in_position"]
+            & (df["ma_trend"] < df["ma_long"])
+            & (df["ma_trend"].shift(1) >= df["ma_long"].shift(1))
         )
         cond_stagnation = df["in_position"] & (
             (df["vol_ratio"] >= stagnation_vol_ratio)
@@ -153,7 +163,9 @@ class NorthForceLongStrategy(Strategy):
             & (df["days_since_entry"] >= time_stop_window)
             & (df["return_since_entry"] < time_stop_threshold)
         )
-        cond_take_profit = df["in_position"] & (df["daily_return"] >= take_profit_pct * 0.6) & df["is_yang"]
+        cond_take_profit = (
+            df["in_position"] & (df["daily_return"] >= take_profit_pct * 0.6) & df["is_yang"]
+        )
 
         # 信号赋值：卖出优先
         df["signal"] = 0
@@ -169,6 +181,8 @@ class NorthForceLongStrategy(Strategy):
         ] = -1
 
         df["confidence"] = 0.0
-        df.loc[buy_cond_final, "confidence"] = df.loc[buy_cond_final, "confidence_score"].clip(0.55, 0.85)
+        df.loc[buy_cond_final, "confidence"] = df.loc[buy_cond_final, "confidence_score"].clip(
+            0.55, 0.85
+        )
 
         return df

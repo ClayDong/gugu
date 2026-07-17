@@ -52,7 +52,9 @@ class DragonTigerShortStrategy(Strategy):
 
         # 均线
         df["ma_trend"] = df["close"].rolling(ma_trend_window).mean()
-        df["ma_slope"] = df["ma_trend"].diff(ma_slope_window) / df["ma_trend"].shift(ma_slope_window)
+        df["ma_slope"] = df["ma_trend"].diff(ma_slope_window) / df["ma_trend"].shift(
+            ma_slope_window
+        )
 
         # 量能
         df["vol_ma"] = df["volume"].rolling(vol_ma_window).mean().shift(1)
@@ -61,7 +63,9 @@ class DragonTigerShortStrategy(Strategy):
         # K线
         df["daily_return"] = df["close"].pct_change()
         df["is_yang"] = df["close"] > df["open"]
-        df["upper_shadow"] = (df["high"] - df[["open", "close"]].max(axis=1)) / df["open"].replace(0, np.nan)
+        df["upper_shadow"] = (df["high"] - df[["open", "close"]].max(axis=1)) / df["open"].replace(
+            0, np.nan
+        )
         df["is_limit_up"] = np.round(df["daily_return"], 4) >= limit_up_pct
 
         # 找到最近涨停日
@@ -89,7 +93,9 @@ class DragonTigerShortStrategy(Strategy):
                 if i - last_break <= max_break_days:
                     df.loc[df.index[i], "break_day_high"] = df.loc[df.index[last_break], "high"]
                     df.loc[df.index[i], "break_day_low"] = df.loc[df.index[last_break], "low"]
-                    df.loc[df.index[i], "break_day_vol_ratio"] = df.loc[df.index[last_break], "vol_ratio"]
+                    df.loc[df.index[i], "break_day_vol_ratio"] = df.loc[
+                        df.index[last_break], "vol_ratio"
+                    ]
                     lu_idx = last_break - 1
                     if lu_idx >= 0 and df.loc[df.index[lu_idx], "is_limit_up"]:
                         df.loc[df.index[i], "limit_up_day_high"] = df.loc[df.index[lu_idx], "high"]
@@ -113,15 +119,25 @@ class DragonTigerShortStrategy(Strategy):
 
         # 评分项
         score_break_shrink = (1 - df["break_day_vol_ratio"].clip(0, 1)).fillna(0).clip(0, 1) * 0.25
-        score_rebound_vol = (df["vol_ratio"].clip(0, max_vol_ratio) / max_vol_ratio * 0.20).fillna(0)
-        score_strong_rebound = (df["close"] > df["limit_up_day_high"]).fillna(False).astype(float) * 0.20
+        score_rebound_vol = (df["vol_ratio"].clip(0, max_vol_ratio) / max_vol_ratio * 0.20).fillna(
+            0
+        )
+        score_strong_rebound = (df["close"] > df["limit_up_day_high"]).fillna(False).astype(
+            float
+        ) * 0.20
         score_trend_up = (df["ma_slope"].clip(0, 0.05) / 0.05 * 0.15).fillna(0)
-        score_timing = ((df["limit_up_day_offset"] >= 2) & (df["limit_up_day_offset"] <= 4)).astype(float) * 0.10
+        score_timing = ((df["limit_up_day_offset"] >= 2) & (df["limit_up_day_offset"] <= 4)).astype(
+            float
+        ) * 0.10
         score_yang = df["is_yang"].astype(float) * 0.10
 
         df["confidence_score"] = (
-            score_break_shrink + score_rebound_vol + score_strong_rebound
-            + score_trend_up + score_timing + score_yang
+            score_break_shrink
+            + score_rebound_vol
+            + score_strong_rebound
+            + score_trend_up
+            + score_timing
+            + score_yang
         ).clip(0, 1)
 
         buy_cond_final = core_buy_cond & (df["confidence_score"] >= min_confidence)
@@ -155,16 +171,24 @@ class DragonTigerShortStrategy(Strategy):
             & (df["days_since_entry"] >= time_stop_window)
             & (df["return_since_entry"] < time_stop_threshold)
         )
-        cond_take_profit = df["in_position"] & (df["daily_return"] >= take_profit_pct * 0.6) & df["is_yang"]
+        cond_take_profit = (
+            df["in_position"] & (df["daily_return"] >= take_profit_pct * 0.6) & df["is_yang"]
+        )
 
         df["signal"] = 0
         df.loc[buy_cond_final, "signal"] = 1
         df.loc[
-            cond_stop_loss_1 | cond_stop_loss_2 | cond_stagnation | cond_time_stop | cond_take_profit,
+            cond_stop_loss_1
+            | cond_stop_loss_2
+            | cond_stagnation
+            | cond_time_stop
+            | cond_take_profit,
             "signal",
         ] = -1
 
         df["confidence"] = 0.0
-        df.loc[buy_cond_final, "confidence"] = df.loc[buy_cond_final, "confidence_score"].clip(0.55, 0.90)
+        df.loc[buy_cond_final, "confidence"] = df.loc[buy_cond_final, "confidence_score"].clip(
+            0.55, 0.90
+        )
 
         return df

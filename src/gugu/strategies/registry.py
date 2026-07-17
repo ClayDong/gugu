@@ -11,9 +11,9 @@ from gugu.strategies.breakout_rebound import BreakoutReboundStrategy
 from gugu.strategies.capital_flow_alert import CapitalFlowAlertStrategy
 from gugu.strategies.chen_jiangting import ChenJiangtingStrategy
 from gugu.strategies.double_yin import DoubleYinMoneyBagStrategy
+from gugu.strategies.dragon_tiger_short import DragonTigerShortStrategy
 from gugu.strategies.leopard_three_factors import LeopardThreeFactorsStrategy
 from gugu.strategies.mean_revert import BollingerStrategy, KDJStrategy, RSIStrategy
-from gugu.strategies.dragon_tiger_short import DragonTigerShortStrategy
 from gugu.strategies.ml_factor import MLFactorStrategy
 from gugu.strategies.money_flow_follow import MoneyFlowFollowStrategy
 from gugu.strategies.north_force_long import NorthForceLongStrategy
