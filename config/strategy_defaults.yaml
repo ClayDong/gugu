@@ -189,3 +189,41 @@ breakout_rebound:
 
   # ── 信号确认 ──
   confirm_days: 0                    # 不确认（反包突破本身即触发条件）
+
+north_force_long:
+  # 长线主力吸筹跟随策略：趋势向上 + 缩量回踩 MA20 + 近期有资金关注
+  ma_trend_window: 20
+  ma_long_window: 60
+  ma_slope_window: 5
+  pullback_to_ma_pct: 0.02
+  recent_momentum_window: 20
+  recent_momentum_pct: 0.05
+  recent_spike_window: 5
+  recent_spike_pct: 0.05
+  max_daily_gain_pct: 0.02
+  max_vol_ratio: 1.5
+  vol_ma_window: 60
+  stop_loss_pct: 0.07
+  take_profit_pct: 0.20
+  stagnation_vol_ratio: 2.5
+  max_upper_shadow_pct: 0.03
+  time_stop_window: 30
+  time_stop_threshold: 0.05
+  min_confidence: 0.55
+
+dragon_tiger_short:
+  # 短线龙虎榜反包跟随策略：涨停 + 断板 + 反包 + 趋势支撑
+  ma_trend_window: 20
+  ma_slope_window: 5
+  limit_up_pct: 0.095
+  limit_up_lookback: 5
+  max_break_days: 3
+  stop_loss_pct: 0.05
+  take_profit_pct: 0.10
+  stagnation_vol_ratio: 2.5
+  max_upper_shadow_pct: 0.02
+  time_stop_window: 5
+  time_stop_threshold: 0.03
+  max_vol_ratio: 2.0
+  vol_ma_window: 20
+  min_confidence: 0.55

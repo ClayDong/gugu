@@ -13,8 +13,10 @@ from gugu.strategies.chen_jiangting import ChenJiangtingStrategy
 from gugu.strategies.double_yin import DoubleYinMoneyBagStrategy
 from gugu.strategies.leopard_three_factors import LeopardThreeFactorsStrategy
 from gugu.strategies.mean_revert import BollingerStrategy, KDJStrategy, RSIStrategy
+from gugu.strategies.dragon_tiger_short import DragonTigerShortStrategy
 from gugu.strategies.ml_factor import MLFactorStrategy
 from gugu.strategies.money_flow_follow import MoneyFlowFollowStrategy
+from gugu.strategies.north_force_long import NorthForceLongStrategy
 from gugu.strategies.pullback_low import PullbackLowStrategy
 from gugu.strategies.trend import DualMAStrategy, MACDStrategy, TurtleStrategy
 
@@ -36,6 +38,8 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "breakout_rebound": BreakoutReboundStrategy,  # 断板反包策略（短线主力行为）
     "capital_flow_alert": CapitalFlowAlertStrategy,  # 资金流异动监控
     "ml_factor": MLFactorStrategy,  # LightGBM 多因子策略
+    "north_force_long": NorthForceLongStrategy,  # 长线主力吸筹跟随
+    "dragon_tiger_short": DragonTigerShortStrategy,  # 短线龙虎榜反包跟随
 }
 
 

@@ -322,6 +322,45 @@ signal_strategies:
       Walk-Forward：前 80% 训练，后 20% 验证，避免前视偏差。
       启用条件：必须通过 9 项准入门禁 + paper 验证 30+ 信号。
 
+  north_force_long:
+    name: 长线主力吸筹跟随
+    module: gugu.strategies.north_force_long
+    class: NorthForceLongStrategy
+    source: 实战派「主力资金跟随」战法（北向/公募长线行为近似）
+    enabled: false
+    summary: 趋势向上+缩量回踩MA20+近期有资金关注，模拟长线主力吸筹形态
+    params_entry: strategy_defaults.yaml
+    validation: 新增策略，待回测验证后开启
+    validation_gate:
+      status: pending_backtest
+      reason: 新增策略，待回测验证后开启
+      last_backtest: null
+    notes: |
+      核心观点：中期趋势向上时，缩量回踩MA20且近期有资金关注，视为长线主力吸筹。
+      买点：MA20>MA60 + MA20斜率向上 + 收盘价在MA20上方且偏离≤2% + 近期涨幅≥5%或5日内有5%以上阳线 + 非天量。
+      卖点：跌破入场止损位 / 跌破MA20 / 高位放量滞涨 / 时间止损 / 大阳线止盈。
+      生产增强：SignalPipeline 的 AltAlphaFilter（高管增持/龙虎榜机构净买/融资情绪）和
+      HolderConcentrationFilter 对其进行二次过滤，近似实现“跟随主力”。
+
+  dragon_tiger_short:
+    name: 短线龙虎榜反包跟随
+    module: gugu.strategies.dragon_tiger_short
+    class: DragonTigerShortStrategy
+    source: A股实战派「涨停断板反包」战法（短线主力行为学）
+    enabled: false
+    summary: 涨停+断板+反包+趋势支撑，模拟机构/游资短线反包行为
+    params_entry: strategy_defaults.yaml
+    validation: 新增策略，待回测验证后开启
+    validation_gate:
+      status: pending_backtest
+      reason: 新增策略，待回测验证后开启
+      last_backtest: null
+    notes: |
+      核心观点：近5日内有涨停 → 断板调整 → 1-3日内阳线反包断板日最高价，视为短线主力再介入。
+      买点：近5日涨停 + 断板存在 + 收盘价突破断板日高点 + 阳线 + MA20趋势向上 + 非天量。
+      卖点：跌破入场止损位 / 跌破MA20 / 高位放量滞涨 / 时间止损 / 大阳线止盈。
+      生产增强：SignalPipeline 的 AltAlphaFilter 对龙虎榜机构净买（lhb_inst_net）二次确认。
+
 # ============================================================
 # 二、风控/择时型策略（analysis/ + engine/，SignalPipeline 直接实例化）
 # ============================================================
@@ -486,12 +525,14 @@ skill_strategies:
     source: 《炒股的智慧》
     enabled: false
     summary: 泡沫期参与策略（未启用）
+    validation: 未启用（泡沫期参与逻辑未完善，待回测验证后再考虑启用）
 
   stock-learning-stage:
     name: 学习阶段策略
     source: 《炒股的智慧》
     enabled: false
     summary: 新手学习阶段策略（未启用）
+    validation: 未启用（学习阶段为认知引导类内容，不产生交易信号，无需回测）
 
   # --- 多视角书籍Skill（28本，动态选3本）---
   multi_perspective:

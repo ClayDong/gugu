@@ -78,6 +78,12 @@ gugu/
 │   ├── macro/                   # 宏观五维模块
 │   ├── selector/                # 选股层
 │   │   └── stock_selector.py    # 资金流 + 策略筛选
+│   ├── screener/                # 尾盘选股器（P2-1 低吸逻辑 + 自动调优）
+│   │   ├── terminal_screener.py # 14:30 全市场扫描（缩量回踩 MA20）
+│   │   ├── params.py            # ScreenerParams 动态参数与硬边界
+│   │   ├── auto_tune.py         # 基于验证历史的参数自动调优
+│   │   ├── validator.py         # T+1 选股有效性验证
+│   │   └── report.py            # 飞书选股报告卡片
 │   ├── filters/                 # 过滤层
 │   │   ├── fundamental.py       # 基本面过滤
 │   │   ├── money_flow.py        # 资金流过滤
@@ -355,7 +361,99 @@ perspective:
   min_perspective_score: 4.0
   min_pass_count: 7
   auto_notify: true
+
+## 3.9 尾盘选股与自动调优
+
+### 3.9.1 尾盘选股器
+
+`TerminalScreener`（[screener/terminal_screener.py](src/gugu/screener/terminal_screener.py)）在每个交易日 14:30 执行全市场扫描，采用陈江挺《炒股的智慧》中的**缩量回踩 MA20 低吸逻辑**。
+
+**8 条选股条件**：
+
+| # | 条件 | 说明 |
+|---|------|------|
+| 1 | 当日涨幅 -2% ~ +1% | 回踩而非追涨 |
+| 2 | 前 5 日有涨幅 ≥ 5% | 确认强势股基因 |
+| 3 | 量比 < 1.0 | 缩量回踩才健康 |
+| 4 | 收盘价 ≥ MA20 | 趋势未破 |
+| 5 | MA20 > MA60 | 中期趋势向上 |
+| 6 | 换手率 3% ~ 15% | 活跃但非过度投机 |
+| 7 | 流通市值 50亿 ~ 500亿 | 避免小盘操纵与大盘滞涨 |
+| 8 | 非尾盘异常冲高 | 排除诱多形态 |
+
+**性能优化**：
+- 快照硬过滤：先用行情快照的 量比/换手率/流通市值 字段粗筛，6400+ 只股票降至 50~100 只进入 K 线验证
+- 并发 K 线获取：`Semaphore(5)` + `asyncio.gather`，5 倍加速
+- 总超时 20 分钟硬上限：超时返回已扫描部分结果，避免阻塞日报
+- HTTP 失败熔断：连续 5 只股票失败时中止该批
+
+**市场状态过滤**：
+- 通过 `MarketRegimeDetector` 判断当前市场状态（bull/rally/sideways/bear/crash）
+- `bear`/`crash` 状态下跳过正式选股，返回观察列表或空仓提示
+- `sideways` 状态下候选数量乘以 0.6 的修正系数，降低曝光
+
+### 3.9.2 次日验证
+
+`ScreenerValidator`（[screener/validator.py](src/gugu/screener/validator.py)）在 T+1 日两次验证选股结果：
+
+- **09:35 盘中验证**：读取昨日选股记录，通过东财 push2 批量实时接口获取开盘价与盘中最高价，计算：
+  - `open_premium` = (T+1 开盘价 - T 收盘价) / T 收盘价
+  - `intraday_high_premium` = (T+1 盘中最高价 - T 收盘价) / T 收盘价
+  - `benchmark_open_change` = 沪深 300 开盘涨幅
+  - 超额收益 = 个股开盘溢价 - 基准开盘涨幅
+
+- **15:05 收盘验证**：补充收盘价收益、盘中最大回撤、止损命中率，覆盖真实可执行收益与风险
+
+验证结果写入 `data/screener_validation.jsonl`，用于自动调优与人工复盘。
+
+### 3.9.3 参数自动调优
+
+`ScreenerParams` + `auto_tune.py`（[screener/params.py](src/gugu/screener/params.py)、[screener/auto_tune.py](src/gugu/screener/auto_tune.py)）构成尾盘选股的自动调优闭环。
+
+**参数管理**：
+- 运行时参数从 `data/screener_params.json` 加载，不依赖 settings.yaml
+- 每个阈值都有硬边界（`_BOUNDS`），防止调优过程进入非理性区间
+- `apply_adjustment()` 返回新实例，原实例不变，便于 A/B 对比
+
+**调优触发条件**（交易日 15:10）：
+
+| 触发条件 | 阈值 | 动作 |
+|----------|------|------|
+| 近 N 日平均开盘超额收益 | < -0.5% | 收紧选股条件 |
+| 胜率 | < 30% | 收紧选股条件 |
+| 止损命中率 | > 40% | 收紧选股条件 |
+| 近 N 日平均开盘超额收益 | > 0.3% | 放宽选股条件 |
+| 胜率 | > 45% | 放宽选股条件 |
+
+**调优规则**：
+- 效果差时：降低量比上限、提高换手率下限、收窄涨幅区间 → 提高信号质量
+- 效果好时：放宽量比/换手率/涨幅区间 → 增加样本数量，避免过度拟合
+- 每次调整幅度小（步进式），防止参数抖动
+- 样本不足（< 5 个交易日）或自动调优关闭时跳过
+
+**调度集成**：
+- `screener_1430`：14:30 执行选股
+- `screener_validate_0935`：次日 09:35 盘中验证
+- `screener_validate_1505`：15:05 收盘验证
+- `screener_auto_tune_1510`：15:10 基于收盘验证数据自动调优参数
+
+### 3.9.4 使用与监控
+
+```bash
+# 手动触发尾盘选股
+uv run python -m gugu.screener.terminal_screener
+
+# 手动触发次日验证
+uv run python -m gugu.screener.validator
+
+# 手动触发自动调优
+uv run python -m gugu.screener.auto_tune
 ```
+
+监控指标：
+- `data/screener_validation.jsonl` 中的 `open_premium` / `intraday_high_premium` / `close_premium`
+- `data/screener_params.json` 中的参数变化
+- 飞书选股报告中的市场状态、候选数量、每只股票的通过条件
 
 ## 四、配置体系
 
@@ -485,6 +583,29 @@ class MyStrategy(Strategy):
         # 策略逻辑
         return df
 ```
+
+### 6.3.1 主力资金跟随策略
+
+#### `north_force_long` — 长线主力吸筹跟随
+
+- **来源**：实战派「主力资金跟随」战法，模拟北向/公募等长线主力在趋势股中的吸筹行为。
+- **核心逻辑**：
+  - 趋势向上：MA20 > MA60 且 MA20 斜率为正。
+  - 缩量回踩：收盘价位于 MA20 上方，且与 MA20 的偏离 ≤ 2%，避免追涨。
+  - 资金关注：近 20 日涨幅 ≥ 5%，或近 5 日内出现过 ≥ 5% 的放量阳线。
+  - 量能健康：当日成交量不高于 60 日均量的 1.5 倍，排除历史天量。
+- **卖点**：跌破入场止损位（入场低点 × 0.93）/ 跌破 MA20 / 高位放量滞涨 / 时间止损 / 大阳线 12% 止盈。
+- **生产增强**：SignalPipeline 通过 `AltAlphaFilter`（高管增持、龙虎榜机构净买、融资情绪）和 `HolderConcentrationFilter` 对其进行二次过滤，近似实现“跟随主力”。
+
+#### `dragon_tiger_short` — 短线龙虎榜反包跟随
+
+- **来源**：A股实战派「涨停断板反包」战法，模拟机构/游资短线主力行为。
+- **核心逻辑**：
+  - 近 5 日内出现涨幅 ≥ 9.5% 的涨停板。
+  - 涨停次日未继续涨停（断板），并在 1-3 个交易日内被阳线反包。
+  - 反包日收盘价突破断板日最高价，且为阳线、MA20 趋势向上、成交量不过度放大。
+- **卖点**：跌破入场止损位（入场低点 × 0.95）/ 跌破 MA20 / 高位放量滞涨 / 时间止损 / 大阳线 6% 止盈。
+- **生产增强**：SignalPipeline 通过 `AltAlphaFilter` 对龙虎榜机构净买因子（`lhb_inst_net`）进行二次确认，剔除机构净卖出的假反包。
 
 ### 6.4 添加新的过滤规则
 
