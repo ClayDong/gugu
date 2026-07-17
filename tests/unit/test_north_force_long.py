@@ -33,13 +33,13 @@ def _make_df(
 
 
 def _build_uptrend_segment() -> pd.DataFrame:
-    """构造一个能触发买入信号的 100 日上涨趋势段。"""
+    """构造一个能触发买入信号的 122 日上涨趋势段（覆盖默认 position_window）。"""
     prices = (
-        list(np.linspace(10.0, 12.0, 55))
+        list(np.linspace(10.0, 12.0, 77))
         + list(np.linspace(12.0, 12.6, 20))
         + list(np.linspace(12.6, 14.49, 25))
     )
-    volumes = [10000] * 95 + [4000] * 5
+    volumes = [10000] * 117 + [4000] * 5
     opens = [p * 0.998 for p in prices]
     df = _make_df(prices, volumes, opens)
 
@@ -103,7 +103,7 @@ def test_sell_priority_over_buy(strategy: NorthForceLongStrategy):
     post[-1] = post[-2] * 1.001
 
     prices = list(df_buy["close"]) + post
-    volumes = [10000] * 95 + [4000] * 5 + [20000] * 29 + [4000]
+    volumes = [10000] * 117 + [4000] * 5 + [20000] * 29 + [4000]
     opens = [p * 0.998 for p in prices]
     df = _make_df(prices, volumes, opens)
 
@@ -128,7 +128,7 @@ def test_ma_death_cross_sells(strategy: NorthForceLongStrategy):
     # 买入后缓慢下跌，使 MA20 最终下穿 MA60
     post = [entry_close * (0.997 ** (i + 1)) for i in range(120)]
     prices = list(df_buy["close"]) + post
-    volumes = [10000] * 95 + [4000] * 5 + [10000] * 120
+    volumes = [10000] * 117 + [4000] * 5 + [10000] * 120
     opens = [p * 0.998 for p in prices]
     df = _make_df(prices, volumes, opens)
 

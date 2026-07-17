@@ -59,8 +59,11 @@ class NorthForceLongStrategy(Strategy):
         time_stop_threshold = float(self.params.get("time_stop_threshold", 0.05))
         min_confidence = float(self.params.get("min_confidence", 0.55))
 
-        # 数据长度校验
-        min_len = max(ma_long_window, vol_ma_window, recent_momentum_window) + 2
+        # 持仓状态窗口（买入后 N 日内认为在持仓，用于卖出条件）
+        position_window = time_stop_window * 4
+
+        # 数据长度校验：覆盖所有滚动/状态窗口
+        min_len = max(ma_long_window, vol_ma_window, recent_momentum_window, position_window) + 2
         if len(df) < min_len:
             df["signal"] = 0
             df["confidence"] = 0.0
@@ -119,8 +122,7 @@ class NorthForceLongStrategy(Strategy):
         buy_cond_final = core_buy_cond & (df["confidence_score"] >= min_confidence)
 
         # 持仓状态（用于卖出条件只在买入后生效）
-        position_window = time_stop_window * 4
-        df["in_position"] = buy_cond_final.rolling(window=position_window).sum() > 0
+        df["in_position"] = buy_cond_final.rolling(window=position_window, min_periods=1).sum() > 0
         df["entry_low"] = np.nan
         df["entry_close"] = np.nan
         df.loc[buy_cond_final, "entry_low"] = df.loc[buy_cond_final, "low"]
