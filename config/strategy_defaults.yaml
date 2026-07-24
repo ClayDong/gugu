@@ -141,6 +141,69 @@ double_yin:
   max_upper_shadow_pct: 0.02        # 长上影阈值（高位滞涨判定）
   stagnation_vol_ratio: 2.5          # 巨量滞涨量比阈值（清仓信号）
 
+cloud_trend:
+  # 云策略：三维趋势判定 + 两类入场买点 + 严格止损 + 分层仓位
+  # 来源：用户自研（趋势跟踪+共振确认+严格风控）
+  # 核心哲学：只做上涨趋势，震荡/下跌空仓。三维共振缺一不可。
+
+  # ── 均线参数 ──
+  ma_short: 10                        # 短期均线（MA10，低吸回踩目标）
+  ma_trend: 20                        # 趋势均线（MA20，趋势判定+止损线）
+
+  # ── 三维趋势判定参数 ──
+  hh_ll_window: 20                    # 高低点计算窗口
+  hh_ll_compare: 5                    # 高低点抬升比较间隔（hh > hh.shift(5)）
+  vol_compare_window: 10              # 量价配合比较窗口（阳线均量 vs 阴线均量）
+
+  # ── 入场参数 ──
+  breakout_vol_ratio: 1.5             # 突破放量倍率（volume > vol_ma * 1.5）
+  pullback_tolerance: 0.01            # 回踩容忍度（close <= MA * 1.01 即视为回踩）
+  doji_body_max: 0.01                 # 十字星实体阈值（body < 1%）
+  small_yang_max_gain: 0.03           # 小阳线最大涨幅 3%
+
+  # ── 趋势阶段参数 ──
+  trend_early_days: 5                 # 趋势初期天数（三维刚满足≤5日）
+
+  # ── 止损参数 ──
+  stop_loss_pct: 0.02                 # 单笔亏损上限（总资金2%）
+  max_hold_days: 30                   # 最大持仓天数
+  trailing_stop_pct: 0.05            # 移动止盈：从持仓最高点回落5%卖出
+  time_stop_days: 15                 # 时间止盈：持仓超过15天不亏就卖出
+
+  # ── 信号确认 ──
+  confirm_days: 0                     # 不确认（趋势信号本身即触发条件）
+
+hot_money:
+  # 游资策略：三数交易法 — 涨停筛选 + 缩倍量入场 + 放倍量离场
+  # 来源：游资内部交易心法
+  # 核心哲学：成交量是唯一无法造假的大资金痕迹
+  # 三步法：①近7日涨停筛选 → ②缩量至50%入场 → ③放量至200%离场
+
+  # ── 涨停筛选参数 ──
+  limit_up_window: 7                  # 涨停回溯窗口（天）
+  limit_up_threshold: 0.095           # 涨停判定阈值（9.5%，覆盖主板10%/科创创业板20%/北交所30%）
+
+  # ── 量能参数 ──
+  shrink_ratio: 0.5                   # 缩量入场比例（量能缩至参考量的50%以下触发买入）
+  expand_ratio: 2.0                   # 放量离场比例（量能放大至参考量的200%以上触发卖出）
+  vol_ma_window: 20                   # 均量线窗口（用于量能健康度评估）
+  min_volume: 1000000                 # 最低量能阈值（过滤无量/停牌股票）
+
+  # ── 半仓滚动参数 ──
+  rolling_enabled: true               # 是否启用半仓滚动（阴线买/阳线卖）
+  rolling_yin_buy_ratio: 0.5          # 滚动买入仓位比例（阴线日加仓50%仓位）
+  rolling_yang_sell_ratio: 0.5        # 滚动卖出仓位比例（阳线日减仓50%仓位）
+
+  # ── 风控参数 ──
+  max_hold_days: 20                   # 最大持仓天数（涨停信号过期后自动离场）
+  max_track_days: 30                 # 最大跟踪天数（参考量能向前传播天数）
+  hard_stop_loss_pct: 0.05          # 硬止损：持仓亏损超过5%强制卖出
+  trailing_stop_pct: 0.07           # 移动止盈：从持仓最高点回落7%卖出
+
+  # ── 双通道参数 ──
+  big_yang_enabled: true            # 启用大阳线通道（涨幅≥5%视为主力信号）
+  big_yang_threshold: 0.05          # 大阳线判定阈值（5%）
+
 capital_flow_alert:
   # 资金流异动监控策略：4卖出特征识别主力出逃 + 3买入特征捕捉洗盘结束
   # 来源：豆包AI「龙头股散户化」分析 + 实战派资金流监控
@@ -157,73 +220,188 @@ capital_flow_alert:
   confirm_days: 0                    # 不确认（放量/缩量本身即触发条件）
 
 breakout_rebound:
-  # 断板反包策略：涨停板断裂后主力反包介入的短线信号
-  # 来源：A股实战派「断板反包」战法（短线主力行为学）
-  # 第一性原理：涨停(主力介入) → 断板(洗盘) → 反包(再介入) 完整行为闭环
-  # 与 double_yin 互补：double_yin 是波段拐点，本策略是短线主力行为
+  # v0.6.4: 大幅放宽条件以增加信号产量
+  # 来源：陈学长不吃面交易策略
 
   # ── 均线参数 ──
-  ma_trend_window: 20                 # 趋势均线（MA20）
-  ma_long_window: 60                  # 长期均线（MA60，中期趋势过滤）
-  ma_slope_window: 5                  # MA20 斜率计算窗口（持续向上拐头判定）
+  ma_trend_window: 20                 # 默认不变
+  ma_long_window: 60                  # 默认不变
+  ma_slope_window: 5                  # 默认不变
 
   # ── 涨停板识别 ──
-  limit_up_pct: 0.095                 # 涨停判定阈值 9.5%（A股10%涨停板留0.5%容差）
-  limit_up_lookback: 5                # 涨停板回看窗口（前N日内有涨停）
+  limit_up_pct: 0.07                  # v0.6.4: 从8%放宽到7%（覆盖更多涨停）
+  limit_up_lookback: 10               # v0.6.4: 从7放宽到10日
 
-  # ── 反包量能确认 ──
-  breakout_vol_ratio: 1.5             # 反包日量比下限（放量确认）
+  # ── 洗盘识别 ──
+  wash_day_max: 7                     # v0.6.4: 从5放宽到7日
+  breakout_vol_ratio: 1.0             # v0.6.4: 从1.2放宽到1.0（只要放量就算）
+
+  # ── 量能参数 ──
+  shrink_vol_ratio: 0.85              # v0.6.4: 从0.7放宽到0.85（缩量85%以内）
+  ground_vol_ratio: 0.5               # v0.6.4: 从0.4放宽到0.5
 
   # ── 置信度过滤 ──
-  min_confidence: 0.0                 # 核心信号置信度下限（0=不过滤，用评分仅作置信度展示）
+  min_confidence: 0.0                 # 默认不变
 
   # ── 止损止盈 ──
-  stop_loss_pct: 0.03                 # 止损百分比（反包日最低价 × 0.97）
-  take_profit_pct: 0.08              # 止盈位 8%（减半仓触发阈值 × 0.6 = 4.8%）
-  max_upper_shadow_pct: 0.02        # 长上影阈值（高位滞涨判定）
-  stagnation_vol_ratio: 2.5          # 巨量滞涨量比阈值（清仓信号）
+  stop_loss_pct: 0.08                 # v0.6.4: 从5%放宽到8%
+  take_profit_pct: 0.05               # v0.6.4: 从6%放宽到5%
+  max_upper_shadow_pct: 0.04          # v0.6.4: 从3%放宽到4%
+  stagnation_vol_ratio: 1.8           # v0.6.4: 从2.0放宽到1.8
 
   # ── 时间止损 ──
-  time_stop_window: 5                # 时间止损窗口（持仓 N 日）
-  time_stop_threshold: 0.03           # 时间止损阈值（涨幅 < 3% 减仓）
+  time_stop_window: 10                # v0.6.4: 从5放宽到10天
+  time_stop_threshold: 0.01           # v0.6.4: 从3%放宽到1%
 
   # ── 信号确认 ──
   confirm_days: 0                    # 不确认（反包突破本身即触发条件）
 
 north_force_long:
   # 长线主力吸筹跟随策略：趋势向上 + 缩量回踩 MA20 + 近期有资金关注
+  # v0.6.2 调优：放宽回踩/涨幅/量能门槛，增加信号数；收紧持仓窗口，抑制卖出泛滥
   ma_trend_window: 20
   ma_long_window: 60
   ma_slope_window: 5
-  pullback_to_ma_pct: 0.02
+  pullback_to_ma_pct: 0.05
   recent_momentum_window: 20
-  recent_momentum_pct: 0.05
+  recent_momentum_pct: 0.03
   recent_spike_window: 5
-  recent_spike_pct: 0.05
-  max_daily_gain_pct: 0.02
-  max_vol_ratio: 1.5
+  recent_spike_pct: 0.03
+  max_daily_gain_pct: 0.05
+  max_vol_ratio: 2.0
   vol_ma_window: 60
-  stop_loss_pct: 0.07
-  take_profit_pct: 0.20
+  stop_loss_pct: 0.05
+  take_profit_pct: 0.15
   stagnation_vol_ratio: 2.5
   max_upper_shadow_pct: 0.03
-  time_stop_window: 30
-  time_stop_threshold: 0.05
-  min_confidence: 0.55
+  time_stop_window: 20
+  time_stop_threshold: 0.03
+  min_confidence: 0.50
 
 dragon_tiger_short:
   # 短线龙虎榜反包跟随策略：涨停 + 断板 + 反包 + 趋势支撑
+  # v0.6.2 调优：放宽涨停/断板窗口，允许更大波动；状态机精确持仓，减少重复止损
   ma_trend_window: 20
   ma_slope_window: 5
-  limit_up_pct: 0.095
-  limit_up_lookback: 5
-  max_break_days: 3
-  stop_loss_pct: 0.05
-  take_profit_pct: 0.10
+  limit_up_pct: 0.07
+  limit_up_lookback: 10
+  max_break_days: 5
+  stop_loss_pct: 0.07
+  take_profit_pct: 0.15
   stagnation_vol_ratio: 2.5
   max_upper_shadow_pct: 0.02
-  time_stop_window: 5
-  time_stop_threshold: 0.03
-  max_vol_ratio: 2.0
+  time_stop_window: 10
+  time_stop_threshold: 0.05
+  max_vol_ratio: 3.0
   vol_ma_window: 20
-  min_confidence: 0.55
+  min_confidence: 0.50
+
+first_board:
+  # 首板战法（北京炒家）：首板套利 + 极致风控 + 机械执行
+  # 来源：北京炒家首板战法（公开信息整理）
+  # 第一性原理：只做个股首次涨停（首板），次日冲高即卖，不参与连板接力
+  # 靠高频交易（年化200-300笔）滚复利，单月目标收益10%
+
+  # ── 涨停板识别 ──
+  limit_up_pct: 0.095                 # 涨停判定阈值 9.5%（A股10%涨停板留0.5%容差）
+  limit_up_lookback: 120              # 历史涨停回看窗口（半年内至少3次涨停）
+  history_limit_up_min: 3             # 历史涨停最低次数（股性筛选）
+
+  # ── 市值与价格 ──
+  market_cap_min: 30e8                # 流通市值下限 30亿
+  market_cap_max: 100e8               # 流通市值上限 100亿
+  price_max: 20.0                     # 股价上限 20元
+  price_min: 3.0                      # 股价下限 3元
+
+  # ── 量能参数 ──
+  turnover_min: 0.05                  # 换手率下限 5%
+  turnover_max: 0.15                  # 换手率上限 15%
+  vol_ratio_min: 2.0                  # 量比下限（2倍前5日均量）
+  vol_ratio_max: 3.0                  # 量比上限（3倍前5日均量）
+  seal_ratio_min: 0.20                # 封单比下限（封单金额/当日成交额）
+
+  # ── 技术形态 ──
+  ma_trend_window: 20                 # 趋势均线（MA20）
+  ma_long_window: 60                  # 长期均线（MA60，突破判定）
+  breakout_lookback: 20               # 突破回看窗口（20日高点突破）
+
+  # ── 止损止盈 ──
+  stop_loss_pct: 0.02                 # 止损百分比（低开2%）
+  take_profit_pct: 0.03               # 止盈阈值（高开3%）
+  time_stop_window: 1                 # 时间止损窗口（持仓1天，隔日卖）
+
+  # ── 信号确认 ──
+  confirm_days: 0                     # 不确认（首板本身即触发条件）
+
+ma20_trend:
+  # 20日均线趋势跟随战法：趋势为王 + 回踩低吸 + 放量突破 + 乖离率止盈止损
+  # 来源：用户自研（MA20趋势跟随+量价关系+机械执行）
+  # 核心哲学：只做MA20向上的个股，乖离率>30%无条件止盈，跌破MA20无条件止损
+
+  # ── 均线参数 ──
+  ma_window: 20                        # 趋势均线（MA20）
+
+  # ── 量能参数 ──
+  vol_shrink_pct: 0.30                 # 缩量阈值（量能缩至前5日均值70%以下触发低吸）
+  vol_expand_ratio: 1.5                # 放量阈值（量能放大至前5日均值1.5倍以上触发突破）
+  vol_ma_window: 5                     # 成交量均线窗口
+
+  # ── 乖离率参数 ──
+  deviation_threshold: 0.30            # 止盈乖离率阈值（现价偏离MA20超过30%无条件止盈）
+  divergence_lookback: 20              # 高位滞涨回看窗口（近20日高点未突破判定滞涨）
+
+  # ── K线形态参数 ──
+  shadow_ratio: 0.6                    # 长上影线判定比率（上影线 > 实体 * 0.6）
+
+  # ── 风控参数 ──
+  stop_loss_pct: 0.05                  # 止损百分比（跌破MA20 × 0.95）
+  min_daily_amount: 5e8               # 最低日成交额（5亿，流动性过滤）
+
+zhen_dahu:
+  # 珍大户价值投资策略：价值回归 + 行业优先 + 护城河 + 安全边际
+  # 来源：珍大户投资策略系统（AI量化决策文档）
+  # 核心哲学：在护城河足够深的前提下，PE越低、PB越低、股息率越高、筹码越集中，买入信号越强
+
+  # ── 估值参数 ──
+  pe_undervalued: 15.0                 # 极度低估阈值（PE < 15 重仓买入）
+  pe_fair_low: 20.0                    # 合理偏低阈值（PE 15-20 分批建仓）
+  pe_overvalued: 25.0                  # 偏高阈值（PE >= 25 不买入/逐步减仓）
+  pb_bargain: 1.0                      # 抄底信号阈值（PB < 1.0 且持续盈利）
+  pb_fair_low: 1.5                     # 合理偏低阈值（PB 1.0-1.5 可买入）
+  pb_high: 2.0                         # 偏高阈值（PB >= 2.0 需谨慎）
+  dividend_excellent: 0.06             # 极佳股息率阈值（>6% 储蓄概念股）
+  dividend_good_min: 0.04              # 良好股息率下限（4%-6% 可配置）
+  dividend_poor: 0.02                  # 不足股息率阈值（<2% 除非高成长）
+
+  # ── 筹码参数 ──
+  chip_high_concentrated: 15.0         # 高度集中阈值（<15% 主力控盘）
+  chip_medium_concentrated: 25.0       # 中度集中阈值（15%-25%）
+  chip_dispersed: 30.0                 # 分散阈值（>30% 难有趋势行情）
+  chip_price_position_entry: 0.30      # 现价在下沿30%以内买入
+  chip_price_position_exit: 0.70       # 现价在上沿30%以内不追高
+
+  # ── 均线参数 ──
+  ma_short: 5                          # 短期均线（MA5）
+  ma_mid: 10                           # 中期均线（MA10）
+  ma_long: 20                          # 长期均线（MA20）
+  ma_very_long: 60                     # 超长期均线（MA60）
+
+  # ── MACD参数 ──
+  macd_short: 12                       # MACD短期EMA
+  macd_long: 26                        # MACD长期EMA
+  macd_signal: 9                       # MACD信号线
+
+  # ── 量能参数 ──
+  vol_ma_window: 5                     # 成交量均线窗口
+  vol_expand_ratio: 1.5                # 放量确认阈值
+
+  # ── 风控参数 ──
+  stop_loss_pct: 0.08                  # 止损百分比（跌破MA60 × 0.92）
+  take_profit_pct: 0.30                # 止盈百分比（PE泡沫+50%）
+  max_position_ratio: 0.20             # 单股仓位上限20%
+  max_industry_ratio: 0.40             # 行业集中度上限40%
+
+  # ── 预过滤参数 ──
+  min_daily_amount: 3e8               # 最低日成交额（3亿，价值股相对宽松）
+  max_pe_filter: 25.0                  # PE过滤上限
+  max_pb_filter: 2.0                   # PB过滤上限
