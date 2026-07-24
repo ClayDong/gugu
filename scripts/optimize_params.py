@@ -27,6 +27,7 @@ P1 修复：参数写回解锁条件（防止过拟合参数污染生产）
 3. 最大回撤可控：avg_max_dd < 25%
 4. 收益非负：avg_return ≥ 0（允许持平但不允许系统性亏损）
 """
+
 from __future__ import annotations
 
 import argparse
@@ -47,6 +48,33 @@ from gugu.strategies.registry import get_strategy, list_strategies  # noqa: E402
 from gugu.utils.log import get_logger  # noqa: E402
 
 logger = get_logger()
+
+# P1-2 新增：默认代表性股票池（50只，覆盖多个行业，解决单股过拟合问题）
+# 选股标准：各行业龙头 + 不同市值 + 不同估值水平
+DEFAULT_REPRESENTATIVE_STOCKS = [
+    # 白酒/食品饮料
+    "600519", "000858", "002304", "600887", "603288",
+    # 医药生物
+    "600276", "000538", "300760", "603259", "300015",
+    # 银行
+    "601398", "600036", "601288", "601328", "600016",
+    # 保险/券商
+    "601318", "601628", "600030", "000776", "601211",
+    # 房地产/建筑
+    "600048", "001979", "601668", "600585",
+    # 家电
+    "000333", "600690", "000651", "002508",
+    # 汽车
+    "600104", "002594", "000625", "601127",
+    # 电子/半导体
+    "002415", "603986", "688981", "002371",
+    # 新能源
+    "300750", "002459", "601012", "600438",
+    # 互联网/科技
+    "600570", "300033", "002230", "688111",
+    # 消费/零售
+    "600887", "002024", "601888", "000100",
+]
 
 # 参数网格定义：策略名 → 参数网格
 # 基于 config/strategy_defaults.yaml 中的每个策略
@@ -119,6 +147,44 @@ STRATEGY_PARAM_GRIDS: dict[str, dict[str, list]] = {
         "take_profit_pct": [0.06, 0.08, 0.10],
         "stagnation_vol_ratio": [2.0, 2.5, 3.0],
     },
+    # v0.6.2 新增：主力资金跟随策略参数网格（已缩小至核心维度，避免组合爆炸）
+    "north_force_long": {
+        "ma_trend_window": [20, 30],
+        "ma_long_window": [60, 90],
+        "pullback_to_ma_pct": [0.02, 0.03, 0.05],
+        "max_daily_gain_pct": [0.04, 0.07],
+        "max_vol_ratio": [2.0, 2.5, 3.0],
+        "stop_loss_pct": [0.05, 0.07],
+        "take_profit_pct": [0.10, 0.20],
+        "min_confidence": [0.40, 0.50, 0.60],
+    },
+    "dragon_tiger_short": {
+        # v0.6.2 调优：网格覆盖默认值并放宽，解决 trades=0 问题
+        "limit_up_pct": [0.07, 0.085, 0.10],  # 默认 0.07，覆盖 7%/8.5%/10%
+        "limit_up_lookback": [5, 10, 15],  # 默认 10，覆盖 5/10/15 日
+        "max_break_days": [3, 5, 7],  # 默认 5，覆盖 3/5/7 日反包窗口
+        "stop_loss_pct": [0.05, 0.07],
+        "take_profit_pct": [0.10, 0.15],
+        "max_vol_ratio": [2.5, 3.5, 5.0],
+        "min_confidence": [0.40, 0.50],
+    },
+    # v0.6.2 新增：云策略 + 游资策略参数网格
+    "cloud_trend": {
+        "ma_short": [8, 10, 12],
+        "ma_trend": [15, 20, 25],
+        "hh_ll_window": [15, 20, 25],
+        "breakout_vol_ratio": [1.3, 1.5, 2.0],
+        "trailing_stop_pct": [0.03, 0.05, 0.07],
+        "time_stop_days": [10, 15, 20],
+    },
+    "hot_money": {
+        "limit_up_window": [5, 7, 10],
+        "shrink_ratio": [0.3, 0.4, 0.5, 0.6],
+        "expand_ratio": [1.5, 2.0, 2.5, 3.0],
+        "max_track_days": [15, 20, 30, 45],
+        "hard_stop_loss_pct": [0.03, 0.05, 0.07],
+        "trailing_stop_pct": [0.05, 0.07, 0.10],
+    },
 }
 
 # 策略 → 其策略类需要哪些参数（pyproject.toml 中定义的策略类）
@@ -134,18 +200,97 @@ STRATEGY_CONFIG_KEYS: dict[str, list[str]] = {
     "dual_thrust": ["lookback", "k_up", "k_down"],
     # P0 补全：与新策略网格同步
     "money_flow_follow": [
-        "new_high_window", "new_high_lookback", "pullback_max_pct",
-        "volume_expand_ratio", "volume_shrink_days", "recent_gain_threshold",
+        "new_high_window",
+        "new_high_lookback",
+        "pullback_max_pct",
+        "volume_expand_ratio",
+        "volume_shrink_days",
+        "recent_gain_threshold",
         "abnormal_volume_ratio",
     ],
     "chen_jiangting": [
-        "resistance_window", "volume_ratio", "vol_ma_window",
-        "ma_short", "ma_long", "max_daily_gain_pct",
+        "resistance_window",
+        "volume_ratio",
+        "vol_ma_window",
+        "ma_short",
+        "ma_long",
+        "max_daily_gain_pct",
     ],
     "double_yin": [
-        "ma_slope_window", "first_yin_vol_ratio_max", "second_yin_vol_ratio_max",
-        "doji_body_max", "small_yang_max_gain", "breakout_vol_ratio_min",
-        "take_profit_pct", "stagnation_vol_ratio",
+        "ma_slope_window",
+        "first_yin_vol_ratio_max",
+        "second_yin_vol_ratio_max",
+        "doji_body_max",
+        "small_yang_max_gain",
+        "breakout_vol_ratio_min",
+        "take_profit_pct",
+        "stagnation_vol_ratio",
+    ],
+    # v0.6.2 新增：主力资金跟随策略配置键
+    "north_force_long": [
+        "ma_trend_window",
+        "ma_long_window",
+        "ma_slope_window",
+        "pullback_to_ma_pct",
+        "recent_momentum_window",
+        "recent_momentum_pct",
+        "recent_spike_window",
+        "recent_spike_pct",
+        "max_daily_gain_pct",
+        "max_vol_ratio",
+        "vol_ma_window",
+        "stop_loss_pct",
+        "take_profit_pct",
+        "stagnation_vol_ratio",
+        "max_upper_shadow_pct",
+        "time_stop_window",
+        "time_stop_threshold",
+        "min_confidence",
+    ],
+    "dragon_tiger_short": [
+        "ma_trend_window",
+        "ma_slope_window",
+        "limit_up_pct",
+        "limit_up_lookback",
+        "max_break_days",
+        "stop_loss_pct",
+        "take_profit_pct",
+        "stagnation_vol_ratio",
+        "max_upper_shadow_pct",
+        "time_stop_window",
+        "time_stop_threshold",
+        "max_vol_ratio",
+        "vol_ma_window",
+        "min_confidence",
+    ],
+    # v0.6.2 新增：云策略 + 游资策略配置键
+    "cloud_trend": [
+        "ma_short",
+        "ma_trend",
+        "hh_ll_window",
+        "hh_ll_compare",
+        "vol_compare_window",
+        "breakout_vol_ratio",
+        "pullback_tolerance",
+        "doji_body_max",
+        "small_yang_max_gain",
+        "stop_loss_pct",
+        "max_hold_days",
+        "trailing_stop_pct",
+        "time_stop_days",
+    ],
+    "hot_money": [
+        "limit_up_window",
+        "limit_up_threshold",
+        "big_yang_threshold",
+        "shrink_ratio",
+        "expand_ratio",
+        "vol_ma_window",
+        "min_volume",
+        "max_hold_days",
+        "max_track_days",
+        "hard_stop_loss_pct",
+        "trailing_stop_pct",
     ],
 }
 
@@ -203,7 +348,27 @@ def _double_yin_constraints(p: dict) -> bool:
     """double_yin: 第二根阴量应弱于第一根阴量，止盈和滞涨阈值必须为正。"""
     first = p.get("first_yin_vol_ratio_max", 0)
     second = p.get("second_yin_vol_ratio_max", 0)
-    return second <= first and p.get("take_profit_pct", 0) > 0 and p.get("stagnation_vol_ratio", 0) > 0
+    return (
+        second <= first and p.get("take_profit_pct", 0) > 0 and p.get("stagnation_vol_ratio", 0) > 0
+    )
+
+
+def _north_force_long_constraints(p: dict) -> bool:
+    """north_force_long: 趋势均线必须严格小于长期均线；止损必须小于止盈。"""
+    return (
+        p.get("ma_trend_window", 0) < p.get("ma_long_window", 0)
+        and p.get("stop_loss_pct", 0) < p.get("take_profit_pct", 0)
+        and p.get("recent_spike_window", 0) <= p.get("recent_momentum_window", 0)
+    )
+
+
+def _dragon_tiger_short_constraints(p: dict) -> bool:
+    """dragon_tiger_short: 止损必须小于止盈；断板窗口不超过涨停回看窗口。"""
+    return (
+        p.get("stop_loss_pct", 0) < p.get("take_profit_pct", 0)
+        and p.get("max_break_days", 0) <= p.get("limit_up_lookback", 0)
+        and p.get("time_stop_threshold", 0) < p.get("take_profit_pct", 0)
+    )
 
 
 STRATEGY_PARAM_CONSTRAINTS: dict[str, "callable[[dict], bool]"] = {
@@ -215,6 +380,9 @@ STRATEGY_PARAM_CONSTRAINTS: dict[str, "callable[[dict], bool]"] = {
     "chen_jiangting": _chen_jiangting_constraints,
     "money_flow_follow": _money_flow_follow_constraints,
     "double_yin": _double_yin_constraints,
+    # v0.6.2 新增：主力资金跟随策略约束
+    "north_force_long": _north_force_long_constraints,
+    "dragon_tiger_short": _dragon_tiger_short_constraints,
 }
 
 
@@ -300,7 +468,7 @@ def show_current_params() -> None:
 
 def build_param_grid(strategy_name: str, defaults: dict) -> dict[str, list]:
     """为指定策略构建参数网格。
-    
+
     从预定义网格中选取参数，确保参数在 reasonable 范围内。
     """
     strat_defaults = defaults.get(strategy_name, {})
@@ -350,8 +518,7 @@ async def run_optimization(
         return None
 
     logger.info(
-        f"开始 Walk-Forward 优化: {strategy_name} @ {symbol} "
-        f"数据={len(df)}行 窗口={n_splits}"
+        f"开始 Walk-Forward 优化: {strategy_name} @ {symbol} 数据={len(df)}行 窗口={n_splits}"
     )
 
     results = walk_forward_optimize(
@@ -426,7 +593,9 @@ async def run_optimization(
 
         if unlock_report["unlocked"] or force:
             if force and not unlock_report["unlocked"]:
-                print(f"\n⚠️  --force 强制写回（跳过 {len(unlock_report['failed_checks'])} 项解锁条件）")
+                print(
+                    f"\n⚠️  --force 强制写回（跳过 {len(unlock_report['failed_checks'])} 项解锁条件）"
+                )
                 logger.warning(
                     f"强制写回 {strategy_name} 参数，跳过解锁检查: {unlock_report['failed_checks']}"
                 )
@@ -438,7 +607,9 @@ async def run_optimization(
             write_defaults(defaults)
             print(f"\n优化参数已写回 config/strategy_defaults.yaml")
         else:
-            print(f"\n❌ 参数写回被拒绝（未通过 {len(unlock_report['failed_checks'])} 项解锁条件）:")
+            print(
+                f"\n❌ 参数写回被拒绝（未通过 {len(unlock_report['failed_checks'])} 项解锁条件）:"
+            )
             for check in unlock_report["checks"]:
                 status = "✓" if check["passed"] else "✗"
                 print(f"  {status} {check['name']}: {check['detail']}")
@@ -459,7 +630,9 @@ async def run_optimization(
             n_windows=len(results),
         )
         print(f"\n📋 优化报告: {report_path}")
-        failed_reason = "; ".join(unlock_report["failed_checks"]) if unlock_report["failed_checks"] else ""
+        failed_reason = (
+            "; ".join(unlock_report["failed_checks"]) if unlock_report["failed_checks"] else ""
+        )
         apply_optimization_result(
             strategy_name=strategy_name,
             passed=unlock_report["unlocked"],
@@ -506,11 +679,13 @@ def _check_unlock_conditions(
 
     # 检查1：样本外 Sharpe > 0
     sharpe_passed = avg_sharpe > 0
-    checks.append({
-        "name": "样本外 Sharpe > 0",
-        "passed": sharpe_passed,
-        "detail": f"avg_test_sharpe={avg_sharpe:.4f} ({'通过' if sharpe_passed else '失败'})",
-    })
+    checks.append(
+        {
+            "name": "样本外 Sharpe > 0",
+            "passed": sharpe_passed,
+            "detail": f"avg_test_sharpe={avg_sharpe:.4f} ({'通过' if sharpe_passed else '失败'})",
+        }
+    )
     if not sharpe_passed:
         failed.append("样本外 Sharpe ≤ 0")
 
@@ -526,34 +701,40 @@ def _check_unlock_conditions(
         if stability_ratio < 0.5:
             stability_passed = False
             stability_details.append(f"{param_name} 一致性 {stability_ratio:.0%}")
-    checks.append({
-        "name": "参数稳定性 ≥50%",
-        "passed": stability_passed,
-        "detail": (
-            f"全部参数一致性 ≥50% ({'通过' if stability_passed else '失败: ' + ', '.join(stability_details)})"
-        ),
-    })
+    checks.append(
+        {
+            "name": "参数稳定性 ≥50%",
+            "passed": stability_passed,
+            "detail": (
+                f"全部参数一致性 ≥50% ({'通过' if stability_passed else '失败: ' + ', '.join(stability_details)})"
+            ),
+        }
+    )
     if not stability_passed:
         failed.append("参数稳定性 <50%")
 
     # 检查3：最大回撤可控（avg_max_dd < 25%）
     dd_threshold = 0.25
     dd_passed = avg_max_dd < dd_threshold
-    checks.append({
-        "name": f"最大回撤 < {dd_threshold:.0%}",
-        "passed": dd_passed,
-        "detail": f"avg_max_dd={avg_max_dd:.2%} ({'通过' if dd_passed else '失败'})",
-    })
+    checks.append(
+        {
+            "name": f"最大回撤 < {dd_threshold:.0%}",
+            "passed": dd_passed,
+            "detail": f"avg_max_dd={avg_max_dd:.2%} ({'通过' if dd_passed else '失败'})",
+        }
+    )
     if not dd_passed:
         failed.append(f"最大回撤 ≥ {dd_threshold:.0%}")
 
     # 检查4：收益非负
     return_passed = avg_return >= 0
-    checks.append({
-        "name": "平均样本外收益 ≥ 0",
-        "passed": return_passed,
-        "detail": f"avg_return={avg_return:.2%} ({'通过' if return_passed else '失败'})",
-    })
+    checks.append(
+        {
+            "name": "平均样本外收益 ≥ 0",
+            "passed": return_passed,
+            "detail": f"avg_return={avg_return:.2%} ({'通过' if return_passed else '失败'})",
+        }
+    )
     if not return_passed:
         failed.append("平均样本外收益 < 0")
 
@@ -699,11 +880,7 @@ def _replace_manifest_validation(
                 current_strategy = None
 
         # 在目标策略段内匹配 validation 行
-        if (
-            current_strategy == strategy_name
-            and not updated
-            and stripped.startswith("validation:")
-        ):
+        if current_strategy == strategy_name and not updated and stripped.startswith("validation:"):
             indent = line[: len(line) - len(line.lstrip())]
             # 保留行尾注释
             comment = ""
@@ -768,13 +945,16 @@ async def run_multi_stock_optimization(
     print(f"  股票数: {len(stock_dfs)}")
     constraint_fn = STRATEGY_PARAM_CONSTRAINTS.get(strategy_name)
     # 统计合法参数组合数（约束过滤后）
-    all_combos = list(__import__('itertools').product(*param_grid.values()))
+    all_combos = list(__import__("itertools").product(*param_grid.values()))
     keys = list(param_grid.keys())
     legal_combos = [
-        c for c in all_combos
+        c
+        for c in all_combos
         if constraint_fn is None or constraint_fn(dict(zip(keys, c, strict=True)))
     ]
-    print(f"  参数组合数: {len(all_combos)} 总 / {len(legal_combos)} 合法（约束过滤 {len(all_combos) - len(legal_combos)} 个）")
+    print(
+        f"  参数组合数: {len(all_combos)} 总 / {len(legal_combos)} 合法（约束过滤 {len(all_combos) - len(legal_combos)} 个）"
+    )
     print(f"  预计耗时: ~{len(stock_dfs) * len(legal_combos) * n_splits * 0.1:.0f}s")
 
     results = walk_forward_optimize_multi_stock(
@@ -837,7 +1017,9 @@ async def run_multi_stock_optimization(
         )
         # 显示各股明细
         for d in r.get("test_details", [])[:3]:  # 只显示前3只
-            print(f"    {d['symbol']}: sharpe={d['test_sharpe']:.4f} ret={d['test_return']:.2%} dd={d['test_max_dd']:.2%} trades={d['trades']}")
+            print(
+                f"    {d['symbol']}: sharpe={d['test_sharpe']:.4f} ret={d['test_return']:.2%} dd={d['test_max_dd']:.2%} trades={d['trades']}"
+            )
 
     if write:
         unlock_report = _check_unlock_conditions(
@@ -851,7 +1033,9 @@ async def run_multi_stock_optimization(
 
         if unlock_report["unlocked"] or force:
             if force and not unlock_report["unlocked"]:
-                print(f"\n⚠️  --force 强制写回（跳过 {len(unlock_report['failed_checks'])} 项解锁条件）")
+                print(
+                    f"\n⚠️  --force 强制写回（跳过 {len(unlock_report['failed_checks'])} 项解锁条件）"
+                )
                 logger.warning(f"强制写回 {strategy_name} 参数: {unlock_report['failed_checks']}")
             if strategy_name not in defaults:
                 defaults[strategy_name] = {}
@@ -860,7 +1044,9 @@ async def run_multi_stock_optimization(
             write_defaults(defaults)
             print(f"\n优化参数已写回 config/strategy_defaults.yaml")
         else:
-            print(f"\n❌ 参数写回被拒绝（未通过 {len(unlock_report['failed_checks'])} 项解锁条件）:")
+            print(
+                f"\n❌ 参数写回被拒绝（未通过 {len(unlock_report['failed_checks'])} 项解锁条件）:"
+            )
             for check in unlock_report["checks"]:
                 status = "✓" if check["passed"] else "✗"
                 print(f"  {status} {check['name']}: {check['detail']}")
@@ -881,7 +1067,9 @@ async def run_multi_stock_optimization(
             n_windows=len(results),
         )
         print(f"\n📋 优化报告: {report_path}")
-        failed_reason = "; ".join(unlock_report["failed_checks"]) if unlock_report["failed_checks"] else ""
+        failed_reason = (
+            "; ".join(unlock_report["failed_checks"]) if unlock_report["failed_checks"] else ""
+        )
         apply_optimization_result(
             strategy_name=strategy_name,
             passed=unlock_report["unlocked"],
@@ -910,10 +1098,45 @@ async def main(
     show: bool,
     force: bool,
     multi_stock: str | None,
+    use_default_pool: bool = False,
 ) -> None:
     """主入口。"""
     if show:
         show_current_params()
+        return
+
+    # P1-2 新增：使用默认50只代表性股票池
+    if use_default_pool and not multi_stock:
+        symbols = DEFAULT_REPRESENTATIVE_STOCKS
+        print(f"\n使用默认代表性股票池（{len(symbols)} 只）进行多股聚合优化")
+        print(f"覆盖行业：白酒/医药/银行/保险/券商/房地产/家电/汽车/电子/新能源/互联网/消费")
+        print(f"选股标准：各行业龙头 + 不同市值 + 不同估值水平\n")
+
+        if strategy_name:
+            await run_multi_stock_optimization(strategy_name, symbols, days, n_splits, write, force)
+        else:
+            from gugu.config import get_config
+
+            cfg = get_config()
+            enabled = cfg.strategy.enabled
+            if not enabled:
+                logger.error("无启用策略")
+                return
+            print(f"将对 {len(enabled)} 个策略运行多股聚合 Walk-Forward 优化")
+            print(f"股票池: {symbols}")
+            if write:
+                if force:
+                    print("⚠️  --force 强制写回（跳过解锁条件检查）")
+                else:
+                    print("写回前将执行 4 项解锁条件检查")
+            print()
+            for s_name in enabled:
+                try:
+                    await run_multi_stock_optimization(s_name, symbols, days, n_splits, write, force)
+                    print()
+                except Exception as e:
+                    logger.error(f"策略 {s_name} 多股优化失败: {e}")
+                    continue
         return
 
     # P2 新增：多股聚合模式（解决单股过拟合）
@@ -928,6 +1151,7 @@ async def main(
             await run_multi_stock_optimization(strategy_name, symbols, days, n_splits, write, force)
         else:
             from gugu.config import get_config
+
             cfg = get_config()
             enabled = cfg.strategy.enabled
             if not enabled:
@@ -943,7 +1167,9 @@ async def main(
             print()
             for s_name in enabled:
                 try:
-                    await run_multi_stock_optimization(s_name, symbols, days, n_splits, write, force)
+                    await run_multi_stock_optimization(
+                        s_name, symbols, days, n_splits, write, force
+                    )
                     print()
                 except Exception as e:
                     logger.error(f"策略 {s_name} 多股优化失败: {e}")
@@ -984,15 +1210,44 @@ async def main(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Walk-Forward 参数优化")
     parser.add_argument("--strategy", type=str, default=None, help="策略名称（默认=所有启用策略）")
-    parser.add_argument("--symbol", type=str, default="600519", help="股票代码（默认=600519 贵州茅台）")
+    parser.add_argument(
+        "--symbol", type=str, default="600519", help="股票代码（默认=600519 贵州茅台）"
+    )
     parser.add_argument("--days", type=int, default=500, help="历史数据天数（默认=500）")
     parser.add_argument("--splits", type=int, default=3, help="Walk-Forward 窗口数（默认=3）")
-    parser.add_argument("--write", action="store_true", help="将最优参数写回 strategy_defaults.yaml（需通过解锁条件）")
-    parser.add_argument("--force", action="store_true", help="强制写回，跳过解锁条件检查（紧急情况使用）")
-    parser.add_argument("--multi-stock", type=str, default=None,
-                        help="多股聚合模式：逗号分隔的股票代码（如 600519,000858,002714），解决单股过拟合")
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="将最优参数写回 strategy_defaults.yaml（需通过解锁条件）",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="强制写回，跳过解锁条件检查（紧急情况使用）"
+    )
+    parser.add_argument(
+        "--multi-stock",
+        type=str,
+        default=None,
+        help="多股聚合模式：逗号分隔的股票代码（如 600519,000858,002714），解决单股过拟合",
+    )
+    parser.add_argument(
+        "--default-pool",
+        action="store_true",
+        help="P1-2 新增：使用默认50只代表性股票池进行多股聚合优化（覆盖多个行业，解决单股过拟合）",
+    )
     parser.add_argument("--show", action="store_true", help="显示当前策略参数")
     parser.add_argument("--version", action="version", version="gugu 0.1.0")
     args = parser.parse_args()
 
-    asyncio.run(main(args.strategy, args.symbol, args.days, args.splits, args.write, args.show, args.force, args.multi_stock))
+    asyncio.run(
+        main(
+            args.strategy,
+            args.symbol,
+            args.days,
+            args.splits,
+            args.write,
+            args.show,
+            args.force,
+            args.multi_stock,
+            args.default_pool,
+        )
+    )

@@ -570,18 +570,24 @@ class MarketFilter:
         satisfied = [cond_above_ma, cond_trend_up, cond_liquidity]
         satisfied_count = sum(satisfied)
 
-        # 三重验证：全部满足才判定为 bull（恢复硬约束，P0-2 修复）
-        # v0.4.0 曾放宽为"指数在 MA200 之上即允许选股"，导致震荡市也放行，
-        # 违反陈江挺"大市不好不选股"原意（震荡市假突破率高）。
-        # 震荡市选不出股票是策略纪律的正确表现，不应通过降门槛硬出信号。
+        # P1-3 优化：放宽大市判断门槛，解决信号产量极低问题
+        # 原逻辑：必须 3/3 条件满足才允许选股，导致震荡市完全无信号
+        # 新逻辑：
+        #   - 3/3 满足 → bull（强势市场，允许追势策略）
+        #   - 2/3 满足 → rally（偏强震荡，允许均值回归/双阴策略）
+        #   - 1/3 满足 → sideways（偏弱震荡，仅允许 RSI 等超卖反弹）
+        #   - 0/3 满足 → bear（禁止买入）
         if satisfied_count == 3:
             regime = "bull"
             bullish = True
-        elif satisfied_count == 0:
-            regime = "bear"
-            bullish = False
+        elif satisfied_count == 2:
+            regime = "rally"
+            bullish = True
+        elif satisfied_count == 1:
+            regime = "sideways"
+            bullish = True
         else:
-            regime = "range"
+            regime = "bear"
             bullish = False
 
         # 构建可读的判断理由

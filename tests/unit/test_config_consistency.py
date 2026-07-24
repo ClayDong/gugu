@@ -75,11 +75,20 @@ class TestWatchlistMonitoringConfig:
     """自选监控列表配置测试。"""
 
     def test_default_watchlist_matches_current_targets(self):
-        """默认监控恒瑞医药、豪威集团、双环传动、机器人ETF华夏。"""
-        from gugu.config import refresh_config
+        """默认监控列表包含基础自选股和用户真实持仓。"""
+        from gugu.config import get_config, refresh_config
 
+        get_config.cache_clear()
         cfg = refresh_config()
-        assert cfg.watchlist == ["600276", "603501", "002472", "562500"]
+        # P1-5 优化：扩大自选股池到 19 只（14 只自选 + 5 只 ETF）
+        expected = {
+            "600519", "000858", "600276", "300760", "300750",
+            "002594", "002472", "603501", "002371", "601012",
+            "600438", "300033", "002230", "562500",
+            "002714", "510500", "588000", "510310", "512480",
+        }
+        assert set(cfg.watchlist) == expected
+        assert len(cfg.watchlist) == 19
 
     def test_intraday_custom_watchlist_matches_default_watchlist(self):
         """盘中实时盯盘范围与默认自选列表保持一致。"""
@@ -88,12 +97,22 @@ class TestWatchlistMonitoringConfig:
         cfg = refresh_config()
         assert cfg.intraday_monitor.custom_watchlist == cfg.watchlist
 
-    def test_execution_mode_is_paper_for_simulation(self):
-        """默认使用模拟盘记录，不启用实盘。"""
+    def test_execution_mode_is_safe_for_simulation(self):
+        """执行模式必须是安全模式（非 live），保护用户资金。
+
+        允许的模式：
+        - paper: 模拟盘交易
+        - signal_only: 仅信号通知不下单
+        - track_live: 实盘持仓跟踪（只读用户真实持仓，不自动交易）
+        禁止: live（实盘交易需显式启用券商接口）
+        """
         from gugu.config import refresh_config
 
         cfg = refresh_config()
-        assert cfg.execution.mode == "paper"
+        assert cfg.execution.mode in ("paper", "signal_only", "track_live"), (
+            f"执行模式 {cfg.execution.mode} 不是安全模式，"
+            f"生产环境禁止使用 live 模式（除非显式启用券商接口）"
+        )
 
 
 class TestManifestSettingsConsistency:

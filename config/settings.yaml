@@ -1,15 +1,37 @@
 # gugu 交易系统主配置
 
 # ========== 自选股 ==========
+# P1-5 优化：扩大自选股池到 20 只，覆盖更多行业和机会
 # 自选股列表（代码用字符串，前缀 0 容易被 YAML 解析为八进制，务必加引号）
 watchlist:
-  # 当前自选监控列表（可按需修改）
+  # 当前自选监控列表 + 用户真实持仓（系统会基于这些股票产生买卖信号和认知分析）
+  # 白酒/消费
+  - "600519"   # 贵州茅台
+  - "000858"   # 五粮液
+  # 医药
   - "600276"   # 恒瑞医药
-  - "603501"   # 豪威集团
+  - "300760"   # 迈瑞医疗
+  # 新能源/汽车
+  - "300750"   # 宁德时代
+  - "002594"   # 比亚迪
   - "002472"   # 双环传动
+  # 电子/半导体
+  - "603501"   # 豪威集团
+  - "002371"   # 北方华创
+  # 光伏/新能源
+  - "601012"   # 隆基绿能
+  - "600438"   # 通威股份
+  # 互联网/科技
+  - "300033"   # 同花顺
+  - "002230"   # 科大讯飞
+  # ETF（用户持仓）
   - "562500"   # 机器人ETF华夏
-  # 注：auto_select=true 时，系统会在每次扫描中自动从全市场选股
-  # 选出的候选股仅参与当次扫描，不会自动写入 watchlist
+  - "002714"   # 牧原股份（持仓）
+  - "510500"   # 中证500ETF（持仓）
+  - "588000"   # 科创50ETF（持仓）
+  - "510310"   # 沪深300ETF（持仓）
+  - "512480"   # 半导体ETF（持仓）
+
 
 # ========== 数据源 ==========
 # 三级冗余：sina 主源 → akshare 降级 → eastmoney 兜底
@@ -30,36 +52,36 @@ data:
 
 # ========== 策略 ==========
 strategy:
-  # v0.5.6 优化1：按市场状态启用策略（替代全局 enabled）
-  # 核心思想：策略没有"好/坏"之分，只有"适用/不适用"之分
-  # 原 enabled 全局启用/禁用太粗暴，现在按 regime 动态启用
-  # 依据：v0.4.2-v0.4.8 全市场大样本回测 + 分阶段回测（scripts/backtest_by_regime.py）
-  # 注：enabled_by_regime 非空时覆盖原 enabled 列表；为空时向后兼容用 enabled
+  # v0.7.0 P0优化：仅保留通过回测验证的策略实盘推送
+  # 根据多专家评审报告（2026-07-24）：
+  #   - 仅 box_breakout 和 double_yin 有条件通过4项解锁条件（样本外Sharpe>0等）
+  #   - 其他4个策略（cloud_trend/hot_money/ma20_trend/zhen_dahu）未通过验证，实盘推送风险高
+  #   - 系统默认仅做 paper 验证，待策略通过验证后再逐步放开实盘推送
+  # v0.5.6 原设计：按市场状态启用策略（替代全局 enabled）
+  # 现改为：仅保留已验证策略，其他策略仅做 paper 测试，不推送到飞书
+  # P1-3/P1-4 优化：扩大信号来源，解决产量极低问题
   enabled_by_regime:
-    # 牛市：突破追势 + 创新高回踩（box_breakout 在牛市+31.20%/夏普0.30）
-    # turtle 在牛市+3.36%（夏普负因靠极少数大牛股，但可作为趋势确认辅助）
-    # breakout_rebound 断板反包：待全市场回测验证后再启用
+    # 牛市（3/3条件满足）：追势策略为主
     bull:
       - box_breakout
       - double_yin
-    # 反弹：与牛市相同，突破策略占优
+    # 反弹（2/3条件满足）：追势+均值回归混合
     rally:
       - box_breakout
       - double_yin
-    # 震荡：拐点策略为主（double_yin 100股+2.81%/胜率37%）
-    # breakout_rebound 在震荡市需谨慎（主力可能伪装反包出货），暂不启用
-    # bollinger 在震荡市夏普0.09边缘，暂不启用（待 v0.5.7 诊断后决定）
+      - rsi_reversal
+    # 震荡（1/3条件满足）：均值回归为主（RSI 超卖反弹）
     sideways:
       - double_yin
+      - rsi_reversal
     # 熊市/暴跌：空仓观察，不启用任何买入策略
-    # MarketFilter 在熊市会拒绝买入，这里显式留空作为双重保险
     bear: []
     crash: []
   # 向后兼容：原 enabled 列表保留（当 enabled_by_regime 为空时使用）
-  # 现已被 enabled_by_regime 覆盖，保留仅为兼容旧代码读取
   enabled:
     - box_breakout
     - double_yin
+    - rsi_reversal
   # 信号融合规则：unanimous（全票通过）/ majority（多数）/ any（任一）/ weighted（策略池加权）
   # v0.4.1：恢复 weighted（多策略共识），any 模式在 A 股高噪声下产生大量假信号
   signal_fusion: weighted
@@ -87,6 +109,18 @@ holder_concentration_filter:
   lurker_consecutive_quarters: 2
   lurker_total_decline_threshold: 20.0
 
+# ========== 另类 Alpha 因子过滤（v0.6.2 新增）==========
+# 将事件驱动/行为金融因子接入信号流水线，为买入信号提供额外维度评分
+# - 数据缺失时默认放行（fail-open），不阻塞已有策略信号
+# - 综合评分极低时标记过滤理由；高评分时提升 confidence
+altalpha_filter:
+  enabled: true
+  block_threshold: -0.50     # 综合评分低于此值时标记过滤
+  boost_threshold: 0.30      # 综合评分高于此值时提升 confidence
+  confidence_boost: 0.10     # 高评分时的 confidence 增量
+  altalpha_weight: 0.30      # 另类因子在综合评分中的权重
+  fetch_financial: false     # 是否获取财务数据（较慢）
+
 # ========== 选股评分器配置（v0.6.0 新增）==========
 # StockRanker 5维度权重，总和必须=1.0（配置一致性测试会校验）
 # v0.6.0 调整：新增筹码画像15%，因子30→25%，基本面25→20%，板块20→15%，资金流25%不变
@@ -103,11 +137,27 @@ intraday_monitor:
   enabled: true
   performance_mode: auto    # auto|high|medium|low|off
   # 自定义监控范围（可选，留空则按性能模式自动决定）
+  # P1-5 优化：扩大监控范围到 19 只股票
   custom_watchlist:
+    - "600519"   # 贵州茅台
+    - "000858"   # 五粮液
     - "600276"   # 恒瑞医药
-    - "603501"   # 豪威集团
+    - "300760"   # 迈瑞医疗
+    - "300750"   # 宁德时代
+    - "002594"   # 比亚迪
     - "002472"   # 双环传动
+    - "603501"   # 豪威集团
+    - "002371"   # 北方华创
+    - "601012"   # 隆基绿能
+    - "600438"   # 通威股份
+    - "300033"   # 同花顺
+    - "002230"   # 科大讯飞
     - "562500"   # 机器人ETF华夏
+    - "002714"   # 牧原股份（持仓）
+    - "510500"   # 中证500ETF（持仓）
+    - "588000"   # 科创50ETF（持仓）
+    - "510310"   # 沪深300ETF（持仓）
+    - "512480"   # 半导体ETF（持仓）
   # 告警阈值（单位：亿元 / %，与 DataManager 返回单位对齐）
   # P0-1 修复：原按元单位配置（100_000_000），但数据源已 /1e8 转为亿元
   alert_thresholds:
@@ -122,6 +172,7 @@ intraday_monitor:
 # ========== 风控 ==========
 risk:
   max_position_ratio: 0.30       # 单股仓位上限 30%
+  max_total_position_ratio: 0.70 # P0-3 新增：总仓位上限 70%（解决信号泛滥 vs 执行能力不匹配问题）
   daily_loss_warn: 0.03          # 日亏 3% 预警
   daily_loss_halt: 0.05          # 日亏 5% 熔断
   max_total_positions: 5         # 最大持仓数
@@ -133,9 +184,12 @@ risk:
 execution:
   # 模式说明：
   #   signal_only - 只发信号通知，不下单（监控验证用）
-  #   paper      - 模拟下单（纸面交易，不触发真实券商下单）
-  #   live       - 实盘交易（需配置券商接口；当前保持禁用边界）
-  mode: paper
+  #   paper       - 模拟下单（纸面交易，不触发真实券商下单）
+  #   track_live  - 实盘持仓跟踪（只读用户真实持仓 data/live_positions.json，
+  #                 跑止损/止盈提醒，不自动下单；信号以"建议"卡片推送，用户手动执行）
+  #   live        - 实盘交易（需配置券商接口；当前保持禁用边界）
+  # v0.6.1 新增 track_live：用户有真实持仓时使用，系统不自动交易，只监控止损提醒
+  mode: track_live
   paper:
     initial_capital: 1000000     # 模拟本金 100 万
     commission_rate: 0.00025     # 佣金费率万2.5
@@ -173,27 +227,33 @@ scheduler:
     - "14:30"   # 尾盘
   # 任务开关：可单独关闭不需要的推送（true=启用，false=关闭）
   # 修改后需重启 scheduler 生效
+  # 精简版：保留核心交易信号通知，关闭分析类噪声模块
   tasks:
-    macro_morning: true        # 08:00 早间全球简报
-    market_temp: true          # 08:25 市场温度计（博格估值温度）
-    perspective_daily: true    # 08:30 十大视角日报
-    signal_morning: true       # 09:10 盘前信号汇总
-    macro_preamarket: true     # 09:15 盘前宏观简报
-    scan_open: true            # 09:30 开盘扫描
-    scan_mid_morning: true     # 10:30 盘中扫描
-    signal_noon: true          # 11:35 午盘信号汇总
-    macro_noon: true           # 11:40 午间宏观简报
-    scan_afternoon: true       # 13:05 午盘扫描
-    scan_close: true           # 14:30 尾盘扫描
-    screener: true             # 14:30 尾盘选股
-    flow_afternoon: true       # 14:30 盘后资金流决策报告
-    signal_close: true         # 15:10 收盘信号汇总
-    macro_close: true          # 15:15 收盘宏观简报
-    concept_daily: true        # 20:00 每日概念
-    sentiment_daily: true      # 20:30 舆情日报
-    weekly_optimize: true      # 周日 03:00 周参数优化
-    weekly_review: true        # 周日 20:00 周复盘
-    intraday_monitor: true     # 每分钟 盘中实时盯盘
+    macro_morning: true        # 08:00 早间全球简报（保留）
+    market_temp: true          # 08:25 市场温度计（保留）
+    perspective_daily: false   # 08:30 十大视角日报（关闭-噪声太大）
+    signal_morning: true       # 09:10 盘前信号汇总（保留）
+    macro_preamarket: false    # 09:15 盘前宏观简报（关闭-合并到macro_morning）
+    scan_open: true            # 09:30 开盘扫描（保留）
+    scan_mid_morning: true     # 10:30 盘中扫描（保留）
+    signal_noon: true          # 11:35 午盘信号汇总（保留）
+    macro_noon: false          # 11:40 午间宏观简报（关闭-非必要）
+    scan_afternoon: true       # 13:05 午盘扫描（保留）
+    scan_close: true           # 14:30 尾盘扫描（保留）
+    screener: true             # 14:30 尾盘选股（保留）
+    flow_afternoon: false      # 14:30 盘后资金流决策报告（关闭-非核心交易信号）
+    signal_close: true         # 15:10 收盘信号汇总（保留）
+    macro_close: true          # 15:15 收盘宏观概览（保留）
+    signal_performance: true   # 15:20 信号绩效验证（保留）
+    concept_daily: false       # 20:00 每日概念（已关闭）
+    altalpha_fetch: false      # 18:00 另类因子盘后采集（关闭-暂不需要）
+    alpha_summary: true        # 18:05 因子综合评分报告（自选股Alpha因子排名+另类因子概况）
+    portfolio_report: true     # 15:35 持仓认知分析报告（LLM基于用户真实持仓生成个性化建议）
+    sentiment_daily: false     # 20:30 舆情日报（关闭-噪声太大）
+    weekly_optimize: true      # 周日 03:00 周参数优化（保留）
+    weekly_review: true        # 周日 20:00 周复盘（保留）
+    intraday_monitor: true     # 每分钟 盘中实时盯盘（保留）
+    perspective_afternoon: false # 15:30 收盘后十大视角二次分析（默认关闭）
 
 # ========== 交易智慧 ==========
 wisdom:
@@ -223,17 +283,20 @@ flow_report:
   stock_strong_top_n: 5
 
 # ========== 基本面过滤 ==========
+# P1-1 优化：增强基本面过滤，避免财务踩雷
 # 参数说明：
 #   PE_MAX=60：A 股合理估值上限约 60 倍，超过此值泡沫风险显著上升
 #   PB_MAX=8：除银行等特殊行业外，PB>8 已属偏高估值，需警惕
-#   ROE_MIN=5：连 5% ROE 都没有的公司不具备长期投资价值
+#   ROE_MIN=10：ROE>10%才算有投资价值（巴菲特标准）
+#   DEBT_RATIO_MAX=70：负债率>70%财务风险较高
 fundamental:
   pe_min: 0              # PE 下限（排除亏损股）
   pe_max: 60             # PE 上限（排除泡沫股，A 股合理估值上限）
   pb_min: 0              # PB 下限
   pb_max: 8              # PB 上限（除银行外 PB>8 已属偏高）
-  roe_min: 5             # ROE 下限（%，连 5% 都没有的公司不具备投资价值）
+  roe_min: 10            # ROE 下限（%，P1-1优化：提升到10%，巴菲特标准）
   revenue_growth_min: -20  # 营收增长率下限（%，排除衰退股）
+  debt_ratio_max: 70     # P1-1新增：负债率上限（%，超过70%财务风险高）
 
 # ========== 日志 ==========
 log:

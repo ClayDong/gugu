@@ -186,9 +186,9 @@ class QmtBroker(BaseBroker):
     def get_account(self) -> AccountInfo:
         if not self._health_check():
             logger.warning("QMT 未连接，无法查询账户")
-            return AccountInfo(cash=0, total_value=0, positions={})
+            return AccountInfo(cash=0, total_value=0, positions={}, positions_value=0)
         logger.warning("QMT 查询账户未实现（阶段四）")
-        return AccountInfo(cash=0, total_value=0, positions={})
+        return AccountInfo(cash=0, total_value=0, positions={}, positions_value=0)
 
     def update_price(self, symbol: str, price: float) -> None:
         """实盘自动更新，无需手动调用。"""

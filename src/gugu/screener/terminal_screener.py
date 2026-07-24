@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from gugu.filters.market_regime import MarketRegimeDetector
+from gugu.screener.params import ScreenerParams
 from gugu.utils.log import get_logger
 
 if TYPE_CHECKING:
@@ -108,7 +110,7 @@ class ScreeningResult:
 
     @property
     def risk_reward_ratio(self) -> float:
-        """盈亏比 = (止盈 - 当前价) / (当前价 - 止损)。"""
+        """盈亏比 = (止盈 - 当前价) / (当前价 - 止损）。"""
         if self.stop_loss_price <= 0 or self.take_profit_price <= self.price:
             return 0.0
         risk = self.price - self.stop_loss_price
@@ -116,24 +118,63 @@ class ScreeningResult:
         return round(reward / risk, 2) if risk > 0 else 0.0
 
 
+@dataclass
+class ScreenerScanResult:
+    """尾盘选股一次扫描的完整结果。"""
+
+    results: list[ScreeningResult] = field(default_factory=list)
+    skipped: bool = False
+    skip_reason: str = ""
+    market_regime: str = ""
+    total_scanned: int = 0
+
+    def __len__(self) -> int:
+        """P1-1 修复：支持 len() 操作（生产环境 7月22日触发 TypeError）。"""
+        return len(self.results)
+
+
 class TerminalScreener:
-    """尾盘选股器（P2-1 低吸逻辑 + P0 性能修复）。"""
+    """尾盘选股器（P2-1 低吸逻辑 + P0 性能修复 + 市场状态过滤）。"""
 
-    def __init__(self, dm: DataManager | None = None) -> None:
+    def __init__(self, dm: DataManager | None = None, params: ScreenerParams | None = None) -> None:
         self._dm = dm
+        self.params = params or ScreenerParams.load()
+        self._regime_detector = MarketRegimeDetector()
 
-    async def scan(self) -> list[ScreeningResult]:
-        """执行全市场扫描，返回通过 8 条件的排序结果。
+    async def scan(self) -> ScreenerScanResult:
+        """执行全市场扫描，返回完整扫描结果。
+
+        新增市场状态过滤：
+        - bear/crash 等 skip_regimes 下跳过正式选股，避免逆势操作。
+        - bull/sideways 等状态下按 candidate_modifier 缩减候选数量。
 
         P0 修复：总超时 20 分钟硬上限，超时返回已扫描的部分结果。
         """
-        logger.info("=== 尾盘选股: 开始全市场扫描（低吸逻辑 + P0 性能修复）===")
+        logger.info("=== 尾盘选股: 开始全市场扫描（低吸逻辑 + 市场过滤 + P0 性能修复）===")
         start_time = time.time()
 
+        # 1. 先判市场状态
         try:
-            return await asyncio.wait_for(
-                self._scan_internal(start_time),
+            market_state = await self._regime_detector.detect()
+            regime = market_state.get("regime", "sideways")
+        except Exception as e:
+            logger.warning(f"尾盘选股: 市场状态判断失败，降级为震荡市: {e}")
+            regime = "sideways"
+
+        if self.params.should_skip(regime):
+            reason = f"市场状态为 {regime}，根据配置跳过正式选股（保护性空仓）"
+            logger.info(f"尾盘选股: {reason}")
+            return ScreenerScanResult(
+                results=[], skipped=True, skip_reason=reason, market_regime=regime
+            )
+
+        try:
+            results = await asyncio.wait_for(
+                self._scan_internal(start_time, regime),
                 timeout=_TOTAL_TIMEOUT_SEC,
+            )
+            return ScreenerScanResult(
+                results=results, skipped=False, market_regime=regime, total_scanned=len(results)
             )
         except TimeoutError:
             elapsed = time.time() - start_time
@@ -141,10 +182,10 @@ class TerminalScreener:
                 f"尾盘选股: 总超时 {_TOTAL_TIMEOUT_SEC}s 触发，已运行 {elapsed:.0f}s，"
                 f"返回空结果（内部已尽可能提前返回部分结果）"
             )
-            return []
+            return ScreenerScanResult(results=[], market_regime=regime)
 
-    async def _scan_internal(self, start_time: float) -> list[ScreeningResult]:
-        """实际扫描逻辑（带快照硬过滤 + 并发 K 线获取 + 失败熔断）。"""
+    async def _scan_internal(self, start_time: float, regime: str) -> list[ScreeningResult]:
+        """实际扫描逻辑（带快照硬过滤 + 并发 K 线获取 + 失败熔断 + 市场状态适配）。"""
         # 1. 获取全市场实时快照（含 量比/换手率/流通市值 等所有字段）
         spot = await self._fetch_market_snapshot()
         if spot is None or spot.empty:
@@ -175,10 +216,12 @@ class TerminalScreener:
         # P2 优化：通过股票按视角评分降序排列（评分高的优先）
         passed.sort(key=lambda r: (-r.perspective_score, r.change_pct))
 
-        top = (passed + partial)[:MAX_CANDIDATES]
+        max_candidates = self.params.effective_max_candidates(regime)
+        top = (passed + partial)[:max_candidates]
         elapsed = time.time() - start_time
         logger.info(
-            f"尾盘选股: 完成 完全通过 {len(passed)} 只，上报 {len(top)} 只，耗时 {elapsed:.0f}s"
+            f"尾盘选股: 市场状态 {regime}，完成 完全通过 {len(passed)} 只，"
+            f"上报 {len(top)} 只（上限 {max_candidates}），耗时 {elapsed:.0f}s"
         )
         return top
 
@@ -215,27 +258,37 @@ class TerminalScreener:
             if col in spot.columns:
                 spot[col] = pd.to_numeric(spot[col], errors="coerce").fillna(0)
 
-        # 条件2: 涨幅 -2% ~ +1%
-        mask = (spot["涨跌幅"] >= MIN_CHG_PCT) & (spot["涨跌幅"] <= MAX_CHG_PCT)
+        # 条件2: 涨幅区间（动态参数，默认可覆盖 -2% ~ +1%）
+        mask = (spot["涨跌幅"] >= self.params.min_chg_pct) & (
+            spot["涨跌幅"] <= self.params.max_chg_pct
+        )
 
         # 排除北交所、ST
         mask &= ~spot["代码"].astype(str).str.startswith(("bj", "43", "83", "87", "88"))
         mask &= ~spot["名称"].str.contains("ST|退|N|C", na=False)
 
-        # 条件4: 量比 < 1.0（缩量）
+        # 条件4: 量比上限（缩量）
         if "量比" in spot.columns:
-            mask &= (spot["量比"] > 0) & (spot["量比"] < MAX_VOL_RATIO)
-            logger.info("尾盘选股: 快照硬过滤 量比<1.0 应用")
+            mask &= (spot["量比"] > 0) & (spot["量比"] < self.params.max_vol_ratio)
+            logger.info(f"尾盘选股: 快照硬过滤 量比<{self.params.max_vol_ratio:.2f} 应用")
 
-        # 条件7: 换手率 3%-15%
+        # 条件7: 换手率区间
         if "换手率" in spot.columns:
-            mask &= (spot["换手率"] >= MIN_TURNOVER) & (spot["换手率"] <= MAX_TURNOVER)
-            logger.info("尾盘选股: 快照硬过滤 换手率3-15% 应用")
+            mask &= (spot["换手率"] >= self.params.min_turnover) & (
+                spot["换手率"] <= self.params.max_turnover
+            )
+            logger.info(
+                f"尾盘选股: 快照硬过滤 换手率{self.params.min_turnover:.0f}%-{self.params.max_turnover:.0f}% 应用"
+            )
 
-        # 条件8: 流通市值 50亿-500亿（单位：元）
+        # 条件8: 流通市值区间（单位：元）
         if "流通市值" in spot.columns:
-            mask &= (spot["流通市值"] >= MIN_MCAP) & (spot["流通市值"] <= MAX_MCAP)
-            logger.info("尾盘选股: 快照硬过滤 流通市值50-500亿 应用")
+            mask &= (spot["流通市值"] >= self.params.min_mcap) & (
+                spot["流通市值"] <= self.params.max_mcap
+            )
+            logger.info(
+                f"尾盘选股: 快照硬过滤 流通市值{self.params.min_mcap / 1e8:.0f}亿-{self.params.max_mcap / 1e8:.0f}亿 应用"
+            )
 
         candidates = spot[mask].copy()
         return candidates
@@ -472,7 +525,9 @@ class TerminalScreener:
                     )
                 mcap_b = price * outstanding / 1e8
 
-            if mcap_b < 5 or mcap_b > 500:
+            min_mcap_b = self.params.min_mcap / 1e8
+            max_mcap_b = self.params.max_mcap / 1e8
+            if mcap_b < min_mcap_b or mcap_b > max_mcap_b:
                 failed.append(f"市值{mcap_b:.0f}亿")
 
             # 条件4: 量比（已从快照获取）
@@ -480,14 +535,14 @@ class TerminalScreener:
                 volumes_tmp = recent["volume"].values.astype(float)
                 avg_5d = float(np.nanmean(volumes_tmp[-6:-1])) if len(volumes_tmp) > 5 else 0.0
                 vol_ratio = volumes_tmp[-1] / avg_5d if avg_5d > 0 else 0
-            if vol_ratio >= MAX_VOL_RATIO:
+            if vol_ratio >= self.params.max_vol_ratio:
                 failed.append(f"量比{vol_ratio:.2f}(未缩量)")
 
             # 条件7: 换手率（已从快照获取）
             if turnover_pct == 0:
                 latest = recent.iloc[-1]
                 turnover_pct = float(latest.get("turnover", 0)) * 100
-            if turnover_pct < MIN_TURNOVER or turnover_pct > MAX_TURNOVER:
+            if turnover_pct < self.params.min_turnover or turnover_pct > self.params.max_turnover:
                 failed.append(f"换手率{turnover_pct:.1f}%")
 
             # 条件5: 收盘价 ≥ MA20
@@ -501,15 +556,17 @@ class TerminalScreener:
             if not ma20_rising:
                 failed.append("MA20未上MA60")
 
-            # 条件3: 前 5 日内有涨幅 ≥ 5% 的强势表现
-            if len(recent) >= RECENT_STRONG_DAYS + 1:
-                recent_closes = recent["close"].iloc[-(RECENT_STRONG_DAYS + 1) : -1]
+            # 条件3: 前 N 日内有涨幅 >= X% 的强势表现
+            recent_days = self.params.recent_strong_days
+            recent_pct = self.params.recent_strong_pct
+            if len(recent) >= recent_days + 1:
+                recent_closes = recent["close"].iloc[-(recent_days + 1) : -1]
                 recent_chg_pct = recent_closes.pct_change() * 100
-                has_strong = (recent_chg_pct >= RECENT_STRONG_PCT).any()
+                has_strong = (recent_chg_pct >= recent_pct).any()
             else:
                 has_strong = False
             if not has_strong:
-                failed.append(f"近{RECENT_STRONG_DAYS}日无强势")
+                failed.append(f"近{recent_days}日无强势")
 
             # 条件8: 回踩日不跑赢大盘
             beats = chg_pct <= index_chg + 1.0

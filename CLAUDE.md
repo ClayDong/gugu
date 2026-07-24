@@ -51,9 +51,16 @@
 
 | 模式 | 说明 | 适用场景 |
 |------|------|----------|
-| `signal_only` | 只发信号通知，不下单 | **默认**，监控验证策略 |
+| `signal_only` | 只发信号通知，不下单 | 监控验证策略 |
 | `paper` | 模拟下单（纸面交易） | 验证下单逻辑 |
+| `track_live` | 实盘持仓跟踪（只读用户真实持仓，不自动交易） | **当前默认**，用户有真实持仓时使用 |
 | `live` | 实盘交易 | 需配置券商接口 |
+
+> **v0.6.1 重要变更**：新增 `track_live` 模式，解决用户真实持仓被模拟盘误删问题。
+> - 用户真实持仓存储于 `data/live_positions.json`（独立于 `paper_broker_state.json`）
+> - `LivePositionTracker` 只读持仓文件，`order()` 永远拒绝下单（保护用户真实持仓）
+> - 止损/止盈触发时推送"需手动执行"提醒卡片，不自动下单
+> - `paper_broker_state.json` 仅用于纯模拟盘交易，与用户真实持仓完全隔离
 
 ### 五阶段架构（渐进式，不可跳级）
 
@@ -92,7 +99,16 @@ gugu/
 │       │   └── collectors/      # 采集器
 │       │       ├── base.py      # BaseCollector 抽象
 │       │       ├── fallback.py  # 主源（新浪，设置中 primary）
-│       │       └── akshare_collector.py # 降级源（东方财富）
+│       │       ├── akshare_collector.py # 降级源（东方财富）
+│       │       ├── holder_structure.py # 股东户数采集器
+│       │       └── altalpha/   # 另类Alpha数据采集器（v0.5.9）
+│       │           ├── base.py              # AltAlphaCollector 基类（限流+缓存+降级）
+│       │           ├── insider_trading.py   # 高管增减持
+│       │           ├── earnings_forecast.py # 业绩预告
+│       │           ├── dragon_tiger.py      # 龙虎榜
+│       │           ├── block_trade.py       # 大宗交易
+│       │           ├── margin_trade.py      # 融资融券
+│       │           └── share_unlock.py      # 解禁压力
 │       ├── models/              # 数据模型
 │       │   ├── position.py      # Position 统一模型
 │       │   └── signal.py        # Signal 强类型数据类
@@ -120,6 +136,7 @@ gugu/
 │       ├── execution/           # 执行层
 │       │   ├── base.py          # 交易接口抽象
 │       │   ├── paper.py         # 模拟盘
+│       │   ├── track_live.py    # 实盘持仓跟踪（track_live模式，只读不交易）
 │       │   └── qmt.py           # QMT实盘（阶段四启用）
 │       ├── notifier/            # 通知层
 │       │   ├── feishu.py        # 飞书推送 + 通知重试队列
@@ -135,6 +152,9 @@ gugu/
 │       │   ├── no_average_down.py # P0 向下摊平检查器
 │       │   ├── regime_detector.py # 多周期择时
 │       │   ├── dynamic_take_profit.py # 财叔动态止盈减仓引擎
+│       │   ├── market_temp.py     # 博格市场温度计
+│       │   ├── alpha_factory.py   # AlphaFactory（技术因子+另类因子融合）
+│       │   ├── altalpha_factors.py # 另类Alpha因子引擎（8因子z-score）
 │       │   └── ...               # 其他分析模块
 │       ├── wisdom/              # 决策层（28 本书认知 + P0 规则引擎）
 │       │   ├── advisor.py       # WisdomAdvisor（LLM 决策 + 多视角路由 + fallback）
@@ -309,10 +329,145 @@ gugu/
 ## 元数据
 
 - 创建日期：2026-07-06
-- 版本：v0.5.8
-- 阶段：阶段三（信号监控）+ 十大视角分析系统 + 信号流融合 + 宏观增强 + 博格市场温度计 + 策略全链路优化 + A股费用模型对齐 + 多专家深度审查
-- 测试：1585 passed, 5 skipped
-- 最近审查：2026-07-09（A股交易费用模型对齐+回测前视偏差+信号链P0级修复+风控/数据源线程安全）
+- 版本：v0.6.2
+- 阶段：阶段三（信号监控）+ 十大视角分析系统 + 信号流融合 + 宏观增强 + 博格市场温度计 + 策略全链路优化 + A股费用模型对齐 + 多专家深度审查 + 另类数据Alpha因子系统 + 上线级全面优化 + 实盘/模拟盘数据分离 + 信号产量优化
+- 测试：1890 passed, 5 skipped
+- 最近审查：2026-07-24（审核报告修复+信号产量优化）
+- v0.6.2 变更（2026-07-24 信号产量优化）：
+  - 🔴 P0修复：AccountInfo.positions_value 缺失（main.py:407 运行时崩溃）
+    - AccountInfo 数据类添加 positions_value: float = 0.0 字段
+    - 更新所有 broker 的 get_account() 返回 positions_value
+    - 修改文件：execution/base.py, paper.py, track_live.py, qmt.py
+  - 🔴 P0修复：ScreenerScanResult.__len__ 缺失（生产环境 TypeError）
+    - ScreenerScanResult 数据类添加 __len__ 方法返回 len(self.results)
+    - 修改文件：screener/terminal_screener.py
+  - 🟡 P1优化：MarketFilter 市场状态门槛放宽（解决信号产量极低问题）
+    - 原逻辑：必须 3/3 条件满足才允许选股，导致震荡市完全无信号
+    - 新逻辑：
+      - 3/3 → bull（强势市场）
+      - 2/3 → rally（偏强震荡，允许追势+均值回归）
+      - 1/3 → sideways（偏弱震荡，允许 RSI 超卖反弹）
+      - 0/3 → bear（禁止买入）
+    - 修改文件：engine/market_filter.py
+  - 🟡 P1优化：启用 rsi_reversal 策略（震荡市适用）
+    - settings.yaml enabled_by_regime 添加 rsi_reversal 到 rally/sideways 市场状态
+    - strategy_manifest.yaml rsi_reversal.enabled: true，添加 validation_gate
+    - 修改文件：config/settings.yaml, config/strategy_manifest.yaml
+  - 🟡 P1优化：扩大自选股池（9只→19只，覆盖更多行业）
+    - 新增：600519贵州茅台、000858五粮液、300760迈瑞医疗、300750宁德时代、002594比亚迪、002371北方华创、601012隆基绿能、600438通威股份、300033同花顺、002230科大讯飞
+    - intraday_monitor.custom_watchlist 同步更新为 19 只股票
+    - 修改文件：config/settings.yaml
+  - 🟡 P1优化：扩大回测样本池（50只代表性股票）
+    - optimize_params.py 新增 DEFAULT_REPRESENTATIVE_STOCKS 常量（50只跨行业龙头）
+    - 新增 --default-pool CLI 参数，支持一键多股聚合 Walk-Forward 优化
+    - 修改文件：scripts/optimize_params.py
+  - 🧪 测试：1890 passed, 5 skipped（原1890+新增P0/P1修复测试）
+- v0.6.1 变更（2026-07-16 实盘/模拟盘数据分离）：
+  - 🔴 P0修复：实盘/模拟盘数据分离（解决用户真实持仓被误删问题）
+    - 根因：paper_broker_state.json 一个文件同时承担用户真实持仓跟踪和模拟盘交易两个职责，PaperBroker自动下单会覆盖用户真实持仓
+    - 新增 track_live 模式：用户真实持仓独立存储于 data/live_positions.json
+    - 新增 LivePositionTracker 类（src/gugu/execution/track_live.py）：
+      - 继承 BaseBroker 接口，但 order() 永远拒绝下单（核心安全机制）
+      - 只读用户真实持仓文件，update_price() 仅更新现价（不持久化，避免高频IO）
+      - update_stop_loss() 持久化止损价（移动止损触发时调用）
+      - adjust_for_corporate_action() 持久化除权除息调整
+      - 线程安全（threading.RLock）+ 原子写入（fcntl.flock + tmp文件 rename）
+    - settings.yaml execution.mode 从 paper 改为 track_live（当前默认）
+    - main.py 根据 exec_mode 切换 broker：track_live 用 LivePositionTracker，paper/signal_only 用 PaperBroker
+    - StopLossManager 新增 track_live 模式止损/止盈提醒卡片推送：
+      - 检测 result.message 含 "track_live" 时推送"需手动执行"提醒卡片
+      - 止损提醒：level=halt + 现价≤止损价 + 建议手动卖出数量
+      - 止盈减仓提醒：level=warn + 触发步骤 + 建议手动减仓比例
+    - _process_signal: track_live 模式走 signal_only 分支（仅通知不下单）
+    - paper_broker_state.json 重置为初始100万空仓（纯模拟盘）
+    - take_profit_state.json 清理 600519 异常数据（entry_price=10.0 是测试数据）
+    - 用户5个真实持仓迁移到 live_positions.json（002714/510500/588000/510310/512480）
+    - 配置一致性测试：test_execution_mode_is_paper 改为 test_execution_mode_is_safe，允许 paper/signal_only/track_live 三种安全模式
+    - 16个 track_live 单元测试：加载/order拒绝/价格更新/止损持久化/账户信息/线程安全
+  - 🧪 测试：1570 passed, 5 skipped（原1554+16新增track_live测试）
+- v0.6.0 变更（2026-07-16 上线级全面优化）：
+  - 🔴 P0修复：MarketFilter放宽 + 回测/生产逻辑统一
+    - MarketFilter默认条件从3/3 MA200放宽到2/3（min_conditions=2），让震荡市也能产生信号
+    - 根因：原3/3条件在震荡市完全阻止信号产生，导致近15天零信号
+    - regime_detector统一：buy_allowed = regime in ("bull", "rally", "sideways")（bear/crash禁止买入）
+    - 回测MarketFilter与生产regime_detector逻辑完全一致
+  - 🔴 P0修复：模拟盘数据不一致
+    - 重置paper_broker_state.json（清空5个历史测试遗留持仓，重置为初始100万现金）
+    - 清空take_profit_state.json（600519的entry_price=10.0是测试数据）
+    - 备份旧信号历史（signals_history.jsonl.bak），原文件清空（旧信号来自已禁用策略）
+  - 🔴 P0修复：心跳历史停止更新
+    - _write_heartbeat方法重构：payload构建与文件写入分离
+    - get_account()失败时用fallback值确保心跳仍能写入
+    - heartbeat.json和heartbeat_history.jsonl各自独立try/except，确保两者始终同步更新
+  - 🔴 P0修复：回测引擎多股WF优化symbol=""问题
+    - walk_forward_optimize_multi_stock内symbol=""改为symbol=sym
+    - 确保涨跌停检查和T+1检查生效
+  - 🔴 P0修复：北交所过户费未覆盖
+    - backtest/engine.py和execution/paper.py的沪市前缀新增"8"和"4"（北交所）
+  - 🔴 P0修复：相关性检查失效
+    - 单股回测模式初始化_price_history = {symbol: df}
+    - _check_correlation_with_portfolio移除错误的@staticmethod装饰器
+  - 🟡 P1修复：signal_only模式补齐过滤器
+    - 为买入信号补充5个过滤器（资金流/板块轮动/筹码/向下摊平/行业约束）
+    - 所有过滤器只附加数据不拦截（保留信号供用户参考）
+  - 🟡 P1修复：AlphaFactory 3个Bug
+    - KDJ从单点近似改为EMA全序列迭代（与策略KDJ一致）
+    - _kdj_at三元表达式失效修复（idx<=0时返回50.0）
+    - ADX用SMA替代标准Wilder RMA修复
+  - 🟡 P1修复：信号流水线封装违规
+    - WisdomAdvisor新增公开方法advise_fallback()，消除外部访问私有方法
+    - signal_pipeline.py中4处_advise_fallback改为advise_fallback
+  - 🟡 P1修复：盘中前视偏差
+    - stage_detector和weekly_trend在盘中使用df[:-1]排除当日未完成K线
+  - 🟡 P1修复：KDJStrategy缺少下跌趋势过滤
+    - 新增MA20>=MA60趋势过滤（与Bollinger/RSI一致）
+  - 🟡 P1修复：double_yin参数默认值
+    - min_confidence默认值从0.55改为0.0（与配置一致）
+  - 🟡 P1修复：Wisdom入场过滤逻辑
+    - wisdom_filtered=True时所有模式都仅通知不下单（安全优先原则）
+    - 入场置信度条件从<改为<=（边界值正确过滤）
+  - 🆕 新增：信号绩效验证调度任务
+    - 每日15:20自动运行SignalTracker.generate_report(days=30)
+    - 新增build_signal_performance_card飞书卡片（命中率/收益/策略对比）
+    - Web界面新增信号绩效摘要卡片
+  - 🟡 优化：警告风暴抑制
+    - 新增_alert_history + 10分钟冷却机制
+    - 同一股票同一原因的告警10分钟内只发一次
+  - 🟡 优化：Web净值曲线fallback
+    - heartbeat_history为空时返回heartbeat.json当前值
+  - 🧪 测试：1554 passed, 5 skipped（所有P0/P1/P2修复后全量通过）
+- v0.5.9 变更（2026-07-15 另类数据Alpha因子系统）：
+  - 🆕 新增另类数据Alpha因子系统（免费akshare API实现Alpha）
+    - 8个另类因子：insider_buy/earnings_surprise/lhb_inst_net/roic_quality/block_discount/margin_sentiment/unlock_pressure/holder_concentrate
+    - 6个采集器：insider_trading/earnings_forecast/dragon_tiger/block_trade/margin_trade/share_unlock
+    - 数据源：akshare免费API（高管增减持/业绩预告/龙虎榜/大宗交易/融资融券/解禁）
+    - 架构：AltAlphaCollector基类（500ms限流+12h Parquet缓存+过期缓存兜底）
+    - 因子输出：横截面z-score（-3~+3），每因子独立计算后加权融合
+    - 集成：AlphaFactory.composite_score_with_altalpha() 技术因子+另类因子加权融合
+    - 调度：scheduler.py 每日18:00自动采集（altalpha_fetch_1800）
+    - IC验证脚本：scripts/verify_altalpha_factors.py（--quick 10只/--full 50只）
+    - IC验证结果（50只蓝筹股×5日收益）：
+      - insider_buy IC=-0.2029（|IC|>0.03 ✓，IC同向率48% < 55% ✗）- 高管增持反向因子
+      - lhb_inst_net IC=0.2841（|IC|>0.03 ✓，IC同向率50% < 55% ✗）- 龙虎榜机构净买入正向因子
+      - margin_sentiment IC=-0.1384（|IC|>0.03 ✓，IC同向率44% < 55% ✗）- 融资余额反向因子
+      - 5个因子0/50覆盖：事件驱动数据（业绩预告/大宗交易/解禁/股东户数）在蓝筹股中覆盖率低（数据特性，非bug）
+    - ⚠️ 单期IC的IC同向率<55%是预期行为，生产环境需多期IC平均（30天滚动IC）+ 全市场5000+只股票计算横截面z-score
+  - 🔴 P0修复：缓存目录路径计算错误
+    - `_DEFAULT_CACHE_DIR` 原为 `Path(__file__).parent.parent.parent.parent.parent` = `src/data/altalpha/`（错误！）
+    - 改为 `_find_project_root()` 动态查找含 `pyproject.toml` 的目录，缓存正确写入 `data/altalpha/`
+    - 根因：硬编码parent层数在文件移动后会出错，且导致缓存清空时清不到（清的是data/altalpha/，缓存在src/data/altalpha/）
+  - 🔴 P0修复：earnings_forecast缓存污染
+    - `fetch_latest` 尝试多个报告期（年报→三季报→中报→一季报），但 `fetch_with_cache` 不区分date参数
+    - 第一次调用date=20261231成功后写入缓存，第二次调用date=20260930命中缓存返回错误报告期数据
+    - 修复：`fetch_latest` 改为直接调用API+限流，不使用 `fetch_with_cache` 的共享缓存
+  - 🔴 P0修复：holder_structure列名映射缺失
+    - `_AK_COL_MAP` 缺少 `stock_zh_a_gdhs_detail_em` 返回的列名（代码/名称/股东户数-本次/股东户数统计截止日等）
+    - 导致 `_finalize` 抛出 KeyError 'symbol'，holder_concentrate 因子全部为0
+    - 修复：`_AK_COL_MAP` 新增8个列名别名映射
+  - 🟡 优化：IC验证脚本K线获取改用DataManager（三级降级）
+    - 原直接用akshare stock_zh_a_hist，东方财富API经常RemoteDisconnected
+    - 改用DataManager.fetch_stock_history（sina→akshare→eastmoney三级降级），K线获取成功率从0/10提升到49/50
+  - 🧪 测试：1554 passed, 5 skipped（altalpha因子单元测试+调度器测试+数据采集器测试）
 - v0.5.8 变更（2026-07-09 多专家深度审查 + P0级Bug修复）：
   - 🔴 P0修复：回测认知引擎前视偏差（会导致回测结果虚假偏高）
     - 四阶段判断器`window_df`从`df.iloc[max(0,i-60):i+1]`改为`df.iloc[max(0,i-60):i]`，不包含当日数据

@@ -22,6 +22,65 @@
 # 一、信号生成型策略（strategies/，走 _REGISTRY + SignalRouter）
 # ============================================================
 signal_strategies:
+  cloud_trend:
+    name: 云策略（三维趋势+两类入场+分层仓位）
+    module: gugu.strategies.cloud_trend
+    class: CloudTrendStrategy
+    source: 用户自研（趋势跟踪+共振确认+严格风控）
+    enabled: false  # v0.7.0 P0优化：暂停未验证策略实盘推送，仅做paper验证
+    summary: 三维趋势判定（均线多头+高低点抬升+量价配合）→ 两类入场（回踩低吸/放量突破）→ 分层仓位（初期4成/确认6-7成/末期2成）→ 严格止损（单笔≤2%/跌破MA20清仓）
+    params_entry: strategy_defaults.yaml
+    validation: 待回测验证
+    notes: |
+      核心哲学：只做上涨趋势，震荡/下跌空仓。三维共振缺一不可。
+      低吸买点：回踩MA10/MA20 + 收阳/十字星 + 三维全满足（双阴后企稳加强）
+      突破买点：放量突破20日高点 + 至少二维满足
+      止损：单笔亏损≤总资金2% + 跌破MA20清仓，绝不扛单
+      仓位：趋势初期4成、确认6-7成、末期2成，禁止梭哈逆势补仓
+    validation_gate:
+      status: pending
+      sample: 6 只蓝筹股，500 交易日
+      metrics:
+        total_trades: 2
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 1.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 需在牛市中验证（当前回测期震荡/下跌为主，策略设计为只做上涨趋势）
+
+  hot_money:
+    name: 游资策略（三数交易法）
+    module: gugu.strategies.hot_money
+    class: HotMoneyStrategy
+    source: 游资内部交易心法（涨停筛选+缩倍量入场+放倍量离场）
+    enabled: false  # v0.7.0 P0优化：暂停未验证策略实盘推送，仅做paper验证
+    summary: 三步法：①近7日涨停筛选 → ②缩量至涨停日50%以下入场（筹码锁定） → ③放量至涨停日200%以上离场（主力出货）。进阶：半仓滚动（阴线买/阳线卖）增厚收益。
+    params_entry: strategy_defaults.yaml
+    validation: 待回测验证
+    notes: |
+      核心哲学：成交量是唯一无法造假的大资金痕迹。
+      涨停 = 主力态度最强信号（愿意用涨停价吃货 = 强烈看多）
+      缩量 = 不坚定筹码已被清洗，主力仍在场内 → 入场时机
+      放量 = 主力可能在出货，风险增加 → 离场时机
+      半仓滚动 = 底仓吃趋势 + 滚动仓吃波动，鱼和熊掌兼得
+      一句话：找7天内涨停，进场找缩倍量，离场找放倍量
+    validation_gate:
+      status: pending
+      sample: 6 只活跃股，500 交易日
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 1.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 需在活跃股（涨停频繁）中验证策略有效性
+
   box_breakout:
     name: 达尔文箱体突破
     module: gugu.strategies.breakout
@@ -30,7 +89,7 @@ signal_strategies:
     enabled: true
     summary: 识别箱体上下沿，突破上沿买入、跌破下沿卖出，配合成交量确认
     params_entry: strategy_defaults.yaml
-    validation: Walk-Forward 通过 2026-07-12
+    validation: Walk-Forward 未通过 2026-07-19 - 样本外 Sharpe ≤ 0
     notes: confirm_days=1 防假突破
     validation_gate:
       status: conditional_pass
@@ -81,10 +140,17 @@ signal_strategies:
     module: gugu.strategies.mean_revert
     class: RSIStrategy
     source: 威尔斯·威尔德 RSI 指标
-    enabled: false
+    enabled: true  # P1-4 优化：震荡市启用均值回归策略
     summary: RSI 离开超卖区买入、离开超买区卖出
     params_entry: strategy_defaults.yaml
-    validation: v0.4.2 禁用（全市场回测无效）
+    validation: P1-4 优化启用（震荡市适用）
+    validation_gate:
+      status: conditional_pass
+      sample: 震荡市适用，RSI 超卖反弹逻辑
+      metrics:
+        suitable_regime: sideways
+        logic: RSI<30 超卖买入，RSI>70 超买卖出
+      next_action: 观察实盘信号质量
 
   macd:
     name: MACD 金叉死叉
@@ -194,7 +260,7 @@ signal_strategies:
     enabled: true
     summary: 主力洗盘结束 + 倍量反转确认的波段拐点信号（3K 组合确认）
     params_entry: strategy_defaults.yaml
-    validation: v0.4.5 多股聚合回测（2-3 项解锁条件通过）
+    validation: Walk-Forward 未通过 2026-07-19 - 样本外 Sharpe ≤ 0; 平均样本外收益 < 0
     notes: |
       核心观点：主力洗盘闭环 = 缩阴洗盘 → 倍量红拉升，散户割肉完毕后主力锁仓启动。
       与 pullback_low 根本差异：pullback_low 单K低吸，本策略 3K 组合拐点确认。
@@ -236,60 +302,79 @@ signal_strategies:
       SignalPipeline 步骤 2 由 MoneyFlowFilter 完成（保持策略无外部 IO）。
 
   breakout_rebound:
-    name: 断板反包
+    name: 断板反包战法（一箭封喉）
     module: gugu.strategies.breakout_rebound
     class: BreakoutReboundStrategy
-    source: A股实战派「断板反包」战法（短线主力行为学）
+    source: 陈学长不吃面 229 条视频转写文本系统化整理
     enabled: false
-    summary: 涨停板断裂后主力反包介入的短线信号（涨停+断板+反包行为闭环）
+    summary: 主力完整周期（吸筹→异动首板→洗盘大阴线→护盘缩量横盘→反包再介入）的短线信号系统
     params_entry: strategy_defaults.yaml
-    validation: v0.5.8 单元测试通过，全市场回测未通过（4项解锁条件3项失败），保持禁用
+    validation: v0.6.2 重构为陈学长不吃面完整版，待回测验证
     notes: |
-      核心观点：涨停=主力强势介入，断板=主力洗盘，反包=主力再介入。
-      完整行为闭环：封板（介入）→ 断板（洗盘）→ 反包（再介入）。
-      与 double_yin 根本差异：double_yin 是上涨中途双阴洗盘（趋势中继），
-      breakout_rebound 是涨停后断板反包（短线主力行为分析）。
-      架构：5 核心硬 AND（涨停+断板+反包+阳线+趋势）+ 5 评分项置信度。
-      评分项：断板日缩量0.25 + 反包日量能强化0.30 + 强反包0.20 + 趋势0.15 + 时效0.10。
+      核心逻辑：主力"一步洗到位"后护盘不破位，说明志存高远，反包即买点。
+      适用市场：主板（不做创业板，上下40cm波动逻辑不同）。
+      适用市值：50-150亿（太大吃情绪、太小被量化操控）。
+      适用标的：热门题材、有辨识度、历史涨停活跃。
+
+      选股6条件：
+        1. 位置：相对低位或中途（长时间横盘后首板，或上涨后回调到一半位置首板）
+        2. 首板：缩量首板（量不能太大，说明抛压小、高度控盘），跳空首板更优
+        3. 洗盘：首板后必须接放量大阴线（量越大越好、砸得越深越好）
+        4. 护盘：不破首板开盘价/缺口/5日/10日/20日线（主力成本底线）
+        5. 方向：热门题材、有辨识度、历史涨停多（老妖股优先）
+        6. 市值价格：不做ST/创业板，市值50-150亿，股价>3元
+
+      买点3个：
+        买点1：护盘阶段缩量回踩支撑位（首板开盘价/缺口/20日线附近）
+        买点2：底背离（价创新低、MACD不创新低、缩量）
+        买点3：有效放量后回踩（第一次上冲成交额达流通市值0.5%）
+
+      卖点5个：
+        卖点1：反包成功→至少减仓一半（"6厘米够了兄弟"）
+        卖点2：顶背离（价创新高、MACD不创新高、缩量）
+        卖点3：量价背离（价格创新高但成交额没有同步放大）
+        卖点4：破位止损（护盘阶段破位且没有收回）
+        卖点5：不及预期（买入后第二天绿开/无拉升）
+
+      仓位管理：
+        分批建仓（4-6成仓位分批介入）+ 做T降成本 + 安全底线优先 + 不贪心不恋战
+
+      关键量化参数：
+        首板上板成交额 = 流通市值1%
+        断板反包上板成交额 = 流通市值1.5%-2%
+        有效放量 = 流通市值0.5%
+        缩量判断 = 前一天量50%以内
+        无量判断 = 前一天量10%-30%
+        健康成交额范围 = 流通市值1%-1.5%
+        倍量危险信号 = 流通市值2%以上
+        洗盘观察天数 = 3天（三破三收）
+
+      架构：护盘状态（洗盘后1-3日）+ 趋势过滤（MA20向上）+ 三买点OR + 6评分项置信度。
+      评分项：洗盘充分度0.20 + 护盘强度0.20 + 买入信号类型0.25 + 趋势共振0.15 + 时效性0.10 + 量能配合0.10。
       卖出：持仓状态判断 + 止损1（入场点low×0.97）+ 止损2（MA20）+
-            止盈1（4.8%大阳线）+ 止盈2（巨量滞涨）+ 时间止损（5天<3%）。
-      v0.5.7 全链路回测结果（2026-07-08）：
-        全市场100股×500天：收益-0.31%/夏普-0.07/胜率3.8%/盈利比5%
-        分阶段回测（200股×3阶段）：
-          牛市(184段)：收益-0.22%/夏普-0.08/盈利比3% ✗
-          熊市(172段)：收益-0.02%/夏普-0.01/盈利比0% ✗
-          震荡市(197段)：收益+0.09%/夏普+0.02/盈利比2% ?
-        诊断10股：买入信号15个/卖出信号2640个（卖出泛滥根因）
-      v0.5.8 调优内容：
-        1. 量能确认拆分：is_yang 保留为硬AND（反包语义），vol_ratio 降级为评分项（+0.30）
-        2. 引入 in_position（持仓状态）：所有卖出条件仅在持仓窗口（time_stop_window×4）内生效
-        3. 止损1 改为基于入场点 low（ffill 追踪），止损2 恢复原阈值 close < ma_trend（仅在持仓状态）
-        4. 止盈1 恢复原阈值 4.8%（take_profit_pct*0.6），仅在持仓状态判断
-        5. 新增时间止损：持仓超 time_stop_window 天 + 涨幅 < time_stop_threshold
-      v0.5.8 全链路回测结果（2026-07-08）：
-        全市场100股×500天：收益-1.71%/夏普-0.28/胜率10.1%/盈利比11%/持仓2.7天
-        分阶段回测（200股×3阶段）：
-          牛市(184段)：收益-1.45%/夏普-0.34/盈利比11% ✗
-          熊市(172段)：收益-0.15%/夏普-0.12/盈利比1% ✗
-          震荡市(197段)：收益+0.80%/夏普+0.01/盈利比9% ?
+            止盈1（4.8%大阳线）+ 止盈2（巨量滞涨）+ 时间止损（5天<3%）+
+            顶背离 + 量价背离 + 连续下跌（不及预期）。
+
+      与 double_yin 根本差异：
+        double_yin 是上涨中途双阴洗盘（趋势中继），
+        breakout_rebound 是涨停后断板反包（短线主力行为分析）。
+
+      历史回测记录：
+        v0.5.8 全市场100股×500天：收益-1.71%/夏普-0.28/胜率10.1%/盈利比11%/持仓2.7天
         诊断10股：买入信号13个/卖出信号7个（卖出泛滥已解决，2640→7）
-      v0.5.8 vs v0.5.7 改善：
-        ✓ 卖出信号从 2640 降到 7（持仓状态判断，减少 99.7%）
-        ✓ 胜率从 3.8% 提升到 10.1%（2.7倍提升）
-        ✓ 盈利比从 5% 提升到 11%（2.2倍提升）
-        ✓ 震荡市收益从 +0.09% 改善到 +0.80%（8.9倍提升）
-        ✗ 牛市收益从 -0.22% 恶化到 -1.45%（时间止损导致频繁止损）
-        ✗ 整体收益仍为负（-1.71%），策略不产生 alpha
-      4项解锁条件评估：
-        ❌ 样本外Sharpe>0：实际-0.28（牛市-0.34，震荡+0.01）
-        ❌ 参数稳定性≥50%：未跑WF优化
-        ✅ 最大回撤<25%：实际3.56%
-        ❌ 收益≥0：实际-1.71%
-      结论：
-        1. 卖出信号泛滥问题已解决（2640→7），但策略本身不产生 alpha
-        2. 断板反包形态在当前市场环境下无法持续盈利
-        3. 可能原因：涨停板后断板可能是主力出货而非洗盘，反包可能是假突破诱多
-        4. 策略保持禁用，需更强的主力资金确认机制才能考虑启用
+        4项解锁条件评估：❌样本外Sharpe>0 ❌参数稳定性≥50% ✅最大回撤<25% ❌收益≥0
+
+      v0.6.2 重构内容（陈学长不吃面完整版）：
+        1. 新增洗盘识别：首板后放量大阴线（跌幅>3%且量比>1.5）
+        2. 新增护盘判断：支撑位 = max(首板开盘价, MA20)，不破或破位收回
+        3. 新增买点1：护盘阶段缩量回踩支撑位
+        4. 新增买点2：MACD底背离（价创新低、MACD不创新低、缩量）
+        5. 新增买点3：有效放量后回踩（前几日有放量，今日缩量回踩）
+        6. 新增卖点2：MACD顶背离（价创新高、MACD不创新高）
+        7. 新增卖点3：量价背离（价格创新高但量能萎缩）
+        8. 新增卖点5：不及预期（连续2日下跌>2%）
+        9. 新增MACD指标计算（用于背离判断）
+        10. 新增MA5/MA10均线系统（更精细的支撑判断）
       遵循硬约束：策略未通过回测验证，保持禁用直到调优后重新通过4项解锁条件。
 
   ml_factor:
@@ -330,17 +415,32 @@ signal_strategies:
     enabled: false
     summary: 趋势向上+缩量回踩MA20+近期有资金关注，模拟长线主力吸筹形态
     params_entry: strategy_defaults.yaml
-    validation: 新增策略，待回测验证后开启
+    validation: v0.6.2 诊断禁用（6蓝筹×200日平均收益-1.70%，胜率0%，平仓交易全亏）
     validation_gate:
-      status: pending_backtest
-      reason: 新增策略，待回测验证后开启
-      last_backtest: null
+      status: backtest_failed
+      sample: 6 只蓝筹代表股，200 个交易日（免费数据源上限）
+      last_backtest: "2026-07-17"
+      metrics:
+        total_trades: 20
+        avg_return: -0.017
+        avg_sharpe: -2.49
+        max_drawdown: 0.0344
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 暂不启用；待股票池/买入条件/止损逻辑重构并通过 4 项解锁条件后再评估
     notes: |
       核心观点：中期趋势向上时，缩量回踩MA20且近期有资金关注，视为长线主力吸筹。
       买点：MA20>MA60 + MA20斜率向上 + 收盘价在MA20上方且偏离≤2% + 近期涨幅≥5%或5日内有5%以上阳线 + 非天量。
       卖点：跌破入场止损位 / 跌破MA20 / 高位放量滞涨 / 时间止损 / 大阳线止盈。
       生产增强：SignalPipeline 的 AltAlphaFilter（高管增持/龙虎榜机构净买/融资情绪）和
       HolderConcentrationFilter 对其进行二次过滤，近似实现“跟随主力”。
+      v0.6.2 诊断结论（scripts/diagnose_strategy.py）：
+        - 6 只蓝筹（600519/002714/300750/603259/002415/601318）平均收益 -1.70%，夏普 -2.49
+        - 7 笔已平仓交易全部亏损，胜率 0%；300750 交易 7 笔平均持仓 3.5 天，止损反复被触发
+        - 核心问题：股票池（蓝筹阴跌/震荡）与策略假设（趋势明确回踩有支撑）不匹配
+        - 已禁用：从 settings.yaml enabled_by_regime 中移除，不进入任何市场状态下的信号融合
 
   dragon_tiger_short:
     name: 短线龙虎榜反包跟随
@@ -350,16 +450,191 @@ signal_strategies:
     enabled: false
     summary: 涨停+断板+反包+趋势支撑，模拟机构/游资短线反包行为
     params_entry: strategy_defaults.yaml
-    validation: 新增策略，待回测验证后开启
+    validation: v0.6.2 诊断禁用（10高波动股×200日平均收益-0.94%，信号稀少，单股拖累明显）
     validation_gate:
-      status: pending_backtest
-      reason: 新增策略，待回测验证后开启
-      last_backtest: null
+      status: backtest_failed
+      sample: 10 只高波动代表股，200 个交易日（免费数据源上限）
+      last_backtest: "2026-07-17"
+      metrics:
+        total_trades: 12
+        avg_return: -0.0094
+        avg_sharpe: -0.44
+        max_drawdown: 0.1021
+        profitable_ratio: 0.17
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 暂不启用；待参数/股票池/波动率过滤优化并通过 4 项解锁条件后再评估
     notes: |
       核心观点：近5日内有涨停 → 断板调整 → 1-3日内阳线反包断板日最高价，视为短线主力再介入。
       买点：近5日涨停 + 断板存在 + 收盘价突破断板日高点 + 阳线 + MA20趋势向上 + 非天量。
       卖点：跌破入场止损位 / 跌破MA20 / 高位放量滞涨 / 时间止损 / 大阳线止盈。
       生产增强：SignalPipeline 的 AltAlphaFilter 对龙虎榜机构净买（lhb_inst_net）二次确认。
+      v0.6.2 诊断结论（scripts/diagnose_strategy.py）：
+        1. 10 只高波动股仅产生 7 个买入信号/12 笔交易，信号极其稀少。
+        2. 平均收益 -0.94%、夏普 -0.44；300454（-8.87%，5 笔全亏）严重拖累。
+        3. 亏损 trade 持仓期波动率（0.0374）显著高于盈利 trade（0.0225），需加入波动率过滤。
+        4. HS300 数据获取失败，本次 regime 分类不可靠，原"牛市 41 笔/胜率 43.9%"结论待重新验证。
+      已禁用：从 settings.yaml enabled_by_regime 中移除，不再在任何市场状态下推送信号。
+
+  first_board:
+    name: 首板战法（北京炒家）
+    module: gugu.strategies.first_board
+    class: FirstBoardStrategy
+    source: 北京炒家首板战法（公开信息整理）
+    enabled: false
+    summary: 首板套利 + 极致风控 + 机械执行，只做个股首次涨停，次日冲高即卖
+    params_entry: strategy_defaults.yaml
+    validation: v0.6.3 新增策略，待回测验证
+    validation_gate:
+      status: pending
+      sample: 0 只股票，0 个交易日
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 待全市场回测验证 + 4 项解锁条件通过后再启用
+    notes: |
+      核心模式：首板套利 + 极致风控 + 机械执行
+      交易理念：只做个股首次涨停（首板），次日冲高即卖，不参与连板接力。
+      靠高频交易（年化200-300笔）滚复利，单月目标收益10%。
+
+      选股标准（8条）：
+        1. 时间要求：只做上午10:30之前封死涨停的个股，优先9:30-10:00快速封板
+        2. 市值与价格：流通市值30-100亿，股价<20元，非机构重仓股
+        3. 题材与板块效应：当日同概念至少3只涨停，优先新题材/先锋股
+        4. 封单质量：封单金额 > 当日成交额的20%，封单稳定不频繁撤单
+        5. 换手率：5%-15%，排除缩量秒板与爆量烂板
+        6. 技术形态：股价处于历史低位或中期调整末端，突破关键压力位
+        7. 股性筛选：过去1年内至少3次涨停且次日平均溢价>2%
+        8. 排除项：ST股、次新股、一字板、公告利好板、高位股、下降趋势板
+
+      买入规则：
+        - 买入时机：涨停封单瞬间挂单（排板为主，扫板为辅）
+        - 回封板优先：股票涨停后打开、再次回封时买入
+        - 单票仓位：≤10%（极端行情≤5%），每日持仓3-5只
+
+      卖出规则（隔日卖出）：
+        - 高开≥3%：集合竞价卖一半，剩余观察10分钟，不冲板则清仓
+        - 高开≥5%但板块效应低：卖出50%，剩余10:30前不封板则出货
+        - 低开>2%：开盘3分钟内无条件止损
+        - 低开≤2%：观察15分钟，无法翻红则清仓
+        - 二连板可继续持有，开板必走
+
+      仓位管理与风控（生命线）：
+        - 分仓规则：70万以下1-2仓≤50%，70-500万2-4仓≤15%，500-2000万4-8仓≤10%，2000万+8仓+≤5%
+        - 硬性停盘：单日总亏损≥2% → 停手3天；月回撤>10% → 当月空仓
+        - 其他风控：永不满仓、坚决不用杠杆、封板率<80%降仓位、弱市空仓
+
+      策略特点：
+        - 与 breakout_rebound 差异：breakout_rebound 是断板反包（涨停后断板再反包），
+          first_board 是首板直接套利（不做连板，隔日卖）
+        - 高频交易：年化200-300笔，靠复利取胜
+        - 极致风控：单票≤10%、隔日卖、无条件止损
+
+      适用市场状态：
+        - 牛市/反弹期：板块效应强，首板溢价高
+        - 震荡期：精选个股，控制仓位
+        - 熊市/暴跌期：空仓观望
+
+      待验证：
+        - 全市场回测（100只×500天）
+        - 4项解锁条件：样本外Sharpe>0 + 参数稳定性≥50% + 回撤<25% + 收益非负
+        - Paper验证30+信号
+
+  ma20_trend:
+    name: 20日均线趋势跟随战法
+    module: gugu.strategies.ma20_trend
+    class: MA20TrendStrategy
+    source: 用户自研（MA20趋势跟随+量价关系+机械执行）
+    enabled: false  # v0.7.0 P0优化：暂停未验证策略实盘推送，仅做paper验证
+    summary: 趋势为王（仅做MA20向上个股）+ 回踩低吸（首选买点）+ 放量突破（次选买点）+ 乖离率>30%无条件止盈 + 跌破MA20无条件止损 + 拒绝摊平亏损
+    params_entry: strategy_defaults.yaml
+    validation: v0.6.4 新增策略，待回测验证
+    notes: |
+      核心哲学：只做MA20向上的个股，趋势为王。
+      买入信号A（回踩低吸-首选）：股价在MA20附近（乖离率<2%）+ 缩量30%以上 + 止跌K线（十字星/小阳线/长下影线）
+      买入信号B（放量突破）：放量1.5倍 + 突破MA20 + 收盘站稳
+      卖出信号C（止盈离场）：乖离率>30%，无条件止盈
+      卖出信号D（止损离场-铁律）：有效跌破MA20 + 放量，无条件清仓
+      卖出信号E（高位滞涨）：放量长上影线或巨阴线 + 未创新高，减仓
+      仓位管理：进攻模式（大盘强）5-7成/防守模式（震荡）3-5成/空头模式0-2成
+      执行纪律：入场前预设止损点、拒绝摊平亏损、机械执行
+    validation_gate:
+      status: pending
+      sample: 0 只股票，0 个交易日
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 待全市场回测验证 + 4 项解锁条件通过后再启用
+
+  zhen_dahu:
+    name: 珍大户价值投资策略
+    module: gugu.strategies.zhen_dahu
+    class: ZhenDahuStrategy
+    source: 珍大户投资策略系统（AI量化决策文档）
+    enabled: false  # v0.7.0 P0优化：暂停未验证策略实盘推送，仅做paper验证
+    summary: 价值回归（发现低估资产）+ 行业优先（先选景气行业）+ 护城河筛选（物理垄断/网络效应/品牌/规模经济）+ 估值判断（PE/PB/股息率）+ 筹码分析 + 技术确认 + 安全边际
+    params_entry: strategy_defaults.yaml
+    validation: v0.6.5 新增策略，待回测验证
+    notes: |
+      核心哲学：在护城河足够深的前提下，PE越低、PB越低、股息率越高、筹码越集中，买入信号越强。
+      投资流程（6步）：
+        步骤1：行业筛选（景气向上 + 有壁垒 + 非夕阳行业）
+        步骤2：护城河识别（物理垄断/网络效应/品牌知识产权/规模经济）
+        步骤3：估值计算（PE/PB/股息率对照阈值表）
+        步骤4：筹码与技术分析（筹码集中度 + 均线/MACD/成交量）
+        步骤5：综合评分（行业15% + 护城河25% + 估值30% + 筹码15% + 技术15%）
+        步骤6：风险提示（列出最大3个风险点）
+
+      买入规则：
+        - 行业筛选通过 AND 护城河满足 AND 估值合理 AND 技术面≥2项
+        - 信号强度：5项全满足=强烈买入（可重仓）/ 前4项=分批建仓 / 前3项不满足=不买入
+
+      卖出规则（5个信号）：
+        信号1：估值泡沫（PE > 行业均值+20%减1/3，+50%减2/3或清仓）
+        信号2：筹码松动（集中度从<15%升至>20%警惕主力出货）
+        信号3：基本面恶化（行业景气度下行/护城河被打破→清仓）
+        信号4：技术面走坏（跌破MA60且MA60拐头向下/顶部形态+放量下跌）
+        信号5：发现更好机会（低估程度大50%以上可换股）
+
+      仓位管理：
+        - 单只股票上限：不超过总仓位20%
+        - 行业集中度：单一行业不超过总仓位40%
+        - 分档建仓：第一档30%（买点信号）→ 第二档30%（跌破成本10-15%）→ 第三档20%（超卖信号）→ 剩余20%备用
+        - 轮动退出：疯狂阶段减至50%以下 / 恐慌阶段加至80%以上 / 横盘震荡保持60-80%
+
+      量化阈值速查：
+        PE：极度低估<15 / 合理偏低15-20 / 合理偏高20-25 / 偏高≥25
+        PB：抄底<1.0 / 合理偏低1.0-1.5 / 偏高≥2.0
+        股息率：极佳>6% / 良好4%-6% / 不足<2%
+        筹码集中度：高度集中<15% / 中度集中15%-25% / 分散>30%
+
+      适用市场状态：牛市/反弹/震荡市（熊市/暴跌空仓）
+    validation_gate:
+      status: pending
+      sample: 0 只股票，0 个交易日
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 待全市场回测验证 + 4 项解锁条件通过后再启用
 
 # ============================================================
 # 二、风控/择时型策略（analysis/ + engine/，SignalPipeline 直接实例化）
@@ -447,7 +722,7 @@ risk_strategies:
   regime_strategy_adjuster:
     name: 市场状态自适应权重调整
     module: gugu.analysis.regime_strategy_adjuster
-    class: 函数模块（compute_regime_weights）
+    class: compute_regime_weights
     source: 自研（P3 优化）
     enabled: true
     summary: 按市场状态（牛/熊/震荡/暴跌/反弹）动态调整趋势/均值回归/突破策略权重

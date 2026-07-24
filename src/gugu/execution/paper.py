@@ -11,6 +11,7 @@ P3 优化：
 
 from __future__ import annotations
 
+import fcntl
 import json
 import math
 import random
@@ -182,16 +183,19 @@ class PaperBroker(BaseBroker):
 
     @staticmethod
     def _calc_transfer_fee(symbol: str, trade_value: float) -> float:
-        """P0 修复：计算过户费（沪市双向 0.001%，2022年4月起减半）。
+        """P0 修复：计算过户费（沪市+北交所双向 0.001%，2022年4月起减半）。
 
-        沪市股票（600/601/603/605/688/689 开头）双向收取过户费 0.001%。
+        沪市股票（600/601/603/605/688/689/9 开头）双向收取过户费 0.001%。
+        北交所股票（8/4 开头）同样双向收取过户费 0.001%（与沪市规则一致）。
         深市不收取。
+
+        与 BacktestEngine._calc_transfer_fee 保持一致。
         """
         if not symbol or trade_value <= 0:
             return 0.0
         code = symbol.strip().zfill(6)
-        # 沪市前缀
-        if code.startswith(("600", "601", "603", "605", "688", "689", "9")):
+        # 沪市 + 北交所前缀
+        if code.startswith(("600", "601", "603", "605", "688", "689", "9", "8", "4")):
             return round(trade_value * 0.00001, 2)  # 0.001%
         return 0.0  # 深市无过户费
 
@@ -413,6 +417,7 @@ class PaperBroker(BaseBroker):
             cash=self._cash,
             total_value=self._cash + positions_value,
             positions=dict(self._positions),
+            positions_value=positions_value,  # P0-3 修复：补全缺失字段
         )
 
     def update_price(self, symbol: str, price: float) -> None:
@@ -542,10 +547,10 @@ class PaperBroker(BaseBroker):
         self._save_state()
 
     def _save_state(self) -> None:
-        """将当前状态持久化到 JSON 文件（原子写入，避免崩溃致半截文件）。
+        """将当前状态持久化到 JSON 文件（原子写入 + 文件锁，双进程安全）。
 
-        写入流程：先写临时文件 → 原子 rename 覆盖目标文件。
-        若目标文件已存在，先备份为 .bak 保留上一版本，便于回滚。
+        写入流程：文件锁 → 先写临时文件 → 原子 rename 覆盖目标文件。
+        双进程安全：使用 fcntl.flock 互斥，引擎和 Web 进程不会同时写。
         """
         try:
             STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -564,6 +569,8 @@ class PaperBroker(BaseBroker):
                         "is_suspended": p.is_suspended,
                         "lowest_price": p.lowest_price,
                         "dividend_adjusted": p.dividend_adjusted,
+                        "trailing_stop": p.trailing_stop,
+                        "danger_signals": p.danger_signals,
                     }
                     for sym, p in self._positions.items()
                 },
@@ -578,10 +585,16 @@ class PaperBroker(BaseBroker):
                     backup.write_bytes(STATE_FILE.read_bytes())
                 except Exception as e:
                     logger.warning(f"备份状态文件失败: {e}")
-            # 原子写入：临时文件 → rename
-            tmp = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
-            tmp.write_text(content, encoding="utf-8")
-            tmp.replace(STATE_FILE)
+            # 文件锁 + 原子写入：避免引擎和Web进程并发覆盖
+            # fcntl.LOCK_EX 是排他锁，其他进程读/写会阻塞等待
+            with open(STATE_FILE, "a") as lock_f:
+                fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
+                try:
+                    tmp = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
+                    tmp.write_text(content, encoding="utf-8")
+                    tmp.replace(STATE_FILE)
+                finally:
+                    fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
         except Exception as e:
             logger.warning(f"保存模拟盘状态失败: {e}")
 
@@ -623,8 +636,14 @@ class PaperBroker(BaseBroker):
             ) from e
 
     def _load_from_path(self, path) -> None:
-        """从指定路径加载状态（内部方法）。"""
-        data = json.loads(path.read_text(encoding="utf-8"))
+        """从指定路径加载状态（内部方法，带文件锁）。"""
+        # 文件锁（共享锁）：确保读取时没有写入操作
+        with open(path) as lock_f:
+            try:
+                fcntl.flock(lock_f.fileno(), fcntl.LOCK_SH)
+                data = json.load(lock_f)
+            finally:
+                fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
         self._cash = data.get("cash", self._cash)
         # P1-f 修复：显式循环 + per-symbol try/except，避免单条失败丢全部持仓
         positions_data = data.get("positions", {})
@@ -642,6 +661,8 @@ class PaperBroker(BaseBroker):
                     is_suspended=p.get("is_suspended", False),
                     lowest_price=p.get("lowest_price", 0.0),
                     dividend_adjusted=p.get("dividend_adjusted", False),
+                    trailing_stop=p.get("trailing_stop"),
+                    danger_signals=p.get("danger_signals"),
                 )
             except (KeyError, TypeError, ValueError) as pos_err:
                 logger.warning(f"恢复持仓 {sym} 失败，跳过该持仓: {pos_err}；原始数据: {p}")

@@ -36,6 +36,7 @@ class AccountInfo:
     cash: float
     total_value: float
     positions: dict[str, Position]
+    positions_value: float = 0.0  # P0-3 修复：持仓市值（main.py:407 依赖此字段）
 
 
 class BaseBroker(ABC):
