@@ -35,9 +35,9 @@ box_breakout:
 
 rsi_reversal:
   # RSI 均值回归：超卖买入，超买卖出
-  window: 14
-  oversold: 30  # 超卖阈值
-  overbought: 70  # 超买阈值
+  window: 9
+  oversold: 20  # 超卖阈值
+  overbought: 65  # 超买阈值
 
 macd:
   short_window: 12
@@ -46,8 +46,8 @@ macd:
 
 kdj:
   window: 9
-  oversold: 20
-  overbought: 80
+  oversold: 25
+  overbought: 75
 
 dual_thrust:
   # Dual Thrust 突破
@@ -118,18 +118,18 @@ double_yin:
   # ── 均线参数 ──
   ma_trend_window: 20                 # 趋势均线（MA20）
   ma_long_window: 60                  # 长期均线（MA60）
-  ma_slope_window: 5                  # MA20 斜率计算窗口（持续向上拐头判定）
+  ma_slope_window: 5  # MA20 斜率计算窗口（持续向上拐头判定）
 
   # ── 双阴量能配合（评分项，非硬性门槛）──
-  first_yin_vol_ratio_max: 0.9       # 第一根阴量比上限（小幅缩量，评分用）
-  second_yin_vol_ratio_max: 0.6      # 第二根阴量比上限（极致缩量，评分用）
+  first_yin_vol_ratio_max: 0.9  # 第一根阴量比上限（小幅缩量，评分用）
+  second_yin_vol_ratio_max: 0.6  # 第二根阴量比上限（极致缩量，评分用）
 
   # ── 反转K线参数 ──
-  doji_body_max: 0.01                # 十字星实体阈值（body < 1%）
-  small_yang_max_gain: 0.03          # 小阳线最大涨幅 3%
+  doji_body_max: 0.01  # 十字星实体阈值（body < 1%）
+  small_yang_max_gain: 0.03  # 小阳线最大涨幅 3%
 
   # ── 倍量反转加仓（次日独立买入信号）──
-  breakout_vol_ratio_min: 2.0        # 倍量反转量比下限（2倍量红柱）
+  breakout_vol_ratio_min: 2.0  # 倍量反转量比下限（2倍量红柱）
   breakout_pct_min: 0.0              # 倍量阳线涨幅下限（收复双阴失地）
 
   # ── 置信度过滤 ──
@@ -137,9 +137,9 @@ double_yin:
 
   # ── 止损止盈 ──
   stop_loss_pct: 0.0                 # 止损百分比（0=跌破MA20即止损，盘中刺破收回可持有）
-  take_profit_pct: 0.08              # 止盈位 8%（减半仓触发阈值 × 0.6 = 4.8%）
+  take_profit_pct: 0.08  # 止盈位 8%（减半仓触发阈值 × 0.6 = 4.8%）
   max_upper_shadow_pct: 0.02        # 长上影阈值（高位滞涨判定）
-  stagnation_vol_ratio: 2.5          # 巨量滞涨量比阈值（清仓信号）
+  stagnation_vol_ratio: 2.5  # 巨量滞涨量比阈值（清仓信号）
 
 cloud_trend:
   # 云策略：三维趋势判定 + 两类入场买点 + 严格止损 + 分层仓位
@@ -147,28 +147,28 @@ cloud_trend:
   # 核心哲学：只做上涨趋势，震荡/下跌空仓。三维共振缺一不可。
 
   # ── 均线参数 ──
-  ma_short: 10                        # 短期均线（MA10，低吸回踩目标）
-  ma_trend: 20                        # 趋势均线（MA20，趋势判定+止损线）
+  ma_short: 10  # 短期均线（MA10，低吸回踩目标）
+  ma_trend: 20  # 趋势均线（MA20，趋势判定+止损线）
 
   # ── 三维趋势判定参数 ──
-  hh_ll_window: 20                    # 高低点计算窗口
-  hh_ll_compare: 5                    # 高低点抬升比较间隔（hh > hh.shift(5)）
-  vol_compare_window: 10              # 量价配合比较窗口（阳线均量 vs 阴线均量）
+  hh_ll_window: 20  # 高低点计算窗口
+  hh_ll_compare: 5  # 高低点抬升比较间隔（hh > hh.shift(5)）
+  vol_compare_window: 10  # 量价配合比较窗口（阳线均量 vs 阴线均量）
 
   # ── 入场参数 ──
-  breakout_vol_ratio: 1.5             # 突破放量倍率（volume > vol_ma * 1.5）
-  pullback_tolerance: 0.01            # 回踩容忍度（close <= MA * 1.01 即视为回踩）
-  doji_body_max: 0.01                 # 十字星实体阈值（body < 1%）
-  small_yang_max_gain: 0.03           # 小阳线最大涨幅 3%
+  breakout_vol_ratio: 1.5  # 突破放量倍率（volume > vol_ma * 1.5）
+  pullback_tolerance: 0.01  # 回踩容忍度（close <= MA * 1.01 即视为回踩）
+  doji_body_max: 0.01  # 十字星实体阈值（body < 1%）
+  small_yang_max_gain: 0.03  # 小阳线最大涨幅 3%
 
   # ── 趋势阶段参数 ──
   trend_early_days: 5                 # 趋势初期天数（三维刚满足≤5日）
 
   # ── 止损参数 ──
-  stop_loss_pct: 0.02                 # 单笔亏损上限（总资金2%）
-  max_hold_days: 30                   # 最大持仓天数
-  trailing_stop_pct: 0.05            # 移动止盈：从持仓最高点回落5%卖出
-  time_stop_days: 15                 # 时间止盈：持仓超过15天不亏就卖出
+  stop_loss_pct: 0.02  # 单笔亏损上限（总资金2%）
+  max_hold_days: 30  # 最大持仓天数
+  trailing_stop_pct: 0.05  # 移动止盈：从持仓最高点回落5%卖出
+  time_stop_days: 15  # 时间止盈：持仓超过15天不亏就卖出
 
   # ── 信号确认 ──
   confirm_days: 0                     # 不确认（趋势信号本身即触发条件）
@@ -180,14 +180,14 @@ hot_money:
   # 三步法：①近7日涨停筛选 → ②缩量至50%入场 → ③放量至200%离场
 
   # ── 涨停筛选参数 ──
-  limit_up_window: 7                  # 涨停回溯窗口（天）
-  limit_up_threshold: 0.095           # 涨停判定阈值（9.5%，覆盖主板10%/科创创业板20%/北交所30%）
+  limit_up_window: 5  # 涨停回溯窗口（天）
+  limit_up_threshold: 0.095  # 涨停判定阈值（9.5%，覆盖主板10%/科创创业板20%/北交所30%）
 
   # ── 量能参数 ──
-  shrink_ratio: 0.5                   # 缩量入场比例（量能缩至参考量的50%以下触发买入）
-  expand_ratio: 2.0                   # 放量离场比例（量能放大至参考量的200%以上触发卖出）
-  vol_ma_window: 20                   # 均量线窗口（用于量能健康度评估）
-  min_volume: 1000000                 # 最低量能阈值（过滤无量/停牌股票）
+  shrink_ratio: 0.3  # 缩量入场比例（量能缩至参考量的50%以下触发买入）
+  expand_ratio: 1.5  # 放量离场比例（量能放大至参考量的200%以上触发卖出）
+  vol_ma_window: 20  # 均量线窗口（用于量能健康度评估）
+  min_volume: 1000000  # 最低量能阈值（过滤无量/停牌股票）
 
   # ── 半仓滚动参数 ──
   rolling_enabled: true               # 是否启用半仓滚动（阴线买/阳线卖）
@@ -195,14 +195,14 @@ hot_money:
   rolling_yang_sell_ratio: 0.5        # 滚动卖出仓位比例（阳线日减仓50%仓位）
 
   # ── 风控参数 ──
-  max_hold_days: 20                   # 最大持仓天数（涨停信号过期后自动离场）
-  max_track_days: 30                 # 最大跟踪天数（参考量能向前传播天数）
-  hard_stop_loss_pct: 0.05          # 硬止损：持仓亏损超过5%强制卖出
-  trailing_stop_pct: 0.07           # 移动止盈：从持仓最高点回落7%卖出
+  max_hold_days: 20  # 最大持仓天数（涨停信号过期后自动离场）
+  max_track_days: 15  # 最大跟踪天数（参考量能向前传播天数）
+  hard_stop_loss_pct: 0.03  # 硬止损：持仓亏损超过5%强制卖出
+  trailing_stop_pct: 0.05  # 移动止盈：从持仓最高点回落7%卖出
 
   # ── 双通道参数 ──
   big_yang_enabled: true            # 启用大阳线通道（涨幅≥5%视为主力信号）
-  big_yang_threshold: 0.05          # 大阳线判定阈值（5%）
+  big_yang_threshold: 0.05  # 大阳线判定阈值（5%）
 
 capital_flow_alert:
   # 资金流异动监控策略：4卖出特征识别主力出逃 + 3买入特征捕捉洗盘结束
@@ -224,34 +224,34 @@ breakout_rebound:
   # 来源：陈学长不吃面交易策略
 
   # ── 均线参数 ──
-  ma_trend_window: 20                 # 默认不变
-  ma_long_window: 60                  # 默认不变
-  ma_slope_window: 5                  # 默认不变
+  ma_trend_window: 20  # 默认不变
+  ma_long_window: 60  # 默认不变
+  ma_slope_window: 5  # 默认不变
 
   # ── 涨停板识别 ──
-  limit_up_pct: 0.07                  # v0.6.4: 从8%放宽到7%（覆盖更多涨停）
-  limit_up_lookback: 10               # v0.6.4: 从7放宽到10日
+  limit_up_pct: 0.07  # v0.6.4: 从8%放宽到7%（覆盖更多涨停）
+  limit_up_lookback: 10  # v0.6.4: 从7放宽到10日
 
   # ── 洗盘识别 ──
-  wash_day_max: 7                     # v0.6.4: 从5放宽到7日
-  breakout_vol_ratio: 1.0             # v0.6.4: 从1.2放宽到1.0（只要放量就算）
+  wash_day_max: 7  # v0.6.4: 从5放宽到7日
+  breakout_vol_ratio: 1.0  # v0.6.4: 从1.2放宽到1.0（只要放量就算）
 
   # ── 量能参数 ──
-  shrink_vol_ratio: 0.85              # v0.6.4: 从0.7放宽到0.85（缩量85%以内）
-  ground_vol_ratio: 0.5               # v0.6.4: 从0.4放宽到0.5
+  shrink_vol_ratio: 0.85  # v0.6.4: 从0.7放宽到0.85（缩量85%以内）
+  ground_vol_ratio: 0.5  # v0.6.4: 从0.4放宽到0.5
 
   # ── 置信度过滤 ──
-  min_confidence: 0.0                 # 默认不变
+  min_confidence: 0.0  # 默认不变
 
   # ── 止损止盈 ──
-  stop_loss_pct: 0.08                 # v0.6.4: 从5%放宽到8%
-  take_profit_pct: 0.05               # v0.6.4: 从6%放宽到5%
-  max_upper_shadow_pct: 0.04          # v0.6.4: 从3%放宽到4%
-  stagnation_vol_ratio: 1.8           # v0.6.4: 从2.0放宽到1.8
+  stop_loss_pct: 0.08  # v0.6.4: 从5%放宽到8%
+  take_profit_pct: 0.05  # v0.6.4: 从6%放宽到5%
+  max_upper_shadow_pct: 0.04  # v0.6.4: 从3%放宽到4%
+  stagnation_vol_ratio: 1.8  # v0.6.4: 从2.0放宽到1.8
 
   # ── 时间止损 ──
-  time_stop_window: 10                # v0.6.4: 从5放宽到10天
-  time_stop_threshold: 0.01           # v0.6.4: 从3%放宽到1%
+  time_stop_window: 10  # v0.6.4: 从5放宽到10天
+  time_stop_threshold: 0.01  # v0.6.4: 从3%放宽到1%
 
   # ── 信号确认 ──
   confirm_days: 0                    # 不确认（反包突破本身即触发条件）
@@ -276,7 +276,7 @@ north_force_long:
   max_upper_shadow_pct: 0.03
   time_stop_window: 20
   time_stop_threshold: 0.03
-  min_confidence: 0.50
+  min_confidence: 0.5
 
 dragon_tiger_short:
   # 短线龙虎榜反包跟随策略：涨停 + 断板 + 反包 + 趋势支撑
@@ -294,7 +294,7 @@ dragon_tiger_short:
   time_stop_threshold: 0.05
   max_vol_ratio: 3.0
   vol_ma_window: 20
-  min_confidence: 0.50
+  min_confidence: 0.5
 
 first_board:
   # 首板战法（北京炒家）：首板套利 + 极致风控 + 机械执行
@@ -405,3 +405,33 @@ zhen_dahu:
   min_daily_amount: 3e8               # 最低日成交额（3亿，价值股相对宽松）
   max_pe_filter: 25.0                  # PE过滤上限
   max_pb_filter: 2.0                   # PB过滤上限
+
+industry_capital_momentum:
+  # 行业资金强度+动量确认策略（个股适配版 v1.2）
+  # 来源：行业资金强度+动量确认策略框架（四层架构）
+  # v1.2 优化：放宽退出条件，减少频繁止损
+
+  # ── 均线参数 ──
+  ma_short: 5                         # 短期均线（MA5，趋势判断）
+  ma_long: 20                         # 长期均线（MA20，中期趋势）
+
+  # ── 动量确认参数（核心条件）──
+  volume_ratio: 1.2                   # 量能确认阈值（当日量 > 20日均量×1.2）
+  ma5_slope_threshold: -0.02          # MA5斜率阈值
+
+  # ── RSI参数 ──
+  rsi_window: 14                      # RSI计算窗口
+  rsi_low: 35                         # RSI下限
+  rsi_high: 70                        # RSI上限
+
+  # ── 入场评分参数 ──
+  min_entry_score: 0.40               # 最低入场评分
+  return_hot_threshold: 0.25          # 20日涨幅过热阈值
+  crowding_vol_ratio: 2.5             # 拥挤度量比上限（排除异常放量）
+
+  # ── 退出风控参数（v1.2 放宽）──
+  exit_trend_ma: 10                   # 趋势破坏均线（跌破MA10卖出）
+  stop_loss_pct: 0.12                 # 硬止损：从高点回撤12%卖出（从8%放宽，减少震荡市频繁止损）
+  take_profit_pct: 0.25               # 止盈：20日涨幅达25%卖出（从20%放宽）
+  overheat_return_pct: 0.35           # 过热止盈：20日涨幅突破35%卖出（从30%放宽）
+  overheat_rsi: 78                    # 过热RSI阈值（RSI>78卖出，从75放宽）

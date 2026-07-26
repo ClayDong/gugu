@@ -39,7 +39,7 @@
 
 ### 4.1 策略层
 
-**10 个内置策略**：
+**12 个内置策略**：
 
 | 类型 | 策略 | 说明 |
 |------|------|------|
@@ -52,9 +52,14 @@
 | 均值回归 | Bollinger | 布林带突破 |
 | 突破 | DualThrust | 双突破（N 日高低点） |
 | 突破 | BoxBreakout | 达尔文箱体理论突破 |
+| 突破 | PullbackLow | 缩量回踩 MA20 低吸（震荡市） |
+| 突破 | DoubleYin | 双阴钱袋子（主力洗盘结束+倍量反转） |
 | 资金流 | MoneyFlowFollow | 创新高回踩+资金流跟随 |
+| 资金流 | IndustryCapitalMomentum | 行业资金强度+动量确认（v1.2禁用：回测表现最差-15.38%，待重新设计） |
+| 主力跟随 | NorthForceLong | 趋势向上+缩量回踩 MA20，模拟北向/公募长线吸筹 |
+| 主力跟随 | DragonTigerShort | 涨停断板反包，模拟机构/游资短线行为 |
 
-**当前启用策略**：`box_breakout`（箱体突破，含置信度叠加和 max_hold_days 强制卖出）+ `double_yin`（双阴钱袋子），按市场状态分流启用。
+**当前启用策略**：`box_breakout`（箱体突破）+ `double_yin`（双阴钱袋子）作为核心；`dragon_tiger_short`（短线龙虎榜反包）在 `bull/rally` 市场状态下观察启用；`north_force_long`（长线主力吸筹）回测未通过，保持禁用并由 Walk-Forward 自动调参持续优化；`industry_capital_momentum`（行业资金强度+动量确认）v1.2回测表现最差（-15.38%），禁用待重新设计。所有启用策略均按市场状态分流启用。
 **LLM 自然语言策略生成**：描述策略逻辑 → LLM 生成 Python 代码 → AST 校验 → 自动注册。
 
 **策略注册中心**（v0.3.5+）：所有策略（信号生成/风控择时/止盈止损/Skill）统一登记到 `config/strategy_manifest.yaml`，支持：
@@ -229,6 +234,23 @@ feishu:
 
 **调度**：08:30（交易日），对自选股池运行分析，推送飞书报告卡片。
 
+## 当前运行契约（2026-07-21）
+
+- `signal_only` 与 `track_live` 都是监控模式：只生成信号、记录历史并发送通知，不自动提交订单。`track_live` 额外读取用户真实持仓，用于跟踪和止损检查，但不会由系统自动交易。
+- 所有买入候选统一经过十大视角门禁。门禁未通过的候选只能作为观察/研究结果展示，不能进入买入路径。
+- 数据质量采用 `fresh`、`stale`、`partial`、`invalid`、`unavailable` 状态；只有 `fresh` 允许进入买入决策，其余状态只能用于研究或通知。
+- 订单执行成功只表示订单执行结果为成功，不等于交易盈利。未完成平仓的记录不能作为已实现盈利样本。
+
+### 绩效指标口径
+
+| 指标 | 含义 | 使用边界 |
+|------|------|----------|
+| `execution_success_rate` | 订单执行成功率 | 只衡量订单执行，不代表盈利 |
+| `forward_5d_signal_hit_rate` | 信号发出后五个交易日的方向命中率 | 用于前向信号验证，不等于平仓盈利率 |
+| `closed_trade_win_rate` | 已完整平仓交易中盈利交易的占比 | 仅纳入有完整平仓结果的交易 |
+| `realized_pnl` | 已完成交易的实际已实现盈亏 | 只统计已实现结果 |
+| `estimated_signal_pnl` | 按假设仓位估算的信号收益 | 估算值，不作为实际账户盈亏 |
+
 ## 五、使用方式
 
 ### 5.1 环境准备
@@ -335,6 +357,7 @@ uv run python scripts/run_live.py
 | 29 | 2026-07-02 | **策略注册中心（v0.3.5）**：新建 `config/strategy_manifest.yaml` 全量策略清单（26 个策略统一登记：8 信号生成+7 风控择时+1 止盈止损+9 Skill+1 动态生成器）、`strategies/manifest.py` 加载器（查询/统计/看板生成）、`scripts/verify_strategies.py` 验证脚本（list/check/dashboard/source/params 五个子命令）、飞书策略全景看板推送、测试 818 passed |
 | 30 | 2026-07-02 | **产品文档完善（v0.3.6）**：新增第十一章(宏观数据未融入决策之分析)、第十二章(回测与策略验证必要性)、
     补充宏观模块当前定位与融合路线图、明确策略回测的必要性与步骤、能力边界补充 2 项已知限制、迭代记录更新 |
+| 31 | 2026-07-17 | **主力资金跟随策略 v0.6.2**：新增 `NorthForceLongStrategy`（长线主力吸筹跟随）和 `DragonTigerShortStrategy`（短线龙虎榜反包跟随），均接入状态机精确持仓与连续 2 日跌破 MA20 止损；`dragon_tiger_short` 在 `bull/rally` 观察启用，`north_force_long` 回测未通过保持禁用；`scripts/optimize_params.py` 注册两只策略的参数网格、配置键和约束函数，`weekly_optimize_0300` 自动 Walk-Forward 调参；新增单元测试 20+，全量测试 1620 passed；同步更新 `PRODUCT.md` / `TECH.md` / `strategy_manifest.yaml` |
 
 ## 九、项目关系与合并计划
 

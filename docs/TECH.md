@@ -310,7 +310,28 @@ STOCK_FLOW_VALIDATOR:
 - `majority`：多数策略同方向才输出
 - `unanimous`：全部策略同方向才输出
 
-### 3.8 十大视角分析引擎（v0.5.0）
+### 3.8 信号可信度与结果指标契约（当前实现）
+
+信号处理遵循“先判断是否可买，再区分是否执行”的原则：
+
+1. `SignalPipeline` 为信号补充 `data_quality`，并对买入候选运行十大视角分析和统一入口门禁。
+2. 只有十大视角门禁通过且 `data_quality == fresh` 的买入候选，才具备进入买入路径的资格；`stale`、`partial`、`invalid`、`unavailable` 只能保留为研究/通知结果。
+3. `signal_only` 与 `track_live` 在引擎处理阶段只记录信号并通知，不提交订单。`track_live` 可读取真实持仓并执行相关检查，但不自动交易。
+4. `paper`/`live` 才进入风控和执行分支；订单成功仅记录执行结果，不能直接推导盈利。
+
+信号历史和绩效汇总必须区分以下指标：
+
+| 字段 | 定义 | 数据来源/边界 |
+|------|------|--------------|
+| `execution_success_rate` | 订单执行成功率 | `execution_status`/订单结果；不作为盈利标签 |
+| `forward_5d_signal_hit_rate` | 信号发出后五个交易日方向命中率 | 前向收益 `return_5d`；不要求订单成交 |
+| `closed_trade_win_rate` | 完整平仓交易的盈利率 | 仅 `outcome_status == closed` 且有 `realized_pnl` |
+| `realized_pnl` | 实际已实现盈亏 | 已平仓交易结果 |
+| `estimated_signal_pnl` | 基于假设仓位的估算信号收益 | 研究/验证指标，不等同账户实际盈亏 |
+
+因此，订单执行成功、前向信号命中和已实现盈利是三类独立事实，禁止互相替代或混用。
+
+### 3.9 十大视角分析引擎（v0.5.0）
 
 `PerspectiveEngine`（[analysis/perspectives/engine.py](src/gugu/analysis/perspectives/engine.py)）：
 
@@ -455,6 +476,75 @@ uv run python -m gugu.screener.auto_tune
 - `data/screener_params.json` 中的参数变化
 - 飞书选股报告中的市场状态、候选数量、每只股票的通过条件
 
+### 3.10 行业资金强度+动量确认策略（v1.2 已禁用）
+
+`IndustryCapitalMomentumStrategy`（[strategies/industry_capital_momentum.py](src/gugu/strategies/industry_capital_momentum.py)）实现四层架构，将行业资金流向作为领先指标，结合动量确认过滤假突破。
+
+> ⚠️ **v0.7.1 禁用**：回测表现最差（23个策略中排名末位，总收益-15.38%，夏普-0.92），禁用待重新设计。
+
+**禁用原因分析**：
+
+| 版本 | 总收益 | 夏普 | 问题 |
+|------|--------|------|------|
+| v1.0（行业级别） | 0笔交易 | - | 策略设计为行业级别，回测框架传入个股数据 |
+| v1.1（个股适配） | -18.04% | - | 重构为个股时间序列，但逻辑失效 |
+| v1.2（放宽退出） | -15.38% | -0.92 | 止损8%→12%，止盈20%→25%，仍是所有策略中最差的 |
+
+**根因**：策略核心逻辑基于行业横截面排名（需多行业数据对比），改为个股时间序列后逻辑失效。
+
+**四层架构**（设计思路，供后续重构参考）：
+
+```
+资金监控层 → 动量确认层 → 入场触发层 → 退出风控层
+```
+
+**1. 资金监控层**（识别资金聚集）：
+
+| 指标 | 计算方式 | 权重/阈值 |
+|------|----------|-----------|
+| 资金强度排名 | 近5日净流入在行业中的滚动分位 | 排名前10%得分0.25 |
+| 成交额占比变化 | 当前成交额占全市场比 - 20日均值 | 提升>3%得分0.15 |
+| 连续流入天数 | 主力资金连续净流入交易日 | 3-5日更可靠 |
+
+**2. 动量确认层**（过滤假流入）：
+
+| 确认条件 | 标准 | 作用 |
+|----------|------|------|
+| MA5/MA20金叉 | MA5上穿MA20或已金叉状态 | 确认中期趋势转多 |
+| 收盘价>MA5 | 站上5日均线 | 排除一日游行情 |
+| 量能放大 | 当日成交量 > 20日均量 × 1.2 | 真实买盘支撑 |
+| RSI合理区间 | RSI(14) 在 35-70 之间 | 避免超买追入 |
+| MA5斜率向上 | MA5斜率 > -0.02 | 短期趋势健康 |
+
+**3. 入场触发层**（7项评分体系，≥0.40分入场）：
+
+```python
+entry_score = (
+    score_rank * 0.25 +        # 资金排名
+    score_turnover * 0.15 +    # 成交额变化
+    score_price_trend * 0.15 + # 价格趋势
+    score_volume * 0.15 +      # 量能配合
+    score_resonance * 0.10 +   # 个股共振
+    score_rsi_zone * 0.10 +    # RSI区间
+    score_not_hot * 0.10       # 非过热状态
+)
+```
+
+**4. 退出风控层**（v1.2 放宽后）：
+
+| 退出类型 | 触发条件 | 逻辑 |
+|----------|----------|------|
+| 趋势破坏 | 收盘价跌破MA10 | 短期趋势转弱 |
+| 资金退潮 | 量能萎缩或价格连跌 | 资金开始撤离 |
+| 过热止盈 | 20日涨幅>35%或RSI>78 | 情绪过热，获利了结 |
+| 硬止损 | 从高点回撤12% | 单笔风险控制 |
+| 止盈 | 20日涨幅>25% | 获利了结 |
+
+**后续优化方向**：
+1. 重新设计为纯行业级别策略（需单独的数据管道，获取全行业横截面数据）
+2. 或完全重构入场逻辑，增加更多有效因子
+3. 待市场环境变化后再验证
+
 ## 四、配置体系
 
 ### 4.1 配置分层
@@ -586,26 +676,50 @@ class MyStrategy(Strategy):
 
 ### 6.3.1 主力资金跟随策略
 
+v0.6.2 新增两只主力跟随策略，均继承 `Strategy` 基类、在 `strategies/registry.py` 注册、参数入口为 `config/strategy_defaults.yaml`，并通过 `config/strategy_manifest.yaml` 记录验证状态。生产环境中由 `SignalPipeline` 的过滤器进行二次确认，track_live 模式下只推送信号不下单。
+
 #### `north_force_long` — 长线主力吸筹跟随
 
 - **来源**：实战派「主力资金跟随」战法，模拟北向/公募等长线主力在趋势股中的吸筹行为。
 - **核心逻辑**：
-  - 趋势向上：MA20 > MA60 且 MA20 斜率为正。
-  - 缩量回踩：收盘价位于 MA20 上方，且与 MA20 的偏离 ≤ 2%，避免追涨。
-  - 资金关注：近 20 日涨幅 ≥ 5%，或近 5 日内出现过 ≥ 5% 的放量阳线。
-  - 量能健康：当日成交量不高于 60 日均量的 1.5 倍，排除历史天量。
-- **卖点**：跌破入场止损位（入场低点 × 0.93）/ 跌破 MA20 / 高位放量滞涨 / 时间止损 / 大阳线 12% 止盈。
-- **生产增强**：SignalPipeline 通过 `AltAlphaFilter`（高管增持、龙虎榜机构净买、融资情绪）和 `HolderConcentrationFilter` 对其进行二次过滤，近似实现“跟随主力”。
+  - 趋势向上：`ma_trend` > `ma_long` 且短期均线斜率为正。
+  - 缩量回踩：收盘价位于 `ma_trend` 上方，且与均线偏离 ≤ `pullback_to_ma_pct`（默认 5%），避免追涨。
+  - 资金关注：`recent_momentum_window` 内涨幅 ≥ `recent_momentum_pct`，或 `recent_spike_window` 内出现 ≥ `recent_spike_pct` 的放量阳线。
+  - 量能健康：当日成交量不高于 `vol_ma_window` 日均量的 `max_vol_ratio` 倍，排除历史天量。
+- **卖点（状态机精确持仓）**：
+  - 跌破入场低点 × (1 - `stop_loss_pct`)。
+  - 连续 2 日收盘跌破 `ma_trend`，过滤单日噪音。
+  - `ma_trend` 下穿 `ma_long` 趋势反转。
+  - 高位巨量滞涨（`stagnation_vol_ratio` + 长上影 `max_upper_shadow_pct`）。
+  - 时间止损：持仓超过 `time_stop_window` 日且收益 < `time_stop_threshold`。
+  - 大阳线止盈：`daily_return` ≥ `take_profit_pct` × 0.6。
+- **生产增强**：`AltAlphaFilter`（高管增持、龙虎榜机构净买、融资情绪）+ `HolderConcentrationFilter` 二次过滤，近似实现“跟随主力”。
+- **当前状态**：v0.6.2 58 股 × 300 天回测未通过（收益 +0.08%，夏普 -1.23），`enabled: false`，作为 Walk-Forward 自动调参靶策略持续优化。
 
 #### `dragon_tiger_short` — 短线龙虎榜反包跟随
 
 - **来源**：A股实战派「涨停断板反包」战法，模拟机构/游资短线主力行为。
 - **核心逻辑**：
-  - 近 5 日内出现涨幅 ≥ 9.5% 的涨停板。
-  - 涨停次日未继续涨停（断板），并在 1-3 个交易日内被阳线反包。
-  - 反包日收盘价突破断板日最高价，且为阳线、MA20 趋势向上、成交量不过度放大。
-- **卖点**：跌破入场止损位（入场低点 × 0.95）/ 跌破 MA20 / 高位放量滞涨 / 时间止损 / 大阳线 6% 止盈。
-- **生产增强**：SignalPipeline 通过 `AltAlphaFilter` 对龙虎榜机构净买因子（`lhb_inst_net`）进行二次确认，剔除机构净卖出的假反包。
+  - 近 `limit_up_lookback` 日内出现涨幅 ≥ `limit_up_pct`（默认 7%）的涨停板。
+  - 涨停次日未继续涨停（断板），并在 `max_break_days` 个交易日内被阳线反包。
+  - 反包日收盘价突破断板日最高价，且为阳线、`ma_trend` 斜率为正、成交量 ≤ `max_vol_ratio` 倍均量。
+- **评分项**：断板日缩量 0.25 + 反包量能 0.20 + 强反包（突破涨停日高点）0.20 + 趋势向上 0.15 + 时效 0.10 + 阳线 0.10，总分 ≥ `min_confidence`（默认 0.50）才触发信号。
+- **卖点（状态机精确持仓）**：跌破入场低点止损、连续 2 日跌破 `ma_trend`、高位巨量滞涨、时间止损、大阳线止盈。
+- **生产增强**：`AltAlphaFilter` 对龙虎榜机构净买因子（`lhb_inst_net`）二次确认，剔除机构净卖出的假反包。
+- **当前状态**：v0.6.2 58 股 × 300 天回测观察通过（牛市胜率 43.9%，单笔平均 +6646 元），`enabled: true` 但仅在 `settings.yaml` 的 `bull/rally`  regime 下启用，track_live 模式收集 30+ 实盘信号后再评估扩大启用。
+
+#### 自动调参与 Walk-Forward 集成
+
+- **参数网格**：`scripts/optimize_params.py` 中已为两只策略注册完整参数网格（`STRATEGY_PARAM_GRIDS`）、配置键（`STRATEGY_CONFIG_KEYS`）和语义约束（`STRATEGY_PARAM_CONSTRAINTS`）。
+- **解锁条件**：优化结果写回 `strategy_defaults.yaml` 必须通过 4 项门控：样本外 Sharpe > 0、参数稳定性 ≥ 50%、最大回撤 < 25%、平均收益 ≥ 0。
+- **调度任务**：`engine/scheduler.py` 的 `weekly_optimize_0300`（周日 03:00）对 6 只行业代表股运行 `scripts/optimize_params.py --multi-stock 600519,002714,300750,603259,002415,601318 --days 500 --splits 3 --write`，失败仅记录日志，不污染生产参数。
+- **生产启用流程**：自动调参通过解锁条件 → 更新 `strategy_defaults.yaml` → 手动将 `strategy_manifest.yaml` 中 `enabled` 改为 `true` 并补充验证状态 → 由配置一致性测试 `tests/unit/test_config_consistency.py` 确保 manifest / settings / registry 三方一致。
+
+#### 相关测试
+
+- `tests/unit/test_north_force_long.py`：参数校验、信号生成、卖出优先级、数据不足边界。
+- `tests/unit/test_dragon_tiger_short.py`：参数校验、涨停/断板/反包形态、卖出信号、状态机持仓。
+- `tests/unit/test_config_consistency.py`：manifest / settings / registry 一致性校验。
 
 ### 6.4 添加新的过滤规则
 

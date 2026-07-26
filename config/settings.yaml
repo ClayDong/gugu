@@ -61,27 +61,95 @@ strategy:
   # 现改为：仅保留已验证策略，其他策略仅做 paper 测试，不推送到飞书
   # P1-3/P1-4 优化：扩大信号来源，解决产量极低问题
   enabled_by_regime:
+    # v0.6.5: 全量策略启用，按市场状态分配
     # 牛市（3/3条件满足）：追势策略为主
     bull:
+      - turtle
+      - dual_ma
+      - macd
+      - kdj
+      - bollinger
       - box_breakout
+      - dual_thrust
+      - money_flow_follow
+      - chen_jiangting
+      - cloud_trend
+      - ma20_trend
       - double_yin
+      - breakout_rebound
+      - hot_money
+      - north_force_long
+      - dragon_tiger_short
+      - leopard_three_factors
+      - capital_flow_alert
+      - first_board
+      - pullback_low
+      - rsi_reversal
+      - ml_factor
+      - zhen_dahu
     # 反弹（2/3条件满足）：追势+均值回归混合
     rally:
+      - turtle
+      - dual_ma
+      - macd
+      - kdj
+      - bollinger
       - box_breakout
+      - dual_thrust
+      - money_flow_follow
+      - chen_jiangting
+      - cloud_trend
+      - ma20_trend
       - double_yin
+      - breakout_rebound
+      - hot_money
+      - north_force_long
+      - dragon_tiger_short
+      - leopard_three_factors
+      - capital_flow_alert
+      - first_board
+      - pullback_low
       - rsi_reversal
+      - ml_factor
+      - zhen_dahu
     # 震荡（1/3条件满足）：均值回归为主（RSI 超卖反弹）
     sideways:
-      - double_yin
+      - bollinger
       - rsi_reversal
-    # 熊市/暴跌：空仓观察，不启用任何买入策略
+      - double_yin
+      - breakout_rebound
+      - pullback_low
+      - ml_factor
+      - zhen_dahu
+    # 熊市/暴跌：空仓观察，不启用任何买入策略（保留观察）
     bear: []
     crash: []
   # 向后兼容：原 enabled 列表保留（当 enabled_by_regime 为空时使用）
+  # v0.6.5: 全量策略
   enabled:
+    - turtle
+    - dual_ma
+    - macd
+    - kdj
+    - bollinger
     - box_breakout
+    - dual_thrust
+    - money_flow_follow
+    - chen_jiangting
+    - cloud_trend
+    - ma20_trend
     - double_yin
+    - breakout_rebound
+    - hot_money
+    - north_force_long
+    - dragon_tiger_short
+    - leopard_three_factors
+    - capital_flow_alert
+    - first_board
+    - pullback_low
     - rsi_reversal
+    - ml_factor
+    - zhen_dahu
   # 信号融合规则：unanimous（全票通过）/ majority（多数）/ any（任一）/ weighted（策略池加权）
   # v0.4.1：恢复 weighted（多策略共识），any 模式在 A 股高噪声下产生大量假信号
   signal_fusion: weighted
