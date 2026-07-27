@@ -99,6 +99,7 @@ gugu/
 │   │   ├── stock_ranker.py     # 个股综合评分
 │   │   ├── sector_rotation.py  # 板块轮动
 │   │   ├── param_optimizer.py  # 参数优化
+│   │   ├── heuristic_optimizer.py # 启发式参数优化器（GA/PSO）
 │   │   ├── execution_optimizer.py # 执行优化
 │   │   ├── stage_detector.py   # P0 四阶段判断器（牛皮/升势/疯狂/最后）
 │   │   ├── trailing_stop.py    # P0 浪谷递进移动止损引擎
@@ -708,12 +709,19 @@ v0.6.2 新增两只主力跟随策略，均继承 `Strategy` 基类、在 `strat
 - **生产增强**：`AltAlphaFilter` 对龙虎榜机构净买因子（`lhb_inst_net`）二次确认，剔除机构净卖出的假反包。
 - **当前状态**：v0.6.2 58 股 × 300 天回测观察通过（牛市胜率 43.9%，单笔平均 +6646 元），`enabled: true` 但仅在 `settings.yaml` 的 `bull/rally`  regime 下启用，track_live 模式收集 30+ 实盘信号后再评估扩大启用。
 
-#### 自动调参与 Walk-Forward 集成
+#### 自动调参与启发式优化集成（v0.7.3）
 
 - **参数网格**：`scripts/optimize_params.py` 中已为两只策略注册完整参数网格（`STRATEGY_PARAM_GRIDS`）、配置键（`STRATEGY_CONFIG_KEYS`）和语义约束（`STRATEGY_PARAM_CONSTRAINTS`）。
 - **解锁条件**：优化结果写回 `strategy_defaults.yaml` 必须通过 4 项门控：样本外 Sharpe > 0、参数稳定性 ≥ 50%、最大回撤 < 25%、平均收益 ≥ 0。
-- **调度任务**：`engine/scheduler.py` 的 `weekly_optimize_0300`（周日 03:00）对 6 只行业代表股运行 `scripts/optimize_params.py --multi-stock 600519,002714,300750,603259,002415,601318 --days 500 --splits 3 --write`，失败仅记录日志，不污染生产参数。
-- **生产启用流程**：自动调参通过解锁条件 → 更新 `strategy_defaults.yaml` → 手动将 `strategy_manifest.yaml` 中 `enabled` 改为 `true` 并补充验证状态 → 由配置一致性测试 `tests/unit/test_config_consistency.py` 确保 manifest / settings / registry 三方一致。
+- **Walk-Forward 调度**：`engine/scheduler.py` 的 `weekly_optimize_0300`（周日 03:00）对 6 只行业代表股运行 `scripts/optimize_params.py --multi-stock 600519,002714,300750,603259,002415,601318 --days 500 --splits 3 --write`，失败仅记录日志，不污染生产参数。
+- **启发式优化（v0.7.3 新增）**：
+  - `analysis/heuristic_optimizer.py` 实现 GA（遗传算法）和 PSO（粒子群优化）两种启发式算法
+  - **GAOptimizer**：锦标赛选择（tournament size=3）+ 单点交叉（crossover rate=0.7）+ 高斯变异（mutation rate=0.1，noise σ=10% range）+ 精英保留（elite ratio=0.1）
+  - **PSOOptimizer**：惯性权重 w=0.7 + 个体最优引导 c1=1.5 + 全局最优引导 c2=1.5，速度限制在参数范围 20% 以内
+  - **适应度函数**：多股聚合回测的夏普 40% + Calmar 30% + 胜率 20% + 收益 10% 加权评分
+  - **参数约束**：支持自定义约束函数（如 short_window < long_window），约束违反返回 -inf
+  - **CLI 入口**：`scripts/optimize_params.py` 新增 `run_heuristic_optimization()` + `--algorithm ga/pso` / `--population` / `--generations` / `--seed` 参数
+  - **测试**：22 个单元测试覆盖 ParamSpace/GA/PSO/StrategyParamOptimizer/集成场景，行覆盖率 93%
 
 #### 相关测试
 
@@ -883,6 +891,19 @@ tests/
 | 53 | P1-10: SinaCollector 双源失败不抛异常 → 主源无法触发降级 | `data/collectors/fallback.py` |
 | 54 | P1-11: money_flow_follow 重设计混合模式（hard filter + soft score，震荡市 0 误触发） | `strategies/money_flow_follow.py` |
 | 55 | P1-8: leopard_three_factors 补入 manifest + 配置一致性测试（防 settings/manifest 分裂） | `config/strategy_manifest.yaml`, `tests/unit/test_manifest.py` |
+
+### 八之十、v0.7.3 新增（启发式参数优化系统）
+
+| # | 功能 | 涉及文件 |
+|---|------|----------|
+| 81 | 遗传算法优化器（锦标赛选择+单点交叉+高斯变异+精英保留） | `analysis/heuristic_optimizer.py` |
+| 82 | 粒子群优化器（惯性权重+个体/全局最优引导+速度限制） | `analysis/heuristic_optimizer.py` |
+| 83 | StrategyParamOptimizer 封装（参数网格→ParamSpace→适应度函数） | `analysis/heuristic_optimizer.py` |
+| 84 | 多股聚合适应度函数（夏普40%+Calmar30%+胜率20%+收益10%） | `analysis/heuristic_optimizer.py` |
+| 85 | 参数约束函数支持（自定义语义约束过滤） | `analysis/heuristic_optimizer.py` |
+| 86 | CLI 入口（run_heuristic_optimization + --algorithm/--population/--generations） | `scripts/optimize_params.py` |
+| 87 | 调度器支持启发式优化任务 | `engine/scheduler.py` |
+| 88 | 22 个启发式优化器单元测试 | `tests/unit/test_heuristic_optimizer.py` |
 
 ### 八之六、v0.3.8 修复（迭代 9：炒股专家审查）
 

@@ -185,6 +185,14 @@ STRATEGY_PARAM_GRIDS: dict[str, dict[str, list]] = {
         "hard_stop_loss_pct": [0.03, 0.05, 0.07],
         "trailing_stop_pct": [0.05, 0.07, 0.10],
     },
+    # v0.6.3 新增：陈学长不吃面策略参数网格
+    "breakout_rebound": {
+        "shrink_vol_ratio": [0.3, 0.4, 0.5, 0.6, 0.7],      # 缩量判断标准
+        "wash_day_max": [2, 3, 4, 5],                        # 洗盘观察天数
+        "stop_loss_pct": [0.02, 0.03, 0.04, 0.05],           # 止损百分比
+        "limit_up_lookback": [3, 5, 7],                       # 涨停板回看窗口
+        "take_profit_pct": [0.06, 0.08, 0.10],               # 止盈位
+    },
 }
 
 # 策略 → 其策略类需要哪些参数（pyproject.toml 中定义的策略类）
@@ -291,6 +299,25 @@ STRATEGY_CONFIG_KEYS: dict[str, list[str]] = {
         "max_track_days",
         "hard_stop_loss_pct",
         "trailing_stop_pct",
+    ],
+    # v0.6.3 新增：陈学长不吃面策略配置键
+    "breakout_rebound": [
+        "ma_trend_window",
+        "ma_long_window",
+        "ma_slope_window",
+        "limit_up_pct",
+        "limit_up_lookback",
+        "wash_day_max",
+        "breakout_vol_ratio",
+        "shrink_vol_ratio",
+        "ground_vol_ratio",
+        "min_confidence",
+        "stop_loss_pct",
+        "take_profit_pct",
+        "max_upper_shadow_pct",
+        "stagnation_vol_ratio",
+        "time_stop_window",
+        "time_stop_threshold",
     ],
 }
 
@@ -894,6 +921,180 @@ def _replace_manifest_validation(
         new_lines.append(line)
 
     return "\n".join(new_lines), updated
+
+
+async def run_heuristic_optimization(
+    strategy_name: str,
+    symbols: list[str],
+    days: int,
+    algorithm: str,
+    population_size: int,
+    generations: int,
+    write: bool,
+    force: bool = False,
+    seed: int | None = None,
+) -> dict | None:
+    """使用启发式算法（GA/PSO）对策略参数进行优化。
+
+    相比网格搜索的 Walk-Forward，启发式算法更适合参数空间较大、
+    需要自适应调参的场景。优化目标为夏普、Calmar、胜率、收益的加权评分。
+    """
+    from gugu.analysis.heuristic_optimizer import StrategyParamOptimizer
+    from gugu.strategies.registry import get_strategy_cls
+
+    strategy_cls = get_strategy_cls(strategy_name)
+    if strategy_cls is None:
+        logger.error(f"策略类 {strategy_name} 未注册")
+        return None
+
+    dm = data_manager()
+    print(f"\n并发批量获取 {len(symbols)} 只股票历史数据...")
+    stock_dfs = await dm.fetch_stock_history_batch(symbols, days=days)
+    stock_dfs = {s: df for s, df in stock_dfs.items() if not df.empty and len(df) >= 120}
+    if len(stock_dfs) < 3:
+        logger.error(f"有效股票数 {len(stock_dfs)} < 3，无法运行启发式优化")
+        return None
+
+    defaults = load_defaults()
+    param_grid = build_param_grid(strategy_name, defaults)
+    if not param_grid:
+        logger.warning(f"策略 {strategy_name} 无参数网格，跳过")
+        return None
+
+    constraint_fn = STRATEGY_PARAM_CONSTRAINTS.get(strategy_name)
+
+    print(f"\n开始启发式优化: {strategy_name} 算法={algorithm.upper()}")
+    print(f"  股票数: {len(stock_dfs)}")
+    print(f"  种群大小: {population_size}, 迭代次数: {generations}")
+
+    optimizer = StrategyParamOptimizer(
+        strategy_cls=strategy_cls,
+        stock_dfs=stock_dfs,
+        param_grid=param_grid,
+        param_constraints=constraint_fn,
+        algorithm=algorithm,
+        population_size=population_size,
+        generations=generations,
+        seed=seed,
+    )
+
+    result = optimizer.optimize(verbose=True)
+
+    best_params = result.best_params
+    best_score = result.best_score
+    best_metrics = result.best_metrics
+
+    print(f"\n{'=' * 70}")
+    print(f"策略: {strategy_name} (启发式优化 {algorithm.upper()})")
+    print(f"{'=' * 70}")
+    print(f"股票: {list(stock_dfs.keys())}")
+    print(f"最优综合得分: {best_score:.4f}")
+    print(f"最优参数:")
+    for k, v in best_params.items():
+        default_val = defaults.get(strategy_name, {}).get(k, "?")
+        print(f"  {k}: {v} (原值: {default_val})")
+
+    # 用最优参数跑一次完整回测，计算解锁条件所需指标
+    engine = BacktestEngine()
+    test_sharpes: list[float] = []
+    test_returns: list[float] = []
+    test_max_dds: list[float] = []
+    test_win_rates: list[float] = []
+
+    for symbol, df in stock_dfs.items():
+        try:
+            strategy = strategy_cls(best_params)
+            bt_result = engine.run(strategy, df, symbol=symbol)
+            metrics = bt_result.metrics
+            test_sharpes.append(metrics.get("sharpe", 0))
+            test_returns.append(metrics.get("total_return", 0))
+            test_max_dds.append(metrics.get("max_drawdown", 0))
+            test_win_rates.append(metrics.get("win_rate", 0))
+        except Exception as e:
+            logger.warning(f"最终回测失败 {symbol}: {e}")
+            continue
+
+    avg_sharpe = sum(test_sharpes) / len(test_sharpes) if test_sharpes else 0
+    avg_return = sum(test_returns) / len(test_returns) if test_returns else 0
+    avg_max_dd = sum(test_max_dds) / len(test_max_dds) if test_max_dds else 0
+    avg_win_rate = sum(test_win_rates) / len(test_win_rates) if test_win_rates else 0
+
+    print(f"\n最终回测指标（多股平均）:")
+    print(f"  平均 Sharpe: {avg_sharpe:.4f}")
+    print(f"  平均收益:    {avg_return:.2%}")
+    print(f"  平均最大回撤: {avg_max_dd:.2%}")
+    print(f"  平均胜率:    {avg_win_rate:.2%}")
+
+    # 构造解锁条件检查所需的 results 结构
+    results = [
+        {
+            "best_params": best_params,
+            "test_sharpe": avg_sharpe,
+            "test_return": avg_return,
+            "test_max_dd": avg_max_dd,
+            "test_win_rate": avg_win_rate,
+        }
+    ]
+    param_votes: dict[str, dict] = {}
+    for param_name, param_val in best_params.items():
+        param_votes[param_name] = {str(param_val): 1}
+
+    if write:
+        unlock_report = _check_unlock_conditions(
+            strategy_name=strategy_name,
+            results=results,
+            avg_sharpe=avg_sharpe,
+            avg_return=avg_return,
+            avg_max_dd=avg_max_dd,
+            param_votes=param_votes,
+        )
+
+        if unlock_report["unlocked"] or force:
+            if force and not unlock_report["unlocked"]:
+                print(f"\n⚠️  --force 强制写回（跳过 {len(unlock_report['failed_checks'])} 项解锁条件）")
+                logger.warning(f"强制写回 {strategy_name} 参数: {unlock_report['failed_checks']}")
+            if strategy_name not in defaults:
+                defaults[strategy_name] = {}
+            for k, v in best_params.items():
+                defaults[strategy_name][k] = v
+            write_defaults(defaults)
+            print(f"\n优化参数已写回 config/strategy_defaults.yaml")
+        else:
+            print(f"\n❌ 参数写回被拒绝（未通过 {len(unlock_report['failed_checks'])} 项解锁条件）:")
+            for check in unlock_report["checks"]:
+                status = "✓" if check["passed"] else "✗"
+                print(f"  {status} {check['name']}: {check['detail']}")
+
+        report_path = write_optimization_report(
+            strategy_name=strategy_name,
+            unlock_report=unlock_report,
+            avg_sharpe=avg_sharpe,
+            avg_return=avg_return,
+            avg_max_dd=avg_max_dd,
+            param_votes=param_votes,
+            best_params=best_params,
+            n_windows=1,
+        )
+        print(f"\n📋 优化报告: {report_path}")
+        failed_reason = "; ".join(unlock_report["failed_checks"]) if unlock_report["failed_checks"] else ""
+        apply_optimization_result(
+            strategy_name=strategy_name,
+            passed=unlock_report["unlocked"],
+            reason=failed_reason,
+        )
+
+    return {
+        "strategy": strategy_name,
+        "algorithm": algorithm,
+        "best_params": best_params,
+        "best_score": best_score,
+        "best_metrics": best_metrics,
+        "avg_sharpe": avg_sharpe,
+        "avg_return": avg_return,
+        "avg_max_dd": avg_max_dd,
+        "avg_win_rate": avg_win_rate,
+        "n_stocks": len(stock_dfs),
+    }
 
 
 async def run_multi_stock_optimization(

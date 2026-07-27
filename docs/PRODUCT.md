@@ -456,7 +456,8 @@ macro/collectors.py → macro/report.py → Feishu (用户看)
 |--------|------|----------|
 | 全市场回测 | 无法评估策略在 5000+ 股票上的整体表现 | 扩展 `run_backtest.py` 支持批量回测 |
 | 多周期回测 | 无法验证策略在不同市场状态下的稳定性 | 按牛/熊/震荡市分段评估 |
-| 参数优化 | 策略参数靠猜测，缺乏最优参数选择 | `walk_forward_optimize()` 已实现但未集成到 CLI |
+| 参数优化 | 策略参数靠猜测，缺乏最优参数选择 | ✅ v0.7.3 已完善：Walk-Forward 网格扫描 + GA/PSO 启发式优化，多股聚合评分（夏普40%+Calmar30%+胜率20%+收益10%），支持自定义参数约束（如 short<long），周日自动调参 + 4 项解锁条件门控 |
+| 启发式优化 | 传统网格搜索效率低，不适用于大参数空间 | ✅ v0.7.3 已实现：`analysis/heuristic_optimizer.py` 遗传算法(GA)+粒子群优化(PSO)，锦标赛选择+单点交叉+高斯变异+精英保留，惯性权重+个体全局最优引导 |
 | 过拟合检测 | 无法判断回测结果是否过拟合 | 引入蒙特卡洛模拟或交叉验证 |
 | 策略对比 | 无法横向对比 8 个策略的优劣 | 统一回测 + 排序 |
 | 实际收益跟踪 | 回测收益与模拟盘/实盘收益脱节 | 建立回测→模拟→实盘对照流水线 |
@@ -508,3 +509,4 @@ cat data/signals_history.jsonl | jq '. | select(.symbol=="600519") | {date: .tim
 | 32 | 2026-07-06 | **v0.5.2 宏观增强 + 引擎拆分 + 集成测试**：新增 MacroRegimeEnhancer（P0-2），金/油/汇/债/G → RegimeDetector 仓位上限调整（黄金>3000 -10%, VIX>30 -15%, 美债倒挂 -20%）。提取 DailyReportManager（P0-3），main.py 1142→999 行。新增 E2E 集成测试骨架（P0-5），覆盖 20+ 模块导入。新增 POST /api/stop_loss/{symbol} Web API（P1-2）。OrderManager + StopLossManager 完成提取到 execution/。覆盖率 63%→65%，测试 1180 passed。 |
 | 33 | 2026-07-15 | **v0.7.0 多专家视角深度审查与算法可靠性修复**：P0 修复相关性检查空壳/ProcessPoolExecutor pickle/NonNegativeValuesRule 返回值 3 项；P1 消除 PCA 前视偏差/OBV numpy 向量化/FactorIC 标注/RegimeDetector 周线/LRU 语义/BoxBreakout 置信度 6 项；P2 提取 max_hold_days 基类方法/Calmar 目标函数/Sharpe 无风险利率/validation --notify 联动 4 项。审查评级 A-。 |
 | 34 | 2026-07-15 | **v0.7.1 多专家视角深度审查（第二轮）与全面修复**：新增 StockRankerConfig/FlowReportConfig 配置模型；修复 kb_indexer.py 硬编码绝对路径；修复 risk/manager.py + notifier/feishu.py 异常静默吞噬；metrics.py 补充 Calmar/Sortino 比率；backtest_offline.py + walk_forward_offline.py 新增 --notify 飞书通知。审查评级 A。 |
+| 35 | 2026-07-28 | **v0.7.3 启发式参数优化系统**：新增 `analysis/heuristic_optimizer.py` 遗传算法(GA)+粒子群优化(PSO)双算法；适应度函数为多股聚合回测的夏普40%+Calmar30%+胜率20%+收益10%加权评分；`scripts/optimize_params.py` 新增 `run_heuristic_optimization()` + CLI 参数（--algorithm/--population/--generations）；`engine/scheduler.py` 调度器支持启发式优化任务；新增 22 个单元测试（ParamSpace/GA/PSO/StrategyParamOptimizer/集成场景），heuristic_optimizer.py 行覆盖率 93%；全量测试 1965 passed, 5 skipped；同步更新 CLAUDE.md/PRODUCT.md/TECH.md |

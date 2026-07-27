@@ -12,6 +12,7 @@
 - 14:30  尾盘扫描（尾盘信号 + 止损检查）+ 尾盘选股 + 盘后资金流决策报告
 - 15:10  收盘信号汇总（个股层面）
 - 15:15  收盘宏观全球概览（含 A 股指数 + 资金流日报 + 大师兄解读，错开 5 分钟）
+- 15:20  信号绩效验证（追踪信号实际收益，推送命中率/策略对比报告）
 - 15:35  基金监控推送
 - 20:00  舆情日报（个股新闻情感分析 + 操作建议）
 - 07:00  Parquet 缓存定期清理（删除 >7天 过期文件）
@@ -34,6 +35,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from gugu.config import get_config
 from gugu.engine.main import TradingEngine
+from gugu.screener.auto_tune import auto_tune_screener_params
 from gugu.screener.terminal_screener import TerminalScreener
 from gugu.screener.validator import (
     ScreenerRecord,
@@ -147,6 +149,24 @@ class TradingScheduler:
                 name="尾盘验证-09:35",
             )
 
+        # 尾盘选股收盘验证（15:05，收盘价已确定，覆盖盘中验证供自动调优使用）
+        if self._task_enabled("screener"):
+            self._scheduler.add_job(
+                self._safe_validate_screener_eod,
+                CronTrigger(hour=15, minute=5, day_of_week="mon-fri"),
+                id="screener_validate_1505",
+                name="尾盘收盘验证-15:05",
+            )
+
+        # 尾盘选股参数自动调优（15:10，基于收盘验证数据）
+        if self._task_enabled("screener_auto_tune"):
+            self._scheduler.add_job(
+                self._safe_auto_tune_screener,
+                CronTrigger(hour=15, minute=10, day_of_week="mon-fri"),
+                id="screener_auto_tune_1510",
+                name="尾盘选股自动调优-15:10",
+            )
+
         # P1-1: 震荡市盘中观察列表推送（10:30 / 13:05）
         for h, m in [(10, 30), (13, 5)]:
             self._scheduler.add_job(
@@ -185,13 +205,33 @@ class TradingScheduler:
 
         register_macro_jobs(self._scheduler, broker=self._engine._broker)
 
-        # 小白学堂每日概念推送：20:00（交易日）
-        if self._task_enabled("concept_daily"):
+        # 小白学堂每日概念推送：20:00（已关闭 - 见 settings.yaml concept_daily: false）
+
+        # 另类因子数据盘后批量采集：18:00（交易日）
+        if self._task_enabled("altalpha_fetch"):
             self._scheduler.add_job(
-                self._safe_concept_daily,
-                CronTrigger(hour=20, minute=0, day_of_week="mon-fri"),
-                id="concept_daily_2000",
-                name="每日概念-20:00",
+                self._safe_altalpha_fetch,
+                CronTrigger(hour=18, minute=0, day_of_week="mon-fri"),
+                id="altalpha_fetch_1800",
+                name="另类因子采集-18:00",
+            )
+
+        # Alpha因子综合评分报告：18:05（在18:00另类因子采集之后）
+        if self._task_enabled("alpha_summary"):
+            self._scheduler.add_job(
+                self._safe_alpha_summary,
+                CronTrigger(hour=18, minute=5, day_of_week="mon-fri"),
+                id="alpha_summary_1805",
+                name="因子综合评分报告-18:05",
+            )
+
+        # 持仓认知分析报告：15:35（收盘后，基于用户真实持仓生成LLM个性化建议）
+        if self._task_enabled("portfolio_report"):
+            self._scheduler.add_job(
+                self._safe_portfolio_report,
+                CronTrigger(hour=15, minute=35, day_of_week="mon-fri"),
+                id="portfolio_report_1535",
+                name="持仓认知分析-15:35",
             )
 
         # 舆情日报推送：20:30（交易日）
@@ -238,6 +278,15 @@ class TradingScheduler:
                 name="十大视角日报-08:30",
             )
 
+        # 收盘后十大视角二次分析：15:30（可选，默认关闭）
+        if self._task_enabled("perspective_afternoon"):
+            self._scheduler.add_job(
+                self._safe_perspective_report,
+                CronTrigger(hour=15, minute=30, day_of_week="mon-fri"),
+                id="perspective_report_1530",
+                name="十大视角收盘分析-15:30",
+            )
+
         # 市场温度计：08:25（盘前估值温度，在08:00宏观简报之后推送）
         if self._task_enabled("market_temp"):
             self._scheduler.add_job(
@@ -245,6 +294,15 @@ class TradingScheduler:
                 CronTrigger(hour=8, minute=25, day_of_week="mon-fri"),
                 id="market_temp_0825",
                 name="市场温度计-08:25",
+            )
+
+        # 信号绩效验证：15:20（收盘日报后，追踪信号实际收益并推送验证报告）
+        if self._task_enabled("signal_performance"):
+            self._scheduler.add_job(
+                self._safe_signal_performance,
+                CronTrigger(hour=15, minute=20, day_of_week="mon-fri"),
+                id="signal_performance_1520",
+                name="信号绩效验证-15:20",
             )
 
         # 资金流数据已合并到宏观卡片中（08:00/15:15），不再单独注册 flow 任务
@@ -309,6 +367,17 @@ class TradingScheduler:
             await self._engine.run_daily_cycle()
         except Exception as e:
             logger.exception(f"交易循环异常: {e}")
+            # P1 修复：交易循环崩溃时必须通知用户，避免静默失败
+            try:
+                await self._engine._notifier.notify_error(
+                    {
+                        "message": f"交易循环异常: {e}",
+                        "level": "error",
+                        "source": "scheduler._safe_run",
+                    }
+                )
+            except Exception as ne:
+                logger.error(f"交易循环异常通知发送失败: {ne}")
 
     async def _safe_intraday_monitor(self) -> None:
         """v0.5.0 盘中实时资金流异动监控。
@@ -336,6 +405,17 @@ class TradingScheduler:
                 await self._engine._notifier.notify_intraday_alert(alerts)
         except Exception as e:
             logger.exception(f"盘中盯盘异常: {e}")
+            # P1 修复：盘中盯盘异常通知用户
+            try:
+                await self._engine._notifier.notify_error(
+                    {
+                        "message": f"盘中资金流盯盘异常: {e}",
+                        "level": "error",
+                        "source": "scheduler._safe_intraday_monitor",
+                    }
+                )
+            except Exception as ne:
+                logger.error(f"盘中盯盘异常通知发送失败: {ne}")
 
     async def _safe_report(self, period: str) -> None:
         """安全执行信号汇总推送。"""
@@ -345,6 +425,17 @@ class TradingScheduler:
             await self._engine.send_daily_report(period)
         except Exception as e:
             logger.exception(f"信号汇总推送异常: {e}")
+            # P1 修复：信号汇总异常通知用户
+            try:
+                await self._engine._notifier.notify_error(
+                    {
+                        "message": f"信号汇总({period})推送异常: {e}",
+                        "level": "error",
+                        "source": "scheduler._safe_report",
+                    }
+                )
+            except Exception as ne:
+                logger.error(f"信号汇总异常通知发送失败: {ne}")
 
     async def _safe_retry_notify(self) -> None:
         """重试失败的通知队列。"""
@@ -359,13 +450,19 @@ class TradingScheduler:
         """安全执行尾盘选股（非交易日跳过）。
 
         P0 修复：异常时也发送错误通知（避免静默失败，用户不知情）。
+        P0-v3 修复：scan() 返回 ScreenerScanResult 而非 list，
+        使用 .results 获取筛选结果列表，使用 .total_scanned 获取总扫描数。
+        根因：scan() 返回类型从 list 改为 ScreenerScanResult 后，
+        调用方未同步适配，导致 len(ScreenerScanResult) 抛出 TypeError，
+        完整选股流程跳到 except 异常分支，数据不保存、通知变空。
         """
         if not is_trading_day():
             return
         try:
             screener = TerminalScreener(dm=self._engine._dm)
-            results = await screener.scan()
-            total = len(results) if results else 0
+            scan_result = await screener.scan()
+            results = scan_result.results if scan_result else []
+            total = scan_result.total_scanned if scan_result else 0
             # 保存选股结果到 JSONL（供次日验证使用）
             if results:
                 today_str = datetime.now().strftime("%Y-%m-%d")
@@ -379,6 +476,7 @@ class TradingScheduler:
                         screener_date=today_str,
                         passed=r.passed,
                         failed_conditions=r.failed_conditions,
+                        stop_loss_price=r.stop_loss_price,
                     )
                     for r in results
                 ]
@@ -386,7 +484,6 @@ class TradingScheduler:
             await self._engine._notifier.notify_screener(results, total)
         except Exception as e:
             logger.exception(f"尾盘选股异常: {e}")
-            # P0 修复：异常时也通知用户（避免静默失败）
             try:
                 await self._engine._notifier.notify_screener([], 0)
             except Exception as notify_err:
@@ -405,12 +502,14 @@ class TradingScheduler:
                 # 统计并记录日志
                 win_open = sum(1 for v in results if v.open_premium > 0)
                 win_high = sum(1 for v in results if v.intraday_high_premium > 0)
+                stop_hit = sum(1 for v in results if v.stop_loss_hit)
                 n = len(results)
                 logger.info(
                     f"📊 尾盘验证日报: "
                     f"昨日选股 {n} 只 | "
                     f"高开 {win_open}/{n}({win_open / n * 100:.0f}%) | "
                     f"日内冲高 {win_high}/{n}({win_high / n * 100:.0f}%) | "
+                    f"止损命中 {stop_hit}/{n}({stop_hit / n * 100:.0f}%) | "
                     f"平均开盘溢价 {sum(v.open_premium for v in results) / n:+.2f}%"
                 )
                 # 推送飞书验证结果卡片
@@ -421,6 +520,57 @@ class TradingScheduler:
                 await self._engine._notifier.notify_screener_validation([])
         except Exception as e:
             logger.exception(f"尾盘选股验证异常: {e}")
+            try:
+                await self._engine._notifier.notify_error(
+                    {
+                        "message": f"尾盘选股验证异常: {e}",
+                        "level": "error",
+                        "source": "scheduler._safe_validate_screener",
+                    }
+                )
+            except Exception as ne:
+                logger.error(f"尾盘选股验证异常通知发送失败: {ne}")
+
+    async def _safe_validate_screener_eod(self) -> None:
+        """安全执行尾盘选股收盘验证（15:05，非交易日跳过）。
+
+        收盘验证覆盖当日盘中验证记录，补充真实收盘价收益，
+        供 15:10 自动调优使用。
+        """
+        if not is_trading_day():
+            return
+        try:
+            results = await validate_yesterday_screener(is_eod=True)
+            if results:
+                n = len(results)
+                avg_close = sum(v.close_premium for v in results) / n
+                stop_hit = sum(1 for v in results if v.stop_loss_hit)
+                logger.info(
+                    f"📊 尾盘收盘验证: 昨日选股 {n} 只 | "
+                    f"收盘收益 {avg_close:+.2f}% | "
+                    f"止损命中 {stop_hit}/{n}({stop_hit / n * 100:.0f}%)"
+                )
+        except Exception as e:
+            logger.exception(f"尾盘收盘验证异常: {e}")
+
+    async def _safe_auto_tune_screener(self) -> None:
+        """安全执行尾盘选股参数自动调优（15:10，非交易日跳过）。
+
+        基于近 N 日收盘验证数据，自动收紧/放宽选股阈值。
+        调优结果保存到 data/screener_params.json，次日选股生效。
+        """
+        if not is_trading_day():
+            return
+        try:
+            new_params = auto_tune_screener_params()
+            logger.info(
+                f"🎛️ 尾盘选股自动调优完成: "
+                f"max_vol_ratio={new_params.max_vol_ratio:.2f} "
+                f"min_turnover={new_params.min_turnover:.1f} "
+                f"min_chg_pct={new_params.min_chg_pct:.1f}"
+            )
+        except Exception as e:
+            logger.exception(f"尾盘选股自动调优异常: {e}")
 
     async def _safe_range_watchlist(self) -> None:
         """P1-1: 震荡市盘中观察列表推送。
@@ -452,6 +602,16 @@ class TradingScheduler:
                 await self._engine._notifier.notify_range_watchlist([], regime)
         except Exception as e:
             logger.exception(f"震荡市观察列表异常: {e}")
+            try:
+                await self._engine._notifier.notify_error(
+                    {
+                        "message": f"震荡市观察列表异常: {e}",
+                        "level": "error",
+                        "source": "scheduler._safe_range_watchlist",
+                    }
+                )
+            except Exception as ne:
+                logger.error(f"震荡市观察列表异常通知发送失败: {ne}")
 
     async def _scan_range_candidates(self) -> list[dict]:
         """扫描接近 MA20 支撑位的候选股（用于震荡市观察列表）。
@@ -543,6 +703,196 @@ class TradingScheduler:
 
     # 资金流推送已合并到宏观卡片中（macro/scheduler.py 的 _push_macro_report）
     # 不再单独推送 flow_morning / flow_close
+
+    async def _safe_altalpha_fetch(self) -> None:
+        """安全执行另类因子数据盘后批量采集（18:00，非交易日跳过）。
+
+        采集内容：高管增减持、业绩预告、龙虎榜、大宗交易、融资融券、限售解禁。
+        采集后写入 Parquet 缓存，供次日策略扫描使用。
+        """
+        if not is_trading_day():
+            return
+        try:
+            import asyncio
+
+            from gugu.data.collectors.altalpha.block_trade import BlockTradeCollector
+            from gugu.data.collectors.altalpha.dragon_tiger import (
+                DragonTigerCollector,
+            )
+            from gugu.data.collectors.altalpha.insider_trading import (
+                InsiderTradingCollector,
+            )
+            from gugu.data.collectors.altalpha.margin_trade import (
+                MarginTradeCollector,
+            )
+            from gugu.data.collectors.altalpha.share_unlock import (
+                ShareUnlockCollector,
+            )
+
+            collectors = [
+                InsiderTradingCollector(),
+                DragonTigerCollector(),
+                BlockTradeCollector(),
+                MarginTradeCollector(),
+                ShareUnlockCollector(),
+            ]
+
+            tasks = []
+            if hasattr(collectors[0], "fetch_recent"):
+                tasks.append(collectors[0].fetch_recent())
+            if hasattr(collectors[1], "fetch_detail"):
+                tasks.append(collectors[1].fetch_detail())
+            if hasattr(collectors[2], "fetch_detail"):
+                tasks.append(collectors[2].fetch_detail())
+            if hasattr(collectors[3], "fetch_detail"):
+                tasks.append(collectors[3].fetch_detail())
+            if hasattr(collectors[4], "fetch_upcoming"):
+                tasks.append(collectors[4].fetch_upcoming())
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            success_count = sum(
+                1 for r in results if not isinstance(r, Exception) and r is not None
+            )
+            logger.info(f"另类因子采集完成: {success_count}/{len(tasks)} 成功")
+        except Exception as e:
+            logger.exception(f"另类因子采集异常: {e}")
+
+    async def _safe_alpha_summary(self) -> None:
+        """安全执行Alpha因子综合评分报告（18:05，非交易日跳过）。
+
+        采集Alpha因子数据、StockRanker评分、另类因子概况，
+        汇总为一份因子综合报告推送飞书。
+        """
+        if not is_trading_day():
+            return
+        try:
+            from gugu.analysis.alpha_factory import AlphaFactory
+            from gugu.analysis.stock_ranker import StockRanker
+            from gugu.config import get_config
+            from gugu.data.stock_names import lookup_stock_name
+
+            cfg = get_config()
+            symbols = cfg.watchlist[:20]  # 取前20只自选股
+            if not symbols:
+                return
+
+            # Alpha因子计算
+            factory = AlphaFactory()
+            factor_scores = {}
+            try:
+                for sym in symbols:
+                    df = await self._engine._dm.fetch_stock_history(sym, days=60)
+                    if df is not None and len(df) >= 30:
+                        factors = factory.compute(df)
+                        if factors:
+                            factor_scores[sym] = factors.composite_score
+            except Exception:
+                pass
+
+            # StockRanker评分
+            rankings = []
+            try:
+                ranker = StockRanker()
+                rank_results = ranker.rank(symbols, hot_sectors=[], top_n=20)
+                for r in rank_results:
+                    name = lookup_stock_name(r.get("symbol", ""))
+                    rankings.append(
+                        {
+                            "symbol": r.get("symbol", ""),
+                            "name": name or r.get("symbol", ""),
+                            "total_score": r.get("total_score", 0),
+                        }
+                    )
+            except Exception:
+                pass
+
+            # Top因子（取均值最高的5个因子）
+            top_factors = []
+            if factor_scores:
+                factor_names = (
+                    list(next(iter(factor_scores.values())).keys()) if factor_scores else []
+                )
+                for fname in factor_names[:5]:
+                    values = [
+                        s.get(fname, 0) for s in factor_scores.values() if isinstance(s, dict)
+                    ]
+                    if values:
+                        top_factors.append(
+                            {"name": fname, "avg_value": round(sum(values) / len(values), 4)}
+                        )
+                top_factors.sort(key=lambda x: abs(x["avg_value"]), reverse=True)
+
+            summary = {
+                "rankings": rankings,
+                "top_factors": top_factors[:5],
+                "timestamp": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M"),
+            }
+
+            await self._engine._notifier.notify_alpha_summary(summary)
+            logger.info(
+                f"因子综合评分报告推送完成: {len(rankings)}只评分, {len(top_factors)}个因子"
+            )
+        except Exception as e:
+            logger.exception(f"因子综合评分报告异常: {e}")
+
+    async def _safe_portfolio_report(self) -> None:
+        """安全执行持仓认知分析报告（15:35，非交易日跳过）。
+
+        读取用户真实持仓数据，通过 WisdomAdvisor 生成个性化 LLM 分析，
+        包含持仓健康度总评、风险信号、调仓机会、明日操作计划。
+        独立于信号流——即使当天没有策略信号也正常执行。
+        """
+        if not is_trading_day():
+            return
+        try:
+            import json
+            from pathlib import Path
+
+            live_path = Path("data/live_positions.json")
+            if not live_path.exists():
+                return
+            with open(live_path, encoding="utf-8") as f:
+                live_data = json.load(f)
+            raw_positions = live_data.get("positions", {})
+            if not raw_positions:
+                return
+
+            # 计算每只票的盈亏百分比
+            positions = []
+            for sym, p in raw_positions.items():
+                entry = p.get("avg_cost", 0)
+                current = p.get("current_price", 0)
+                profit_pct = ((current - entry) / entry * 100) if entry > 0 else 0
+                positions.append(
+                    {
+                        "symbol": sym,
+                        "name": p.get("name", sym),
+                        "entry_price": entry,
+                        "current_price": current,
+                        "quantity": p.get("quantity", 0),
+                        "market_value": round(current * p.get("quantity", 0), 2),
+                        "profit_pct": round(profit_pct, 2),
+                    }
+                )
+            if not positions:
+                return
+
+            # 调用 WisdomAdvisor 生成 LLM 分析
+            from gugu.wisdom.advisor import WisdomAdvisor
+
+            advisor = WisdomAdvisor()
+            analysis = await advisor.advise_portfolio_async(
+                positions=positions,
+                market_summary="",
+                macro_summary="",
+            )
+            if analysis:
+                await self._engine._notifier.notify_portfolio_report(analysis, positions)
+                logger.info(f"持仓认知分析报告推送完成: {len(positions)}只持仓")
+            else:
+                logger.info("持仓认知分析报告: LLM 无输出，跳过推送")
+        except Exception as e:
+            logger.exception(f"持仓认知分析报告异常: {e}")
 
     async def _safe_concept_daily(self) -> None:
         """安全执行每日概念推送（20:00，非交易日跳过）。"""
@@ -874,6 +1224,44 @@ class TradingScheduler:
             logger.info("市场温度计推送完成（子进程隔离执行）")
         except Exception as e:
             logger.exception(f"市场温度计推送异常: {e}")
+
+    async def _safe_signal_performance(self) -> None:
+        """信号绩效验证推送（15:20，非交易日跳过）。
+
+        收盘后自动运行 SignalTracker.generate_report()，
+        追踪信号产生后 1/3/5/10 日的实际收益，统计命中率，
+        对比策略表现，推送飞书验证报告卡片。
+
+        这是项目"验证"环节的关键：信号发出后，到底赚没赚钱？
+        """
+        if not is_trading_day():
+            return
+        try:
+            from gugu.analysis.signal_tracker import SignalTracker
+            from gugu.notifier.formatter import build_signal_performance_card
+
+            tracker = SignalTracker()
+            report = await tracker.generate_report(days=30)
+            card = build_signal_performance_card(report)
+            await self._engine._notifier.send_card(card)
+
+            total = report.get("total_signals", 0)
+            forward_hit_rate = report.get("forward_5d_signal_hit_rate", 0)
+            logger.info(
+                f"信号绩效验证推送完成: {total} 条信号, 前瞻5日命中率 {forward_hit_rate:.1%}"
+            )
+        except Exception as e:
+            logger.exception(f"信号绩效验证推送异常: {e}")
+            try:
+                await self._engine._notifier.notify_error(
+                    {
+                        "message": f"信号绩效验证异常: {e}",
+                        "level": "error",
+                        "source": "scheduler._safe_signal_performance",
+                    }
+                )
+            except Exception as ne:
+                logger.error(f"信号绩效验证异常通知发送失败: {ne}")
 
     async def _run_market_temp_subprocess(self) -> dict | None:
         """在子进程中执行市场温度计计算，返回飞书卡片 dict。

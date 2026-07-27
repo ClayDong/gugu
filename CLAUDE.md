@@ -153,9 +153,10 @@ gugu/
 │       │   ├── regime_detector.py # 多周期择时
 │       │   ├── dynamic_take_profit.py # 财叔动态止盈减仓引擎
 │       │   ├── market_temp.py     # 博格市场温度计
-│       │   ├── alpha_factory.py   # AlphaFactory（技术因子+另类因子融合）
-│       │   ├── altalpha_factors.py # 另类Alpha因子引擎（8因子z-score）
-│       │   └── ...               # 其他分析模块
+│       ├── alpha_factory.py   # AlphaFactory（技术因子+另类因子融合）
+│       ├── altalpha_factors.py # 另类Alpha因子引擎（8因子z-score）
+│       ├── heuristic_optimizer.py # 启发式参数优化器（GA/PSO）
+│       └── ...               # 其他分析模块
 │       ├── wisdom/              # 决策层（28 本书认知 + P0 规则引擎）
 │       │   ├── advisor.py       # WisdomAdvisor（LLM 决策 + 多视角路由 + fallback）
 │       │   ├── book_router.py   # BookPerspectiveRouter（28 本书多视角路由）
@@ -293,9 +294,16 @@ gugu/
 ### 自动优化（P1-7）
 
 - **周参数优化**：周日 03:00 自动跑多股聚合 Walk-Forward（6 只行业代表股）
+- **启发式参数优化**：GA/PSO 算法自适应调参（见 `analysis/heuristic_optimizer.py`）
+  - 遗传算法 (GA)：锦标赛选择 + 单点交叉 + 高斯变异 + 精英保留
+  - 粒子群优化 (PSO)：惯性权重 + 个体/全局最优引导
+  - 适应度函数：夏普40% + Calmar30% + 胜率20% + 收益10% 多目标加权
+  - 参数约束：支持自定义约束函数（如 short_window < long_window）
+  - 多股聚合：对多只股票回测取平均得分，避免单股过拟合
 - **4 项解锁条件**：样本外 Sharpe>0 + 参数稳定性≥50% + 回撤<25% + 收益非负
 - **失败保护**：未通过解锁条件仅记录日志，不污染生产参数
-- 手动触发：`uv run python scripts/optimize_params.py --multi-stock 600519,002714,... --write`
+- 手动触发 Walk-Forward：`uv run python scripts/optimize_params.py --multi-stock 600519,002714,... --write`
+- 手动触发启发式优化：`uv run python scripts/optimize_params.py --strategy ma5_momentum --algorithm ga --population 30 --generations 20`
 
 ---
 
@@ -329,10 +337,31 @@ gugu/
 ## 元数据
 
 - 创建日期：2026-07-06
-- 版本：v0.7.0
-- 阶段：阶段三（信号监控）+ 十大视角分析系统 + 信号流融合 + 宏观增强 + 博格市场温度计 + 策略全链路优化 + A股费用模型对齐 + 多专家深度审查 + 另类数据Alpha因子系统 + 上线级全面优化 + 实盘/模拟盘数据分离 + 信号产量优化 + 陈学长不吃面策略大幅放宽
-- 测试：1915 passed, 5 skipped
-- 最近审查：2026-07-26（行业资金强度+动量确认策略回测表现最差，禁用待优化）
+- 版本：v0.7.3
+- 阶段：阶段三（信号监控）+ 十大视角分析系统 + 信号流融合 + 宏观增强 + 博格市场温度计 + 策略全链路优化 + A股费用模型对齐 + 多专家深度审查 + 另类数据Alpha因子系统 + 上线级全面优化 + 实盘/模拟盘数据分离 + 信号产量优化 + 陈学长不吃面策略大幅放宽 + 启发式参数优化系统
+- 测试：1965 passed, 5 skipped
+- 最近审查：2026-07-28（启发式优化器 GA/PSO 实现完成，22个单元测试+全量测试通过）
+- v0.7.3 变更（2026-07-28 启发式参数优化系统）：
+  - 🆕 新增：启发式策略参数优化器（analysis/heuristic_optimizer.py）
+    - 遗传算法 (GAOptimizer)：锦标赛选择 + 单点交叉 + 高斯变异 + 精英保留
+    - 粒子群优化 (PSOOptimizer)：惯性权重 + 个体/全局最优引导 + 速度限制
+    - StrategyParamOptimizer 封装：参数网格→ParamSpace→适应度函数→优化
+    - 适应度函数：多股聚合回测的夏普40% + Calmar30% + 胜率20% + 收益10% 加权评分
+    - 参数约束：支持自定义约束函数过滤非法参数组合
+    - 集成：scripts/optimize_params.py 新增 run_heuristic_optimization() + CLI 参数
+    - 集成：engine/scheduler.py 调度器支持启发式优化任务
+    - 修复：heuristic_optimizer.py docstring 语法错误修复
+  - 🧪 测试：新增 22 个启发式优化器单元测试（ParamSpace/GA/PSO/StrategyParamOptimizer/集成场景）
+  - 测试覆盖：heuristic_optimizer.py 行覆盖率 93%（17 行未覆盖为边界分支）
+  - 修改文件：src/gugu/analysis/heuristic_optimizer.py, scripts/optimize_params.py, src/gugu/engine/scheduler.py, tests/unit/test_heuristic_optimizer.py
+  - 🟡 持续优化：行业资金强度+动量确认策略v2.x系列回测
+    - v2.0 重构：状态机持仓追踪+连续评分系统+统一退出条件
+    - v2.1 优化：RSI范围收紧45-65，MA5斜率>0，最少持仓8天 → 总收益-2.25%
+    - v2.2 优化：收紧止损8%+提高止盈12%+移动止盈+MA20过滤 → 总收益-2.03%（最优）
+    - v2.3 优化：降低量比1.3x+关闭MA20过滤+放宽评分阈值 → 总收益-3.35%，交易增加但质量下降
+    - v2.4 优化：开启MA20过滤+放宽止损10% → 总收益-3.05%，夏普-1.97
+    - 最终结论：策略在当前市场环境下难以实现正收益，建议禁用待进一步优化
+    - 修改文件：strategies/industry_capital_momentum.py, config/strategy_defaults.yaml, config/strategy_manifest.yaml
 - v0.7.1 变更（2026-07-26 行业资金强度+动量确认策略禁用）：
   - 🔴 禁用：行业资金强度+动量确认策略（IndustryCapitalMomentumStrategy）
     - 回测结果：23个策略中表现最差，v1.2优化后总收益-15.38%，夏普-0.92
