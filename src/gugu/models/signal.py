@@ -49,6 +49,12 @@ class Signal:
     is_st: bool = False
     is_suspended: bool = False
 
+    # ========== v0.7.8 数据时效性 ==========
+    data_timestamp: str = ""  # 信号价格对应的时间戳（ISO格式）
+    data_source: str = ""  # 数据来源：sina/akshare/eastmoney
+    is_intraday: bool = True  # True=盘中实时数据, False=收盘数据
+    adjust_type: str = ""  # 复权方式：none(不复权)/qfq(前复权)/hfq(后复权)
+
     # ========== 过滤链结果 ==========
     wisdom_filtered: bool = False
     filter_reason: str = ""
@@ -62,6 +68,7 @@ class Signal:
     # ========== 决策层 ==========
     wisdom: dict[str, Any] = field(default_factory=dict)
     wisdom_decision: dict[str, Any] = field(default_factory=dict)
+    decision: dict[str, Any] = field(default_factory=dict)
 
     # ========== 下单结果 ==========
     order_result: dict[str, Any] | None = None
@@ -87,6 +94,10 @@ class Signal:
             "prev_close": self.prev_close,
             "is_st": self.is_st,
             "is_suspended": self.is_suspended,
+            "data_timestamp": self.data_timestamp,
+            "data_source": self.data_source,
+            "is_intraday": self.is_intraday,
+            "adjust_type": self.adjust_type,
             "wisdom_filtered": self.wisdom_filtered,
             "filter_reason": self.filter_reason,
             "fundamental": dict(self.fundamental),
@@ -95,6 +106,7 @@ class Signal:
             "market_context": dict(self.market_context),
             "wisdom": dict(self.wisdom),
             "wisdom_decision": dict(self.wisdom_decision),
+            "decision": dict(self.decision),
             "order_result": self.order_result,
         }
 
@@ -120,6 +132,10 @@ class Signal:
             prev_close=float(d.get("prev_close", 0)),
             is_st=bool(d.get("is_st", False)),
             is_suspended=bool(d.get("is_suspended", False)),
+            data_timestamp=str(d.get("data_timestamp", "")),
+            data_source=str(d.get("data_source", "")),
+            is_intraday=bool(d.get("is_intraday", True)),
+            adjust_type=str(d.get("adjust_type", "")),
             wisdom_filtered=bool(d.get("wisdom_filtered", False)),
             filter_reason=str(d.get("filter_reason", "")),
             fundamental=dict(d.get("fundamental", {})),
@@ -128,6 +144,7 @@ class Signal:
             market_context=dict(d.get("market_context", {})),
             wisdom=dict(d.get("wisdom", {})),
             wisdom_decision=dict(d.get("wisdom_decision", {})),
+            decision=dict(d.get("decision", {})),
             order_result=d.get("order_result"),
         )
 

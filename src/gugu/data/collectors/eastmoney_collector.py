@@ -65,6 +65,7 @@ class EastmoneyCollector(BaseCollector):
     """
 
     source = "eastmoney"
+    adjust_type = "qfq"  # 前复权
 
     def __init__(self) -> None:
         self._client: httpx.Client | None = None

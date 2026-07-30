@@ -105,6 +105,20 @@ class DataManager:
         """是否处于降级状态。"""
         return time.time() < self._degraded_until
 
+    @property
+    def current_source(self) -> str:
+        """获取当前数据源名称。"""
+        if self.is_degraded:
+            return self._fallbacks[0].source if self._fallbacks else "unknown"
+        return self._primary.source
+
+    @property
+    def current_adjust_type(self) -> str:
+        """获取当前数据源的复权方式。"""
+        if self.is_degraded:
+            return self._fallbacks[0].adjust_type if self._fallbacks else "none"
+        return self._primary.adjust_type
+
     def _get_collector(self) -> BaseCollector:
         """获取当前可用采集器。冷却期过后切回主源并重置失败计数。"""
         if self.is_degraded:
@@ -267,9 +281,12 @@ class DataManager:
         if stale_cached is not None and not stale_cached.empty:
             logger.info(f"{method} 使用过期缓存兜底，下次请求自动重试")
             return stale_cached
-        # 自恢复：清理缓存避免脏数据持续影响
+        # 修复：只清理当前失败key的缓存，不全局清空（避免缓存雪崩）
         with contextlib.suppress(Exception):
-            cache().clear()
+            cache().store.pop(cache_key, None)
+            if hasattr(cache(), "_order"):
+                with contextlib.suppress(ValueError):
+                    cache()._order.remove(cache_key)
         return pd.DataFrame()
 
     def _validate(self, method: str, df: pd.DataFrame, args: tuple) -> pd.DataFrame:

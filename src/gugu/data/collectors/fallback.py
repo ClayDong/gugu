@@ -53,6 +53,7 @@ class SinaCollector(BaseCollector):
     """新浪财经主采集器（直接 HTTP，不依赖 akshare）。"""
 
     source = "sina"
+    adjust_type = "none"  # 不复权（原始价格）
 
     def __init__(self) -> None:
         self._client: httpx.Client | None = None

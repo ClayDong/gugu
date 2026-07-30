@@ -26,7 +26,6 @@ watchlist:
   - "002230"   # 科大讯飞
   # ETF（用户持仓）
   - "562500"   # 机器人ETF华夏
-  - "002714"   # 牧原股份（持仓）
   - "510500"   # 中证500ETF（持仓）
   - "588000"   # 科创50ETF（持仓）
   - "510310"   # 沪深300ETF（持仓）
@@ -52,104 +51,66 @@ data:
 
 # ========== 策略 ==========
 strategy:
-  # v0.7.0 P0优化：仅保留通过回测验证的策略实盘推送
-  # 根据多专家评审报告（2026-07-24）：
-  #   - 仅 box_breakout 和 double_yin 有条件通过4项解锁条件（样本外Sharpe>0等）
-  #   - 其他4个策略（cloud_trend/hot_money/ma20_trend/zhen_dahu）未通过验证，实盘推送风险高
-  #   - 系统默认仅做 paper 验证，待策略通过验证后再逐步放开实盘推送
-  # v0.5.6 原设计：按市场状态启用策略（替代全局 enabled）
-  # 现改为：仅保留已验证策略，其他策略仅做 paper 测试，不推送到飞书
-  # P1-3/P1-4 优化：扩大信号来源，解决产量极低问题
+  # v0.7.5 P0-1修复：策略分组管理（verified / experimental）
+  # verified_strategies: 通过 Walk-Forward 4项门控（样本外Sharpe>0/参数稳定性≥50%/最大回撤<25%/平均收益≥0）
+  # experimental_strategies: 逻辑闭环但未完成验证，仅 paper 模式参与信号融合
+  # 实验性策略在 signal_only/track_live 模式下：信号标记 experimental=True，通知卡片显示警告
   enabled_by_regime:
-    # v0.6.5: 全量策略启用，按市场状态分配
-    # 牛市（3/3条件满足）：追势策略为主
+    # 牛市（3/3条件满足）：核心策略全开
     bull:
-      - turtle
-      - dual_ma
-      - macd
-      - kdj
-      - bollinger
       - box_breakout
-      - dual_thrust
-      - money_flow_follow
-      - chen_jiangting
-      - cloud_trend
-      - ma20_trend
       - double_yin
-      - breakout_rebound
-      - hot_money
-      - north_force_long
-      - dragon_tiger_short
-      - leopard_three_factors
-      - capital_flow_alert
-      - first_board
-      - pullback_low
       - rsi_reversal
-      - ml_factor
-      - zhen_dahu
-    # 反弹（2/3条件满足）：追势+均值回归混合
+      - huamulan_tail_pick
+      - huamulan_fake_dip
+      - huamulan_ghost_breakout
+    # 反弹（2/3条件满足）：核心策略全开
     rally:
-      - turtle
-      - dual_ma
-      - macd
-      - kdj
-      - bollinger
       - box_breakout
-      - dual_thrust
-      - money_flow_follow
-      - chen_jiangting
-      - cloud_trend
-      - ma20_trend
       - double_yin
-      - breakout_rebound
-      - hot_money
-      - north_force_long
-      - dragon_tiger_short
-      - leopard_three_factors
-      - capital_flow_alert
-      - first_board
-      - pullback_low
       - rsi_reversal
-      - ml_factor
-      - zhen_dahu
-    # 震荡（1/3条件满足）：均值回归为主（RSI 超卖反弹）
+      - huamulan_tail_pick
+      - huamulan_fake_dip
+      - huamulan_ghost_breakout
+    # 震荡（1/3条件满足）：核心策略全开
     sideways:
-      - bollinger
-      - rsi_reversal
+      - box_breakout
       - double_yin
-      - breakout_rebound
-      - pullback_low
-      - ml_factor
-      - zhen_dahu
-    # 熊市/暴跌：空仓观察，不启用任何买入策略（保留观察）
+      - rsi_reversal
+      - huamulan_tail_pick
+    # 熊市/暴跌：空仓观察，不启用任何买入策略
+    # 注意：huamulan_crash_layout 在暴跌后布局，加入 crash  regime 作为特殊买入策略
     bear: []
-    crash: []
-  # 向后兼容：原 enabled 列表保留（当 enabled_by_regime 为空时使用）
-  # v0.6.5: 全量策略
-  enabled:
-    - turtle
-    - dual_ma
-    - macd
-    - kdj
-    - bollinger
-    - box_breakout
-    - dual_thrust
-    - money_flow_follow
-    - chen_jiangting
-    - cloud_trend
-    - ma20_trend
-    - double_yin
-    - breakout_rebound
-    - hot_money
-    - north_force_long
-    - dragon_tiger_short
-    - leopard_three_factors
-    - capital_flow_alert
-    - first_board
-    - pullback_low
-    - rsi_reversal
-    - ml_factor
-    - zhen_dahu
+    crash:
+      - huamulan_crash_layout
+  # v0.7.7 新增：花木兰暴跌布局策略特殊配置
+  # 该策略在指数单日暴跌3%以上时由 scheduler 触发，不参与常规扫描
+  huamulan_crash_layout:
+    enabled: true
+    trigger_on_crash: true  # 暴跌时触发
+    crash_threshold: -0.03
+  # v0.7.5 P0-1修复：策略分组管理
+  # 验证通过的策略（无条件启用，参与信号融合）
+  verified_strategies:
+    - box_breakout      # Walk-Forward 条件通过（样本外表现最稳）
+    - double_yin        # Walk-Forward 条件通过（收益稳定为正）
+    - rsi_reversal      # Walk-Forward 条件通过（震荡市专用）
+  # 实验性策略（仅 paper 模式参与信号融合，signal_only/track_live 仅观察）
+  experimental_strategies:
+    - hot_money         # 游资策略，逻辑闭环但需 paper 验证
+    - ma5_momentum      # 新增待验证
+  # 向后兼容：原 enabled 列表（当 verified_strategies + experimental_strategies 都为空时使用）
+  enabled: []
+  # v0.7.5 P0-1修复：仅 verified 策略参与权重分配（总和=1.0）
+  # 权重会在 StrategyPool 中根据近期表现动态调整
+  weights:
+    box_breakout: 0.40
+    double_yin: 0.35
+    rsi_reversal: 0.25
+  # 实验性策略权重（仅 paper 模式使用）
+  experimental_weights:
+    hot_money: 0.25
+    ma5_momentum: 0.20
   # 信号融合规则：unanimous（全票通过）/ majority（多数）/ any（任一）/ weighted（策略池加权）
   # v0.4.1：恢复 weighted（多策略共识），any 模式在 A 股高噪声下产生大量假信号
   signal_fusion: weighted
@@ -221,7 +182,6 @@ intraday_monitor:
     - "300033"   # 同花顺
     - "002230"   # 科大讯飞
     - "562500"   # 机器人ETF华夏
-    - "002714"   # 牧原股份（持仓）
     - "510500"   # 中证500ETF（持仓）
     - "588000"   # 科创50ETF（持仓）
     - "510310"   # 沪深300ETF（持仓）
@@ -277,10 +237,10 @@ feishu:
   notify_backtest: true          # 回测报告
   notify_system_error: true      # 系统异常
   # 推送时段（交易日）
+  # v0.7.5 P0-14修复：减少推送频次（4→2次/日），降低通知过载
   daily_report_times:
-    - "09:10"
-    - "11:35"
-    - "15:10"
+    - "09:10"   # 盘前信号汇总（含选股结果）
+    - "15:10"   # 收盘信号汇总（含资金流日报）
 
 # ========== 调度 ==========
 scheduler:
@@ -298,25 +258,25 @@ scheduler:
   # 精简版：保留核心交易信号通知，关闭分析类噪声模块
   tasks:
     macro_morning: true        # 08:00 早间全球简报（保留）
-    market_temp: true          # 08:25 市场温度计（保留）
+    market_temp: false         # 08:25 市场温度计（关闭-非核心交易信号）
     perspective_daily: false   # 08:30 十大视角日报（关闭-噪声太大）
     signal_morning: true       # 09:10 盘前信号汇总（保留）
     macro_preamarket: false    # 09:15 盘前宏观简报（关闭-合并到macro_morning）
-    scan_open: true            # 09:30 开盘扫描（保留）
-    scan_mid_morning: true     # 10:30 盘中扫描（保留）
-    signal_noon: true          # 11:35 午盘信号汇总（保留）
+    scan_open: false            # 09:30 开盘扫描（关闭-合并在signal_morning）
+    scan_mid_morning: false    # 10:30 盘中扫描（关闭-减少噪声）
+    signal_noon: false          # 11:35 午盘信号汇总（关闭-合并在signal_morning）
     macro_noon: false          # 11:40 午间宏观简报（关闭-非必要）
-    scan_afternoon: true       # 13:05 午盘扫描（保留）
-    scan_close: true           # 14:30 尾盘扫描（保留）
+    scan_afternoon: false       # 13:05 午盘扫描（关闭-减少噪声）
+    scan_close: true           # 14:30 尾盘扫描（保留-接近收盘）
     screener: true             # 14:30 尾盘选股（保留）
     flow_afternoon: false      # 14:30 盘后资金流决策报告（关闭-非核心交易信号）
     signal_close: true         # 15:10 收盘信号汇总（保留）
-    macro_close: true          # 15:15 收盘宏观概览（保留）
-    signal_performance: true   # 15:20 信号绩效验证（保留）
+    macro_close: false          # 15:15 收盘宏观概览（关闭-合并在macro_morning）
+    signal_performance: false   # 15:20 信号绩效验证（关闭-非核心）
     concept_daily: false       # 20:00 每日概念（已关闭）
     altalpha_fetch: false      # 18:00 另类因子盘后采集（关闭-暂不需要）
-    alpha_summary: true        # 18:05 因子综合评分报告（自选股Alpha因子排名+另类因子概况）
-    portfolio_report: true     # 15:35 持仓认知分析报告（LLM基于用户真实持仓生成个性化建议）
+    alpha_summary: false       # 18:05 因子综合评分报告（关闭-非核心）
+    portfolio_report: true     # 15:35 持仓认知分析报告（保留-用户关注）
     sentiment_daily: false     # 20:30 舆情日报（关闭-噪声太大）
     weekly_optimize: true      # 周日 03:00 周参数优化（保留）
     weekly_review: true        # 周日 20:00 周复盘（保留）
@@ -337,8 +297,15 @@ wisdom:
     - stock-psychology-check
   # 仓颉蒸馏的28本书籍视角（多视角认知参考）
   books_dir: "src/gugu/wisdom/skills/books"
-  enable_multi_perspective: false     # P0 修复：默认关闭，新手不需要利弗莫尔/格雷厄姆的权重裁决（专家审查发现这是"产品自我感动"）
-  max_perspectives: 3                 # 每次决策最多参考的视角数
+  # v0.7.5 P0-3修复：默认开启多视角认知（控制成本）
+  # 仅在买入决策时启用 LLM（止损/止盈/仓位用 fallback）
+  # max_perspectives=2 控制 token 消耗
+  enable_multi_perspective: true          # 默认开启（v0.7.5 修复：原默认关闭导致 28 本书 SKILL 失效）
+  max_perspectives: 2                    # 每次决策最多 2 个视角（控制 LLM 成本）
+  # LLM 超时与重试配置
+  llm_timeout: 20.0                      # LLM 请求超时时间（秒）
+  llm_max_retries: 2                     # LLM 请求最大重试次数
+  llm_retry_delay: 1.0                   # 重试间隔（秒）
 
 # ========== 资金流日报 ==========
 flow_report:
@@ -372,6 +339,13 @@ log:
   dir: logs
   rotation: "10 MB"
   retention: "30 days"
+
+# ========== Web 仪表盘安全 ==========
+# v0.7.5 P0-8修复：敏感接口强制认证
+# 生产环境务必通过环境变量 GUGU_ADMIN_API_KEY 设置密钥
+web:
+  admin_api_key: "${GUGU_ADMIN_API_KEY}"  # 从环境变量读取（必填）
+  require_auth_for_sensitive: true         # 强制认证（生产安全）
 
 # ========== 十大视角分析 ==========
 perspective:

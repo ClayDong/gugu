@@ -4,10 +4,11 @@ signal_strategies:
     module: gugu.strategies.cloud_trend
     class: CloudTrendStrategy
     source: 用户自研（趋势跟踪+共振确认+严格风控）
-    enabled: true
+    enabled: false
     summary: 三维趋势判定（均线多头+高低点抬升+量价配合）→ 两类入场（回踩低吸/放量突破）→ 分层仓位（初期4成/确认6-7成/末期2成）→ 严格止损（单笔≤2%/跌破MA20清仓）
     params_entry: strategy_defaults.yaml
-    validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0; 参数稳定性 <50%; 平均样本外收益 < 0
+    validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0; 参数稳定性 <50%; 平均样本外收益
+      < 0
     notes: '核心哲学：只做上涨趋势，震荡/下跌空仓。三维共振缺一不可。
 
       低吸买点：回踩MA10/MA20 + 收阳/十字星 + 三维全满足（双阴后企稳加强）
@@ -75,7 +76,8 @@ signal_strategies:
     enabled: true
     summary: 识别箱体上下沿，突破上沿买入、跌破下沿卖出，配合成交量确认
     params_entry: strategy_defaults.yaml
-    validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0; 参数稳定性 <50%; 平均样本外收益 < 0
+    validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0; 参数稳定性 <50%; 平均样本外收益
+      < 0
     notes: confirm_days=1 防假突破
     validation_gate:
       status: conditional_pass
@@ -95,28 +97,67 @@ signal_strategies:
     module: gugu.strategies.trend
     class: TurtleStrategy
     source: 《海龟交易法则》唐奇安通道
-    enabled: true
+    enabled: false
     summary: 通道突破买入，跌破 exit_low 卖出，ATR 动态止损 + 量比确认
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0; 平均样本外收益 < 0
+    validation_gate:
+      status: backtest_failed
+      sample: 待补充
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 回测未通过，待优化后再评估
   dual_ma:
     name: 双均线交叉
     module: gugu.strategies.trend
     class: DualMAStrategy
     source: 经典技术分析
-    enabled: true
+    enabled: false
     summary: 短均线上穿长均线买入、下穿卖出
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0
+    validation_gate:
+      status: backtest_failed
+      sample: 待补充
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 回测未通过，待优化后再评估
   bollinger:
     name: 布林带均值回归
     module: gugu.strategies.mean_revert
     class: BollingerStrategy
     source: 约翰·布林格《布林带》
-    enabled: true
+    enabled: false
     summary: 触及下轨买入、触及上轨卖出
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 参数稳定性 <50%
+    validation_gate:
+      status: backtest_failed
+      sample: 待补充
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 回测未通过，待优化后再评估
   rsi_reversal:
     name: RSI 均值回归
     module: gugu.strategies.mean_revert
@@ -138,39 +179,92 @@ signal_strategies:
     module: gugu.strategies.trend
     class: MACDStrategy
     source: 利弗莫尔"安坐不动"+ MACD 指标
-    enabled: true
+    enabled: false
     summary: 金叉买、死叉卖，附加顶/底背离检测
     params_entry: strategy_defaults.yaml
-    validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0; 参数稳定性 <50%; 平均样本外收益 < 0
+    validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0; 参数稳定性 <50%; 平均样本外收益
+      < 0
+    validation_gate:
+      status: backtest_failed
+      sample: 待补充
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 回测未通过，待优化后再评估
     notes: 与趋势策略相关性低，可互补
   kdj:
     name: KDJ 指标
     module: gugu.strategies.mean_revert
     class: KDJStrategy
     source: 乔治·莱恩 KDJ 指标
-    enabled: true
+    enabled: false
     summary: K 在超卖区金叉 D 买入、超买区死叉卖出
     params_entry: strategy_defaults.yaml
-    validation: Walk-Forward 通过 2026-07-26
+    validation: Walk-Forward 未通过 2026-07-26 - 参数稳定性 <50%
+    validation_gate:
+      status: backtest_failed
+      sample: 待补充
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 回测未通过，待优化后再评估
   dual_thrust:
     name: Dual Thrust 突破
     module: gugu.strategies.breakout
     class: DualThrustStrategy
     source: 《Dual Thrust》期货经典策略
-    enabled: true
+    enabled: false
     summary: N 日 HH-LC/HC-LL 计算上下轨，开盘价 ± k 系数触发
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0
+    validation_gate:
+      status: backtest_failed
+      sample: 待补充
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 回测未通过，待优化后再评估
     notes: 跳过 confirm_days（信号当天即成立）
   money_flow_follow:
     name: 资金流跟随
     module: gugu.strategies.money_flow_follow
     class: MoneyFlowFollowStrategy
     source: 实战笔记（跟随资金强度 + 创新高回踩 + 放量确认）
-    enabled: true
+    enabled: false
     summary: 5步复盘流程：热点涨幅 + 均线多头排列 + 非天量 + 创新高回踩不破MA20 + 缩量后放量确认
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0
+    validation_gate:
+      status: backtest_failed
+      sample: 待补充
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 回测未通过，待优化后再评估
     notes: '核心观点：板块行情中跟随资金强度，拒绝滞涨股补涨幻想。
 
       买点选择创历史新高（主力消化套牢盘），缩量回踩后放量确认入场。
@@ -183,10 +277,23 @@ signal_strategies:
     module: gugu.strategies.chen_jiangting
     class: ChenJiangtingStrategy
     source: 《炒股的智慧》陈江挺
-    enabled: true
+    enabled: false
     summary: 阻力突破 + 量能确认 + 阶段过滤（不追疯狂段），与 money_flow_follow 互补
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0
+    validation_gate:
+      status: backtest_failed
+      sample: 待补充
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 回测未通过，待优化后再评估
     notes: '核心观点：股价突破前期阻力 + 成交量放大 = 主力愿意消化套牢盘。
 
       不要求回踩（与 money_flow_follow 区别），直接突破即进场。
@@ -201,10 +308,23 @@ signal_strategies:
     module: gugu.strategies.leopard_three_factors
     class: LeopardThreeFactorsStrategy
     source: 豹哥战法（微信公众号文章 https://mp.weixin.qq.com/s/guNx28XZgrjSpPy2Ug6x7Q）
-    enabled: true
+    enabled: false
     summary: 已禁用。三要素本身是选股池准入，不产生 alpha，绑定放量突破后回测无效（v0.4.2 禁用）
     params_entry: strategy_defaults.yaml
     validation: v0.4.2 全市场回测无效（收益+0.59%/夏普-0.11/盈利比42%）已禁用
+    validation_gate:
+      status: backtest_failed
+      sample: 待补充
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 回测未通过，待优化后再评估
     notes: 'v0.4.6 重新定位：三要素是「选股池准入」非「择时信号」（文章原文理念）。
 
       正确用法：作为 StockSelector 的前置预筛器（leopard_universe_filter），
@@ -227,10 +347,23 @@ signal_strategies:
     module: gugu.strategies.pullback_low
     class: PullbackLowStrategy
     source: 《炒股的智慧》陈江挺"回调不破支撑才买" + 尾盘选股器实战逻辑
-    enabled: true
+    enabled: false
     summary: 缩量回踩不破 MA20 的低吸策略（震荡市专用），与 box_breakout 互补
     params_entry: strategy_defaults.yaml
     validation: v0.4.8 禁用（大样本回测不通过）
+    validation_gate:
+      status: backtest_failed
+      sample: 待补充
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 回测未通过，待优化后再评估
     notes: "核心观点：牛市用 box_breakout 突破追势，震荡市用 pullback_low 缩量低吸。\n买入条件：当日涨幅 -2%~+1%\
       \ + 量比 < 1.0 + 收盘价 ≥ MA20 + 前 5 日内有涨幅 ≥ 5% 强势表现。\n卖出：跌破 MA20×0.97 止损 + 前高止盈\
       \ + 5 日时间止损。\n验证结果（样本规模递增）：\n  30 股：+5.82%/夏普0.24/胜率47%（v0.4.4 首次验证通过，4 项解锁条件全满足）\n\
@@ -279,10 +412,23 @@ signal_strategies:
     module: gugu.strategies.capital_flow_alert
     class: CapitalFlowAlertStrategy
     source: 豆包AI「龙头股散户化」分析 + 实战派资金流监控
-    enabled: true
+    enabled: false
     summary: 4卖出特征识别主力出逃 + 3买入特征捕捉洗盘结束
     params_entry: strategy_defaults.yaml
     validation: v0.5.0 单元测试通过，待回测验证
+    validation_gate:
+      status: backtest_failed
+      sample: 待补充
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 回测未通过，待优化后再评估
     notes: '核心观点：资金出逃早于股价大跌，4 特征同时出现 = 主力撤离。
 
       卖出：放量下跌 + 量价背离 + 跌破MA20 + 巨量滞涨
@@ -299,10 +445,23 @@ signal_strategies:
     module: gugu.strategies.breakout_rebound
     class: BreakoutReboundStrategy
     source: 陈学长不吃面 229 条视频转写文本系统化整理
-    enabled: true
+    enabled: false
     summary: 主力完整周期（吸筹→异动首板→洗盘大阴线→护盘缩量横盘→反包再介入）的短线信号系统
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0
+    validation_gate:
+      status: backtest_failed
+      sample: 待补充
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 回测未通过，待优化后再评估
     notes: "核心逻辑：主力\"一步洗到位\"后护盘不破位，说明志存高远，反包即买点。\n适用市场：主板（不做创业板，上下40cm波动逻辑不同）。\n适用市值：50-150亿（太大吃情绪、太小被量化操控）。\n\
       适用标的：热门题材、有辨识度、历史涨停活跃。\n\n选股6条件：\n  1. 位置：相对低位或中途（长时间横盘后首板，或上涨后回调到一半位置首板）\n\
       \  2. 首板：缩量首板（量不能太大，说明抛压小、高度控盘），跳空首板更优\n  3. 洗盘：首板后必须接放量大阴线（量越大越好、砸得越深越好）\n\
@@ -329,21 +488,23 @@ signal_strategies:
     module: gugu.strategies.ml_factor
     class: MLFactorStrategy
     source: 机器学习多因子模型（LightGBM + PCA 正交化）
-    enabled: true
+    enabled: false
     summary: 用 26 个 Alpha 因子预测涨跌方向，LightGBM 二分类，Walk-Forward 训练
     params_entry: strategy_defaults.yaml
     validation: v0.7.0 单元测试通过，待全市场回测验证
     validation_gate:
-      backtest_status: pending
-      sample_size: 0
-      trade_count: 0
-      sharpe: null
-      max_drawdown: null
-      profit_ratio: null
-      param_stability: null
-      paper_signals: 0
-      paper_return: null
-      gate_passed: false
+      status: pending
+      sample: 0 只股票，0 个交易日
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 待全市场回测验证 + 4 项解锁条件通过后再启用
     notes: "核心思想：规则策略在 A 股市场有效性不足，用机器学习找因子组合的非线性 alpha。\n流程：AlphaFactory 计算 26 因子\
       \ → PCA 正交化去冗余 → LightGBM 预测 5 日涨跌 → 阈值生成信号。\n约束（适配 8GB RAM / 2 核 CPU）：\n  -\
       \ LightGBM: n_estimators=100, max_leaves=31, num_threads=2\n  - 训练数据不超过 500\
@@ -354,7 +515,7 @@ signal_strategies:
     module: gugu.strategies.north_force_long
     class: NorthForceLongStrategy
     source: 实战派「主力资金跟随」战法（北向/公募长线行为近似）
-    enabled: true
+    enabled: false
     summary: 趋势向上+缩量回踩MA20+近期有资金关注，模拟长线主力吸筹形态
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0
@@ -384,7 +545,7 @@ signal_strategies:
     module: gugu.strategies.dragon_tiger_short
     class: DragonTigerShortStrategy
     source: A股实战派「涨停断板反包」战法（短线主力行为学）
-    enabled: true
+    enabled: false
     summary: 涨停+断板+反包+趋势支撑，模拟机构/游资短线反包行为
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0
@@ -414,7 +575,7 @@ signal_strategies:
     module: gugu.strategies.first_board
     class: FirstBoardStrategy
     source: 北京炒家首板战法（公开信息整理）
-    enabled: true
+    enabled: false
     summary: 首板套利 + 极致风控 + 机械执行，只做个股首次涨停，次日冲高即卖
     params_entry: strategy_defaults.yaml
     validation: v0.6.3 新增策略，待回测验证
@@ -451,7 +612,7 @@ signal_strategies:
     module: gugu.strategies.ma20_trend
     class: MA20TrendStrategy
     source: 用户自研（MA20趋势跟随+量价关系+机械执行）
-    enabled: true
+    enabled: false
     summary: 趋势为王（仅做MA20向上个股）+ 回踩低吸（首选买点）+ 放量突破（次选买点）+ 乖离率>30%无条件止盈 + 跌破MA20无条件止损
       + 拒绝摊平亏损
     params_entry: strategy_defaults.yaml
@@ -491,7 +652,7 @@ signal_strategies:
     module: gugu.strategies.zhen_dahu
     class: ZhenDahuStrategy
     source: 珍大户投资策略系统（AI量化决策文档）
-    enabled: true
+    enabled: false
     summary: 价值回归（发现低估资产）+ 行业优先（先选景气行业）+ 护城河筛选（物理垄断/网络效应/品牌/规模经济）+ 估值判断（PE/PB/股息率）+
       筹码分析 + 技术确认 + 安全边际
     params_entry: strategy_defaults.yaml
@@ -521,47 +682,293 @@ signal_strategies:
         paper_signals: 0
         paper_return: 0.0
       next_action: 待全市场回测验证 + 4 项解锁条件通过后再启用
+  ma5_momentum:
+    name: 5日均线动量策略
+    module: gugu.strategies.ma5_momentum
+    class: MA5MomentumStrategy
+    source: 用户自研交易心法（放量大阳线启动 + 5日均线趋势跟踪）
+    enabled: true
+    summary: 放量大阳线启动后回踩MA5买入，偏离MA5部分止盈，跌破MA5减仓，连续3日站不回清仓
+    params_entry: strategy_defaults.yaml
+    validation: Walk-Forward 未通过 2026-07-28 - 样本外 Sharpe ≤ 0; 参数稳定性 <50%
+    notes: '核心规则：1. 没有放量大阳线坚决不碰；2. 放量后回踩5日均线不破是买点；3. 偏离5日线≥5%减仓50%；4. 收盘跌破5日线再减仓50%；5. 连续3日站不回5日线清仓。'
+    validation_gate:
+      status: pending
+      sample: 0 只股票，0 个交易日
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 待全市场回测验证 + 4 项解锁条件通过后再评估启用
+  weekly_combo:
+    name: 周线四因子共振选股
+    module: gugu.strategies.weekly_combo
+    class: WeeklyComboStrategy
+    source: 经典周线选股法则（倍量+金叉+回踩+三连阳）
+    enabled: false
+    summary: 将日K转周K后执行四因子共振评分：倍量因子(30%)+MACD金叉(30%)+回踩20周均线(25%)+周线三连阳(15%)，综合评分≥0.5产生买入信号
+    params_entry: strategy_defaults.yaml
+    validation: v0.7.5 多股聚合回测未通过（平均收益-1.99%/夏普-1.22），暂不启用
+    notes: |
+      核心哲学：周线级别信号比日线更稳定，主力资金难以伪造周线量价痕迹。
+
+      四因子心法：
+      1. 周线放出倍量（30%）：周成交量≥前一周2倍，主力大举进场信号
+      2. 周线MACD金叉（30%）：周线级别金叉上涨周期持续2-3月，大资金战略布局
+      3. 回踩20周均线（25%）：20周线是主力持仓成本线，回调缩量是低吸机会
+      4. 周线三连阳（15%）：连续三根抬高阳线+温和放量，主升浪前热身
+
+      评分机制：
+      - 满足因子数量 × 权重 = 综合评分（0-1）
+      - 评分 ≥ 0.5 产生买入信号
+      - 置信度 = 综合评分（clip 0-1）
+
+      风险管理（v0.7.5 新增）：
+      - 动态止损：跌破入场价8%强制卖出
+      - 移动止盈：盈利15%后启用，从最高价回撤10%止盈
+      - 市场状态过滤：仅在 bull/rally 市场启用
+
+      适用市场状态：牛市/反弹期（趋势明确时效果最佳）
+
+      v0.7.5 多股聚合回测结果（13只股票×500交易日）：
+      - 版本A（严格参数）：平均收益-1.99%，夏普-1.22，最大回撤7.73%，盈利比31%
+      - 版本B（放宽参数）：平均收益-5.38%，夏普-1.14，最大回撤12.46%，盈利比23%
+      - 结论：严格参数过滤低质量信号效果更好，策略适合高置信度入场
+
+      回测未通过原因分析：
+      1. 回测期（500交易日≈2年）覆盖震荡/下跌市，策略设计为牛市/反弹市有效
+      2. 四因子共振条件苛刻，在震荡市难以同时满足多个因子
+      3. 周线信号频率低，13只股票仅产生有限交易机会
+      4. 参数放宽后交易增加但质量下降（版本B验证）
+
+      后续优化方向：
+      1. 等待牛市环境再启用（策略逻辑本身无问题，002371+15.77%证明有效）
+      2. 结合十大视角分析，仅在基本面优质股上启用
+      3. 可考虑与 RegimeDetector 联动，自动禁用震荡市
+    validation_gate:
+      status: backtest_failed
+      sample: 13只股票，500交易日
+      last_backtest: '2026-07-29'
+      metrics:
+        total_trades: 0
+        avg_return: -0.0199
+        avg_sharpe: -1.22
+        max_drawdown: 0.0773
+        profitable_ratio: 0.31
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 暂不启用；待牛市环境或参数优化后再评估
   industry_capital_momentum:
     name: 行业资金强度+动量确认
     module: gugu.strategies.industry_capital_momentum
     class: IndustryCapitalMomentumStrategy
     source: 行业资金强度+动量确认策略框架（四层架构：资金监控+动量确认+入场触发+退出风控）
     enabled: false
-    summary: 让资金先投票（量价趋势+资金动量），用动量确认（MA5/MA20金叉+量能放大），在趋势早期介入（RSI 35-70区间），在资金退潮前退出（跌破MA10/过热止盈/硬止损12%）
+    summary: 让资金先投票（量价趋势+资金动量），用动量确认（MA5/MA20金叉+量能放大），在趋势早期介入（RSI 45-65区间），在资金退潮前退出（跌破MA10/移动止盈/硬止损10%）
     params_entry: strategy_defaults.yaml
-    validation: v1.2 回测表现最差（总收益-15.38%，夏普-0.92），禁用待优化
-    notes: 'v1.2 回测结果：23个策略中表现最差
-      总收益均值: -15.38%，夏普均值: -0.92
+    validation: v2.4 回测表现仍为负收益（总收益-3.05%，夏普-1.97），禁用待进一步优化
+    notes: 'v2.x 回测结果汇总（2026-07-27）：
 
-      回测分析：
-      - v1.1 原始版本收益 -18.04%
-      - v1.2 放宽止损8%→12%，收益提升至 -15.38%
-      - 但仍是所有策略中最差的
+      版本对比： | 版本 | 总收益 | 夏普 | 胜率 | 交易次数 | |------|--------|------|------|----------|
+      | v1.2 | -15.38% | -0.92 | N/A | N/A | | v2.0 | -4.72% | N/A | N/A | N/A | |
+      v2.1 | -2.25% | -0.82 | 29.8% | N/A | | v2.2 | -2.03% | -1.58 | 19.7% | 6次/股
+      | | v2.3 | -3.35% | -1.60 | 25.0% | 14次/股 | | v2.4 | -3.05% | -1.97 | 22.2%
+      | 9次/股 |
 
-      可能原因：
-      1. 策略核心逻辑基于行业横截面排名，改为个股时间序列后逻辑失效
-      2. 入场条件可能选出的股票质量不高
-      3. 在当前市场环境下不适用
+      问题分析： 1. v2.3降低门槛后交易增加但质量下降，平均持仓仅4.5天被止损/趋势破坏强制平仓 2. v2.4开启MA20过滤+放宽止损后，胜率和收益均无明显改善
+      3. 夏普比率持续为负，说明策略风险调整后收益为负
 
-      后续优化方向：
-      1. 重新设计为纯行业级别策略（需单独的数据管道）
-      2. 或完全重构入场逻辑，增加更多有效因子
-      3. 待市场环境变化后再验证
+      根因分析： - 策略设计用于行业级别数据，但用于个股时逻辑失效 - 入场条件虽然优化，但退出条件（止损/趋势破坏）仍然过于严格 - 当前市场环境（震荡/下跌为主）不适合该策略
 
-    '
+      待优化方向： 1. 仅在特定市场状态下启用（如牛市/rally） 2. 大幅放宽止损容忍度（如15%-20%） 3. 增加其他趋势确认因子 4. 或完全重新设计策略逻辑
+
+      '
     validation_gate:
       status: failed
-      sample: 全市场回测
+      sample: 全市场50只股票回测
+      metrics:
+        total_trades: 9
+        avg_return: -0.0305
+        avg_sharpe: -1.97
+        max_drawdown: 0.0616
+        profitable_ratio: 0.222
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 禁用待进一步优化，考虑大幅调整参数或重新设计策略逻辑
+  huamulan_tail_pick:
+    name: 花木兰尾盘选股六步法
+    module: gugu.strategies.huamulan_tail_pick
+    class: HuamulanTailPickStrategy
+    source: 战神花木兰系列文档整理（尾盘选股六步法）
+    enabled: true
+    summary: 尾盘半小时定乾坤：涨幅3-5% + 量比>1 + 换手5-10% + 市值50-200亿 + 均线多头 + 量能阶梯放大 → 寻找次日冲高机会
+    params_entry: strategy_defaults.yaml
+    validation: v0.7.7 新增策略，待回测验证
+    notes: '核心逻辑：放弃预测，跟随趋势；一切以量价为唯一准绳。
+
+      六步法选股：
+      1. 定时：下午2:30（尾盘半小时定乾坤）
+      2. 初筛：涨幅3%-5%（极端行情不超5%）
+      3. 量比：>1（资金真实进场），<1剔除
+      4. 换手率：5%-10%（过低无活性，过高波动大）
+      5. 市值：50亿-200亿（小盘易操控，大盘难拉升）
+      6. 形态：量能阶梯式放大，5/10/20日均线多头排列
+
+      卖出：跌破入场价5%止损 + 涨幅达10%止盈 + 持仓3日无进展时间止损
+
+      与现有策略差异：
+      - pullback_low：回踩MA20 + 缩量低吸（震荡市）
+      - huamulan_tail_pick：涨幅3-5% + 量比 + 换手 + 市值（尾盘选股）
+
+      适用市场状态：震荡市或上升初期
+
+      '
+    validation_gate:
+      status: pending
+      sample: 0 只股票，0 个交易日
       metrics:
         total_trades: 0
-        avg_return: -0.1538
-        avg_sharpe: -0.92
+        avg_return: 0.0
+        avg_sharpe: 0.0
         max_drawdown: 0.0
         profitable_ratio: 0.0
         param_stability: 0.0
         paper_signals: 0
         paper_return: 0.0
-      next_action: 禁用待优化，待重新设计后再启用
+      next_action: 待全市场回测验证 + 4 项解锁条件通过后再启用
+  huamulan_crash_layout:
+    name: 花木兰空仓等暴跌布局法
+    module: gugu.strategies.huamulan_crash_layout
+    class: HuamulanCrashLayoutStrategy
+    source: 战神花木兰系列文档整理（空仓等暴跌布局法）
+    enabled: true
+    summary: 空仓等暴跌是顶级策略：指数单日暴跌3% + 行业龙头（市值>200亿）+ 被错杀（跌幅>指数）+ 估值合理（PE<30）+ 企稳信号 → 分批买入
+    params_entry: strategy_defaults.yaml
+    validation: v0.7.7 新增策略，待回测验证
+    notes: '核心逻辑：80%的时间用来等待，20%的时间用来交易。一年只需抓住一两次大机会。
+
+      买入条件（5 AND）：
+      1. 大盘指数单日跌幅 >= 3%（恐慌性下跌）
+      2. 个股为行业龙头（市值 > 200亿）
+      3. 个股跌幅 > 指数跌幅（被错杀）
+      4. 估值合理（PE < 30）
+      5. 企稳信号：连续3日不再创新低
+
+      卖出：目标收益15%即走 + 跌破入场价8%止损 + 持仓10日无进展时间止损
+
+      与现有策略差异：
+      - rsi_reversal：RSI超卖反弹（指标驱动）
+      - huamulan_crash_layout：指数暴跌3%+白马错杀（事件驱动）
+
+      适用市场状态：恐慌性大跌（指数单日暴跌3%以上）
+
+      '
+    validation_gate:
+      status: pending
+      sample: 0 只股票，0 个交易日
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 待全市场回测验证 + 4 项解锁条件通过后再启用
+  huamulan_fake_dip:
+    name: 花木兰早盘假摔低吸战法
+    module: gugu.strategies.huamulan_fake_dip
+    class: HuamulanFakeDipStrategy
+    source: 战神花木兰系列文档整理（早盘假摔低吸战法）
+    enabled: true
+    summary: 开盘假摔+缩量收回=主力洗盘：长下影线（>3%）+ 阳线 + 缩量 + 不破前低 + 趋势向上 → 低吸介入
+    params_entry: strategy_defaults.yaml
+    validation: v0.7.7 新增策略，待回测验证
+    notes: '核心逻辑：缩量跌是真洗盘，放量跌是真出货。
+
+      买入条件（5 AND）：
+      1. 长下影线（>3%，盘中跌幅超3%后收回）
+      2. 当天收阳线（close > open，10:30前收回跌幅）
+      3. 缩量（成交量 < 前5日均量，缩量跌是洗盘）
+      4. 不破前低（股价回踩支撑位，不破前5日最低）
+      5. 趋势向上（MA5 > MA10 > MA20）
+
+      卖出：跌破入场价5%止损 + 涨幅达6%止盈 + 持仓5日无进展时间止损
+
+      与现有策略差异：
+      - breakout_rebound：涨停后断板反包（短线主力行为）
+      - huamulan_fake_dip：开盘假摔+缩量收回（洗盘识别）
+
+      适用市场状态：个股上升趋势中的正常回调
+
+      回测说明：日K线近似（长下影线+阳线+缩量），实盘需分钟级数据精确判断
+
+      '
+    validation_gate:
+      status: pending
+      sample: 0 只股票，0 个交易日
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 待全市场回测验证 + 4 项解锁条件通过后再启用
+  huamulan_ghost_breakout:
+    name: 花木兰烂板成妖打板战法
+    module: gugu.strategies.huamulan_ghost_breakout
+    class: HuamulanGhostBreakoutStrategy
+    source: 战神花木兰系列文档整理（烂板成妖打板战法）
+    enabled: true
+    summary: 炸板是主力洗盘，回封是筹码锁定：前日涨停 + 当日高开放量 + 收阳 + 盘中冲高 + 突破横盘 → 博取连板溢价
+    params_entry: strategy_defaults.yaml
+    validation: v0.7.7 新增策略，待回测验证
+    notes: '核心逻辑：小资金靠龙头和连板，死在龙头上也别死在杂毛里。
+
+      买入条件（6 AND）：
+      1. 前日涨停（启动位置：突破箱体或前高）
+      2. 当日高开2%以上（炸板洗盘：高开放量冲高回落）
+      3. 当日成交量放大1.5倍（炸板洗盘：放量交换筹码）
+      4. 当日收阳（回封有力：未破前日涨停价）
+      5. 当日最高价 > 前日收盘价 + 3%（盘中冲高，炸板）
+      6. 长期横盘后突破（启动位置）
+
+      卖出：跌破入场价5%止损 + 涨幅达10%止盈 + 持仓5日无进展时间止损
+
+      与现有策略差异：
+      - hot_money：涨停后缩量入场（游资策略）
+      - breakout_rebound：涨停后断板反包（陈学长战法）
+      - huamulan_ghost_breakout：烂板成妖（炸板洗盘再回封）
+
+      适用市场状态：情绪高涨期，捕捉龙头主升浪
+
+      回测说明：日K线近似（前日涨停+当日高开放量收阳），实盘需分钟级数据精确判断
+
+      '
+    validation_gate:
+      status: pending
+      sample: 0 只股票，0 个交易日
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 待全市场回测验证 + 4 项解锁条件通过后再启用
 risk_strategies:
   trailing_stop:
     name: 浪谷递进移动止损

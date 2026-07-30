@@ -28,6 +28,7 @@ class AkshareCollector(BaseCollector):
     """akshare 主采集器。"""
 
     source = "akshare"
+    adjust_type = "qfq"  # 前复权
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
     def fetch_stock_history(self, symbol: str, days: int = 90) -> pd.DataFrame:

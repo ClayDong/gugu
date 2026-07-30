@@ -20,6 +20,7 @@ class BaseCollector(ABC):
     """采集器抽象基类。所有数据源采集器继承此类。"""
 
     source: Source = "akshare"
+    adjust_type: str = "none"  # 复权方式：none(不复权)/qfq(前复权)/hfq(后复权)
 
     @abstractmethod
     def fetch_stock_history(self, symbol: str, days: int = 90) -> pd.DataFrame:

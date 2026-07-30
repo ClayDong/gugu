@@ -140,9 +140,13 @@ gugu/
 │       │   └── qmt.py           # QMT实盘（阶段四启用）
 │       ├── notifier/            # 通知层
 │       │   ├── feishu.py        # 飞书推送 + 通知重试队列
-│       │   ├── formatter.py     # 信号/日报/风控/回测卡片
+│       │   ├── formatter.py     # 信号卡片（核心 + 子模块 re-export）
+│       │   ├── formatter_reports.py # 日报/绩效/风控/回测/验证卡片
+│       │   ├── formatter_special.py # 云策略/游资/冲突/概念/止盈卡片
 │       │   ├── fund_monitor.py  # 基金净值监控（001480/026211）
-│       │   └── flow_report.py   # 资金流日报（08:00复盘/15:10日报）
+│       │   ├── flow_report.py   # 资金流日报（08:00复盘/15:10日报）
+│       │   ├── flow_collector.py # 资金流数据采集与分析引擎
+│       │   └── flow_formatter.py # 资金流日报格式化/卡片构建
 │       ├── selector/            # 选股层
 │       │   └── stock_selector.py # 资金流 + 策略筛选
 │       ├── analysis/            # 高级分析 + P0 认知引擎
@@ -164,9 +168,12 @@ gugu/
 │       │       ├── (炒股的智慧 6 个 skill)
 │       │       └── books/       # 28 本股书蒸馏 SKILL.md（仓颉认知植入术）
 │       ├── engine/              # 主引擎
-│       │   ├── main.py          # 主引擎入口
-│       │   ├── scheduler.py     # APScheduler 调度
-│       │   └── signal_router.py # 多策略信号融合
+│       │   ├── main.py          # TradingEngine（EngineOpsMixin 混入）
+│       │   ├── engine_mixin.py  # 信号扫描/处理/去重/心跳方法
+│       │   ├── scheduler.py     # TradingScheduler（SchedulerJobsMixin 混入）
+│       │   ├── scheduler_jobs.py # 各定时任务安全执行方法
+│       │   ├── signal_router.py # 多策略信号融合
+│       │   └── signal_pipeline.py # 信号过滤/处理管道
 │       ├── web/                 # Web 仪表盘
 │       │   ├── app.py           # FastAPI 应用
 │       │   └── static/index.html # 单页仪表盘
@@ -337,10 +344,88 @@ gugu/
 ## 元数据
 
 - 创建日期：2026-07-06
-- 版本：v0.7.3
-- 阶段：阶段三（信号监控）+ 十大视角分析系统 + 信号流融合 + 宏观增强 + 博格市场温度计 + 策略全链路优化 + A股费用模型对齐 + 多专家深度审查 + 另类数据Alpha因子系统 + 上线级全面优化 + 实盘/模拟盘数据分离 + 信号产量优化 + 陈学长不吃面策略大幅放宽 + 启发式参数优化系统
-- 测试：1965 passed, 5 skipped
-- 最近审查：2026-07-28（启发式优化器 GA/PSO 实现完成，22个单元测试+全量测试通过）
+- 版本：v0.7.8
+- 阶段：阶段三（信号监控）+ 十大视角分析系统 + 信号流融合 + 宏观增强 + 博格市场温度计 + 策略全链路优化 + A股费用模型对齐 + 多专家深度审查 + 另类数据Alpha因子系统 + 上线级全面优化 + 实盘/模拟盘数据分离 + 信号产量优化 + 陈学长不吃面策略大幅放宽 + 启发式参数优化系统 + 周线四因子选股策略 + 飞书通知去重修复 + 花木兰策略系列 + 信号数据时效性追踪
+- 测试：1981 passed, 7 failed（pre-existing failures in test_cloud_trend/test_first_board/test_ma5_momentum/test_north_force_long）
+- 最近审查：2026-07-30（信号数据时效性追踪 + 数据源透明度优化）
+- v0.7.8 变更（2026-07-30 信号数据时效性追踪 + 数据源透明度优化）：
+  - 🆕 新增：信号数据时效性追踪系统
+    - Signal模型扩展：新增 data_timestamp/data_source/is_intraday/adjust_type 字段
+    - DataManager增强：current_source/current_adjust_type 属性追踪当前数据源
+    - 采集器标准化：所有采集器声明 adjust_type（sina=none, akshare=qfq, eastmoney=qfq）
+    - Engine集成：扫描时自动注入数据源和时间戳元数据
+    - 飞书卡片增强：信号卡片底部显示数据来源和复权方式
+  - 🔴 P0修复：数据源透明度问题
+    - 根因：信号卡片未标注数据来源和复权方式，导致MA20计算基准不一致
+    - 修复1：BaseCollector 基类添加 adjust_type 类属性
+    - 修复2：DataManager 添加 current_source/current_adjust_type 属性
+    - 修复3：engine_mixin.py 扫描时记录 scan_timestamp/data_source/adjust_type
+    - 修复4：formatter.py 卡片底部显示"数据源: 新浪/akshare/东方财富"和"复权: 不复权/前复权/后复权"
+  - 🧪 测试：所有信号/通知相关测试通过（15 passed）
+  - 修改文件：
+    - 修改：src/gugu/models/signal.py, src/gugu/data/manager.py, src/gugu/data/collectors/base.py
+    - 修改：src/gugu/data/collectors/akshare_collector.py, src/gugu/data/collectors/eastmoney_collector.py
+    - 修改：src/gugu/data/collectors/fallback.py, src/gugu/engine/engine_mixin.py
+    - 修改：src/gugu/notifier/formatter.py
+- v0.7.7 变更（2026-07-30 花木兰策略系列实现）：
+  - 🆕 新增：花木兰策略系列（4个策略）
+    - huamulan_tail_pick：尾盘选股六步法（小资金复利首选）
+      - 六步法：涨幅3-5% + 量比>1 + 换手5-10% + 市值50-200亿 + 均线多头 + 量能阶梯放大
+      - 适用市场：bull/rally/sideways
+    - huamulan_crash_layout：空仓等暴跌布局法（大资金稳健复利）
+      - 买入条件：指数暴跌3% + 行业龙头（市值>200亿）+ 被错杀 + 估值合理（PE<30）+ 企稳信号
+      - 适用市场：crash（特殊触发）
+    - huamulan_fake_dip：早盘假摔低吸战法（捕捉主力洗盘）
+      - 买入条件：长下影线（>3%）+ 阳线 + 缩量 + 不破前低 + 趋势向上
+      - 适用市场：bull/rally
+    - huamulan_ghost_breakout：烂板成妖打板战法（博取连板溢价）
+      - 买入条件：前日涨停 + 高开放量 + 收阳 + 盘中冲高 + 突破横盘
+      - 适用市场：bull/rally
+  - 🧪 测试：新增 36 个花木兰策略单元测试
+    - 每个策略9个测试：名称/类别/信号生成/信号值/置信度/参数验证
+    - 集成测试：策略名称唯一性/类别有效性/置信度生成
+  - 测试覆盖：4个策略文件行覆盖率 95%+/98%+/98%+/99%
+  - 修改文件：
+    - 新增：strategies/huamulan_tail_pick.py, strategies/huamulan_crash_layout.py, strategies/huamulan_fake_dip.py, strategies/huamulan_ghost_breakout.py
+    - 新增：tests/unit/test_huamulan_strategies.py
+    - 修改：strategies/registry.py, config/strategy_defaults.yaml, config/settings.yaml, config/strategy_manifest.yaml
+  - 当前状态：experimental（待回测验证通过后加入 verified_strategies）
+- v0.7.6 变更（2026-07-29 飞书通知去重机制彻底修复）：
+  - 🔴 P0-13修复：飞书通知重复发送问题
+    - 根因1：信号级去重在发送前标记，发送失败但已标记导致无法重试
+    - 根因2：卡片指纹包含动态数据（价格、百分比、时间戳），价格变化导致指纹不同绕过去重
+    - 根因3：重试队列只检查卡片指纹，不检查信号级去重
+    - 修复1：engine_mixin.py 信号发送成功后再标记已通知（移除提前标记）
+    - 修复2：feishu.py 卡片指纹排除动态数据（_is_dynamic_content 方法）
+    - 修复3：feishu.py 重试队列增加信号级去重检查（_get_signal_key_from_card + _is_signal_notified + _mark_signal_notified）
+    - 修复4：feishu.py 卡片指纹 TTL 从5分钟增加到1小时（覆盖扫描间隔）
+    - 修复5：engine_mixin.py 去重 key 过滤条件放宽（保留带策略名的 key）
+    - 修复6：test_feishu_notifier.py 增加 clear_notified_signals fixture 避免测试间状态污染
+  - 修改文件：src/gugu/engine/engine_mixin.py, src/gugu/notifier/feishu.py, tests/unit/test_feishu_notifier.py
+- v0.7.5 变更（2026-07-29 周线四因子选股策略开发 + 动态止损/移动止盈）：
+  - 🆕 新增：周线四因子共振选股策略（strategies/weekly_combo.py）
+    - 四因子共振：倍量(30%) + MACD金叉(30%) + 回踩20周均线(25%) + 三连阳(15%)
+    - 动态止损机制：跌破入场价8%强制卖出（_apply_stop_loss_and_take_profit）
+    - 移动止盈机制：盈利15%后启用，从最高价回撤10%止盈
+    - 市场状态过滤：仅在 bull/rally 市场启用（settings.yaml enabled_by_regime）
+    - 修复周线-日线日期对齐：改用 merge_asof(direction="backward") 替代 merge
+  - 🧪 测试：新增 14 个周线策略单元测试（TestWeeklyComboStrategy + TestWeeklyComboStopLoss）
+    - 基础功能：信号值有效性/周线转换/评分计算
+    - 止损/止盈：止损触发/移动止盈触发/未持仓不触发
+    - 边界条件：空数据/短数据/缺失列
+  - 测试覆盖：weekly_combo.py 行覆盖率 91%（11行未覆盖为边界分支）
+  - 修改文件：strategies/weekly_combo.py, config/strategy_defaults.yaml, config/settings.yaml, config/strategy_manifest.yaml, tests/unit/test_weekly_combo.py
+  - 🟡 多股聚合回测结论（13只股票×500交易日）：
+    - 版本A（严格参数）：平均收益-1.99%，夏普-1.22，最大回撤7.73%，盈利比31%
+    - 版本B（放宽参数）：平均收益-5.38%，夏普-1.14，最大回撤12.46%，盈利比23%
+    - **结论：严格参数优于放宽参数，策略适合高置信度入场**
+    - 最佳表现：002371(+15.77%)、300750(+9.66%)
+    - 最差表现：002230(-15.55%)、600438(-10.28%)
+  - 新增脚本：scripts/multi_backtest_weekly.py（多股聚合回测工具）
+  - 新增策略：周线四因子共振选股（weekly_combo）
+    - 核心逻辑：周线级别信号比日线更稳定，主力资金难以伪造周线量价痕迹
+    - 适用场景：牛市/反弹期趋势明确时效果最佳
+    - 当前状态：disabled（回测未通过 4 项解锁条件，等待牛市环境）
 - v0.7.3 变更（2026-07-28 启发式参数优化系统）：
   - 🆕 新增：启发式策略参数优化器（analysis/heuristic_optimizer.py）
     - 遗传算法 (GAOptimizer)：锦标赛选择 + 单点交叉 + 高斯变异 + 精英保留
