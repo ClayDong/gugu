@@ -71,9 +71,13 @@ gugu/
 │   │   └── qmt.py               # QMT 实盘（阶段四骨架）
 │   ├── notifier/                # 通知层
 │   │   ├── feishu.py            # 飞书推送（含 tenacity 重试）
-│   │   ├── formatter.py         # 卡片格式化（类型安全）
+│   │   ├── formatter.py         # 信号卡片（核心 + 子模块 re-export）
+│   │   ├── formatter_reports.py # 日报/绩效/风控/回测/验证卡片
+│   │   ├── formatter_special.py # 云策略/游资/冲突/概念/止盈卡片
 │   │   ├── fund_monitor.py      # 基金净值监控
 │   │   ├── flow_report.py       # 资金流日报 + 14:30 盘中决策报告
+│   │   ├── flow_collector.py    # 资金流数据采集与分析引擎
+│   │   ├── flow_formatter.py    # 资金流日报格式化/卡片构建
 │   │   └── perspective_report.py # 十大视角分析飞书报告（v0.5.0）
 │   ├── macro/                   # 宏观五维模块
 │   ├── selector/                # 选股层
@@ -118,8 +122,10 @@ gugu/
 │   │       ├── (炒股的智慧 6 个 skill)
 │   │       └── books/           # 仓颉蒸馏的 28 本股书 SKILL.md
 │   ├── engine/                  # 主引擎
-│   │   ├── main.py              # TradingEngine（核心编排）
-│   │   ├── scheduler.py         # APScheduler 调度（4 次/日扫描）
+│   │   ├── main.py              # TradingEngine（核心编排，EngineOpsMixin 混入）
+│   │   ├── engine_mixin.py      # 信号扫描/处理/去重/心跳（从 main.py 提取）
+│   │   ├── scheduler.py         # TradingScheduler（APScheduler 调度）
+│   │   ├── scheduler_jobs.py    # 各定时任务安全执行方法（从 scheduler.py 提取）
 │   │   ├── signal_router.py     # 多策略信号融合（any/majority/unanimous）
 │   │   ├── signal_pipeline.py   # 过滤流水线（独立可测试）
 │   │   └── event_engine.py      # 事件驱动引擎（10 事件类型）
@@ -202,8 +208,6 @@ gugu/
 - 持久化到 `data/notified_signals.json`，引擎重启后自动恢复
 - 同一交易日、同方向、同策略的信号只通知一次，避免重复推送
 
-**事件驱动**：循环中 7 个关键节点通过 EventEngine.put() 产生事件（cycle_start/end、market_regime、signal、order_filled、risk_alert、stop_loss、daily_loss_warn/halt）。
-
 ### 3.3 信号过滤流水线
 
 `SignalPipeline`（[engine/signal_pipeline.py](src/gugu/engine/signal_pipeline.py)）：
@@ -211,28 +215,41 @@ gugu/
 ```
 策略信号 → 路由 → L3 元数据注入(prev_close/is_st/is_suspended)
                     ↓
-         [步骤0]  四阶段判断（StageDetector）
+         [步骤0]   四阶段判断（StageDetector）
                     ↓
-         [步骤0.5] 危险信号检测（DangerSignalDetector，仅买入，medium+ 过滤）
+         [步骤0.5] 危险信号检测（DangerSignalDetector，仅买入）
                     ↓
-              1. 基本面过滤（仅买入）
+         [步骤0.7] 量价背离检测（DivergenceDetector，仅买入）
                     ↓
-              2. 资金流过滤（仅买入）
+         [步骤1]   基本面过滤（FundamentalFilter，仅买入）
                     ↓
-              3. 行业约束（仅买入 + 新建仓位）
+         [步骤2]   资金流过滤（MoneyFlowFilter，仅买入）
                     ↓
-         [步骤2.5] 向下摊平检查（NoAverageDownChecker，仅买入）
+         [步骤2.5] 板块轮动检查（SectorRotation，仅买入）
                     ↓
-              4. 市场状态仓位修正（budget 已体现）
+         [步骤3]   筹码集中度（HolderConcentrationFilter，仅买入）
                     ↓
-              5. Wisdom 决策层（LLM 或 fallback）
+         [步骤3.5] 另类Alpha因子（AltAlphaFilter，仅买入）
                     ↓
-         [步骤3.5] 四阶段入场过滤（疯狂/最后阶段不入场）
+         [步骤4]   向下摊平检查（NoAverageDownChecker，仅买入）
+                    ↓
+         [步骤4.5] 行业约束（IndustryConstraint，仅买入）
+                    ↓
+  signal_only 模式:
+         [步骤5]   Wisdom 决策层（仅 fallback）
+                    ↓
+              完整信号输出（signal_only 仅通知不下单）
+  paper/live 模式:
+         [步骤5]   四阶段入场过滤（StageDetector）
+                    ↓
+         [步骤6]   Wisdom 决策层（LLM 或 fallback）
+                    ↓
+         [步骤7]   十大视角评估（PerspectiveEngine）
+                    ↓
+         [步骤8]   综合入场判定（evaluate_entry_gate）
                     ↓
               完整信号输出
 ```
-
-可独立于 TradingEngine 测试，通过依赖注入替换各过滤组件。
 
 ### 3.3.1 移动止损引擎
 
@@ -931,7 +948,7 @@ tests/
 
 | # | 功能 | 涉及文件 |
 |---|------|----------|
-| 69 | 十大视角接入信号过滤流水线（SignalPipeline 步骤3.6） | `engine/signal_pipeline.py` |
+| 69 | 十大视角接入信号过滤流水线（SignalPipeline 步骤9） | `engine/signal_pipeline.py` |
 | 70 | signal_only 附加视角评分 + paper/live 硬过滤 | `engine/signal_pipeline.py` |
 | 71 | 信号去重内存管理（保存前清理7天过期） | `engine/main.py` |
 | 72 | SignalAggregationConfig（min_interval/max_daily/batch） | `config/models.py` |
