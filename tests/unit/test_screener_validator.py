@@ -406,6 +406,169 @@ class TestValidationResult:
         assert excess == pytest.approx(0.37, abs=0.01)
 
 
+class TestValidationTradeSimulation:
+    """验证器集成交易模拟 + 大盘门控（TDD: RED）。"""
+
+    @pytest.fixture
+    def mock_history(self):
+        """创建昨日选股记录（含止盈目标信息）。"""
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        # 用非交易日日期避免 last_trading_day 不一致
+        yesterday = "2026-07-03"
+        row = {
+            "symbol": "600519",
+            "name": "茅台",
+            "close_price": 10.0,
+            "change_pct": 0.5,
+            "volume_ratio": 0.8,
+            "screener_date": yesterday,
+            "passed": True,
+            "failed_conditions": [],
+            "created_at": "",
+            "stop_loss_price": 9.5,
+        }
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".jsonl") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            fpath = f.name
+        yield fpath
+        os.unlink(fpath)
+
+    @pytest.fixture
+    def mock_validation_file(self):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl") as f:
+            fpath = f.name
+        yield fpath
+        if os.path.exists(fpath):
+            os.unlink(fpath)
+
+    @pytest.mark.asyncio
+    async def test_validation_includes_trade_simulation(self, mock_history, mock_validation_file):
+        """验证结果包含交易模拟字段：开盘10.0/最高10.3(+3%) → 触发止盈 +2%。"""
+        mock_stock_data = {
+            "data": {
+                "diff": [
+                    {
+                        "f12": "600519",
+                        "f14": "茅台",
+                        "f2": 1020,
+                        "f15": 1030,
+                        "f16": 990,
+                        "f17": 1000,
+                        "f18": 1000,
+                    }
+                ]
+            }
+        }
+        # 沪深300 开盘 +0.5%（不阻断）
+        mock_hs300_data = {
+            "data": {
+                "diff": [
+                    {"f12": "000300", "f14": "沪深300", "f15": 403000, "f17": 403000, "f18": 401000}
+                ]
+            }
+        }
+        mock_client = _MockAsyncClient(mock_stock_data, mock_hs300_data)
+
+        with (
+            patch("gugu.screener.validator._SCREENER_HISTORY_FILE", mock_history),
+            patch("gugu.screener.validator._SCREENER_VALIDATION_FILE", mock_validation_file),
+            patch("gugu.screener.validator.httpx.AsyncClient", return_value=mock_client),
+            patch("gugu.screener.validator.last_trading_day", return_value=date(2026, 7, 3)),
+        ):
+            results = await validate_yesterday_screener(is_eod=True)
+
+            assert len(results) == 1
+            r = results[0]
+            # 交易模拟：开盘10.0，最高10.3（+3% > +2%止盈线），最低9.9（-1%未破止损）
+            assert r.sim_exit_reason == "take_profit"
+            assert r.sim_return_pct == pytest.approx(2.0)
+            # 大盘门控：+0.5% > -0.5% 阈值 → 不阻断
+            assert r.market_gate_blocked is False
+
+    @pytest.mark.asyncio
+    async def test_validation_market_gate_blocked(self, mock_history, mock_validation_file):
+        """沪深300 开盘 -0.8%（超 -0.5% 阈值）→ 标记放弃买入。"""
+        mock_stock_data = {
+            "data": {
+                "diff": [
+                    {
+                        "f12": "600519",
+                        "f14": "茅台",
+                        "f2": 1005,
+                        "f15": 1010,
+                        "f16": 990,
+                        "f17": 1000,
+                        "f18": 1000,
+                    }
+                ]
+            }
+        }
+        # 沪深300 开盘 -0.8%
+        mock_hs300_data = {
+            "data": {
+                "diff": [
+                    {"f12": "000300", "f14": "沪深300", "f15": 397800, "f17": 397800, "f18": 401000}
+                ]
+            }
+        }
+        mock_client = _MockAsyncClient(mock_stock_data, mock_hs300_data)
+
+        with (
+            patch("gugu.screener.validator._SCREENER_HISTORY_FILE", mock_history),
+            patch("gugu.screener.validator._SCREENER_VALIDATION_FILE", mock_validation_file),
+            patch("gugu.screener.validator.httpx.AsyncClient", return_value=mock_client),
+            patch("gugu.screener.validator.last_trading_day", return_value=date(2026, 7, 3)),
+        ):
+            results = await validate_yesterday_screener(is_eod=True)
+
+            assert len(results) == 1
+            r = results[0]
+            assert r.market_gate_blocked is True
+            # 开盘10.0/最高10.1/最低9.9 → 未触发止盈止损 → 收盘平仓
+            assert r.sim_exit_reason in ("take_profit", "stop_loss", "close")
+
+    @pytest.mark.asyncio
+    async def test_validation_serializes_sim_fields(self, mock_history, mock_validation_file):
+        """序列化 JSON 包含 sim_exit_reason/sim_return_pct/market_gate_blocked。"""
+        mock_stock_data = {
+            "data": {
+                "diff": [
+                    {
+                        "f12": "600519",
+                        "f14": "茅台",
+                        "f2": 1002,
+                        "f15": 1005,
+                        "f16": 995,
+                        "f17": 1000,
+                        "f18": 1000,
+                    }
+                ]
+            }
+        }
+        mock_hs300_data = {
+            "data": {
+                "diff": [
+                    {"f12": "000300", "f14": "沪深300", "f15": 403000, "f17": 403000, "f18": 401000}
+                ]
+            }
+        }
+        mock_client = _MockAsyncClient(mock_stock_data, mock_hs300_data)
+
+        with (
+            patch("gugu.screener.validator._SCREENER_HISTORY_FILE", mock_history),
+            patch("gugu.screener.validator._SCREENER_VALIDATION_FILE", mock_validation_file),
+            patch("gugu.screener.validator.httpx.AsyncClient", return_value=mock_client),
+            patch("gugu.screener.validator.last_trading_day", return_value=date(2026, 7, 3)),
+        ):
+            results = await validate_yesterday_screener(is_eod=True)
+
+            assert len(results) == 1
+            saved = json.loads(open(mock_validation_file, encoding="utf-8").readline())
+            assert "sim_exit_reason" in saved
+            assert "sim_return_pct" in saved
+            assert "market_gate_blocked" in saved
+
+
 class TestGetMarket:
     """股票代码到东财市场编号的映射测试。"""
 
@@ -437,3 +600,88 @@ class TestGetMarket:
         from gugu.screener.validator import _get_market
 
         assert _get_market("999999") == 1  # 默认沪市
+
+
+class TestValidationDedup:
+    """P2-3: 验证记录写入幂等化——同日同股去重（TDD: RED）。
+
+    背景（对抗性审查发现的生产 bug）：
+    7/30 收盘验证被调度两次 → 5 只股票各重复 2 条，
+    污染 auto_tune 统计（重复计数止损率/胜率）。
+    """
+
+    def _make_vr(self, symbol="600519", val_date="2026-07-30", close=10.0):
+        from gugu.screener.validator import ValidationResult
+
+        return ValidationResult(
+            symbol=symbol,
+            name="测试",
+            close_price=close,
+            open_price=close * 0.99,
+            high_price=close * 1.01,
+            low_price=close * 0.98,
+            current_price=close,
+            open_premium=-1.0,
+            intraday_high_premium=1.0,
+            current_premium=0.0,
+            close_premium=0.0,
+            intraday_max_drawdown=-1.0,
+            stop_loss_hit=False,
+            screener_date="2026-07-29",
+            validation_date=val_date,
+            passed=True,
+            benchmark_open_change=0.0,
+        )
+
+    def test_append_same_day_same_symbol_dedups(self, tmp_path):
+        """追加模式写入同日同股 → 只保留最新一条。"""
+        import gugu.screener.validator as validator_mod
+        from gugu.screener.validator import _write_validation_lines
+
+        fpath = str(tmp_path / "val.jsonl")
+        vr1 = self._make_vr("600519")
+        vr2 = self._make_vr("600519")  # 同日同股第二次写入
+
+        # 所有写入都必须在 patch 上下文内（隔离生产文件）
+        with patch.object(validator_mod, "_SCREENER_VALIDATION_FILE", fpath):
+            _write_validation_lines([vr1], mode="a")
+            _write_validation_lines([vr2], mode="a")
+
+        lines = open(fpath, encoding="utf-8").readlines()
+        assert len(lines) == 1  # 同日同股只保留 1 条
+
+    def test_append_different_days_keeps_both(self, tmp_path):
+        """不同日期同股 → 都保留。"""
+        import gugu.screener.validator as validator_mod
+        from gugu.screener.validator import _write_validation_lines
+
+        fpath = str(tmp_path / "val.jsonl")
+        with patch.object(validator_mod, "_SCREENER_VALIDATION_FILE", fpath):
+            _write_validation_lines([self._make_vr("600519", val_date="2026-07-29")], mode="a")
+            _write_validation_lines([self._make_vr("600519", val_date="2026-07-30")], mode="a")
+
+        lines = open(fpath, encoding="utf-8").readlines()
+        assert len(lines) == 2
+
+    def test_overwrite_mode_still_dedups(self, tmp_path):
+        """覆盖模式（EOD）同日同股 → 去重。"""
+        import gugu.screener.validator as validator_mod
+        from gugu.screener.validator import _write_validation_lines
+
+        fpath = str(tmp_path / "val.jsonl")
+        with patch.object(validator_mod, "_SCREENER_VALIDATION_FILE", fpath):
+            _write_validation_lines(
+                [self._make_vr("600519", val_date="2026-07-30", close=10.0)],
+                mode="w",
+                filter_date="2026-07-30",
+            )
+            _write_validation_lines(
+                [self._make_vr("600519", val_date="2026-07-30", close=11.0)],
+                mode="w",
+                filter_date="2026-07-30",
+            )
+
+        lines = open(fpath, encoding="utf-8").readlines()
+        assert len(lines) == 1
+        d = json.loads(lines[0])
+        assert d["close_price"] == 11.0  # 保留最新

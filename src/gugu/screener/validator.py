@@ -38,6 +38,10 @@ _SCREENER_VALIDATION_FILE = os.path.join(_DATA_DIR, "screener_validation.jsonl")
 MAX_RECORDS = 5000  # JSONL 轮转上限
 TRIM_TO = 2500  # 超限时保留最新数
 
+# P2-3: 大盘开盘门控阈值（沪深300 开盘跌幅超过该值 → 放弃买入）
+# 依据：7/30 大盘开盘 -0.74%，选中股票收盘平均 -9.58%（跌得比大盘狠 10 倍）
+_MARKET_GATE_THRESHOLD = -0.5
+
 # ── 东财日K线 URL ────────────────────────────────────
 _EASTMONEY_KLINE_URL = (
     "https://push2his.eastmoney.com/api/qt/stock/kline/get"
@@ -100,6 +104,10 @@ class ValidationResult:
     passed: bool
     benchmark_open_change: float  # 沪深300同日开盘涨幅（用于计算超额收益）
     stop_loss_price: float = 0.0  # T 日选股建议止损价
+    # P2-3: 交易模拟 + 大盘门控（开盘低吸→止盈/止损/收盘平仓闭环）
+    sim_exit_reason: str = ""  # "take_profit" | "stop_loss" | "close" | ""（数据异常）
+    sim_return_pct: float = 0.0  # 模拟交易收益率（%）
+    market_gate_blocked: bool = False  # 大盘开盘跌超阈值 → 放弃买入
 
 
 # ── 记录写入 ──────────────────────────────────────────
@@ -107,7 +115,7 @@ class ValidationResult:
 
 def save_screener_records(results: list[ScreenerRecord]) -> None:
     """将选股结果保存到历史 JSONL（T 日调用）。"""
-    os.makedirs(os.path.dirname(_SCREENER_HISTORY_FILE), exist_ok=True)
+    os.makedirs(os.path.dirname(_SCREENER_HISTORY_FILE), exist_ok=True)  # noqa: PTH103 兼容既有风格
     count = 0
     for r in results:
         try:
@@ -146,7 +154,7 @@ def _rotate_file(filepath: str) -> None:
             return
         with open(filepath, "w", encoding="utf-8") as f:
             f.writelines(lines[-TRIM_TO:])
-        logger.info(f"JSONL 轮转: {os.path.basename(filepath)} {len(lines)}→{TRIM_TO}")
+        logger.info(f"JSONL 轮转: {os.path.basename(filepath)} {len(lines)}→{TRIM_TO}")  # noqa: PTH119 兼容既有风格
     except Exception as e:
         logger.debug("JSONL 轮转失败: {}", e)
 
@@ -193,6 +201,20 @@ async def validate_yesterday_screener(is_eod: bool = False) -> list[ValidationRe
         # 止损命中：最低价 <= 选股时建议止损价（且止损价有效）
         stop_loss_hit = rec.stop_loss_price > 0 and low_price <= rec.stop_loss_price
 
+        # P2-3: 交易模拟（开盘低吸 → 止盈/止损/收盘平仓）+ 大盘门控
+        from gugu.screener.trade_simulator import check_market_gate, simulate_trade
+
+        sim = simulate_trade(
+            open_price=open_price,
+            high_price=high_price,
+            low_price=low_price,
+            close_price=current_price if is_eod else high_price,
+        )
+        gate = check_market_gate(
+            benchmark_open_change=hs300_open_chg,
+            skip_threshold=_MARKET_GATE_THRESHOLD,
+        )
+
         vr = ValidationResult(
             symbol=rec.symbol,
             name=rec.name,
@@ -212,6 +234,9 @@ async def validate_yesterday_screener(is_eod: bool = False) -> list[ValidationRe
             passed=rec.passed,
             benchmark_open_change=hs300_open_chg,
             stop_loss_price=rec.stop_loss_price,
+            sim_exit_reason=sim.exit_reason if sim else "",
+            sim_return_pct=sim.return_pct if sim else 0.0,
+            market_gate_blocked=gate.blocked,
         )
         validated.append(vr)
 
@@ -417,6 +442,9 @@ def _validation_result_to_dict(r: ValidationResult) -> dict[str, Any]:
         "validation_date": r.validation_date,
         "benchmark_open_change": r.benchmark_open_change,
         "stop_loss_price": r.stop_loss_price,
+        "sim_exit_reason": r.sim_exit_reason,
+        "sim_return_pct": r.sim_return_pct,
+        "market_gate_blocked": r.market_gate_blocked,
         "created_at": datetime.now().isoformat(),
     }
 
@@ -426,11 +454,21 @@ def _write_validation_lines(
     mode: str = "a",
     filter_date: str | None = None,
 ) -> None:
-    """底层写入函数：追加或覆盖指定日期的验证记录。"""
-    os.makedirs(os.path.dirname(_SCREENER_VALIDATION_FILE), exist_ok=True)
+    """底层写入函数：追加或覆盖指定日期的验证记录（幂等去重）。
 
-    existing_lines: list[str] = []
-    if filter_date and os.path.exists(_SCREENER_VALIDATION_FILE):
+    P2-3 修复（对抗性审查发现的生产 bug）：
+    7/30 收盘验证被调度两次 → 同日同股重复 2 条，污染 auto_tune 统计。
+    现在按 (validation_date, symbol) 幂等去重：同键只保留最新一条。
+
+    实现：无论 append 还是 overwrite，都重写整个文件——
+    - 保留与本次写入无键冲突的旧记录
+    - 本次 results 覆盖同键旧记录
+    """
+    os.makedirs(os.path.dirname(_SCREENER_VALIDATION_FILE), exist_ok=True)  # noqa: PTH103 兼容既有风格
+
+    # 1. 读取现有记录，建立 (validation_date, symbol) → 行 索引
+    kept_lines: list[str] = []
+    if os.path.exists(_SCREENER_VALIDATION_FILE):
         try:
             with open(_SCREENER_VALIDATION_FILE, encoding="utf-8") as f:
                 for line in f:
@@ -439,25 +477,44 @@ def _write_validation_lines(
                         continue
                     try:
                         d = json.loads(line)
-                        if d.get("validation_date") != filter_date:
-                            existing_lines.append(line)
                     except json.JSONDecodeError:
                         continue
+                    # 覆盖模式：剔除 filter_date 当日的全部旧记录（整日重写）
+                    if filter_date and d.get("validation_date") == filter_date:
+                        continue
+                    kept_lines.append(line)
         except Exception as e:
             logger.warning("读取旧验证记录失败: {}", e)
 
+    # 2. 本次写入的新记录（去重：同键只保留最后一条）
+    new_keys: set[tuple[str, str]] = set()
+    new_lines: list[str] = []
+    for r in results:
+        d = _validation_result_to_dict(r)
+        key = (d.get("validation_date", ""), d.get("symbol", ""))
+        if key in new_keys:
+            continue  # 本次批量内去重
+        new_keys.add(key)
+        new_lines.append(json.dumps(d, ensure_ascii=False))
+
+    # 3. 重写文件：保留与本次写入无键冲突的旧记录 + 新记录
     count = 0
     try:
-        with open(_SCREENER_VALIDATION_FILE, mode, encoding="utf-8") as f:
-            # 覆盖模式时先写回非当日的旧记录
-            if filter_date and mode == "w" and existing_lines:
-                for line in existing_lines:
-                    f.write(line + "\n")
-            for r in results:
-                line = json.dumps(_validation_result_to_dict(r), ensure_ascii=False)
+        with open(_SCREENER_VALIDATION_FILE, "w", encoding="utf-8") as f:
+            for line in kept_lines:
+                try:
+                    d = json.loads(line)
+                    key = (d.get("validation_date", ""), d.get("symbol", ""))
+                except json.JSONDecodeError:
+                    key = None
+                # 幂等去重：旧记录与本次新写入同键 → 丢弃（以新为准）
+                if key is not None and key in new_keys:
+                    continue
+                f.write(line + "\n")
+            for line in new_lines:
                 f.write(line + "\n")
                 count += 1
     except Exception as e:
-        logger.warning("保存验证记录失败: {}", e)
-    logger.info("尾盘验证结果已保存: {} 条", count)
+        logger.warning("保存验证记录失败: {}\n{}", e, results)
+    logger.info("尾盘验证结果已保存: {} 条（旧记录保留 {} 条）", count, len(kept_lines))
     _rotate_file(_SCREENER_VALIDATION_FILE)
