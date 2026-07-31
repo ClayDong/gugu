@@ -119,7 +119,7 @@ def engine(
         mock_cfg.return_value.execution.paper.initial_capital = 1_000_000
         mock_cfg.return_value.watchlist = ["600519", "000858"]
         mock_cfg.return_value.strategy.auto_select = False
-        eng = TradingEngine()
+        eng = TradingEngine(alert_history_file=tmp_path / "alert_history.json")
         # P0 修复：将止盈引擎指向 tmp_path，避免测试污染生产数据文件
         # take_profit_state.json（_process_signal → register 会写文件）
         from gugu.analysis.dynamic_take_profit import DynamicTakeProfitEngine

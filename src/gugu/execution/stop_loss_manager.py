@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import contextlib
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from gugu.engine.event_engine import EventEngine
@@ -41,6 +41,7 @@ class StopLossManager:
         *,
         trailing_stop_engine: Any = None,
         take_profit_engine: Any = None,
+        should_alert: Callable[[str], bool] | None = None,
     ) -> None:
         self._trailing_stop_engine = (
             trailing_stop_engine if trailing_stop_engine is not None else TrailingStopEngine()
@@ -48,6 +49,7 @@ class StopLossManager:
         self._take_profit_engine = (
             take_profit_engine if take_profit_engine is not None else DynamicTakeProfitEngine()
         )
+        self._should_alert = should_alert
 
     async def execute(
         self,
@@ -190,20 +192,24 @@ class StopLossManager:
                         fresh_pos.trailing_stop = None
                         fresh_pos.danger_signals = None
 
-                    notify_ok = await notifier.notify_risk_alert(
-                        {
-                            "level": "warn",
-                            "message": f"止损卖出: {symbol} {result.quantity}股 @ {result.price}",
-                            "suggestion": "止损价由移动止损引擎管理，已自动执行",
-                        }
-                    )
-                    if not notify_ok:
-                        logger.error(
-                            "止损卖出 {} 已执行（{}股@{}）但飞书通知失败，请检查飞书配置与网络",
-                            symbol,
-                            result.quantity,
-                            result.price,
+                    alert_key = f"stop_loss:{symbol}"
+                    if self._should_alert is None or self._should_alert(alert_key):
+                        notify_ok = await notifier.notify_risk_alert(
+                            {
+                                "level": "warn",
+                                "message": f"止损卖出: {symbol} {result.quantity}股 @ {result.price}",
+                                "suggestion": "止损价由移动止损引擎管理，已自动执行",
+                            }
                         )
+                        if not notify_ok:
+                            logger.error(
+                                "止损卖出 {} 已执行（{}股@{}）但飞书通知失败，请检查飞书配置与网络",
+                                symbol,
+                                result.quantity,
+                                result.price,
+                            )
+                    else:
+                        logger.info("止损卖出 {} 告警已去重，跳过通知", symbol)
                     sold_count += 1
                 else:
                     # v0.6.1: track_live 模式拒绝下单时，推送止损提醒卡片（用户手动执行）
@@ -216,30 +222,34 @@ class StopLossManager:
                             pos.stop_loss_price,
                             int(available),
                         )
-                        notify_ok = await notifier.notify_risk_alert(
-                            {
-                                "level": "halt",
-                                "message": (
-                                    f"止损提醒（需手动执行）: {symbol} 现价 {price} "
-                                    f"≤ 止损价 {pos.stop_loss_price}"
-                                ),
-                                "suggestion": (
-                                    f"track_live 模式不自动下单，请手动在券商APP卖出 "
-                                    f"{int(available)}股"
-                                ),
-                            }
-                        )
-                        if not notify_ok:
-                            logger.error(
-                                "[track_live] 止损提醒 {} 通知失败，请检查飞书配置", symbol
+                        alert_key = f"stop_loss_manual:{symbol}"
+                        if self._should_alert is None or self._should_alert(alert_key):
+                            notify_ok = await notifier.notify_risk_alert(
+                                {
+                                    "level": "halt",
+                                    "message": (
+                                        f"止损提醒（需手动执行）: {symbol} 现价 {price} "
+                                        f"≤ 止损价 {pos.stop_loss_price}"
+                                    ),
+                                    "suggestion": (
+                                        f"track_live 模式不自动下单，请手动在券商APP卖出 "
+                                        f"{int(available)}股"
+                                    ),
+                                }
                             )
+                            if not notify_ok:
+                                logger.error(
+                                    "[track_live] 止损提醒 {} 通知失败，请检查飞书配置", symbol
+                                )
+                        else:
+                            logger.info("[track_live] 止损提醒 {} 已去重，跳过通知", symbol)
                     else:
                         logger.warning("止损卖出 {} 下单失败: {}", symbol, result.message)
             else:
                 logger.warning("止损卖出 {} 被风控拦截: {}", symbol, risk_result.message)
 
         # 财叔动态止盈减仓检查（与移动止损互补）
-        await self._check_take_profit(broker, risk, notifier, portfolio)
+        await self._check_take_profit(broker, risk, notifier, portfolio, self._should_alert)
 
         return sold_count
 
@@ -249,6 +259,7 @@ class StopLossManager:
         risk: Any,
         notifier: Any,
         portfolio: dict[str, Position],
+        should_alert: Callable[[str], bool] | None = None,
     ) -> None:
         """财叔动态止盈减仓检查（四步策略）。
 
@@ -329,22 +340,31 @@ class StopLossManager:
                         tp_signal.trigger_step,
                         reduce_qty,
                     )
-                    notify_ok = await notifier.notify_risk_alert(
-                        {
-                            "level": "warn",
-                            "message": (
-                                f"止盈减仓提醒（需手动执行）: {symbol} 触发 "
-                                f"{tp_signal.trigger_step} - {tp_signal.reason}"
-                            ),
-                            "suggestion": (
-                                f"track_live 模式不自动下单，请手动在券商APP卖出 "
-                                f"{reduce_qty}股（减仓比例 {tp_signal.reduce_ratio:.0%}）"
-                            ),
-                        }
-                    )
-                    if not notify_ok:
-                        logger.error(
-                            "[track_live] 止盈减仓提醒 {} 通知失败，请检查飞书配置", symbol
+                    alert_key = f"take_profit_manual:{symbol}:{tp_signal.trigger_step}"
+                    should_alert_fn = should_alert or self._should_alert
+                    if should_alert_fn is None or should_alert_fn(alert_key):
+                        notify_ok = await notifier.notify_risk_alert(
+                            {
+                                "level": "warn",
+                                "message": (
+                                    f"止盈减仓提醒（需手动执行）: {symbol} 触发 "
+                                    f"{tp_signal.trigger_step} - {tp_signal.reason}"
+                                ),
+                                "suggestion": (
+                                    f"track_live 模式不自动下单，请手动在券商APP卖出 "
+                                    f"{reduce_qty}股（减仓比例 {tp_signal.reduce_ratio:.0%}）"
+                                ),
+                            }
+                        )
+                        if not notify_ok:
+                            logger.error(
+                                "[track_live] 止盈减仓提醒 {} 通知失败，请检查飞书配置", symbol
+                            )
+                    else:
+                        logger.info(
+                            "[track_live] 止盈减仓提醒 {} step={} 已去重，跳过通知",
+                            symbol,
+                            tp_signal.trigger_step,
                         )
                 else:
                     logger.warning("[take_profit] {} 止盈减仓下单失败", symbol)
@@ -370,13 +390,22 @@ class StopLossManager:
             from dataclasses import asdict as _asdict
 
             state_dict = _asdict(tp_state) if tp_state else None
-            notify_ok = await notifier.notify_take_profit_alert(
-                symbol, stock_name, signal_dict, state_dict
-            )
-            if not notify_ok:
-                logger.error(
-                    "[take_profit] {} 止盈减仓已执行（{}股@{}）但飞书通知失败，请检查飞书配置",
+            alert_key = f"take_profit:{symbol}:{tp_signal.trigger_step}"
+            should_alert_fn = should_alert or self._should_alert
+            if should_alert_fn is None or should_alert_fn(alert_key):
+                notify_ok = await notifier.notify_take_profit_alert(
+                    symbol, stock_name, signal_dict, state_dict
+                )
+                if not notify_ok:
+                    logger.error(
+                        "[take_profit] {} 止盈减仓已执行（{}股@{}）但飞书通知失败，请检查飞书配置",
+                        symbol,
+                        result.quantity,
+                        result.price,
+                    )
+            else:
+                logger.info(
+                    "[take_profit] {} step={} 止盈减仓通知已去重，跳过通知",
                     symbol,
-                    result.quantity,
-                    result.price,
+                    tp_signal.trigger_step,
                 )

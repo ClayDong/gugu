@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from gugu.engine.event_engine import EventEngine
@@ -94,6 +94,7 @@ class OrderManager:
         *,
         trailing_stop_engine: Any = None,
         take_profit_engine: Any = None,
+        should_alert: Callable[[str], bool] | None = None,
     ) -> None:
         self._trailing_stop_engine = (
             trailing_stop_engine if trailing_stop_engine is not None else TrailingStopEngine()
@@ -101,6 +102,7 @@ class OrderManager:
         self._take_profit_engine = (
             take_profit_engine if take_profit_engine is not None else DynamicTakeProfitEngine()
         )
+        self._should_alert = should_alert
 
     async def execute(
         self,
@@ -166,15 +168,19 @@ class OrderManager:
         # 价格合法性校验前置
         if price <= 0:
             logger.warning("{} 信号价格异常 price={}，跳过下单并发送告警", symbol, price)
-            notify_alert_ok = await notifier.notify_risk_alert(
-                {
-                    "level": "warn",
-                    "message": f"{symbol} 信号价格异常 price={price}，已跳过下单",
-                    "suggestion": "检查数据源是否返回异常价格（0/负值）",
-                }
-            )
-            if not notify_alert_ok:
-                logger.error("{} 价格异常告警通知失败", symbol)
+            alert_key = f"order:price_anomaly:{symbol}"
+            if self._should_alert is None or self._should_alert(alert_key):
+                notify_alert_ok = await notifier.notify_risk_alert(
+                    {
+                        "level": "warn",
+                        "message": f"{symbol} 信号价格异常 price={price}，已跳过下单",
+                        "suggestion": "检查数据源是否返回异常价格（0/负值）",
+                    }
+                )
+                if not notify_alert_ok:
+                    logger.error("{} 价格异常告警通知失败", symbol)
+            else:
+                logger.info("{} 价格异常告警已去重，跳过通知", symbol)
             return None
 
         # 最低1手保底
@@ -194,18 +200,22 @@ class OrderManager:
 
         if quantity <= 0:
             logger.warning("{} 计算下单数量为 0，跳过并发送告警", symbol)
-            notify_alert_ok = await notifier.notify_risk_alert(
-                {
-                    "level": "warn",
-                    "message": (
-                        f"{symbol} 计算下单数量为 0"
-                        f"（price={price}, ratio={suggested_ratio:.2%}, cash={account.cash:.0f}），已跳过"
-                    ),
-                    "suggestion": "检查仓位比例配置或资金是否充足",
-                }
-            )
-            if not notify_alert_ok:
-                logger.error("{} 数量为0告警通知失败", symbol)
+            alert_key = f"order:zero_quantity:{symbol}"
+            if self._should_alert is None or self._should_alert(alert_key):
+                notify_alert_ok = await notifier.notify_risk_alert(
+                    {
+                        "level": "warn",
+                        "message": (
+                            f"{symbol} 计算下单数量为 0"
+                            f"（price={price}, ratio={suggested_ratio:.2%}, cash={account.cash:.0f}），已跳过"
+                        ),
+                        "suggestion": "检查仓位比例配置或资金是否充足",
+                    }
+                )
+                if not notify_alert_ok:
+                    logger.error("{} 数量为0告警通知失败", symbol)
+            else:
+                logger.info("{} 数量为0告警已去重，跳过通知", symbol)
             return None
 
         # 风控检查
@@ -224,15 +234,19 @@ class OrderManager:
 
         if not risk_result.allowed:
             logger.warning(f"{symbol} 风控拦截: {risk_result.message}")
-            notify_alert_ok = await notifier.notify_risk_alert(
-                {
-                    "level": "warn",
-                    "message": f"{symbol} {direction} 被风控拦截: {risk_result.message}",
-                    "suggestion": "检查仓位/日亏/涨跌停",
-                }
-            )
-            if not notify_alert_ok:
-                logger.error("{} 风控拦截告警通知失败", symbol)
+            alert_key = f"order:risk_blocked:{symbol}:{direction}"
+            if self._should_alert is None or self._should_alert(alert_key):
+                notify_alert_ok = await notifier.notify_risk_alert(
+                    {
+                        "level": "warn",
+                        "message": f"{symbol} {direction} 被风控拦截: {risk_result.message}",
+                        "suggestion": "检查仓位/日亏/涨跌停",
+                    }
+                )
+                if not notify_alert_ok:
+                    logger.error("{} 风控拦截告警通知失败", symbol)
+            else:
+                logger.info("{} 风控拦截告警已去重，跳过通知", symbol)
             # 风控拦截也记录历史
             record_signal_history(signal, risk_result, None)
             return {

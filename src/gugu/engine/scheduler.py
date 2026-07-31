@@ -368,8 +368,11 @@ class TradingScheduler(SchedulerJobsMixin):
                 logger.error("交易循环异常通知发送失败: {}", ne)
 
     async def _safe_intraday_monitor(self) -> None:
-        """盘中实时资金流异动监控。"""
+        """盘中实时资金流异动监控（仅交易日盘中时段运行）。"""
         if self._intraday_monitor is None:
+            return
+
+        if not is_trading_day() or not is_trading_time():
             return
 
         try:

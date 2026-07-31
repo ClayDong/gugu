@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
+import threading
 import time
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -45,6 +48,7 @@ from gugu.notifier.daily_report_manager import DailyReportManager
 from gugu.risk import RiskManager
 from gugu.risk.rules import RiskAction
 from gugu.strategies.registry import get_enabled_strategies
+from gugu.utils.atomic import atomic_write_json
 from gugu.utils.calendar import is_trading_day, is_trading_time
 from gugu.utils.log import get_logger
 from gugu.wisdom import WisdomAdvisor
@@ -64,15 +68,33 @@ class TradingEngine(EngineOpsMixin):
     _ALERT_COOLDOWN = 600  # 10分钟冷却
 
     def _should_alert(self, key: str) -> bool:
-        """检查是否应该发送告警（冷却期内抑制重复告警）。"""
+        """检查是否应该发送告警。
+
+        两层去重：
+        1. 每日去重（持久化到文件）：每天每个 key 只发一次，防止引擎重启后重复发送。
+        2. 冷却期去重（内存）：10 分钟内同 key 不重复，防止单次运行期内刷屏。
+        """
         now = time.time()
+        today_str = date.today().isoformat()
+        daily_key = f"{key}_{today_str}"
+
         # 定期清理过期条目，防止无限增长
         self._cleanup_alert_history()
-        last = self._alert_history.get(key, 0)
-        if now - last < self._ALERT_COOLDOWN:
-            return False
-        self._alert_history[key] = now
-        return True
+
+        with self._alert_dedup_lock:
+            # 每日持久化去重：今日已发送过则跳过
+            if self._daily_alerts.get(daily_key):
+                return False
+
+            # 内存冷却去重
+            last = self._alert_history.get(key, 0)
+            if now - last < self._ALERT_COOLDOWN:
+                return False
+
+            self._alert_history[key] = now
+            self._daily_alerts[daily_key] = "1"
+            self._save_daily_alerts()
+            return True
 
     def _cleanup_alert_history(self) -> None:
         """清理超过冷却期 2 倍的过期告警条目，防止内存无限增长。"""
@@ -83,6 +105,34 @@ class TradingEngine(EngineOpsMixin):
             del self._alert_history[k]
         if stale_keys:
             logger.debug("清理过期告警条目: {} 条", len(stale_keys))
+
+    def _load_daily_alerts(self) -> dict[str, str]:
+        """从文件加载今日已发送的告警 key（跨重启去重）。"""
+        try:
+            if self._alert_history_file.exists():
+                data = json.loads(self._alert_history_file.read_text(encoding="utf-8"))
+                alerts = data.get("daily_alerts", {})
+                today_str = date.today().isoformat()
+                return {k: v for k, v in alerts.items() if k.endswith(f"_{today_str}")}
+        except Exception as e:
+            logger.warning("加载告警去重记录失败: {}", e)
+        return {}
+
+    def _save_daily_alerts(self) -> None:
+        """持久化今日已发送的告警 key（原子写入）。"""
+        try:
+            today_str = date.today().isoformat()
+            daily_alerts = {
+                k: v for k, v in self._daily_alerts.items() if k.endswith(f"_{today_str}")
+            }
+            atomic_write_json(
+                self._alert_history_file,
+                {"daily_alerts": daily_alerts},
+                ensure_ascii=False,
+                indent=2,
+            )
+        except Exception as e:
+            logger.warning("保存告警去重记录失败: {}", e)
 
     def __init__(
         self,
@@ -108,9 +158,11 @@ class TradingEngine(EngineOpsMixin):
         strategies: list | None = None,
         exec_mode: str | None = None,
         watchlist: list[str] | None = None,
+        alert_history_file: Path | None = None,
     ) -> None:
         self._lock = asyncio.Lock()
         self._dedup_lock = asyncio.Lock()
+        self._alert_dedup_lock = threading.Lock()
         self._running: bool = False
 
         self._app_config: AppConfig | None = None
@@ -166,6 +218,7 @@ class TradingEngine(EngineOpsMixin):
             else OrderManager(
                 trailing_stop_engine=self._trailing_stop_engine,
                 take_profit_engine=self._take_profit_engine,
+                should_alert=self._should_alert,
             )
         )
         self._stop_loss_manager = (
@@ -174,6 +227,7 @@ class TradingEngine(EngineOpsMixin):
             else StopLossManager(
                 trailing_stop_engine=self._trailing_stop_engine,
                 take_profit_engine=self._take_profit_engine,
+                should_alert=self._should_alert,
             )
         )
 
@@ -207,6 +261,9 @@ class TradingEngine(EngineOpsMixin):
 
         self._notified_signals_file = PROJECT_ROOT / "data" / "notified_signals.json"
         self._notified_signals: dict[str, str] = self._load_notified_signals()
+
+        self._alert_history_file = alert_history_file or PROJECT_ROOT / "data" / "alert_history.json"
+        self._daily_alerts: dict[str, str] = self._load_daily_alerts()
 
         if watchlist is not None:
             self._watchlist = watchlist
@@ -351,13 +408,14 @@ class TradingEngine(EngineOpsMixin):
                 if dd_after_stop.action == RiskAction.HALT:
                     self._event_engine.put(EVENT_DAILY_LOSS_HALT, {"drawdown": True})
                     logger.warning("止损后组合回撤触发熔断: {}", dd_after_stop.message)
-                    await self._notifier.notify_risk_alert(
-                        {
-                            "level": "halt",
-                            "message": dd_after_stop.message,
-                            "suggestion": "组合回撤过大，已自动熔断",
-                        }
-                    )
+                    if self._should_alert("portfolio_drawdown_halt"):
+                        await self._notifier.notify_risk_alert(
+                            {
+                                "level": "halt",
+                                "message": dd_after_stop.message,
+                                "suggestion": "组合回撤过大，已自动熔断",
+                            }
+                        )
                     self._write_heartbeat("halted")
                     return
                 elif dd_after_stop.action == RiskAction.WARN:
@@ -488,26 +546,28 @@ class TradingEngine(EngineOpsMixin):
         risk_result = self._risk.check_daily_loss(loss_pct)
         if risk_result.action == RiskAction.WARN:
             self._event_engine.put(EVENT_DAILY_LOSS_WARN, {"loss_pct": loss_pct})
-            notify_alert_ok = await self._notifier.notify_risk_alert(
-                {
-                    "level": "warn",
-                    "message": f"当日亏损 {loss_pct:.2%} 触发预警",
-                    "suggestion": "关注持仓，考虑减仓",
-                }
-            )
-            if not notify_alert_ok:
-                logger.error("日亏预警（{:.2%}）通知失败", loss_pct)
+            if self._should_alert("daily_loss_warn"):
+                notify_alert_ok = await self._notifier.notify_risk_alert(
+                    {
+                        "level": "warn",
+                        "message": f"当日亏损 {loss_pct:.2%} 触发预警",
+                        "suggestion": "关注持仓，考虑减仓",
+                    }
+                )
+                if not notify_alert_ok:
+                    logger.error("日亏预警（{:.2%}）通知失败", loss_pct)
         elif risk_result.action == RiskAction.HALT:
             self._event_engine.put(EVENT_DAILY_LOSS_HALT, {"loss_pct": loss_pct})
-            notify_alert_ok = await self._notifier.notify_risk_alert(
-                {
-                    "level": "halt",
-                    "message": f"当日亏损 {loss_pct:.2%} 触发熔断，停止交易",
-                    "suggestion": "检查持仓，必要时一键平仓",
-                }
-            )
-            if not notify_alert_ok:
-                logger.error("日亏熔断（{:.2%}）通知失败", loss_pct)
+            if self._should_alert("daily_loss_halt"):
+                notify_alert_ok = await self._notifier.notify_risk_alert(
+                    {
+                        "level": "halt",
+                        "message": f"当日亏损 {loss_pct:.2%} 触发熔断，停止交易",
+                        "suggestion": "检查持仓，必要时一键平仓",
+                    }
+                )
+                if not notify_alert_ok:
+                    logger.error("日亏熔断（{:.2%}）通知失败", loss_pct)
 
     async def send_daily_report(self, period: str) -> None:
         """发送信号汇总报告。委托给 DailyReportManager。"""
