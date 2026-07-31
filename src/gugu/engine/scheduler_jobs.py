@@ -20,10 +20,26 @@ from gugu.screener.validator import (
     save_screener_records,
     validate_yesterday_screener,
 )
+from gugu.strategies.registry import get_enabled_strategies
 from gugu.utils.calendar import is_trading_day
 from gugu.utils.log import get_logger
 
 logger = get_logger()
+
+# ── 启发式优化按策略类型匹配的股票池 ─────────────────
+# 每类策略用最适合的股票来优化参数，避免"用茅台优化涨停策略"的错位
+_HEURISTIC_STOCK_POOLS: dict[str, str] = {
+    "box_breakout": "603501,002371,002472,300033,002230",  # 突破类：活跃中小盘
+    "double_yin": "300750,603259,601012,600438,000858",  # 拐点类：高波动趋势股
+    "rsi_reversal": "300750,601012,600438,603259,002594",  # 均值回归：高波动股
+    "hot_money": "002472,300033,002230,603501",  # 游资类：高换手活跃股
+    "ma5_momentum": "600519,300750,002594,002371",  # 动量类：趋势龙头
+    "chenxuezhang": "300033,002230,300760,000858",  # 自媒体：热点+白马
+    "linjudaye": "600519,300760,002594,300750",  # 邻居大爷：大市值趋势
+    "ml_gradient_boost": "600519,300750,002594,300760,002371",  # ML：多行业验证
+    # fallback：通用验证
+    "_default": "600519,300750,002594,300760,002371",
+}
 
 
 class SchedulerJobsMixin:
@@ -514,7 +530,10 @@ class SchedulerJobsMixin:
             logger.exception("周参数优化异常: {}", e)
 
     async def _safe_heuristic_optimize(self) -> None:
-        """启发式参数优化（每半月 04:00，GA/PSO 交替）。"""
+        """启发式参数优化（每半月 04:00，GA/PSO 交替）。
+        
+        按策略类型匹配对应股票池，每个策略用最适合的股票优化参数。
+        """
         try:
             from datetime import datetime
 
@@ -525,51 +544,42 @@ class SchedulerJobsMixin:
                 logger.warning("优化脚本不存在: {}", script)
                 return
 
-            # 奇数月用 GA，偶数月用 PSO
             algorithm = "ga" if datetime.now().month % 2 == 1 else "pso"
-            multi = "600519,002714,300750,603259,002415,601318"
+            enabled = [s for s in get_enabled_strategies()]
 
-            cmd = [
-                "uv",
-                "run",
-                "python",
-                str(script),
-                "--multi-stock",
-                multi,
-                "--days",
-                "500",
-                "--algorithm",
-                algorithm,
-                "--population",
-                "30",
-                "--generations",
-                "20",
-            ]
-            logger.info("启动启发式优化 ({}): {}", algorithm, " ".join(cmd))
+            for s_name in enabled:
+                stocks = _HEURISTIC_STOCK_POOLS.get(s_name, _HEURISTIC_STOCK_POOLS["_default"])
+                cmd = [
+                    "uv", "run", "python", str(script),
+                    "--strategy", s_name,
+                    "--multi-stock", stocks,
+                    "--days", "500",
+                    "--algorithm", algorithm,
+                    "--population", "30",
+                    "--generations", "20",
+                ]
+                logger.info("启发式优化 {}: strategy={}, stocks={}", algorithm, s_name, stocks)
 
-            result = subprocess.run(
-                cmd,
-                cwd=str(PROJECT_ROOT),
-                capture_output=True,
-                text=True,
-                timeout=7200,
-            )
-
-            if result.returncode == 0:
-                logger.info(
-                    "启发式优化完成 ({}): stdout={}",
-                    algorithm,
-                    result.stdout[-500:] if result.stdout else "",
-                )
-            else:
-                logger.error(
-                    "启发式优化失败 rc={} ({}): stderr={}",
-                    result.returncode,
-                    algorithm,
-                    result.stderr[-500:] if result.stderr else "",
-                )
-        except subprocess.TimeoutExpired:
-            logger.error("启发式优化超时（>2h），已终止")
+                try:
+                    result = subprocess.run(
+                        cmd, cwd=str(PROJECT_ROOT),
+                        capture_output=True, text=True, timeout=900,
+                    )
+                    if result.returncode == 0:
+                        logger.info(
+                            "启发式优化 {} 完成: stdout={}",
+                            s_name, result.stdout[-300:] if result.stdout else "",
+                        )
+                    else:
+                        logger.error(
+                            "启发式优化 {} 失败 rc={}: stderr={}",
+                            s_name, result.returncode,
+                            result.stderr[-300:] if result.stderr else "",
+                        )
+                except subprocess.TimeoutExpired:
+                    logger.error("启发式优化 {} 超时（>15min），跳过", s_name)
+        except Exception as e:
+            logger.exception("启发式优化异常: {}", e)
 
     async def _safe_weekly_review(self) -> None:
         """P2-8: 周日复盘推送（周日 20:00）。"""
