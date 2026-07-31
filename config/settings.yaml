@@ -282,6 +282,7 @@ scheduler:
     screener_auto_tune: true   # 15:10 尾盘选股自动调优（启用-当前参数已放宽，需要持续验证调优）
     sentiment_daily: false     # 20:30 舆情日报（关闭）
     weekly_optimize: true      # 周日 03:00 周参数优化（保留）
+    heuristic_optimize: true   # 每月1/15日 04:00 启发式优化（GA/PSO交替）
     weekly_review: true        # 周日 20:00 周复盘（保留）
     intraday_monitor: true     # 每分钟 盘中实时盯盘（保留）
     perspective_afternoon: false # 15:30 收盘后十大视角二次分析（默认关闭）

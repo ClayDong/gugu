@@ -252,6 +252,15 @@ class TradingScheduler(SchedulerJobsMixin):
                 name="周参数优化-周日03:00",
             )
 
+        # P1-7: 启发式参数优化（每半月 04:00，GA/PSO 交替）
+        if self._task_enabled("heuristic_optimize"):
+            self._scheduler.add_job(
+                self._safe_heuristic_optimize,
+                CronTrigger(hour=4, minute=0, day="1,15"),
+                id="heuristic_optimize_0400",
+                name="启发式优化-每月1/15日04:00",
+            )
+
         # P2-8: 周日复盘推送（20:00）
         if self._task_enabled("weekly_review"):
             self._scheduler.add_job(

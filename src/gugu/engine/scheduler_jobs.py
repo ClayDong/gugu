@@ -513,6 +513,64 @@ class SchedulerJobsMixin:
         except Exception as e:
             logger.exception("周参数优化异常: {}", e)
 
+    async def _safe_heuristic_optimize(self) -> None:
+        """启发式参数优化（每半月 04:00，GA/PSO 交替）。"""
+        try:
+            from datetime import datetime
+
+            from gugu.config import PROJECT_ROOT
+
+            script = PROJECT_ROOT / "scripts" / "optimize_params.py"
+            if not script.exists():
+                logger.warning("优化脚本不存在: {}", script)
+                return
+
+            # 奇数月用 GA，偶数月用 PSO
+            algorithm = "ga" if datetime.now().month % 2 == 1 else "pso"
+            multi = "600519,002714,300750,603259,002415,601318"
+
+            cmd = [
+                "uv",
+                "run",
+                "python",
+                str(script),
+                "--multi-stock",
+                multi,
+                "--days",
+                "500",
+                "--algorithm",
+                algorithm,
+                "--population",
+                "30",
+                "--generations",
+                "20",
+            ]
+            logger.info("启动启发式优化 ({}): {}", algorithm, " ".join(cmd))
+
+            result = subprocess.run(
+                cmd,
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                timeout=7200,
+            )
+
+            if result.returncode == 0:
+                logger.info(
+                    "启发式优化完成 ({}): stdout={}",
+                    algorithm,
+                    result.stdout[-500:] if result.stdout else "",
+                )
+            else:
+                logger.error(
+                    "启发式优化失败 rc={} ({}): stderr={}",
+                    result.returncode,
+                    algorithm,
+                    result.stderr[-500:] if result.stderr else "",
+                )
+        except subprocess.TimeoutExpired:
+            logger.error("启发式优化超时（>2h），已终止")
+
     async def _safe_weekly_review(self) -> None:
         """P2-8: 周日复盘推送（周日 20:00）。"""
         try:
