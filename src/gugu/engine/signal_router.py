@@ -272,6 +272,11 @@ class SignalRouter:
             consensus_factor = 0.7 + 0.3 * consensus_ratio
             avg_conf *= consensus_factor
 
+        # v0.7.10 新增：买入信号成交量确认
+        # 缩量买入往往是假突破/诱多，需对置信度打折；卖出允许缩量（恐慌性抛售）
+        volume_factor = self._apply_volume_confirmation(df, direction)
+        avg_conf *= volume_factor
+
         if avg_conf < self._min_confidence:
             logger.info(
                 f"{symbol} 信号 {direction} 置信度 {avg_conf:.2f} < {self._min_confidence}，过滤"
@@ -287,6 +292,9 @@ class SignalRouter:
             "strategies": triggered,
             "reason": f"策略 {','.join(triggered)} 触发 {direction} 信号",
         }
+        if volume_factor < 1.0:
+            result["volume_confirmed"] = False
+            result["reason"] += "（缩量，置信度打折）"
 
         # 附加市场状态信息
         if regime:
@@ -305,6 +313,35 @@ class SignalRouter:
                 result["market_context"] = hm_data
 
         return result
+
+    def _apply_volume_confirmation(self, df: pd.DataFrame, direction: str) -> float:
+        """买入信号成交量确认。
+
+        逻辑：
+        - 买入需要成交量配合，缩量买入往往为假突破/诱多
+        - 卖出不强制放量（恐慌性抛售可能缩量）
+
+        返回折扣因子（0.5 ~ 1.0），直接乘到置信度上。
+        """
+        if direction != "buy" or "volume" not in df.columns or len(df) < 20:
+            return 1.0
+
+        try:
+            latest_vol = float(df["volume"].iloc[-1])
+            vol_ma20 = float(df["volume"].rolling(20).mean().iloc[-1])
+            if vol_ma20 <= 0 or latest_vol <= 0:
+                return 1.0
+
+            ratio = latest_vol / vol_ma20
+            if ratio >= 1.0:
+                return 1.0
+            if ratio >= 0.8:
+                return 0.85
+            if ratio >= 0.5:
+                return 0.7
+            return 0.5
+        except Exception:
+            return 1.0
 
     def _extract_cloud_trend_context(self, df: pd.DataFrame) -> dict[str, Any] | None:
         """从云策略输出中提取三维趋势上下文数据。

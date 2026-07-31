@@ -39,27 +39,33 @@
 
 ### 4.1 策略层
 
-**12 个内置策略**：
+**核心策略分组**：
 
-| 类型 | 策略 | 说明 |
+| 分组 | 策略 | 说明 |
 |------|------|------|
-| 趋势跟踪 | Turtle | 海龟突破（20 日高低点） |
-| 趋势跟踪 | DualMA | 双均线交叉（5/20 日） |
-| 趋势跟踪 | MACD | MACD 柱状图信号 |
-| 趋势跟踪 | ChenJiangting | 陈江挺《炒股的智慧》阻力突破+量能确认 |
-| 均值回归 | RSI | RSI 超买超卖 |
-| 均值回归 | KDJ | KDJ 金叉死叉 |
-| 均值回归 | Bollinger | 布林带突破 |
-| 突破 | DualThrust | 双突破（N 日高低点） |
-| 突破 | BoxBreakout | 达尔文箱体理论突破 |
-| 突破 | PullbackLow | 缩量回踩 MA20 低吸（震荡市） |
-| 突破 | DoubleYin | 双阴钱袋子（主力洗盘结束+倍量反转） |
-| 资金流 | MoneyFlowFollow | 创新高回踩+资金流跟随 |
-| 资金流 | IndustryCapitalMomentum | 行业资金强度+动量确认（v1.2禁用：回测表现最差-15.38%，待重新设计） |
-| 主力跟随 | NorthForceLong | 趋势向上+缩量回踩 MA20，模拟北向/公募长线吸筹 |
-| 主力跟随 | DragonTigerShort | 涨停断板反包，模拟机构/游资短线行为 |
+| 已验证 | box_breakout | 达尔文箱体突破（Walk-Forward 通过，样本外最稳） |
+| 已验证 | double_yin | 双阴钱袋子（主力洗盘结束+倍量反转，收益稳定为正） |
+| 已验证 | rsi_reversal | RSI 超买超卖反弹（震荡市专用） |
+| 实验性 | hot_money | 游资三数交易法（7 日内涨停 + 缩量买入/放量卖出） |
+| 实验性 | ma5_momentum | MA5 动量突破（待 Walk-Forward 验证） |
+| 实验性 | chenxuezhang | 陈学长不吃面规则策略（6 大高胜率规则组合） |
+| 实验性 | linjudaye | 邻居大爷规则策略（8 大量价规则组合） |
+| 实验性 | ml_gradient_boost | ML GradientBoosting 5 日收益预测（需预训练模型） |
+| 历史/观察 | Turtle / DualMA / MACD | 趋势跟踪基础策略（当前未启用，保留代码） |
+| 历史/观察 | KDJ / Bollinger / PullbackLow | 均值回归/低吸策略（当前未启用，保留代码） |
+| 历史/观察 | NorthForceLong | 趋势向上+缩量回踩 MA20（回测未通过，持续调参） |
+| 历史/观察 | DragonTigerShort | 涨停断板反包（回测观察通过，仅在 paper 观察） |
+| 已禁用 | IndustryCapitalMomentum | 行业资金强度+动量确认 v1.2（回测 -15.38%，待重构） |
 
-**当前启用策略**：`box_breakout`（箱体突破）+ `double_yin`（双阴钱袋子）作为核心；`dragon_tiger_short`（短线龙虎榜反包）在 `bull/rally` 市场状态下观察启用；`north_force_long`（长线主力吸筹）回测未通过，保持禁用并由 Walk-Forward 自动调参持续优化；`industry_capital_momentum`（行业资金强度+动量确认）v1.2回测表现最差（-15.38%），禁用待重新设计。所有启用策略均按市场状态分流启用。
+**当前启用策略（按市场状态分流）**：
+- `bull/rally`：3 个已验证策略（box_breakout / double_yin / rsi_reversal）+ 5 个实验性策略（hot_money / ma5_momentum / chenxuezhang / linjudaye / ml_gradient_boost）
+- `sideways`：3 个已验证策略（box_breakout / double_yin / rsi_reversal）
+- `bear/crash`：空仓，不启用任何买入策略
+- 实验性策略在 `signal_only/track_live` 模式下仅作为观察信号（卡片标注警告），仅在 `paper` 模式下参与融合
+
+**策略池动态权重（v0.7.10+）**：`StrategyPool` 根据近 20 笔交易表现动态调整策略权重，连续亏损 5 次大幅降权但保留策略（不删除），连续盈利 3 次逐步恢复；权重持久化到 `data/strategy_pool_weights.json`，进程重启不丢失。
+
+**买入成交量确认（v0.7.10+）**：`SignalRouter` 对买入信号应用成交量折扣，最新量能低于 20 日均量时按档位降低置信度（0.85 / 0.7 / 0.5），过滤缩量诱多/假突破。
 **LLM 自然语言策略生成**：描述策略逻辑 → LLM 生成 Python 代码 → AST 校验 → 自动注册。
 
 **策略注册中心**（v0.3.5+）：所有策略（信号生成/风控择时/止盈止损/Skill）统一登记到 `config/strategy_manifest.yaml`，支持：

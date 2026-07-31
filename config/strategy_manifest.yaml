@@ -766,6 +766,75 @@ signal_strategies:
         paper_signals: 0
         paper_return: 0.0
       next_action: 暂不启用；待牛市环境或参数优化后再评估
+  chenxuezhang:
+    name: 陈学长不吃面规则策略
+    module: gugu.strategies.blogger_rules.chenxuezhang
+    class: ChenXueZhangStrategy
+    source: 陈学长不吃面系列视频转写（6大独特规则）
+    enabled: true
+    summary: 假调整+尾盘骗线+涨停中继+趋势回踩+量价背离+突破回踩，6个高胜率规则组合触发
+    params_entry: strategy_defaults.yaml
+    validation: v0.7.7 新增博主规则策略，待 Walk-Forward 验证
+    notes: '核心规则：假调整（R12）缩量回踩均线、尾盘骗线（R15）、涨停中继（R18）、趋势回踩（R22）、量价背离（R25）、突破回踩（R28）。'
+    validation_gate:
+      status: pending
+      sample: 0 只股票，0 个交易日
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 待 Walk-Forward 验证 + 4 项解锁条件通过后再评估
+  linjudaye:
+    name: 邻居大爷规则策略
+    module: gugu.strategies.blogger_rules.linjudaye
+    class: LinJuDaYeStrategy
+    source: 邻居大爷系列视频转写（8大独特规则）
+    enabled: true
+    summary: 地量抄底+黄金分割买入+缩量回踩+量能背离+箱体震荡突破+均线粘合突破+龙抬头+量价齐升
+    params_entry: strategy_defaults.yaml
+    validation: v0.7.7 新增博主规则策略，待 Walk-Forward 验证
+    notes: '核心规则：地量抄底（R01）、黄金分割买入（R02）、缩量回踩（R03）、量能背离（R04）、箱体震荡突破（R05）、均线粘合突破（R06）、龙抬头（R07）、量价齐升（R08）。'
+    validation_gate:
+      status: pending
+      sample: 0 只股票，0 个交易日
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 待 Walk-Forward 验证 + 4 项解锁条件通过后再评估
+  ml_gradient_boost:
+    name: ML GradientBoosting 策略
+    module: gugu.strategies.ml_gradient_boost
+    class: MLGradientBoostStrategy
+    source: mulan-quant v11 模型迁移（sklearn GradientBoosting + 83 特征）
+    enabled: true
+    summary: 基于 sklearn GradientBoostingRegressor 的 5 日收益预测策略，需预训练模型才能产生信号
+    params_entry: strategy_defaults.yaml
+    validation: v0.7.7 新增 ML 策略，待 Walk-Forward 验证
+    notes: '核心逻辑：训练 GradientBoosting 模型预测未来 5 日收益，正预期时买入。模型文件：data/ml_models/gradient_boost_v1.pkl。'
+    validation_gate:
+      status: pending
+      sample: 0 只股票，0 个交易日
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 训练模型 + Walk-Forward 验证 + 4 项解锁条件通过后再评估
   industry_capital_momentum:
     name: 行业资金强度+动量确认
     module: gugu.strategies.industry_capital_momentum

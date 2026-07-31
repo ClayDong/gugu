@@ -21,6 +21,7 @@ dual_ma:
 
 box_breakout:
   # 达尔文箱体理论：箱体震荡突破为信号（v2 优化版）
+  default_stock_pool: "603501,002371,002472,300033,002230"  # 突破类：活跃中小盘
   box_window: 15  # 箱体识别窗口
   volume_confirm: True  # 成交量确认（仅买入，卖出不需要）
   volume_ratio: 1.2  # 量比阈值
@@ -35,6 +36,7 @@ box_breakout:
 
 rsi_reversal:
   # RSI 均值回归：超卖买入，超买卖出
+  default_stock_pool: "300750,601012,600438,603259,002594"  # 均值回归：高波动趋势股
   window: 9
   oversold: 20  # 超卖阈值
   overbought: 65  # 超买阈值
@@ -87,6 +89,7 @@ pullback_low:
 
 double_yin:
   # 双阴钱袋子策略：主力洗盘拐点
+  default_stock_pool: "300750,601012,600438,603259,000858"  # 均值回归：高波动趋势股
   ma_short: 5
   ma_long: 20
   yin_count: 2
@@ -228,6 +231,7 @@ industry_capital_momentum:
 ma5_momentum:
   # 5日均线动量策略：放量大阳线 + 回踩MA5
   # 来源：短线趋势跟踪
+  default_stock_pool: "600519,300750,002594,002371"  # 动量类：趋势龙头
   ma_window: 5
   volume_ratio: 1.5
   pullback_pct: 0.02
@@ -310,6 +314,7 @@ hot_money:
   # 游资策略：三数交易法 — 涨停筛选 + 缩倍量入场 + 放倍量离场
   # 来源：游资内部交易心法
   # 核心哲学：成交量是无法造假的大资金痕迹
+  default_stock_pool: "002472,300033,002230,603501"  # 游资类：高换手活跃股
 
   # ── 涨停筛选参数 ──
   limit_up_window: 5
@@ -479,6 +484,7 @@ huamulan_ghost_breakout:
 
 chenxuezhang:
   # 陈学长不吃面：假调整+尾盘骗线+涨停中继+趋势回踩+量价背离+突破回踩
+  default_stock_pool: "300033,002230,300760,000858"  # 自媒体：热点+白马
   ma_short: 5
   ma_mid: 10
   ma_long: 20
@@ -490,6 +496,7 @@ chenxuezhang:
 
 linjudaye:
   # 邻居大爷：地量抄底+黄金分割+缩量回踩+量能背离+箱体突破+量价齐升
+  default_stock_pool: "600519,300760,002594,300750"  # 邻居大爷：大市值趋势
   ma_short: 5
   ma_mid: 10
   ma_long: 20
@@ -501,6 +508,7 @@ linjudaye:
 ml_gradient_boost:
   # ML GradientBoosting策略（基于mulan-quant v11）
   # 注意：需要先训练模型才能产生信号
+  default_stock_pool: "600519,300750,002594,300760,002371"  # ML：多行业验证
   buy_threshold: 0.005
   sell_threshold: -0.002
   n_estimators: 100

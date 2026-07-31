@@ -26,20 +26,7 @@ from gugu.utils.log import get_logger
 
 logger = get_logger()
 
-# ── 启发式优化按策略类型匹配的股票池 ─────────────────
-# 每类策略用最适合的股票来优化参数，避免"用茅台优化涨停策略"的错位
-_HEURISTIC_STOCK_POOLS: dict[str, str] = {
-    "box_breakout": "603501,002371,002472,300033,002230",  # 突破类：活跃中小盘
-    "double_yin": "300750,603259,601012,600438,000858",  # 拐点类：高波动趋势股
-    "rsi_reversal": "300750,601012,600438,603259,002594",  # 均值回归：高波动股
-    "hot_money": "002472,300033,002230,603501",  # 游资类：高换手活跃股
-    "ma5_momentum": "600519,300750,002594,002371",  # 动量类：趋势龙头
-    "chenxuezhang": "300033,002230,300760,000858",  # 自媒体：热点+白马
-    "linjudaye": "600519,300760,002594,300750",  # 邻居大爷：大市值趋势
-    "ml_gradient_boost": "600519,300750,002594,300760,002371",  # ML：多行业验证
-    # fallback：通用验证
-    "_default": "600519,300750,002594,300760,002371",
-}
+# 优化股票池统一由 gugu.analysis.optimization_pools 维护，避免与 scripts/optimize_params.py 重复定义
 
 
 class SchedulerJobsMixin:
@@ -482,8 +469,13 @@ class SchedulerJobsMixin:
             logger.debug("缓存清理异常: {}", e)
 
     async def _safe_optimize_params(self) -> None:
-        """P1-7: 周参数优化（周日 03:00）。"""
+        """P1-7: 周参数优化（周日 03:00）。
+
+        按策略类型自动匹配股票池，对每个启用策略分别运行 Walk-Forward，
+        避免用统一股票池优化不同 alpha 来源的策略。
+        """
         try:
+            from gugu.analysis.optimization_pools import get_strategy_stock_pool
             from gugu.config import PROJECT_ROOT
 
             script = PROJECT_ROOT / "scripts" / "optimize_params.py"
@@ -491,39 +483,54 @@ class SchedulerJobsMixin:
                 logger.warning("优化脚本不存在: {}", script)
                 return
 
-            cmd = [
-                "uv",
-                "run",
-                "python",
-                str(script),
-                "--multi-stock",
-                "600519,002714,300750,603259,002415,601318",
-                "--days",
-                "500",
-                "--splits",
-                "3",
-                "--write",
-            ]
-            logger.info("启动周参数优化: {}", " ".join(cmd))
+            enabled = [s.name for s in get_enabled_strategies()]
+            if not enabled:
+                logger.warning("无启用策略，跳过周参数优化")
+                return
 
-            result = subprocess.run(
-                cmd,
-                cwd=str(PROJECT_ROOT),
-                capture_output=True,
-                text=True,
-                timeout=3600,
-            )
+            logger.info("启动周参数优化: {} 个策略", len(enabled))
+            for s_name in enabled:
+                stocks = get_strategy_stock_pool(s_name)
+                cmd = [
+                    "uv",
+                    "run",
+                    "python",
+                    str(script),
+                    "--strategy",
+                    s_name,
+                    "--multi-stock",
+                    stocks,
+                    "--days",
+                    "500",
+                    "--splits",
+                    "3",
+                    "--write",
+                ]
+                logger.info("周参数优化 {}: stocks={}", s_name, stocks)
 
-            if result.returncode == 0:
-                logger.info(
-                    "周参数优化完成: stdout={}", result.stdout[-500:] if result.stdout else ""
-                )
-            else:
-                logger.error(
-                    "周参数优化失败 rc={}: stderr={}",
-                    result.returncode,
-                    result.stderr[-500:] if result.stderr else "",
-                )
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        cwd=str(PROJECT_ROOT),
+                        capture_output=True,
+                        text=True,
+                        timeout=1200,
+                    )
+                    if result.returncode == 0:
+                        logger.info(
+                            "周参数优化 {} 完成: stdout={}",
+                            s_name,
+                            result.stdout[-300:] if result.stdout else "",
+                        )
+                    else:
+                        logger.error(
+                            "周参数优化 {} 失败 rc={}: stderr={}",
+                            s_name,
+                            result.returncode,
+                            result.stderr[-300:] if result.stderr else "",
+                        )
+                except subprocess.TimeoutExpired:
+                    logger.error("周参数优化 {} 超时（>20min），跳过", s_name)
         except subprocess.TimeoutExpired:
             logger.error("周参数优化超时（>1h），已终止")
         except Exception as e:
@@ -531,12 +538,13 @@ class SchedulerJobsMixin:
 
     async def _safe_heuristic_optimize(self) -> None:
         """启发式参数优化（每半月 04:00，GA/PSO 交替）。
-        
+
         按策略类型匹配对应股票池，每个策略用最适合的股票优化参数。
         """
         try:
             from datetime import datetime
 
+            from gugu.analysis.optimization_pools import get_strategy_stock_pool
             from gugu.config import PROJECT_ROOT
 
             script = PROJECT_ROOT / "scripts" / "optimize_params.py"
@@ -545,10 +553,10 @@ class SchedulerJobsMixin:
                 return
 
             algorithm = "ga" if datetime.now().month % 2 == 1 else "pso"
-            enabled = [s for s in get_enabled_strategies()]
+            enabled = [s.name for s in get_enabled_strategies()]
 
             for s_name in enabled:
-                stocks = _HEURISTIC_STOCK_POOLS.get(s_name, _HEURISTIC_STOCK_POOLS["_default"])
+                stocks = get_strategy_stock_pool(s_name)
                 cmd = [
                     "uv", "run", "python", str(script),
                     "--strategy", s_name,

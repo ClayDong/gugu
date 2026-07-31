@@ -28,7 +28,10 @@ from gugu.utils.log import get_logger
 from gugu.wisdom import perspective
 from gugu.wisdom.book_router import BookPerspectiveRouter
 from gugu.wisdom.fallback import (
+    FALLBACK_ADD_RATIO,
+    FALLBACK_ENTRY_MIN_CONFIDENCE,
     FALLBACK_STOP_LOSS_PCT,
+    FALLBACK_TRIAL_RATIO,
     _compute_take_profit,
     _max_single_position,
     advise_fallback,

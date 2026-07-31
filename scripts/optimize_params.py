@@ -41,6 +41,10 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from gugu.analysis.optimization_pools import (
+    DEFAULT_REPRESENTATIVE_STOCKS,
+    get_strategy_stock_pool,
+)  # noqa: E402
 from gugu.backtest.engine import (
     walk_forward_optimize,
     walk_forward_optimize_multi_stock,
@@ -53,69 +57,6 @@ from gugu.utils.log import get_logger  # noqa: E402
 
 logger = get_logger()
 
-# P1-2 新增：默认代表性股票池（50只，覆盖多个行业，解决单股过拟合问题）
-# 选股标准：各行业龙头 + 不同市值 + 不同估值水平
-DEFAULT_REPRESENTATIVE_STOCKS = [
-    # 白酒/食品饮料
-    "600519",
-    "000858",
-    "002304",
-    "600887",
-    "603288",
-    # 医药生物
-    "600276",
-    "000538",
-    "300760",
-    "603259",
-    "300015",
-    # 银行
-    "601398",
-    "600036",
-    "601288",
-    "601328",
-    "600016",
-    # 保险/券商
-    "601318",
-    "601628",
-    "600030",
-    "000776",
-    "601211",
-    # 房地产/建筑
-    "600048",
-    "001979",
-    "601668",
-    "600585",
-    # 家电
-    "000333",
-    "600690",
-    "000651",
-    "002508",
-    # 汽车
-    "600104",
-    "002594",
-    "000625",
-    "601127",
-    # 电子/半导体
-    "002415",
-    "603986",
-    "688981",
-    "002371",
-    # 新能源
-    "300750",
-    "002459",
-    "601012",
-    "600438",
-    # 互联网/科技
-    "600570",
-    "300033",
-    "002230",
-    "688111",
-    # 消费/零售
-    "600887",
-    "002024",
-    "601888",
-    "000100",
-]
 
 # 参数网格定义：策略名 → 参数网格
 # 基于 config/strategy_defaults.yaml 中的每个策略
@@ -1415,15 +1356,33 @@ async def main(
         return
 
     # P2 新增：多股聚合模式（解决单股过拟合）
-    if multi_stock:
-        # 解析股票列表（逗号分隔）
-        symbols = [s.strip().zfill(6) for s in multi_stock.split(",") if s.strip()]
-        if len(symbols) < 3:
-            logger.error("--multi-stock 至少需要 3 只股票，用逗号分隔，如 600519,000858,002714")
-            return
+    if multi_stock or strategy_name:
+        # 解析股票列表（逗号分隔）；若未指定则按策略类型自动匹配
+        if multi_stock:
+            symbols = [s.strip().zfill(6) for s in multi_stock.split(",") if s.strip()]
+            if len(symbols) < 3:
+                logger.error("--multi-stock 至少需要 3 只股票，用逗号分隔，如 600519,000858,002714")
+                return
+        else:
+            symbols = None  # 按策略自动选择
 
         if strategy_name:
-            await run_multi_stock_optimization(strategy_name, symbols, days, n_splits, write, force)
+            defaults = load_defaults()
+            pool_symbols = (
+                symbols
+                if symbols is not None
+                else [
+                    s.strip().zfill(6)
+                    for s in get_strategy_stock_pool(strategy_name, defaults).split(",")
+                    if s.strip()
+                ]
+            )
+            if len(pool_symbols) < 3:
+                logger.error(f"策略 {strategy_name} 自动股票池不足 3 只: {pool_symbols}")
+                return
+            await run_multi_stock_optimization(
+                strategy_name, pool_symbols, days, n_splits, write, force
+            )
         else:
             from gugu.config import get_config
 
@@ -1433,17 +1392,24 @@ async def main(
                 logger.error("无启用策略")
                 return
             print(f"\n将对 {len(enabled)} 个策略运行多股聚合 Walk-Forward 优化")
-            print(f"股票池: {symbols}")
-            if write:
-                if force:
-                    print("⚠️  --force 强制写回（跳过解锁条件检查）")
-                else:
-                    print("写回前将执行 4 项解锁条件检查")
-            print()
+            defaults = load_defaults()
             for s_name in enabled:
                 try:
+                    pool_symbols = (
+                        symbols
+                        if symbols is not None
+                        else [
+                            s.strip().zfill(6)
+                            for s in get_strategy_stock_pool(s_name, defaults).split(",")
+                            if s.strip()
+                        ]
+                    )
+                    if len(pool_symbols) < 3:
+                        logger.warning(f"策略 {s_name} 自动股票池不足 3 只，跳过")
+                        continue
+                    print(f"  {s_name} 股票池: {','.join(pool_symbols)}")
                     await run_multi_stock_optimization(
-                        s_name, symbols, days, n_splits, write, force
+                        s_name, pool_symbols, days, n_splits, write, force
                     )
                     print()
                 except Exception as e:
@@ -1453,18 +1419,29 @@ async def main(
 
     # v0.7.3 新增：启发式优化模式（GA/PSO）
     if algorithm in ("ga", "pso"):
-        # 解析股票列表
+        # 解析股票列表：优先用户指定 → 默认股票池（按策略类型匹配）→ 50只代表池 → 单股
         if multi_stock:
             symbols = [s.strip().zfill(6) for s in multi_stock.split(",") if s.strip()]
         elif use_default_pool:
             symbols = DEFAULT_REPRESENTATIVE_STOCKS
         else:
-            symbols = [symbol]
+            symbols = None  # 标记为按策略自动选择
 
         if strategy_name:
+            # 单策略：按策略类型自动匹配股票池
+            defaults = load_defaults()
+            pool_symbols = (
+                symbols
+                if symbols is not None
+                else [
+                    s.strip().zfill(6)
+                    for s in get_strategy_stock_pool(strategy_name, defaults).split(",")
+                    if s.strip()
+                ]
+            )
             await run_heuristic_optimization(
                 strategy_name=strategy_name,
-                symbols=symbols,
+                symbols=pool_symbols,
                 days=days,
                 algorithm=algorithm,
                 population_size=population_size,
@@ -1482,12 +1459,22 @@ async def main(
                 logger.error("无启用策略")
                 return
             print(f"\n将对 {len(enabled)} 个策略运行启发式优化 ({algorithm.upper()})")
-            print(f"股票池: {symbols[:5]}{'...' if len(symbols) > 5 else ''}")
+            defaults = load_defaults()
             for s_name in enabled:
                 try:
+                    pool_symbols = (
+                        symbols
+                        if symbols is not None
+                        else [
+                            s.strip().zfill(6)
+                            for s in get_strategy_stock_pool(s_name, defaults).split(",")
+                            if s.strip()
+                        ]
+                    )
+                    print(f"  {s_name} 股票池: {','.join(pool_symbols)}")
                     await run_heuristic_optimization(
                         strategy_name=s_name,
-                        symbols=symbols,
+                        symbols=pool_symbols,
                         days=days,
                         algorithm=algorithm,
                         population_size=population_size,

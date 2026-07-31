@@ -104,6 +104,7 @@ gugu/
 │   │   ├── sector_rotation.py  # 板块轮动
 │   │   ├── param_optimizer.py  # 参数优化
 │   │   ├── heuristic_optimizer.py # 启发式参数优化器（GA/PSO）
+│   │   ├── optimization_pools.py  # 策略专用优化股票池（按策略类型匹配）
 │   │   ├── execution_optimizer.py # 执行优化
 │   │   ├── stage_detector.py   # P0 四阶段判断器（牛皮/升势/疯狂/最后）
 │   │   ├── trailing_stop.py    # P0 浪谷递进移动止损引擎
@@ -328,7 +329,29 @@ STOCK_FLOW_VALIDATOR:
 - `majority`：多数策略同方向才输出
 - `unanimous`：全部策略同方向才输出
 
-### 3.8 信号可信度与结果指标契约（当前实现）
+**买入成交量确认（v0.7.10+）**：
+- 对 `buy` 方向信号，计算最新成交量 / 20 日均量比率
+- 比率 ≥ 1.0：置信度不变
+- 比率 0.8~1.0：置信度 × 0.85
+- 比率 0.5~0.8：置信度 × 0.7
+- 比率 < 0.5：置信度 × 0.5
+- 卖出信号不应用此折扣（恐慌性抛售可能缩量）
+- 目的：过滤缩量诱多、假突破，提高买入信号质量
+
+### 3.8 策略池动态权重管理（v0.7.10+）
+
+`StrategyPool`（[analysis/strategy_pool.py](src/gugu/analysis/strategy_pool.py)）：
+
+- 维护各策略权重，支持 `weighted_fusion` 信号加权融合
+- 根据近 20 笔交易收益动态调整权重：
+  - 胜率 > 60%：权重 × 1.2
+  - 胜率 < 30%：权重 × 0.7
+  - 连续亏损 ≥ 5 次：以 `min(当前权重, 初始权重) × 0.05` 大幅降级，但不低于 `MIN_WEIGHT = 0.01`
+  - 连续盈利 ≥ 3 次：权重 × 1.5，上限为初始权重的 2 倍
+- 所有策略均保留启用状态，**不删除策略**，符合用户要求
+- 权重持久化到 `data/strategy_pool_weights.json`（原子写入），进程重启自动恢复
+
+### 3.9 信号可信度与结果指标契约（当前实现）
 
 信号处理遵循“先判断是否可买，再区分是否执行”的原则：
 
@@ -349,7 +372,7 @@ STOCK_FLOW_VALIDATOR:
 
 因此，订单执行成功、前向信号命中和已实现盈利是三类独立事实，禁止互相替代或混用。
 
-### 3.9 十大视角分析引擎（v0.5.0）
+### 3.10 十大视角分析引擎（v0.5.0）
 
 `PerspectiveEngine`（[analysis/perspectives/engine.py](src/gugu/analysis/perspectives/engine.py)）：
 
@@ -401,9 +424,9 @@ perspective:
   min_pass_count: 7
   auto_notify: true
 
-## 3.9 尾盘选股与自动调优
+## 3.10 尾盘选股与自动调优
 
-### 3.9.1 尾盘选股器
+### 3.10.1 尾盘选股器
 
 `TerminalScreener`（[screener/terminal_screener.py](src/gugu/screener/terminal_screener.py)）在每个交易日 14:30 执行全市场扫描，采用陈江挺《炒股的智慧》中的**缩量回踩 MA20 低吸逻辑**。
 
@@ -431,7 +454,7 @@ perspective:
 - `bear`/`crash` 状态下跳过正式选股，返回观察列表或空仓提示
 - `sideways` 状态下候选数量乘以 0.6 的修正系数，降低曝光
 
-### 3.9.2 次日验证
+### 3.10.2 次日验证
 
 `ScreenerValidator`（[screener/validator.py](src/gugu/screener/validator.py)）在 T+1 日两次验证选股结果：
 
@@ -476,7 +499,7 @@ perspective:
 - `screener_validate_1505`：15:05 收盘验证
 - `screener_auto_tune_1510`：15:10 基于收盘验证数据自动调优参数
 
-### 3.9.4 使用与监控
+### 3.10.4 使用与监控
 
 ```bash
 # 手动触发尾盘选股
@@ -494,7 +517,7 @@ uv run python -m gugu.screener.auto_tune
 - `data/screener_params.json` 中的参数变化
 - 飞书选股报告中的市场状态、候选数量、每只股票的通过条件
 
-### 3.10 行业资金强度+动量确认策略（v1.2 已禁用）
+### 3.11 行业资金强度+动量确认策略（v1.2 已禁用）
 
 `IndustryCapitalMomentumStrategy`（[strategies/industry_capital_momentum.py](src/gugu/strategies/industry_capital_momentum.py)）实现四层架构，将行业资金流向作为领先指标，结合动量确认过滤假突破。
 
@@ -730,7 +753,15 @@ v0.6.2 新增两只主力跟随策略，均继承 `Strategy` 基类、在 `strat
 
 - **参数网格**：`scripts/optimize_params.py` 中已为两只策略注册完整参数网格（`STRATEGY_PARAM_GRIDS`）、配置键（`STRATEGY_CONFIG_KEYS`）和语义约束（`STRATEGY_PARAM_CONSTRAINTS`）。
 - **解锁条件**：优化结果写回 `strategy_defaults.yaml` 必须通过 4 项门控：样本外 Sharpe > 0、参数稳定性 ≥ 50%、最大回撤 < 25%、平均收益 ≥ 0。
-- **Walk-Forward 调度**：`engine/scheduler.py` 的 `weekly_optimize_0300`（周日 03:00）对 6 只行业代表股运行 `scripts/optimize_params.py --multi-stock 600519,002714,300750,603259,002415,601318 --days 500 --splits 3 --write`，失败仅记录日志，不污染生产参数。
+- **策略专用股票池（v0.7.10+）**：
+  - 新增 `analysis/optimization_pools.py` 集中管理策略→股票池映射
+  - 突破类（box_breakout / dual_thrust）：活跃中小盘（603501, 002371, 002472, 300033, 002230）
+  - 趋势类（turtle / dual_ma）：各行业趋势龙头（600519, 300750, 002594, 300760, 002371）
+  - 均值回归（bollinger / rsi_reversal）：高波动趋势股（300750, 601012, 600438, 603259, 002594）
+  - 游资/短线（hot_money / first_board）：高换手活跃股（002472, 300033, 002230, 603501）
+  - 价值投资（zhen_dahu）：大市值白马（600519, 000858, 600276, 300760, 601318）
+  - 用户可在 `config/strategy_defaults.yaml` 中通过 `default_stock_pool` 覆盖默认池
+- **Walk-Forward 调度**：`engine/scheduler.py` 的 `weekly_optimize_0300`（周日 03:00）对每个启用策略按类型匹配股票池，分别运行 `scripts/optimize_params.py --strategy <name> --multi-stock <pool> --days 500 --splits 3 --write`，失败仅记录日志，不污染生产参数。
 - **启发式优化（v0.7.3 新增）**：
   - `analysis/heuristic_optimizer.py` 实现 GA（遗传算法）和 PSO（粒子群优化）两种启发式算法
   - **GAOptimizer**：锦标赛选择（tournament size=3）+ 单点交叉（crossover rate=0.7）+ 高斯变异（mutation rate=0.1，noise σ=10% range）+ 精英保留（elite ratio=0.1）

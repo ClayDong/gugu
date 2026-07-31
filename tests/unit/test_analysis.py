@@ -749,10 +749,15 @@ class TestStrategyPool:
     """StrategyPool 策略池管理测试。"""
 
     @pytest.fixture(autouse=True)
-    def mock_config(self):
+    def mock_config(self, tmp_path):
         """Mock get_config() 让 StrategyPool 初始化时有已知策略列表。"""
-        with patch("gugu.analysis.strategy_pool.get_config") as mock_cfg:
+        with patch("gugu.analysis.strategy_pool.get_config") as mock_cfg, \
+             patch("gugu.analysis.strategy_pool.StrategyPool._WEIGHTS_FILE", tmp_path / "strategy_pool_weights.json"):
             mock_cfg.return_value.strategy.enabled = ["mean_revert", "breakout", "trend"]
+            mock_cfg.return_value.strategy.weights = {}
+            mock_cfg.return_value.strategy.verified_strategies = []
+            mock_cfg.return_value.strategy.experimental_strategies = []
+            mock_cfg.return_value.strategy.experimental_weights = {}
             yield mock_cfg
 
     def test_add_strategy(self) -> None:
@@ -847,30 +852,44 @@ class TestStrategyPool:
         result = pool.weighted_fusion(signals)
         assert result["direction"] == "hold", f"冲突信号预期 hold, 实际 {result['direction']}"
 
-    def test_disable_on_consecutive_losses(self) -> None:
-        """连续亏损 5 次应禁用策略。"""
+    def test_degrade_on_consecutive_losses(self) -> None:
+        """连续亏损 5 次应大幅降权但保留策略（不删除）。"""
         pool = StrategyPool()
+        initial_weight = pool.get_weights()["mean_revert"]
 
+        # 先补充 5 笔非亏损记录满足 total_signals >= 5
+        for _ in range(5):
+            pool.update_performance("mean_revert", pnl=10)
+
+        # 连续亏损触发降级
         for _ in range(5):
             pool.update_performance("mean_revert", pnl=-100)
 
         stats = pool.get_stats()
-        assert stats["mean_revert"]["enabled"] is False, "连续亏损 5 次应禁用"
+        assert stats["mean_revert"]["enabled"] is True, "连续亏损后策略仍应保留"
+        assert stats["mean_revert"]["weight"] < initial_weight * 0.2, "连续亏损后权重应大幅降级"
+        assert stats["mean_revert"]["weight"] >= 0.01, "权重不应低于最低保留值"
 
     def test_recover_after_consecutive_wins(self) -> None:
-        """禁用后连续盈利 3 次应恢复策略。"""
+        """降权后连续盈利 3 次应恢复权重。"""
         pool = StrategyPool()
 
-        # 先连续亏损 5 次禁用
+        # 先补充 5 笔非亏损记录满足 total_signals >= 5
+        for _ in range(5):
+            pool.update_performance("mean_revert", pnl=10)
+
+        # 连续亏损降级
         for _ in range(5):
             pool.update_performance("mean_revert", pnl=-100)
+        degraded_weight = pool.get_weights()["mean_revert"]
 
         # 再连续盈利 3 次恢复
         for _ in range(3):
             pool.update_performance("mean_revert", pnl=100)
 
         stats = pool.get_stats()
-        assert stats["mean_revert"]["enabled"] is True, "连续盈利 3 次后应恢复"
+        assert stats["mean_revert"]["enabled"] is True, "连续盈利后策略仍应保留"
+        assert stats["mean_revert"]["weight"] > degraded_weight, "连续盈利后权重应恢复"
 
 
 # =========================================================================
