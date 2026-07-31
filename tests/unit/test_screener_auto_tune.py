@@ -285,3 +285,97 @@ class TestAutoTuneScreenerParams:
 
         loaded = ScreenerParams.load(params_file)
         assert loaded.max_vol_ratio <= 1.05  # 放宽或不变
+
+
+class TestTuneWithSimMetrics:
+    """P2-3: 自动调优升级——用真实策略收益（sim_return_pct）驱动决策（TDD: RED）。"""
+
+    def test_compute_metrics_uses_sim_return_when_available(self):
+        """有 sim 字段时，win_rate 基于 sim_return_pct > 0 计算。"""
+        records = [
+            {
+                "symbol": "600519",
+                "name": "茅台",
+                "open_premium": 1.0,
+                "benchmark_open_change": 0.2,
+                "stop_loss_hit": False,
+                "intraday_max_drawdown": -1.0,
+                "validation_date": "2026-07-30",
+                "sim_exit_reason": "take_profit",
+                "sim_return_pct": 2.0,
+                "market_gate_blocked": False,
+            },
+            {
+                "symbol": "000858",
+                "name": "五粮液",
+                "open_premium": 2.0,
+                "benchmark_open_change": 0.2,
+                "stop_loss_hit": False,
+                "intraday_max_drawdown": -1.0,
+                "validation_date": "2026-07-30",
+                "sim_exit_reason": "stop_loss",
+                "sim_return_pct": -3.0,
+                "market_gate_blocked": False,
+            },
+        ]
+        metrics = compute_metrics(records)
+        # 2 笔模拟交易：1 盈 1 亏 → 胜率 50%
+        assert metrics.win_rate == pytest.approx(0.50, abs=0.01)
+        assert metrics.sample_size == 2
+
+    def test_gated_records_excluded_from_tuning(self):
+        """大盘门控阻断的记录（未实际买入）不参与调优统计。"""
+        records = [
+            {
+                "symbol": "600519",
+                "name": "茅台",
+                "open_premium": 1.0,
+                "benchmark_open_change": 0.2,
+                "stop_loss_hit": False,
+                "intraday_max_drawdown": -1.0,
+                "validation_date": "2026-07-30",
+                "sim_exit_reason": "take_profit",
+                "sim_return_pct": 2.0,
+                "market_gate_blocked": True,
+            },
+            {
+                "symbol": "000858",
+                "name": "五粮液",
+                "open_premium": 1.0,
+                "benchmark_open_change": 0.2,
+                "stop_loss_hit": False,
+                "intraday_max_drawdown": -1.0,
+                "validation_date": "2026-07-30",
+                "sim_exit_reason": "take_profit",
+                "sim_return_pct": 2.0,
+                "market_gate_blocked": False,
+            },
+        ]
+        metrics = compute_metrics(records)
+        # 只统计 1 条未阻断记录
+        assert metrics.sample_size == 1
+
+    def test_tighten_when_sim_return_negative(self):
+        """模拟收益显著为负 → 收紧选股条件。"""
+        params = ScreenerParams()
+        records = [
+            {
+                "symbol": "600519",
+                "name": "茅台",
+                "open_premium": 0.5,
+                "benchmark_open_change": 0.2,
+                "stop_loss_hit": False,
+                "intraday_max_drawdown": -2.0,
+                "validation_date": "2026-07-30",
+                "sim_exit_reason": "stop_loss",
+                "sim_return_pct": -3.0,
+                "market_gate_blocked": False,
+            }
+            for _ in range(8)
+        ]
+        metrics = compute_metrics(records)
+        assert metrics.win_rate == 0.0
+        assert metrics.sample_size == 8
+        adj = generate_adjustments(metrics, params)
+        # 全止损 → 必须收紧
+        assert adj["max_vol_ratio"] < 0

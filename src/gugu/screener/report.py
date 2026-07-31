@@ -282,6 +282,32 @@ def format_screener_validation(results: list[ValidationResult]) -> dict[str, Any
     avg_excess = sum(excess) / len(excess) if excess else 0.0
     benchmark_open = results[0].benchmark_open_change
 
+    # P2-3: 策略模拟统计（开盘低吸 → 止盈/止损/收盘平仓）
+    sim_reasons = [v.sim_exit_reason for v in results if v.sim_exit_reason]
+    sim_n = len(sim_reasons)
+    sim_section = ""
+    if sim_n > 0:
+        sim_returns = [v.sim_return_pct for v in results if v.sim_exit_reason]
+        avg_sim = sum(sim_returns) / sim_n
+        tp_n = sum(1 for r in sim_reasons if r == "take_profit")
+        sl_n = sum(1 for r in sim_reasons if r == "stop_loss")
+        close_n = sim_n - tp_n - sl_n
+        sim_section = (
+            f"\n**💹 策略模拟（开盘低吸→止盈/止损，{sim_n} 笔）**\n"
+            f"平均收益：{avg_sim:+.2f}% | "
+            f"止盈 {tp_n} 笔 / 止损 {sl_n} 笔 / 平仓 {close_n} 笔\n"
+            f"胜率：{sum(1 for x in sim_returns if x > 0) / sim_n * 100:.0f}%"
+        )
+
+    # P2-3: 大盘门控警告（开盘跌超阈值 → 建议放弃买入）
+    gate_section = ""
+    if results and results[0].market_gate_blocked:
+        gate_section = (
+            f"\n\n**🚫 大盘门控触发**\n"
+            f"沪深300 开盘 {benchmark_open:+.2f}% 低于阈值，"
+            f"建议放弃今日买入（历史数据：门控日选中股平均 -1.6%）"
+        )
+
     # 个股明细（按开盘溢价降序，最多展示 8 只）
     # P2-2: 增加涨跌原因分析
     sorted_r = sorted(results, key=lambda x: x.open_premium, reverse=True)[:8]
@@ -292,6 +318,15 @@ def format_screener_validation(results: list[ValidationResult]) -> dict[str, Any
         excess_val = v.open_premium - v.benchmark_open_change
         excess_str = f" 超额{excess_val:+.2f}%" if abs(excess_val) >= 0.01 else ""
 
+        # P2-3: 个股模拟结果
+        sim_str = ""
+        if v.sim_exit_reason:
+            label = {"take_profit": "止盈", "stop_loss": "止损", "close": "平仓"}.get(
+                v.sim_exit_reason, v.sim_exit_reason
+            )
+            sim_str = f"  [{label}{v.sim_return_pct:+.1f}%]"
+        gate_mark = " 🚫" if v.market_gate_blocked else ""
+
         # P2-2: 涨跌原因分析
         reason = _analyze_premium_reason(v.open_premium, v.benchmark_open_change, excess_val)
         reason_str = f"  \n   └ 💡 {reason}" if reason else ""
@@ -301,7 +336,7 @@ def format_screener_validation(results: list[ValidationResult]) -> dict[str, Any
             f"开盘{v.open_premium:+.2f}%  "
             f"日内最高{v.intraday_high_premium:+.2f}%  "
             f"收盘¥{v.close_price:.2f}→开盘¥{v.open_price:.2f}"
-            f"{excess_str}{reason_str}"
+            f"{excess_str}{sim_str}{gate_mark}{reason_str}"
         )
 
     # P2-2: 本周累计统计
@@ -331,7 +366,7 @@ def format_screener_validation(results: list[ValidationResult]) -> dict[str, Any
             f"平均日内最高溢价：{avg_high:+.2f}%\n"
             f"沪深300基准开盘：{benchmark_open:+.2f}%\n"
             f"平均超额收益：{avg_excess:+.2f}%"
-            f"{weekly_section}{lesson_section}"
+            f"{sim_section}{gate_section}{weekly_section}{lesson_section}"
         ),
         # 个股明细
         "**个股表现（按开盘溢价排序，最多8只）**\n" + "\n".join(detail_lines),

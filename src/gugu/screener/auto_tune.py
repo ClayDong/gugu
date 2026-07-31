@@ -85,19 +85,50 @@ def load_recent_validation(days: int | None = None) -> list[dict[str, Any]]:
 
 
 def compute_metrics(records: list[dict[str, Any]]) -> TuneMetrics:
-    """计算验证记录的调优指标。"""
-    n = len(records)
+    """计算验证记录的调优指标。
+
+    P2-3 升级（第一性原理）：
+    - 优先使用真实策略收益（sim_return_pct > 0 为胜），而非仅开盘溢价。
+      sim 字段由 validator 在 T+1 日生成（开盘低吸 → 止盈/止损/收盘平仓）。
+    - 大盘门控阻断的记录（market_gate_blocked=True）未实际买入，不参与统计。
+    - 向后兼容：无 sim 字段的旧记录回退到 open_premium。
+    """
+    # 过滤：门控阻断 = 未买入，排除
+    tradable = [r for r in records if not r.get("market_gate_blocked", False)]
+    n = len(tradable)
     if n == 0:
         return TuneMetrics(0.0, 0.0, 0.0, 0.0, 0)
 
-    open_excess = [
-        r.get("open_premium", 0.0) - r.get("benchmark_open_change", 0.0) for r in records
-    ]
-    avg_open_excess = sum(open_excess) / n
+    # 有 sim 字段的记录用 sim_return_pct，否则回退 open_premium
+    def _has_sim(r: dict[str, Any]) -> bool:
+        return bool(r.get("sim_exit_reason")) and r.get("sim_return_pct") is not None
 
-    win_rate = sum(1 for r in records if r.get("open_premium", 0.0) > 0) / n
-    stop_loss_rate = sum(1 for r in records if r.get("stop_loss_hit", False)) / n
-    avg_drawdown = sum(r.get("intraday_max_drawdown", 0.0) for r in records) / n
+    open_excess = [
+        r.get("open_premium", 0.0) - r.get("benchmark_open_change", 0.0)
+        for r in tradable
+        if not _has_sim(r)
+    ]
+    # 基准：优先 sim 收益均值，无 sim 时用开盘超额
+    sim_returns = [r.get("sim_return_pct", 0.0) for r in tradable if _has_sim(r)]
+    if sim_returns:
+        avg_open_excess = sum(sim_returns) / n
+    else:
+        avg_open_excess = sum(open_excess) / n if open_excess else 0.0
+
+    win_rate = (
+        sum(1 for r in tradable if _has_sim(r) and r.get("sim_return_pct", 0) > 0)
+        + sum(1 for r in tradable if not _has_sim(r) and r.get("open_premium", 0.0) > 0)
+    ) / n
+    stop_loss_rate = (
+        sum(
+            1
+            for r in tradable
+            if r.get("stop_loss_hit", False)
+            or (_has_sim(r) and r.get("sim_exit_reason") == "stop_loss")
+        )
+        / n
+    )
+    avg_drawdown = sum(r.get("intraday_max_drawdown", 0.0) for r in tradable) / n
 
     return TuneMetrics(
         avg_open_excess=round(avg_open_excess, 2),
