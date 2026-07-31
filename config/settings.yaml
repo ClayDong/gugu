@@ -258,28 +258,28 @@ scheduler:
   # 修改后需重启 scheduler 生效
   # 精简版：保留核心交易信号通知，关闭分析类噪声模块
   tasks:
-    macro_morning: true        # 08:00 早间全球简报（保留）
-    market_temp: false         # 08:25 市场温度计（关闭-非核心交易信号）
-    perspective_daily: false   # 08:30 十大视角日报（关闭-噪声太大）
-    signal_morning: true       # 09:10 盘前信号汇总（保留）
-    macro_preamarket: false    # 09:15 盘前宏观简报（关闭-合并到macro_morning）
-    scan_open: false            # 09:30 开盘扫描（关闭-合并在signal_morning）
-    scan_mid_morning: false    # 10:30 盘中扫描（关闭-减少噪声）
-    signal_noon: false          # 11:35 午盘信号汇总（关闭-合并在signal_morning）
-    macro_noon: false          # 11:40 午间宏观简报（关闭-非必要）
-    scan_afternoon: false       # 13:05 午盘扫描（关闭-减少噪声）
-    rsi_scan: true             # 13:30 RSI 专项扫描（仅 rsi_reversal 策略）
-    scan_close: true           # 14:30 尾盘扫描（保留-接近收盘）
+    macro_morning: false        # 08:00 早间全球简报（关闭-用户不看全球宏观）
+    market_temp: false         # 08:25 市场温度计（关闭）
+    perspective_daily: false   # 08:30 十大视角日报（关闭）
+    signal_morning: false       # 09:10 盘前信号汇总（关闭-开盘扫描会实时推）
+    macro_preamarket: false    # 09:15 盘前宏观简报（关闭）
+    scan_open: true            # 09:30 开盘扫描（开启-实时推送买卖信号）
+    scan_mid_morning: true    # 10:30 盘中扫描（开启-实时推送买卖信号）
+    signal_noon: false          # 11:35 午盘信号汇总（关闭-实时推送替代汇总）
+    macro_noon: false          # 11:40 午间宏观简报（关闭）
+    scan_afternoon: true       # 13:05 午盘扫描（开启-实时推送买卖信号）
+    rsi_scan: true             # 13:30 RSI 专项扫描（保留）
+    scan_close: true           # 14:30 尾盘扫描（保留）
     screener: true             # 14:30 尾盘选股（保留）
-    flow_afternoon: false      # 14:30 盘后资金流决策报告（关闭-非核心交易信号）
-    signal_close: true         # 15:10 收盘信号汇总（保留）
-    macro_close: false          # 15:15 收盘宏观概览（关闭-合并在macro_morning）
-    signal_performance: false   # 15:20 信号绩效验证（关闭-非核心）
-    concept_daily: false       # 20:00 每日概念（已关闭）
-    altalpha_fetch: false      # 18:00 另类因子盘后采集（关闭-暂不需要）
-    alpha_summary: false       # 18:05 因子综合评分报告（关闭-非核心）
-    portfolio_report: true     # 15:35 持仓认知分析报告（保留-用户关注）
-    sentiment_daily: false     # 20:30 舆情日报（关闭-噪声太大）
+    flow_afternoon: false      # 14:30 盘后资金流决策报告（关闭）
+    signal_close: true         # 15:10 收盘信号汇总（保留-收盘看一眼）
+    macro_close: false          # 15:15 收盘宏观概览（关闭）
+    signal_performance: false   # 15:20 信号绩效验证（关闭）
+    concept_daily: false       # 20:00 每日概念（关闭）
+    altalpha_fetch: false      # 18:00 另类因子盘后采集（关闭）
+    alpha_summary: false       # 18:05 因子综合评分报告（关闭）
+    portfolio_report: true     # 15:35 持仓认知分析报告（保留）
+    sentiment_daily: false     # 20:30 舆情日报（关闭）
     weekly_optimize: true      # 周日 03:00 周参数优化（保留）
     weekly_review: true        # 周日 20:00 周复盘（保留）
     intraday_monitor: true     # 每分钟 盘中实时盯盘（保留）

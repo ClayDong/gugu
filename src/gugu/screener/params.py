@@ -30,18 +30,22 @@ class ScreenerParams:
     """
 
     # 涨幅区间（低吸逻辑）
-    min_chg_pct: float = -2.0
-    max_chg_pct: float = 1.0
+    # v0.7.9 优化：max_chg_pct +1%→+2%（原值在震荡市过滤了太多真正的强势股回踩）
+    min_chg_pct: float = -1.5
+    max_chg_pct: float = 2.0
 
     # 前 N 日强势表现
-    recent_strong_pct: float = 5.0
-    recent_strong_days: int = 5
+    # v0.7.9 优化：窗口5天→10天（更长的回看能筛选出真正的强势股）
+    recent_strong_pct: float = 4.0
+    recent_strong_days: int = 10
 
     # 量比上限（<1 表示缩量）
-    max_vol_ratio: float = 1.0
+    # v0.7.9 优化：1.0→1.2（适度放宽，区分缩量回踩和缩量无人问津）
+    max_vol_ratio: float = 1.2
 
     # 换手率区间
-    min_turnover: float = 3.0
+    # v0.7.9 优化：下限3%→2%（2-3%换手的好股被过滤了太多）
+    min_turnover: float = 2.0
     max_turnover: float = 15.0
 
     # 流通市值区间（元）
@@ -59,9 +63,6 @@ class ScreenerParams:
         default_factory=lambda: {
             "bull": 1.0,
             "rally": 1.0,
-            "sideways": 0.6,
-            "bear": 0.0,
-            "crash": 0.0,
         }
     )
 
@@ -72,11 +73,15 @@ class ScreenerParams:
     tune_lookback_days: int = 10
 
     # 调优触发阈值
-    tune_tighten_open_excess: float = -0.5  # 近 N 日平均开盘超额低于此值则收紧
-    tune_tighten_win_rate: float = 0.30
+    # v0.7.9 优化：收紧阈值从-0.5%/30%改为-0.3%/25%（原值太严，实测从未触发过调优）
+    tune_tighten_open_excess: float = -0.3
+    tune_tighten_win_rate: float = 0.25
     tune_tighten_stop_loss_rate: float = 0.40
-    tune_loosen_open_excess: float = 0.30  # 近 N 日平均开盘超额高于此值则放宽
-    tune_loosen_win_rate: float = 0.45
+
+    # 放宽触发的条件
+    # v0.7.9 优化：放宽阈值从0.3%/45%改为0.2%/40%（原值几乎无法达到）
+    tune_loosen_open_excess: float = 0.20
+    tune_loosen_win_rate: float = 0.40
 
     # 参数硬边界（自动调优不得越界）
     _BOUNDS: dict[str, tuple[float, float]] = field(

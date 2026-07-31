@@ -30,6 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import akshare as ak
 import numpy as np
 import pandas as pd
 
@@ -193,6 +194,25 @@ class TerminalScreener:
             return []
 
         logger.info("尾盘选股: 全市场 {} 只股票", len(spot))
+
+        # 1.5 大盘趋势过滤：大盘MA5<MA10（下跌趋势）时跳过选股
+        try:
+            # 获取最近20日大盘数据用于趋势判断
+            index_df = await asyncio.wait_for(
+                asyncio.to_thread(ak.stock_zh_index_daily, symbol="sh000001"),
+                timeout=15.0,
+            )
+            if index_df is not None and len(index_df) > 15:
+                index_df["ma5"] = index_df["close"].rolling(5).mean()
+                index_df["ma10"] = index_df["close"].rolling(10).mean()
+                if index_df.iloc[-1]["ma5"] < index_df.iloc[-1]["ma10"]:
+                    logger.info(
+                        "尾盘选股: 大盘MA5({:.2f})<MA10({:.2f})，下跌趋势跳过选股",
+                        index_df.iloc[-1]["ma5"], index_df.iloc[-1]["ma10"],
+                    )
+                    return []
+        except Exception as e:
+            logger.warning("尾盘选股: 大盘趋势判断失败，降级继续: {}", e)
 
         # 2. 快照硬过滤：先用快照已有的字段过滤，大幅减少候选数
         candidates = self._hard_filter_snapshot(spot)
