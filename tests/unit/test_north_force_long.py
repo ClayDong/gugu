@@ -107,9 +107,11 @@ def test_sell_priority_over_buy(strategy: NorthForceLongStrategy):
     df = _make_df(prices, volumes, opens)
 
     # 缩短时间止损窗口，使测试在可控长度内触发
+    # min_confidence 0.30：构造数据的最高评分 0.389（103-105 日），
+    # 原 0.40 阈值导致买入永不触发（测试意图是验证卖出优先，非评分门槛）
     test_strategy = NorthForceLongStrategy(
         {
-            "min_confidence": 0.40,
+            "min_confidence": 0.30,
             "time_stop_window": 3,
             "time_stop_threshold": 0.05,
         }

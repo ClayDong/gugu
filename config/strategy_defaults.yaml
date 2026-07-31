@@ -136,6 +136,21 @@ breakout_rebound:
   time_stop_days: 10  # 时间止损天数（5天→10天）
   time_stop_gain_threshold: 0.01  # 时间止损阈值（3%→1%）
 
+rebound_elite:
+  # 断板反包·精英追涨策略（2026-07-31 事件研究验证后的概率化用法）
+  # 只做「高活跃妖股 + 放量反包追涨」验证有效的形态，废弃护盘低吸(显著为负)
+  # 验证：67股/2.5年/152事件，本形态子集5日+4.08%、10日+9.99%、盈亏比2.76
+  lookback_days: 120           # 活跃度统计回看窗口
+  min_limit_ups: 8             # 过去120日内涨停次数下限（活跃度/妖股过滤，验证规律）
+  limit_up_pct: 0.095          # 涨停判定阈值（主板9.5%）
+  wash_gap: 5                  # 首板后找洗盘大阴的最大间隔天数
+  wash_min_drop: 0.03          # 洗盘阴线最小跌幅（-3%）
+  wash_vol_min: 0.7            # 洗盘日量能 ≥ 首板量能的倍数下限
+  support_tolerance: 0.03      # 护盘支撑容忍度（首板开盘价 ±3%）
+  vol_ratio_min: 1.2           # 反包日放量阈值（量比≥1.2）
+  stop_loss_pct: 0.08          # 破位止损（跌破首板开盘价×(1-8%)）
+  max_hold_days: 10            # 时间止损/最大持仓天数
+
 capital_flow_alert:
   # 资金流异动监控策略：4卖出特征识别主力出逃 + 3买入特征捕捉洗盘结束
   # 来源：豆包AI「龙头股散户化」分析 + 实战派资金流监控
@@ -150,46 +165,6 @@ capital_flow_alert:
   recent_strong_window: 5             # 前期强势表现回看窗口
   recent_strong_threshold: 0.05       # 前期强势涨幅阈值 5%
   confirm_days: 0                    # 不确认（放量/缩量本身即触发条件）
-
-breakout_rebound:
-  # v0.6.4: 大幅放宽条件以增加信号产量
-  # 来源：陈学长不吃面交易策略
-
-  # ── 均线参数 ──
-  ma_trend_window: 20  # 默认不变
-  ma_long_window: 60  # 默认不变
-  ma_slope_window: 5  # 默认不变
-
-  # ── 涨停筛选参数 ──
-  limit_up_window: 10  # 涨停回看窗口（7日→10日）
-  limit_up_threshold: 0.07  # 涨停判定阈值（9.5%→7%，覆盖更多涨停）
-
-  # ── 护盘参数 ──
-  support_tolerance: 0.12  # 护盘容忍度（±5%→±12%）
-
-  # ── 趋势参数 ──
-  trend_slope_window: 5  # 趋势斜率窗口
-  trend_slope_threshold: -0.05  # 趋势斜率阈值（-0.01→-0.05）
-
-  # ── 量能参数 ──
-  volume_ratio: 0.85  # 缩量判断（0.7→0.85）
-  volume_ratio_max: 1.5  # 量比上限
-
-  # ── 洗盘参数 ──
-  wash_window: 7  # 洗盘窗口（5日→7日）
-  wash_drop_threshold: -0.01  # 洗盘跌幅阈值（-2%→-1%）
-  wash_vol_threshold: 1.0  # 洗盘放量阈值（1.2→1.0）
-
-  # ── 置信度参数 ──
-  min_confidence: 0.3  # 置信度下限（0.5→0.3）
-
-  # ── 止损参数 ──
-  stop_loss_pct: 0.08  # 止损（5%→8%）
-  take_profit_pct: 0.05  # 止盈（6%→5%）
-
-  # ── 时间止损 ──
-  time_stop_days: 10  # 时间止损天数（5天→10天）
-  time_stop_gain_threshold: 0.01  # 时间止损阈值（3%→1%）
 
 industry_capital_momentum:
   # 行业资金强度 + 动量确认策略（v2.x 系列）
@@ -237,6 +212,15 @@ ma5_momentum:
   pullback_pct: 0.02
   stop_loss_pct: 0.03
   take_profit_pct: 0.06
+  # 实际代码参数（v0.8.1 修复：原配置参数名与代码不一致导致 KeyError，策略从未生效）
+  big_yang_gain_pct: 0.03       # 放量大阳线涨幅阈值（3%）
+  big_yang_vol_ratio: 1.8       # 放量倍数（量/均量 >= 1.8）
+  big_yang_lookback: 10         # 近 N 日内出现过放量大阳线
+  pullback_tolerance: 0.02      # 回踩容忍度（收盘 >= MA5 * (1-2%)）
+  shrink_vol_ratio: 0.7         # 缩量确认（回踩日量 <= 前均量 * 0.7）
+  profit_deviation_pct: 0.05    # 偏离 MA5 止盈阈值（5%）
+  ma5_break_exit_days: 3        # 连续 N 日跌破 MA5 清仓
+  vol_ma_window: 5              # 量均线窗口
 
 leopard_three_factors:
   # 豹子三因子策略：量价配合 + 均线支撑 + 动量确认
@@ -257,6 +241,21 @@ first_board:
   stop_loss_pct: 0.05
   take_profit_pct: 0.10
   max_hold_days: 3
+  # 首板专属参数（v0.8.1 补全：实现 validate_params 使用但配置缺失）
+  limit_up_pct: 0.095        # 涨停判定阈值（5%-11%）
+  limit_up_lookback: 120     # 涨停回看窗口（交易日）
+  history_limit_up_min: 3    # 历史涨停次数下限
+  market_cap_min: 3000000000   # 流通市值下限 30 亿
+  market_cap_max: 10000000000  # 流通市值上限 100 亿
+  price_max: 20.0            # 股价上限
+  price_min: 3.0             # 股价下限
+  turnover_min: 0.05         # 换手率下限 5%
+  turnover_max: 0.15         # 换手率上限 15%
+  vol_ratio_min: 2.0         # 量比下限
+  vol_ratio_max: 3.0         # 量比上限
+  seal_ratio_min: 0.2        # 封单金额/成交额 下限 20%
+  time_stop_window: 1        # 时间止损窗口（交易日）
+  confirm_days: 1            # 确认天数
 
 dragon_tiger_short:
   # 短线龙虎榜反包跟随
@@ -514,3 +513,31 @@ ml_gradient_boost:
   n_estimators: 100
   max_depth: 4
   learning_rate: 0.05
+
+price_volume_signal:
+  # 换手率+量比 尾盘黄金信号（短视频策略，经 gugu-strategy-backtest skill 大样本回测验证）
+  # 最优参数：换手>5% 且 (量比2~5 或 低位放量吸筹)，5日裸持有，仅高位放量派发出场
+  # 适用：活跃题材/中小盘（换手中位>1.5%），蓝筹天然不触发
+  # 定位：选股入场漏斗（稀有事件），非全自动交易系统
+  default_stock_pool: "300033,002230,300274,300014,300124,603501,002371,300502,300476,002475"  # 活跃科技题材
+
+  # ── 入场参数 ──
+  turnover_min_pct: 0.05        # 换手率下限 5%
+  vol_ratio_min: 2.0            # 量比下限 2（启动+加速并轨）
+  vol_ratio_max: 5.0            # 量比上限 5
+
+  # ── 低位放量吸筹入场 ──
+  big_turnover_pct: 0.10        # 大幅放量换手 >10%
+  big_vol_ratio: 5.0            # 放量量比 >5
+  low_pos_rank: 0.30            # 低位判定：120日区间位置 <30%
+
+  # ── 高位放量派发出场 ──
+  high_pos_rank: 0.70           # 高位判定：120日区间位置 >70%
+
+  # ── 持有与风控 ──
+  max_hold_days: 5              # 持有上限（实测最优5日，裸持有>主动止盈止损）
+  confirm_days: 0               # 信号当天即成立，不需额外确认
+
+  # ── 工程参数 ──
+  float_shares: 1000000000      # 流通股本(股)近似，缺省1e9（amount/close算换手用，单位鲁棒）
+

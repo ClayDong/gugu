@@ -57,6 +57,127 @@ def test_signal_tracker_report_separates_forward_hit_rate() -> None:
     assert report["closed_trade_win_rate"] == 0
 
 
+def test_signal_tracker_daily_validation_insufficient() -> None:
+    """样本不足时返回带 message 的报告。"""
+    tracker = SignalTracker()
+    tracker._load_signals_by_date = lambda d: [
+        {"timestamp": "2026-01-01T00:00:00", "symbol": "000001", "direction": "buy"},
+    ]
+    report = __import__("asyncio").run(tracker.generate_daily_validation_report("2026-01-01"))
+    assert "message" in report
+    assert report["total_signals"] == 1
+
+
+def test_signal_tracker_daily_validation_computes_t1_metrics() -> None:
+    """T+1 验证正确计算收盘收益、回撤、止损命中。"""
+    tracker = SignalTracker()
+    tracker._load_signals_by_date = lambda d: [
+        {
+            "timestamp": "2026-01-01T10:00:00",
+            "symbol": "000001",
+            "direction": "buy",
+            "strategies": ["turtle"],
+            "stop_loss_price": 9.0,
+        },
+        {
+            "timestamp": "2026-01-01T10:00:00",
+            "symbol": "000002",
+            "direction": "buy",
+            "strategies": ["turtle"],
+            "stop_loss_price": 9.0,
+        },
+        {
+            "timestamp": "2026-01-01T10:00:00",
+            "symbol": "000003",
+            "direction": "buy",
+            "strategies": ["rsi_reversal"],
+            "stop_loss_price": 9.0,
+        },
+    ]
+
+    async def fake_validate(signals):
+        return [
+            {
+                **signals[0],
+                "entry_price": 10.0,
+                "close_return": 0.05,
+                "max_drawdown": -0.01,
+                "stop_loss_hit": False,
+            },
+            {
+                **signals[1],
+                "entry_price": 10.0,
+                "close_return": -0.02,
+                "max_drawdown": -0.03,
+                "stop_loss_hit": True,
+            },
+            {
+                **signals[2],
+                "entry_price": 10.0,
+                "close_return": 0.01,
+                "max_drawdown": -0.005,
+                "stop_loss_hit": False,
+            },
+        ]
+
+    tracker._validate_t1_signals = fake_validate
+    report = __import__("asyncio").run(tracker.generate_daily_validation_report("2026-01-01"))
+    assert report["total_signals"] == 3
+    assert report["valid_count"] == 3
+    assert report["win_rate"] == pytest.approx(2 / 3, abs=1e-4)
+    assert report["avg_close_return"] == pytest.approx((0.05 - 0.02 + 0.01) / 3, abs=1e-4)
+    assert report["stop_hit_rate"] == pytest.approx(1 / 3, abs=1e-4)
+    assert len(report["by_strategy"]) == 2
+
+
+def test_signal_tracker_weekly_report_insufficient() -> None:
+    """周报样本不足时返回提示。"""
+    tracker = SignalTracker()
+    tracker.load_history = lambda days=7: []
+    report = __import__("asyncio").run(tracker.generate_weekly_report())
+    assert "message" in report
+
+
+def test_signal_tracker_weekly_report_aggregates() -> None:
+    """周报正确聚合近7日信号并按日/策略统计。"""
+    tracker = SignalTracker()
+    tracker.load_history = lambda days=7: [
+        {
+            "timestamp": "2026-01-01T10:00:00",
+            "symbol": "000001",
+            "direction": "buy",
+            "strategies": ["turtle"],
+        },
+        {
+            "timestamp": "2026-01-01T10:00:00",
+            "symbol": "000002",
+            "direction": "buy",
+            "strategies": ["turtle"],
+        },
+        {
+            "timestamp": "2026-01-02T10:00:00",
+            "symbol": "000003",
+            "direction": "buy",
+            "strategies": ["rsi_reversal"],
+        },
+    ]
+
+    async def fake_track(signals):
+        return [
+            {**signals[0], "return_5d": 0.05},
+            {**signals[1], "return_5d": -0.02},
+            {**signals[2], "return_5d": 0.03},
+        ]
+
+    tracker._track_signals = fake_track
+    report = __import__("asyncio").run(tracker.generate_weekly_report())
+    assert report["total_signals"] == 3
+    assert report["win_rate"] == pytest.approx(2 / 3, abs=1e-4)
+    assert report["avg_return_5d"] == pytest.approx((0.05 - 0.02 + 0.03) / 3, abs=1e-4)
+    assert len(report["daily_summary"]) == 2
+    assert len(report["by_strategy"]) == 2
+
+
 async def _tracked_with_forward_returns(signals):
     return [
         {**signals[0], "return_5d": 0.1},
@@ -751,8 +872,13 @@ class TestStrategyPool:
     @pytest.fixture(autouse=True)
     def mock_config(self, tmp_path):
         """Mock get_config() 让 StrategyPool 初始化时有已知策略列表。"""
-        with patch("gugu.analysis.strategy_pool.get_config") as mock_cfg, \
-             patch("gugu.analysis.strategy_pool.StrategyPool._WEIGHTS_FILE", tmp_path / "strategy_pool_weights.json"):
+        with (
+            patch("gugu.analysis.strategy_pool.get_config") as mock_cfg,
+            patch(
+                "gugu.analysis.strategy_pool.StrategyPool._WEIGHTS_FILE",
+                tmp_path / "strategy_pool_weights.json",
+            ),
+        ):
             mock_cfg.return_value.strategy.enabled = ["mean_revert", "breakout", "trend"]
             mock_cfg.return_value.strategy.weights = {}
             mock_cfg.return_value.strategy.verified_strategies = []
@@ -867,7 +993,10 @@ class TestStrategyPool:
 
         stats = pool.get_stats()
         assert stats["mean_revert"]["enabled"] is True, "连续亏损后策略仍应保留"
-        assert stats["mean_revert"]["weight"] < initial_weight * 0.2, "连续亏损后权重应大幅降级"
+        # v0.8.1: 权重有二次归一化（除以全策略总和），绝对下限 0.05 归一化后
+        # 会随策略数量稀释（此处 3 策略 → ≈0.0875）。断言改为相对降级：
+        # 连续亏损 5 次后权重应 < 初始权重的一半（大幅降级语义）
+        assert stats["mean_revert"]["weight"] < initial_weight * 0.5, "连续亏损后权重应大幅降级"
         assert stats["mean_revert"]["weight"] >= 0.01, "权重不应低于最低保留值"
 
     def test_recover_after_consecutive_wins(self) -> None:

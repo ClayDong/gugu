@@ -62,6 +62,10 @@ class TestFundamentalFilter:
         """每个用例执行前清理缓存确保隔离（P1 修复：缓存已改为实例级）。"""
         pass
 
+    @patch(
+        "gugu.filters.fundamental.FundamentalFilter._fetch_pe_pb_tencent",
+        return_value=(None, None),
+    )
     @patch("gugu.filters.fundamental.ak.stock_zh_a_spot_em")
     @patch("gugu.filters.fundamental.ak.stock_individual_info_em")
     @patch("gugu.filters.fundamental.ak.stock_financial_analysis_indicator")
@@ -70,6 +74,7 @@ class TestFundamentalFilter:
         mock_financial: MagicMock,
         mock_info: MagicMock,
         mock_spot: MagicMock,
+        mock_tencent: MagicMock,
     ) -> None:
         """PE/PB 在阈值范围内且 ROE 为正 → 通过。"""
         mock_spot.return_value = _make_spot_df(
@@ -90,6 +95,10 @@ class TestFundamentalFilter:
         assert result["revenue_growth"] == 5.0
         assert result["industry"] == "银行"
 
+    @patch(
+        "gugu.filters.fundamental.FundamentalFilter._fetch_pe_pb_tencent",
+        return_value=(None, None),
+    )
     @patch("gugu.filters.fundamental.ak.stock_zh_a_spot_em")
     @patch("gugu.filters.fundamental.ak.stock_individual_info_em")
     @patch("gugu.filters.fundamental.ak.stock_financial_analysis_indicator")
@@ -98,6 +107,7 @@ class TestFundamentalFilter:
         mock_financial: MagicMock,
         mock_info: MagicMock,
         mock_spot: MagicMock,
+        mock_tencent: MagicMock,
     ) -> None:
         """PE 超过最大值 → 未通过。"""
         mock_spot.return_value = _make_spot_df(
@@ -114,6 +124,10 @@ class TestFundamentalFilter:
         assert result["pass"] is False
         assert any("泡沫股" in r for r in result["reasons"])
 
+    @patch(
+        "gugu.filters.fundamental.FundamentalFilter._fetch_pe_pb_tencent",
+        return_value=(None, None),
+    )
     @patch("gugu.filters.fundamental.ak.stock_zh_a_spot_em")
     @patch("gugu.filters.fundamental.ak.stock_individual_info_em")
     @patch("gugu.filters.fundamental.ak.stock_financial_analysis_indicator")
@@ -122,6 +136,7 @@ class TestFundamentalFilter:
         mock_financial: MagicMock,
         mock_info: MagicMock,
         mock_spot: MagicMock,
+        mock_tencent: MagicMock,
     ) -> None:
         """PE 为负（亏损股）→ 未通过。"""
         mock_spot.return_value = _make_spot_df(
@@ -138,6 +153,10 @@ class TestFundamentalFilter:
         assert result["pass"] is False
         assert any("亏损股" in r for r in result["reasons"])
 
+    @patch(
+        "gugu.filters.fundamental.FundamentalFilter._fetch_pe_pb_tencent",
+        return_value=(None, None),
+    )
     @patch("gugu.filters.fundamental.ak.stock_zh_a_spot_em")
     @patch("gugu.filters.fundamental.ak.stock_individual_info_em")
     @patch("gugu.filters.fundamental.ak.stock_financial_analysis_indicator")
@@ -146,6 +165,7 @@ class TestFundamentalFilter:
         mock_financial: MagicMock,
         mock_info: MagicMock,
         mock_spot: MagicMock,
+        mock_tencent: MagicMock,
     ) -> None:
         """ROE 为负 → 未通过。"""
         mock_spot.return_value = _make_spot_df(
@@ -162,6 +182,9 @@ class TestFundamentalFilter:
         assert result["pass"] is False
         assert any("盈利能力不足" in r for r in result["reasons"])
 
+    @patch(
+        "gugu.filters.fundamental.FundamentalFilter._fetch_pe_pb_tencent", return_value=(None, None)
+    )
     @patch("gugu.filters.fundamental.FundamentalFilter._fetch_pe_pb_eastmoney")
     @patch("gugu.filters.fundamental.ak.stock_zh_a_spot_em")
     @patch("gugu.filters.fundamental.ak.stock_individual_info_em")
@@ -172,6 +195,7 @@ class TestFundamentalFilter:
         mock_info: MagicMock,
         mock_spot: MagicMock,
         mock_em_fallback: MagicMock,
+        mock_tencent: MagicMock,
     ) -> None:
         """数据获取失败时宽松降级处理：缺失的指标不参与过滤。"""
         # 模拟异常：实时行情返回空 DataFrame

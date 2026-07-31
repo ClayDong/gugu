@@ -295,9 +295,11 @@ class CloudTrendStrategy(Strategy):
         # 趋势初期（三维刚满足≤5日）：40%
         # 趋势确认（三维持续>5日）：60%
         # 趋势末期（任一维度弱化）：20%
+        # v0.8.1 修复：early_stage 优先于 late_stage——趋势刚启动 5 天内
+        # 即使某维度因噪声短暂弱化，也不应判为"末期"（否则初期仓位永不生效）
         early_stage = (df["trend_all_3_days"] > 0) & (df["trend_all_3_days"] <= trend_early_days)
         confirmed_stage = df["trend_all_3_days"] > trend_early_days
-        late_stage = df["any_dim_weakening"] & df["trend_at_least_2"]
+        late_stage = (~early_stage) & df["any_dim_weakening"] & df["trend_at_least_2"]
 
         df.loc[buy_mask & early_stage, "suggested_position_ratio"] = 0.40
         df.loc[buy_mask & confirmed_stage & ~late_stage, "suggested_position_ratio"] = 0.60
