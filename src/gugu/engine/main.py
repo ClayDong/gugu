@@ -462,6 +462,10 @@ class TradingEngine(EngineOpsMixin):
                         )
 
                 await self._check_daily_loss()
+                if self._risk.is_halted:
+                    logger.warning("信号处理后触发 L2 熔断，跳过本轮后续检查")
+                    self._write_heartbeat("halted")
+                    return
 
                 account_after = self._broker.get_account()
                 self._risk.update_portfolio_peak(account_after.total_value)
@@ -469,13 +473,14 @@ class TradingEngine(EngineOpsMixin):
                 if dd_result.action == RiskAction.HALT:
                     self._event_engine.put(EVENT_DAILY_LOSS_HALT, {"drawdown": True})
                     logger.warning("信号处理后组合回撤触发熔断: {}", dd_result.message)
-                    await self._notifier.notify_risk_alert(
-                        {
-                            "level": "halt",
-                            "message": dd_result.message,
-                            "suggestion": "组合回撤过大，已自动熔断",
-                        }
-                    )
+                    if self._should_alert("portfolio_drawdown_halt"):
+                        await self._notifier.notify_risk_alert(
+                            {
+                                "level": "halt",
+                                "message": dd_result.message,
+                                "suggestion": "组合回撤过大，已自动熔断",
+                            }
+                        )
                 elif dd_result.action == RiskAction.WARN:
                     logger.warning("信号处理后组合回撤预警: {}", dd_result.message)
 
