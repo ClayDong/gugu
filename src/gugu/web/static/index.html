@@ -86,6 +86,10 @@ tr:hover td{background:#161b22}
 
 <div class="tab-content" id="tab-signals">
   <div class="section">
+    <h2>信号绩效摘要</h2>
+    <div id="signal-performance"></div>
+  </div>
+  <div class="section">
     <h2>信号历史（最近50条）</h2>
     <div id="all-signals"></div>
   </div>
@@ -141,11 +145,11 @@ async function fetchJSON(url){
 }
 
 async function refresh(){
-  const [account,portfolio,portfolioDetail,trades,risk,signals,books]=await Promise.all([
+  const [account,portfolio,portfolioDetail,trades,risk,signals,books,perf]=await Promise.all([
     fetchJSON('/api/account'),fetchJSON('/api/portfolio'),
     fetchJSON('/api/portfolio/detail'),fetchJSON('/api/trades'),
     fetchJSON('/api/risk'),fetchJSON('/api/signals?limit=50'),
-    fetchJSON('/api/books')
+    fetchJSON('/api/books'),fetchJSON('/api/signals/performance?days=30')
   ]);
   document.getElementById('last-update').textContent='更新: '+new Date().toLocaleTimeString('zh-CN');
 
@@ -185,6 +189,24 @@ async function refresh(){
     }).join('')}</tbody></table>`;
   }else{
     document.getElementById('recent-signals').innerHTML='<div class="empty">暂无信号</div>';
+  }
+
+  // Signal performance summary (signals tab)
+  if(perf&&perf.success&&perf.data){
+    const d=perf.data;
+    const forwardHitRate=d.forward_5d_signal_hit_rate!=null?fmtPct(d.forward_5d_signal_hit_rate*100):'--';
+    const avgReturn=d.avg_return_5d!=null?fmtPct(d.avg_return_5d*100):'--';
+    const closedWinRate=d.closed_trade_win_rate!=null?fmtPct(d.closed_trade_win_rate*100):'--';
+    const realizedPnl=d.realized_pnl!=null?fmt(d.realized_pnl):'--';
+    document.getElementById('signal-performance').innerHTML=`
+      <div class="grid">
+        <div class="card"><h2>信号5日命中率</h2><div class="value">${forwardHitRate}</div><div class="sub">近${d.period_days||30}天 · ${d.total_signals||0} 条信号</div></div>
+        <div class="card"><h2>5日平均收益</h2><div class="value">${avgReturn}</div><div class="sub">前瞻信号表现</div></div>
+        <div class="card"><h2>闭仓交易胜率</h2><div class="value">${closedWinRate}</div><div class="sub">已实现盈亏 ${realizedPnl}</div></div>
+      </div>
+    `;
+  }else{
+    document.getElementById('signal-performance').innerHTML='<div class="empty">暂无绩效数据</div>';
   }
 
   // All signals (signals tab) - with expandable decision chain

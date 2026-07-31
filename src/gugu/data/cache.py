@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import fcntl
+import os
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +21,7 @@ class DataCache:
     """带 TTL 的内存缓存，有最大条目限制和 LRU 淘汰策略。
 
     线程安全：所有公共方法使用 RLock 保护，防止 asyncio/多线程并发竞态。
+    LRU 实现基于 OrderedDict，set/get 均 O(1) 复杂度。
 
     Attributes:
         _ttl: 缓存 TTL（秒）。
@@ -27,15 +31,13 @@ class DataCache:
     def __init__(self, ttl_seconds: int = 120, max_size: int = 1000) -> None:
         self._ttl = ttl_seconds
         self._max_size = max_size
-        self._store: dict[str, tuple[float, Any]] = {}
-        self._order: list[str] = []
+        self._store: OrderedDict[str, tuple[float, Any]] = OrderedDict()
         self._lock = threading.RLock()
 
     def get(self, key: str, ignore_ttl: bool = False) -> Any | None:
         """获取缓存。过期返回 None。ignore_ttl=True 时即使过期也返回（兜底用）。
 
-        修复：get() 命中时更新 _order 中的位置（LRU 语义），
-        将访问的 key 移到 _order 末尾，避免热数据被冷数据淘汰。
+        OrderedDict 实现 LRU：命中时调用 move_to_end() 更新访问顺序。
         """
         with self._lock:
             if key not in self._store:
@@ -43,34 +45,26 @@ class DataCache:
             ts, val = self._store[key]
             if not ignore_ttl and time.time() - ts > self._ttl:
                 del self._store[key]
-                if key in self._order:
-                    self._order.remove(key)
                 return None
-            # LRU 更新：将访问的 key 移到末尾
-            if key in self._order:
-                self._order.remove(key)
-                self._order.append(key)
+            self._store.move_to_end(key)
             return val
 
     def set(self, key: str, value: Any) -> None:
         """写入缓存。若超出最大条目限制，淘汰最旧条目。"""
         with self._lock:
-            if key not in self._store and len(self._store) >= self._max_size:
+            self._store[key] = (time.time(), value)
+            self._store.move_to_end(key)
+
+            if len(self._store) >= self._max_size:
                 evict_count = max(1, self._max_size // 10)
                 for _ in range(evict_count):
-                    if self._order:
-                        oldest = self._order.pop(0)
-                        self._store.pop(oldest, None)
-
-            if key not in self._store:
-                self._order.append(key)
-            self._store[key] = (time.time(), value)
+                    if self._store:
+                        self._store.popitem(last=False)
 
     def clear(self) -> None:
         """清空缓存。"""
         with self._lock:
             self._store.clear()
-            self._order.clear()
 
     def stats(self) -> dict[str, int]:
         """缓存统计。"""
@@ -97,7 +91,9 @@ class ParquetPersistentCache:
             cache_dir = PROJECT_ROOT / "data" / "parquet_cache"
         self._cache_dir = Path(cache_dir)
         self._cache_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Parquet 持久化缓存目录: {self._cache_dir}")
+        # P0 修复：进程级锁，防止并发写入同一 Parquet 文件
+        self._lock = threading.RLock()
+        logger.info("Parquet 持久化缓存目录: {}", self._cache_dir)
 
     def _key(self, symbol: str, days: int) -> str:
         """生成缓存文件名。"""
@@ -138,8 +134,11 @@ class ParquetPersistentCache:
                 max_stale_days = 7
                 if calendar_days > max_stale_days:
                     logger.debug(
-                        f"Parquet 缓存过期: {symbol} {days}d, "
-                        f"最后日期={last_date.date()}, 距今 {calendar_days} 天"
+                        "Parquet 缓存过期: {} {}d, 最后日期={}, 距今 {} 天",
+                        symbol,
+                        days,
+                        last_date.date(),
+                        calendar_days,
                     )
                     path.unlink(missing_ok=True)
                     return None
@@ -151,19 +150,19 @@ class ParquetPersistentCache:
 
                 validated = validate_stock_history(df, symbol)
                 if validated.empty:
-                    logger.warning(f"Parquet 缓存数据 {symbol} {days}d 校验失败，删除缓存")
+                    logger.warning("Parquet 缓存数据 {} {}d 校验失败，删除缓存", symbol, days)
                     path.unlink(missing_ok=True)
                     return None
                 df = validated
             except Exception as ve:
-                logger.warning(f"Parquet 缓存 {symbol} {days}d 校验异常: {ve}，删除缓存")
+                logger.warning("Parquet 缓存 {} {}d 校验异常: {}，删除缓存", symbol, days, ve)
                 path.unlink(missing_ok=True)
                 return None
 
-            logger.debug(f"Parquet 缓存命中: {symbol} {days}d ({len(df)} 行)")
+            logger.debug("Parquet 缓存命中: {} {}d ({} 行)", symbol, days, len(df))
             return df
         except Exception as e:
-            logger.debug(f"Parquet 缓存读取失败: {e}")
+            logger.debug("Parquet 缓存读取失败: {}", e)
             path.unlink(missing_ok=True)
             return None
 
@@ -179,10 +178,24 @@ class ParquetPersistentCache:
             return
         path = self._cache_dir / self._key(symbol, days)
         try:
-            df.to_parquet(path, index=False)
-            logger.debug(f"Parquet 缓存写入: {symbol} {days}d ({len(df)} 行)")
+            with self._lock:
+                # P0 修复：原子写入，先写临时文件再 rename，避免并发读取到半写文件
+                tmp_path = path.with_suffix(".parquet.tmp")
+                df.to_parquet(tmp_path, index=False)
+                # 使用文件锁防止跨进程并发写入冲突
+                lock_path = path.with_suffix(".lock")
+                with open(lock_path, "w") as lock_file:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                    try:
+                        os.replace(tmp_path, path)
+                    finally:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                # 清理可能遗留的临时文件
+                if tmp_path.exists():
+                    tmp_path.unlink(missing_ok=True)
+            logger.debug("Parquet 缓存写入: {} {}d ({} 行)", symbol, days, len(df))
         except Exception as e:
-            logger.warning(f"Parquet 缓存写入失败: {e}")
+            logger.warning("Parquet 缓存写入失败: {}", e)
 
     def clear(self, symbol: str | None = None, days: int | None = None) -> int:
         """清理缓存。
@@ -208,7 +221,7 @@ class ParquetPersistentCache:
             for f in self._cache_dir.glob("*.parquet"):
                 f.unlink()
                 count += 1
-        logger.info(f"Parquet 缓存清理: {count} 个文件")
+        logger.info("Parquet 缓存清理: {} 个文件", count)
         return count
 
     def cleanup_stale(self, max_age_days: int = 7) -> int:
@@ -240,7 +253,7 @@ class ParquetPersistentCache:
             except OSError:
                 continue
         if count > 0:
-            logger.info(f"Parquet 缓存定期清理: 删除 {count} 个过期文件(>{max_age_days}天)")
+            logger.info("Parquet 缓存定期清理: 删除 {} 个过期文件(>{}天)", count, max_age_days)
         return count
 
 

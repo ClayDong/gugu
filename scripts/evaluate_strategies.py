@@ -9,6 +9,7 @@ P1 改进（基于第一性原理 + 对抗性审查）：
 - 增加样本外可用性诊断（交易次数 <3 视为不可靠）
 - JSON 报告输出供参数写回决策使用
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -45,8 +46,13 @@ async def _fetch_etf_history(symbol: str, days: int) -> "object":
             if df is not None and not df.empty:
                 df = df.tail(days).copy()
                 col_map = {
-                    "日期": "date", "开盘": "open", "收盘": "close",
-                    "最高": "high", "最低": "low", "成交量": "volume", "成交额": "amount",
+                    "日期": "date",
+                    "开盘": "open",
+                    "收盘": "close",
+                    "最高": "high",
+                    "最低": "low",
+                    "成交量": "volume",
+                    "成交额": "amount",
                 }
                 df = df.rename(columns=col_map)
                 df["date"] = df["date"].astype(str)
@@ -54,7 +60,7 @@ async def _fetch_etf_history(symbol: str, days: int) -> "object":
         except Exception as e:
             logger.warning(f"ETF {symbol} fund_etf_hist_em 第{attempt+1}次失败: {e}")
             if attempt < 2:
-                await asyncio.sleep(2 ** attempt)  # 指数退避 1s/2s
+                await asyncio.sleep(2**attempt)  # 指数退避 1s/2s
 
     # 备用源：fund_etf_hist_sina
     try:
@@ -62,8 +68,12 @@ async def _fetch_etf_history(symbol: str, days: int) -> "object":
         if df is not None and not df.empty:
             df = df.tail(days).copy()
             col_map = {
-                "date": "date", "open": "open", "close": "close",
-                "high": "high", "low": "low", "volume": "volume",
+                "date": "date",
+                "open": "open",
+                "close": "close",
+                "high": "high",
+                "low": "low",
+                "volume": "volume",
             }
             df = df.rename(columns=col_map)
             df["date"] = df["date"].astype(str)
@@ -144,12 +154,18 @@ async def evaluate(
             all_symbols.append((etf, f"ETF-{etf}"))
 
     total = len(all_symbols)
-    print(f"共 {total} 只标的（沪深300前{len(codes)} + {len(etf_symbols)} 只ETF），{len(strategies)} 个策略")
+    print(
+        f"共 {total} 只标的（沪深300前{len(codes)} + {len(etf_symbols)} 只ETF），{len(strategies)} 个策略"
+    )
 
     # ── P1 修复：并发批量获取数据，避免串行 akshare 限频 ──
     print(f"\n并发批量获取 {total} 只标的历史数据...")
-    stock_symbols = [s for s, _ in all_symbols if not s.startswith(("51", "52", "56", "58", "15", "16", "18"))]
-    etf_only_symbols = [s for s, _ in all_symbols if s.startswith(("51", "52", "56", "58", "15", "16", "18"))]
+    stock_symbols = [
+        s for s, _ in all_symbols if not s.startswith(("51", "52", "56", "58", "15", "16", "18"))
+    ]
+    etf_only_symbols = [
+        s for s, _ in all_symbols if s.startswith(("51", "52", "56", "58", "15", "16", "18"))
+    ]
 
     # 个股：用 data_manager 的并发批量接口
     stock_dfs: dict[str, "object"] = {}
@@ -179,7 +195,9 @@ async def evaluate(
     print(f"数据获取完成: 成功 {valid_count} 只, 失败 {len(failed_symbols)} 只")
 
     # ── 回测阶段：CPU 密集型，串行执行（避免事件循环阻塞）──
-    print(f"\n开始回测 {valid_count} 只标的 × {len(strategies)} 策略 = {valid_count * len(strategies)} 次...")
+    print(
+        f"\n开始回测 {valid_count} 只标的 × {len(strategies)} 策略 = {valid_count * len(strategies)} 次..."
+    )
 
     all_results: dict[str, list[dict]] = {s.name: [] for s in strategies}
     processed = 0
@@ -194,17 +212,19 @@ async def evaluate(
         for strategy in strategies:
             try:
                 result = engine.run(strategy, df, symbol=symbol)
-                all_results[strategy.name].append({
-                    "symbol": symbol,
-                    "name": name,
-                    "is_etf": is_etf,
-                    "total_return": float(result.metrics["total_return"]),
-                    "sharpe": float(result.metrics["sharpe"]),
-                    "max_drawdown": float(result.metrics["max_drawdown"]),
-                    "win_rate": float(result.metrics["win_rate"]),
-                    "profit_factor": float(result.metrics["profit_factor"]),
-                    "total_trades": int(result.metrics["total_trades"]),
-                })
+                all_results[strategy.name].append(
+                    {
+                        "symbol": symbol,
+                        "name": name,
+                        "is_etf": is_etf,
+                        "total_return": float(result.metrics["total_return"]),
+                        "sharpe": float(result.metrics["sharpe"]),
+                        "max_drawdown": float(result.metrics["max_drawdown"]),
+                        "win_rate": float(result.metrics["win_rate"]),
+                        "profit_factor": float(result.metrics["profit_factor"]),
+                        "total_trades": int(result.metrics["total_trades"]),
+                    }
+                )
             except Exception as e:
                 logger.debug(f"{symbol}/{strategy.name} 回测失败: {e}")
 
@@ -214,7 +234,9 @@ async def evaluate(
 
     # 输出汇总
     print("\n" + "=" * 110)
-    print(f"{'策略':<22} {'标的数':>5} {'平均收益':>8} {'胜率':>6} {'盈亏比':>6} {'夏普':>6} {'最大回撤':>8} {'平均交易':>6} {'诊断':<20}")
+    print(
+        f"{'策略':<22} {'标的数':>5} {'平均收益':>8} {'胜率':>6} {'盈亏比':>6} {'夏普':>6} {'最大回撤':>8} {'平均交易':>6} {'诊断':<20}"
+    )
     print("-" * 110)
 
     report_data: list[dict] = []
@@ -258,24 +280,30 @@ async def evaluate(
             f"{avg_pf:>5.2f} {avg_sharpe:>5.3f} {avg_dd:>7.2%} {avg_trades:>5.1f}  {flag_str}"
         )
 
-        report_data.append({
-            "strategy": strategy.name,
-            "symbol_count": len(results),
-            "active_count": len(active_results),
-            "no_signal_count": no_signal_count,
-            "avg_return": round(avg_return, 4),
-            "avg_win_rate": round(avg_win, 4),
-            "avg_profit_factor": round(avg_pf, 4),
-            "avg_sharpe": round(avg_sharpe, 4),
-            "avg_max_drawdown": round(avg_dd, 4),
-            "avg_trades": round(avg_trades, 2),
-            "diagnosis": flags,
-        })
+        report_data.append(
+            {
+                "strategy": strategy.name,
+                "symbol_count": len(results),
+                "active_count": len(active_results),
+                "no_signal_count": no_signal_count,
+                "avg_return": round(avg_return, 4),
+                "avg_win_rate": round(avg_win, 4),
+                "avg_profit_factor": round(avg_pf, 4),
+                "avg_sharpe": round(avg_sharpe, 4),
+                "avg_max_drawdown": round(avg_dd, 4),
+                "avg_trades": round(avg_trades, 2),
+                "diagnosis": flags,
+            }
+        )
 
     print("-" * 110)
     if failed_symbols:
-        print(f"数据获取失败 {len(failed_symbols)} 只: {failed_symbols[:5]}{'...' if len(failed_symbols) > 5 else ''}")
-    print("\n诊断说明：亏损=平均收益<0 | 低胜率=<40% | 高回撤=>30% | 信号过少=平均交易<3 | 半数无信号=>50%标的未触发")
+        print(
+            f"数据获取失败 {len(failed_symbols)} 只: {failed_symbols[:5]}{'...' if len(failed_symbols) > 5 else ''}"
+        )
+    print(
+        "\n诊断说明：亏损=平均收益<0 | 低胜率=<40% | 高回撤=>30% | 信号过少=平均交易<3 | 半数无信号=>50%标的未触发"
+    )
 
     # JSON 报告输出
     report = {
@@ -295,7 +323,9 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="策略回测评估")
-    parser.add_argument("--top-n", type=int, default=300, help="沪深300成分股取前 N 只（默认=300 全量）")
+    parser.add_argument(
+        "--top-n", type=int, default=300, help="沪深300成分股取前 N 只（默认=300 全量）"
+    )
     parser.add_argument("--sample", type=int, default=None, help="随机抽样数量（不指定则跑全量）")
     parser.add_argument("--no-etf", action="store_true", help="不包含真实持仓 ETF")
     args = parser.parse_args()

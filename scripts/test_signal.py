@@ -1,4 +1,5 @@
 """体验测试：完整决策链路验证——择时→因子→板块→评分→策略→wisdom→飞书通知。"""
+
 import asyncio
 
 from gugu.config import settings
@@ -16,6 +17,7 @@ from gugu.analysis.stock_ranker import StockRanker
 
 async def main() -> None:
     import time as _time
+
     _start_ts = _time.time()
 
     def _elapsed():
@@ -30,8 +32,12 @@ async def main() -> None:
     strategies = get_enabled_strategies()
     router = SignalRouter(strategies, fusion_rule="any", min_confidence=0.0)
     print(f"  策略({len(strategies)}个) ✓ {_elapsed()}")
-    print(f"  LLM决策: {'已启用' if advisor._llm_available else '未启用（将使用硬编码规则）'} {_elapsed()}")
-    print(f"  飞书: {'已配置' if notifier._is_configured() else '未配置，仅输出到控制台'} {_elapsed()}")
+    print(
+        f"  LLM决策: {'已启用' if advisor._llm_available else '未启用（将使用硬编码规则）'} {_elapsed()}"
+    )
+    print(
+        f"  飞书: {'已配置' if notifier._is_configured() else '未配置，仅输出到控制台'} {_elapsed()}"
+    )
 
     # 分析层
     regime_detector = MultiPeriodRegimeDetector()
@@ -52,12 +58,19 @@ async def main() -> None:
     try:
         regime = await regime_detector.detect()
         print(f"  市场状态: {regime['regime']} (总仓位上限={regime['total_position_limit']:.0%})")
-        print(f"  允许买入: {regime['buy_signal_allowed']} | 强制卖出: {regime.get('sell_signal_required', False)}")
+        print(
+            f"  允许买入: {regime['buy_signal_allowed']} | 强制卖出: {regime.get('sell_signal_required', False)}"
+        )
         print(f"  理由: {regime['reason']}")
     except Exception as e:
         print(f"  择时失败: {e}")
-        regime = {"regime": "sideways", "total_position_limit": 0.40,
-                  "buy_signal_allowed": True, "sell_signal_required": False, "reason": "降级"}
+        regime = {
+            "regime": "sideways",
+            "total_position_limit": 0.40,
+            "buy_signal_allowed": True,
+            "sell_signal_required": False,
+            "reason": "降级",
+        }
 
     # === 2. 板块轮动 ===
     print("\n【板块轮动】")
@@ -78,10 +91,12 @@ async def main() -> None:
             stock_ranker.rank(watchlist, hot_sectors=hot, top_n=5), timeout=120.0
         )
         for i, r in enumerate(rankings):
-            print(f"  #{i+1} {r['name']}({r['symbol']}) 总分={r['total_score']:.3f} "
-                  f"因子={r['factor_score']:.2f} 基本面={r['fundamental_score']:.2f} "
-                  f"资金流={r['money_flow_score']:.2f} 板块={r['sector_score']:.2f} "
-                  f"PE={r.get('pe', '?')}")
+            print(
+                f"  #{i+1} {r['name']}({r['symbol']}) 总分={r['total_score']:.3f} "
+                f"因子={r['factor_score']:.2f} 基本面={r['fundamental_score']:.2f} "
+                f"资金流={r['money_flow_score']:.2f} 板块={r['sector_score']:.2f} "
+                f"PE={r.get('pe', '?')}"
+            )
     except asyncio.TimeoutError:
         print("  评分超时，跳过")
     except Exception as e:
@@ -90,6 +105,7 @@ async def main() -> None:
     # === 4. 仓位预算 ===
     print("\n【仓位预算】")
     from gugu.execution import PaperBroker
+
     broker = PaperBroker()
     account = broker.get_account()
     budget = position_ctrl.calculate(
@@ -179,12 +195,18 @@ async def main() -> None:
 
             print(f"\n  {name} ({symbol})")
             print(f"  当前价: {price:.2f}  昨收: {prev_close:.2f}")
-            print(f"  策略信号: {direction_text} (置信度={signal['confidence']:.2f}, 策略={signal['strategies']})")
-            print(f"  Alpha因子: 综合评分={factor_score['score']:.3f} Top={[(f[0], f[1]) for f in factor_score['top_factors'][:3]]}")
+            print(
+                f"  策略信号: {direction_text} (置信度={signal['confidence']:.2f}, 策略={signal['strategies']})"
+            )
+            print(
+                f"  Alpha因子: 综合评分={factor_score['score']:.3f} Top={[(f[0], f[1]) for f in factor_score['top_factors'][:3]]}"
+            )
             print(f"  Wisdom决策: {action.upper()}")
             print(f"  建议仓位: {position_display}")
             if enhanced.get("stop_loss_price", 0) > 0:
-                print(f"  止损价: {enhanced['stop_loss_price']:.2f} ({(enhanced['stop_loss_price']/price-1)*100:.1f}%)")
+                print(
+                    f"  止损价: {enhanced['stop_loss_price']:.2f} ({(enhanced['stop_loss_price']/price-1)*100:.1f}%)"
+                )
             print(f"  决策理由: {decision.get('llm_reason', decision.get('filter_reason', ''))}")
             if filtered:
                 print(f"  [已过滤]")
@@ -217,7 +239,9 @@ async def main() -> None:
     print(f"  市场状态: {regime['regime']} (仓位上限={regime['total_position_limit']:.0%})")
     print(f"  强势板块: {hot[:3] if hot else 'N/A'}")
     if rankings:
-        print(f"  推荐关注: {rankings[0]['name']}({rankings[0]['symbol']}) 评分={rankings[0]['total_score']:.3f}")
+        print(
+            f"  推荐关注: {rankings[0]['name']}({rankings[0]['symbol']}) 评分={rankings[0]['total_score']:.3f}"
+        )
 
 
 if __name__ == "__main__":

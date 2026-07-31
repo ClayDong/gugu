@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+_requires_sklearn = pytest.importorskip("sklearn", reason="sklearn not installed")
+
 
 @pytest.fixture
 def sample_ohlcv() -> pd.DataFrame:

@@ -34,7 +34,7 @@ class SentimentSystem:
         """运行舆情日报流程：采集 → 分析 → 保存。"""
         logger.info(f"== 舆情分析: {self.symbol} {self.stock_name} ==")
         news_list = self._fetcher.fetch_stock_news(self.symbol)
-        logger.info(f"获取到 {len(news_list)} 条新闻")
+        logger.info("获取到 {} 条新闻", len(news_list))
         report = self._report.generate(news_list)
         for n in report.get("analyzed_news", []):
             self._impact.add_case(n, n.get("sentiment", {}))
@@ -49,7 +49,7 @@ class SentimentSystem:
         if notifier and report.get("news_count", 0) > 0:
             card = self._report.format_feishu_card(report)
             ok = await notifier.send_card(card)
-            logger.info(f"舆情飞书推送: {'成功' if ok else '失败'}")
+            logger.info("舆情飞书推送: {}", "成功" if ok else "失败")
         return report
 
     def get_sentiment_factor(self, news_list: list[dict] | None = None) -> float:

@@ -5,6 +5,7 @@
 
 内部使用 MarketFilter.fetch_index_data 的三级冗余获取机制。
 """
+
 from __future__ import annotations
 
 import asyncio

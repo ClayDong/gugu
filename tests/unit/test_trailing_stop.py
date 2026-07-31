@@ -408,9 +408,9 @@ class TestValleyBreakCount:
 
         state, _ = engine.update(state, df)
         # P2-2 修复后：未创新高 → 计数不变（不递减、不重置）
-        assert state.valley_break_count == 2, (
-            f"未创新高时跌破计数应保持 2（不递减），got {state.valley_break_count}"
-        )
+        assert (
+            state.valley_break_count == 2
+        ), f"未创新高时跌破计数应保持 2（不递减），got {state.valley_break_count}"
 
     def test_valley_break_count_resets_on_new_high(self) -> None:
         """价格真正创新高时跌破计数重置为 0（P2-2 修复）。"""
@@ -443,9 +443,9 @@ class TestValleyBreakCount:
 
         state, _ = engine.update(state, df)
         # P2-2 修复后：创新高 → 计数重置为 0
-        assert state.valley_break_count == 0, (
-            f"创新高后跌破计数应重置为 0，got {state.valley_break_count}"
-        )
+        assert (
+            state.valley_break_count == 0
+        ), f"创新高后跌破计数应重置为 0，got {state.valley_break_count}"
 
     def test_consecutive_breaks_accumulate_to_exit(self) -> None:
         """连续多日跌破浪谷3次应触发 EXIT（递进警报核心场景）。

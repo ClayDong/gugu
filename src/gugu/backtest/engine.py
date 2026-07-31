@@ -16,8 +16,9 @@ Cognitive engine integration (enable_cognitive_engine=True):
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 import pandas as pd
 
@@ -49,6 +50,7 @@ class Trade:
         profit: Realized profit (only for sells, 0.0 for buys).
         stamp_tax: Stamp tax (only for sells, 0.0 for buys).
         transfer_fee: Transfer fee (Shanghai stocks only, 0.001% both ways).
+        market_cap: Market cap at trade time (used for liquidity stress test).
     """
 
     date: Any
@@ -59,6 +61,7 @@ class Trade:
     profit: float = 0.0
     stamp_tax: float = 0.0
     transfer_fee: float = 0.0
+    market_cap: float = 0.0
 
 
 @dataclass
@@ -118,8 +121,9 @@ class BacktestEngine:
         # P1-m 修复：回测接入 L3 风控（涨跌停检查），与模拟盘行为一致
         self._risk = RiskManager()
         self._logger = get_logger()
-        # 缺陷B 修复：strict_confirmation=True 时回测使用 is_backtest=False，
-        # 模拟生产环境的次日确认机制，消除回测与生产行为不一致
+        # P0 修复：strict_confirmation 不再影响信号生成阶段的 is_backtest，
+        # 回测始终使用 is_backtest=True 以避免未来函数。该参数保留仅用于
+        # 向后兼容，不再导致前视偏差。
         self.strict_confirmation = strict_confirmation
 
         # P0 修复：可选的动态仓位计算策略（PositionController 风格）
@@ -163,8 +167,13 @@ class BacktestEngine:
                 self._logger.warning(f"回测引擎加载认知引擎失败，回退到纯策略模式: {e}")
                 self.enable_cognitive_engine = False
 
-    def run(self, strategy: Strategy, df: pd.DataFrame, symbol: str,
-            index_df: pd.DataFrame | None = None) -> BacktestResult:
+    def run(
+        self,
+        strategy: Strategy,
+        df: pd.DataFrame,
+        symbol: str,
+        index_df: pd.DataFrame | None = None,
+    ) -> BacktestResult:
         """Run backtest for a single symbol.
 
         Iterates row by row, generates signals on the expanding window
@@ -204,7 +213,13 @@ class BacktestEngine:
         cognitive_log: list[dict] = []
 
         # 持仓组合记录（用于相关性检查）
-        _portfolio_positions: dict[str, dict] = {}  # {symbol: {"buy_price": float, "quantity": int, "buy_date": str}}
+        _portfolio_positions: dict[
+            str, dict
+        ] = {}  # {symbol: {"buy_price": float, "quantity": int, "buy_date": str}}
+
+        # P0 修复：初始化 _price_history，使 _check_correlation_with_portfolio 不再跳过检查
+        # 单股回测模式下仅含当前 symbol 的数据，跨股相关性检查在无其他股票数据时自然放行
+        self._price_history = {symbol: df}
 
         # 认知引擎状态
         trailing_state = None  # TrailingStopState
@@ -214,10 +229,10 @@ class BacktestEngine:
         # 消除 rolling 窗口含当日收盘价引入的隐性前视偏差。
         # 即使策略内部使用 .shift(1)，移动平均类指标（SMA/布林带等）
         # 默认含当日值，shift(1) 信号列保证回测不"看到未来"。
-        # 缺陷B 修复：strict_confirmation=True 时用 is_backtest=False，
-        # 让回测走生产环境的次日确认流程，保证回测与生产行为一致
-        is_bt = not self.strict_confirmation
-        signals_df = strategy.generate_signals(df, is_backtest=is_bt)
+        # P0 修复：回测必须始终使用 is_backtest=True，防止 _require_confirmation
+        # 读取未来 K 线造成前视偏差。生产环境的次日确认机制由回测引擎
+        # 的 shift(1) 统一模拟，不应在信号生成阶段引入未来数据。
+        signals_df = strategy.generate_signals(df, is_backtest=True)
         signals_df["signal"] = signals_df["signal"].shift(1).fillna(0)
         # P1 修复：验证信号值在 {-1, 0, 1} 范围内，非标准值强制截断到合法区间
         raw = signals_df["signal"]
@@ -259,7 +274,7 @@ class BacktestEngine:
             # 基于指数 HS300 数据判断当前 bar 的市场 regime，
             # range/非趋势状态下强制阻止买入（与生产环境 MarketFilter 行为一致）
             if index_df is not None and signal == 1 and position_qty == 0:
-                idx_win = index_df.iloc[:i + 1]
+                idx_win = index_df.iloc[: i + 1]
                 if len(idx_win) >= 60:
                     regime = self._check_market_regime(idx_win)
                     if regime != "bull":
@@ -469,7 +484,10 @@ class BacktestEngine:
                             }
                         }
                     sizing_ratio, sizing_reason = self._position_sizing(
-                        self._regime_cache, account_info, False, 0.0,
+                        self._regime_cache,
+                        account_info,
+                        False,
+                        0.0,
                     )
                     equity = cash + position_qty * close
                     buy_cash = equity * sizing_ratio
@@ -547,8 +565,10 @@ class BacktestEngine:
                     _portfolio_positions.pop(symbol, None)
                     trailing_state = None  # 清除移动止损状态
 
-            # Record daily equity (mark-to-market at close)
+            # 盘中价格更新后立即更新组合峰值和回撤检查（与生产环境 RiskManager 行为一致）
             equity = cash + position_qty * close
+            self._risk.update_portfolio_peak(equity, persist=False)
+            self._risk.check_portfolio_drawdown(equity)
             equity_values.append(equity)
             dates.append(pd.Timestamp(current_date))
 
@@ -572,8 +592,8 @@ class BacktestEngine:
             cognitive_log=cognitive_log,
         )
 
-    @staticmethod
     def _check_correlation_with_portfolio(
+        self,
         df: pd.DataFrame,
         current_idx: int,
         symbol: str,
@@ -597,23 +617,24 @@ class BacktestEngine:
         Returns:
             {"blocked": bool, "high_corr_pairs": [(其他代码, 相关系数), ...]}
         """
-        import numpy as np
 
         if current_idx < window or not existing_symbols:
             return {"blocked": False, "high_corr_pairs": []}
 
         # 提取当前股票截至 current_idx 的收益率序列
-        curr_close = df["close"].iloc[max(0, current_idx - window):current_idx + 1]
+        curr_close = df["close"].iloc[max(0, current_idx - window) : current_idx + 1]
         if len(curr_close) < 20:
             return {"blocked": False, "high_corr_pairs": []}
         curr_ret = curr_close.pct_change().dropna()
 
-        # 单股回测中仅当前股票的 df 可用，无法跨股计算相关性
-        # 正确的多股相关性检查需要：(1) 全组合回测框架；(2) 每个持仓股票的历史 K 线数据
-        # 以下实现使用传入的 existing_symbols 和外部 price_history 数据源
-        # 当前单股回测模式（symbol 固定）无法获取其他股票数据，返回空结果
+        # _price_history 由 run() 初始化为 {symbol: df}；
+        # 单股回测中仅当前 symbol 在 _price_history 内，其他持仓股票数据不可用时自然放行
         if not hasattr(self, "_price_history") or self._price_history is None:
-            return {"blocked": False, "high_corr_pairs": [], "note": "单股回测模式，跳过跨股相关性检查"}
+            return {
+                "blocked": False,
+                "high_corr_pairs": [],
+                "note": "_price_history 未初始化，跳过跨股相关性检查",
+            }
 
         high_corr_pairs: list[tuple[str, float]] = []
         for other_sym in existing_symbols:
@@ -641,7 +662,7 @@ class BacktestEngine:
     def _check_market_regime(
         index_df: pd.DataFrame,
         ma_window: int = 200,
-        min_conditions: int = 3,
+        min_conditions: int = 2,
     ) -> str:
         """基于 HS300 指数数据判断市场状态。
 
@@ -651,8 +672,8 @@ class BacktestEngine:
         3. 近 20 日均量 > 近 252 日均量
 
         min_conditions 控制严格程度：
-        - 3（默认）= 全部满足才 bull（生产环境 MarketFilter 标准）
-        - 2 = 任 2 条满足即 bull（更宽松，适合震荡市）
+        - 3 = 全部满足才 bull（生产环境 MarketFilter 严格标准）
+        - 2（默认）= 任 2 条满足即 bull（更宽松，让震荡市也能产生信号）
 
         Args:
             index_df: HS300 OHLCV 数据，含 date, close, high, low, volume。
@@ -662,39 +683,38 @@ class BacktestEngine:
         Returns:
             "bull" / "bear" / "range"
         """
-        _MA = ma_window
-        _TREND_WINDOW = 40
-        _VOL_SHORT = 20
-        _VOL_LONG = 252
+        _ma = ma_window
+        _trend_window = 40
+        _vol_short = 20
+        _vol_long = 252
 
         df = index_df
         close = df["close"]
         volume = df["volume"]
 
-        if len(df) < _MA:
+        if len(df) < _ma:
             return "range"
 
-        ma = float(close.rolling(_MA).mean().iloc[-1])
+        ma = float(close.rolling(_ma).mean().iloc[-1])
         cond_above_ma = float(close.iloc[-1]) > ma
 
         cond_trend_up = False
-        if len(df) >= _TREND_WINDOW:
-            recent = df.tail(_TREND_WINDOW)
-            half = _TREND_WINDOW // 2
+        if len(df) >= _trend_window:
+            recent = df.tail(_trend_window)
+            half = _trend_window // 2
             first_half = recent.head(half)
             second_half = recent.tail(half)
-            cond_trend_up = (
-                float(second_half["low"].min()) > float(first_half["low"].min())
-                and float(second_half["high"].max()) > float(first_half["high"].max())
-            )
+            cond_trend_up = float(second_half["low"].min()) > float(
+                first_half["low"].min()
+            ) and float(second_half["high"].max()) > float(first_half["high"].max())
 
         cond_liquidity = False
-        if len(df) >= _VOL_LONG:
-            vol_short = float(volume.tail(_VOL_SHORT).mean())
-            vol_long = float(volume.tail(_VOL_LONG).mean())
+        if len(df) >= _vol_long:
+            vol_short = float(volume.tail(_vol_short).mean())
+            vol_long = float(volume.tail(_vol_long).mean())
             cond_liquidity = vol_short > vol_long
-        elif len(df) >= _VOL_SHORT:
-            vol_short = float(volume.tail(_VOL_SHORT).mean())
+        elif len(df) >= _vol_short:
+            vol_short = float(volume.tail(_vol_short).mean())
             vol_long = float(volume.mean())
             cond_liquidity = vol_short > vol_long
 
@@ -707,15 +727,16 @@ class BacktestEngine:
 
     @staticmethod
     def _calc_transfer_fee(symbol: str, trade_value: float) -> float:
-        """Calculate transfer fee (Shanghai stocks: 0.001% both ways, Shenzhen: 0).
+        """Calculate transfer fee (Shanghai + BSE stocks: 0.001% both ways, Shenzhen: 0).
 
         Aligned with PaperBroker._calc_transfer_fee for backtest/live consistency.
-        Shanghai prefixes: 600/601/603/605/688/689/9xx (BSE).
+        Shanghai prefixes: 600/601/603/605/688/689/9xx (B-shares).
+        BSE (北交所) prefixes: 8xxxxx (主板) / 4xxxxx (小股) — same 0.001% rule as SSE.
         """
         if not symbol or trade_value <= 0:
             return 0.0
         code = symbol.strip().zfill(6)
-        if code.startswith(("600", "601", "603", "605", "688", "689", "9")):
+        if code.startswith(("600", "601", "603", "605", "688", "689", "9", "8", "4")):
             return round(trade_value * 0.00001, 2)
         return 0.0
 
@@ -1035,14 +1056,15 @@ def walk_forward_optimize_multi_stock(
 
                     def _eval_params(
                         params: dict[str, Any],
+                        _train_dfs: dict[str, pd.DataFrame] = train_dfs,
                     ) -> tuple[dict[str, Any], float]:
                         """评估一组参数的平均 Sharpe。"""
                         sharpes: list[float] = []
-                        for tdf in train_dfs.values():
+                        for sym, tdf in _train_dfs.items():
                             try:
                                 s = strategy_cls(params)
                                 eng = BacktestEngine()
-                                r = eng.run(s, tdf, symbol="")
+                                r = eng.run(s, tdf, symbol=sym)
                                 sharpes.append(r.metrics.get("sharpe", 0))
                             except Exception:
                                 sharpes.append(0.0)

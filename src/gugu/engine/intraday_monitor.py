@@ -163,7 +163,7 @@ class IntradayMonitor:
         if not symbols:
             return []
 
-        logger.info(f"盘中扫描启动: 模式={self._mode}, 股票数={len(symbols)}")
+        logger.info("盘中扫描启动: 模式={}, 股票数={}", self._mode, len(symbols))
 
         # 1. 个股资金流扫描
         for symbol in symbols:
@@ -171,20 +171,20 @@ class IntradayMonitor:
                 stock_alerts = await self._scan_stock(symbol)
                 alerts.extend(stock_alerts)
             except Exception as e:
-                logger.debug(f"扫描 {symbol} 失败: {e}")
+                logger.debug("扫描 {} 失败: {}", symbol, e)
 
         # 2. 行业资金流扫描（每次都执行，单次 API 调用）
         try:
             industry_alerts = await self._scan_industries()
             alerts.extend(industry_alerts)
         except Exception as e:
-            logger.debug(f"行业扫描失败: {e}")
+            logger.debug("行业扫描失败: {}", e)
 
         # 3. 过滤冷却中的告警
         filtered = self._filter_cooldown(alerts)
 
         if filtered:
-            logger.info(f"盘中扫描完成: 发现 {len(filtered)} 条异动告警")
+            logger.info("盘中扫描完成: 发现 {} 条异动告警", len(filtered))
 
         return filtered
 
@@ -332,7 +332,7 @@ class IntradayMonitor:
                 )
 
         except Exception as e:
-            logger.debug(f"扫描 {symbol} 异常: {e}")
+            logger.debug("扫描 {} 异常: {}", symbol, e)
 
         return alerts
 
@@ -425,7 +425,7 @@ class IntradayMonitor:
                     )
 
         except Exception as e:
-            logger.debug(f"行业扫描异常: {e}")
+            logger.debug("行业扫描异常: {}", e)
 
         return alerts
 

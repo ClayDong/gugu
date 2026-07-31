@@ -14,6 +14,7 @@
     uv run python scripts/backtest_by_regime.py
     uv run python scripts/backtest_by_regime.py --max-stocks 200
 """
+
 from __future__ import annotations
 
 import argparse
@@ -230,7 +231,9 @@ def print_report(
             ret = m.get("return_mean", 0)
             sharpe = m.get("sharpe_mean", 0)
             pf = m.get("profitable_ratio", 0)
-            verdict = "✓" if (ret > 0.05 and sharpe > 0) else ("✗" if (ret < 0 or sharpe < -0.1) else "?")
+            verdict = (
+                "✓" if (ret > 0.05 and sharpe > 0) else ("✗" if (ret < 0 or sharpe < -0.1) else "?")
+            )
             print(
                 f"    {regime:<10}: 样本={n:<5} 收益={ret*100:+6.2f}% 夏普={sharpe:+.2f} "
                 f"盈利比={pf*100:.0f}%  → {verdict}"

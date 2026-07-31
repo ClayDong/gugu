@@ -197,7 +197,7 @@ gugu/
 5. 止损后立即 `_check_daily_loss()`：预防止损造成的大亏
 6. `_scan_signals()`：自选股 + 自动选股（当日候选不污染 watchlist）
    - 市场择时 → 仓位预算计算
-   - 每个 symbol：策略路由 → SignalPipeline.process()（5 层过滤链）
+   - 每个 symbol：策略路由 → SignalPipeline.process()（12 步过滤链）
    - Wisdom 决策增强（LLM 或 fallback）
 7. `_process_signal()`：逐信号 → **去重检查** → wisdom 过滤 → 风控检查 → 下单 → 通知 → 信号历史持久化 → **标记已通知**
 8. `_check_daily_loss()`：L2 预警/熔断（含事件推送）
@@ -721,7 +721,7 @@ v0.6.2 新增两只主力跟随策略，均继承 `Strategy` 基类、在 `strat
   - 近 `limit_up_lookback` 日内出现涨幅 ≥ `limit_up_pct`（默认 7%）的涨停板。
   - 涨停次日未继续涨停（断板），并在 `max_break_days` 个交易日内被阳线反包。
   - 反包日收盘价突破断板日最高价，且为阳线、`ma_trend` 斜率为正、成交量 ≤ `max_vol_ratio` 倍均量。
-- **评分项**：断板日缩量 0.25 + 反包量能 0.20 + 强反包（突破涨停日高点）0.20 + 趋势向上 0.15 + 时效 0.10 + 阳线 0.10，总分 ≥ `min_confidence`（默认 0.50）才触发信号。
+- **评分项**：断板日缩量 0.25 + 反包量能 0.20 + 强反包（突破涨停日高点）0.20 + 趋势向上 0.15 + 时效 0.10 + 阳线 0.10，总分 ≥ `min_confidence`（默认 0.40，v0.7.9 从0.6下调）才触发信号。
 - **卖点（状态机精确持仓）**：跌破入场低点止损、连续 2 日跌破 `ma_trend`、高位巨量滞涨、时间止损、大阳线止盈。
 - **生产增强**：`AltAlphaFilter` 对龙虎榜机构净买因子（`lhb_inst_net`）二次确认，剔除机构净卖出的假反包。
 - **当前状态**：v0.6.2 58 股 × 300 天回测观察通过（牛市胜率 43.9%，单笔平均 +6646 元），`enabled: true` 但仅在 `settings.yaml` 的 `bull/rally`  regime 下启用，track_live 模式收集 30+ 实盘信号后再评估扩大启用。

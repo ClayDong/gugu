@@ -39,6 +39,7 @@ signal_strategies:
     class: HotMoneyStrategy
     source: 游资内部交易心法（涨停筛选+缩倍量入场+放倍量离场）
     enabled: true
+    # experimental: 逻辑闭环但未完成 Walk-Forward 验证，仅在 paper 模式下参与信号融合
     summary: 三步法：①近7日涨停筛选 → ②缩量至涨停日50%以下入场（筹码锁定） → ③放量至涨停日200%以上离场（主力出货）。进阶：半仓滚动（阴线买/阳线卖）增厚收益。
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 通过 2026-07-26
@@ -688,6 +689,7 @@ signal_strategies:
     class: MA5MomentumStrategy
     source: 用户自研交易心法（放量大阳线启动 + 5日均线趋势跟踪）
     enabled: true
+    # experimental: 逻辑闭环但未完成 Walk-Forward 验证，仅在 paper 模式下参与信号融合
     summary: 放量大阳线启动后回踩MA5买入，偏离MA5部分止盈，跌破MA5减仓，连续3日站不回清仓
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-28 - 样本外 Sharpe ≤ 0; 参数稳定性 <50%
@@ -807,7 +809,7 @@ signal_strategies:
     module: gugu.strategies.huamulan_tail_pick
     class: HuamulanTailPickStrategy
     source: 战神花木兰系列文档整理（尾盘选股六步法）
-    enabled: true
+    enabled: false  # P0-1: 0回测数据，待Walk-Forward验证通过后再启用
     summary: 尾盘半小时定乾坤：涨幅3-5% + 量比>1 + 换手5-10% + 市值50-200亿 + 均线多头 + 量能阶梯放大 → 寻找次日冲高机会
     params_entry: strategy_defaults.yaml
     validation: v0.7.7 新增策略，待回测验证
@@ -848,7 +850,7 @@ signal_strategies:
     module: gugu.strategies.huamulan_crash_layout
     class: HuamulanCrashLayoutStrategy
     source: 战神花木兰系列文档整理（空仓等暴跌布局法）
-    enabled: true
+    enabled: false  # P0-1: 0回测数据，待Walk-Forward验证通过后再启用
     summary: 空仓等暴跌是顶级策略：指数单日暴跌3% + 行业龙头（市值>200亿）+ 被错杀（跌幅>指数）+ 估值合理（PE<30）+ 企稳信号 → 分批买入
     params_entry: strategy_defaults.yaml
     validation: v0.7.7 新增策略，待回测验证
@@ -888,7 +890,7 @@ signal_strategies:
     module: gugu.strategies.huamulan_fake_dip
     class: HuamulanFakeDipStrategy
     source: 战神花木兰系列文档整理（早盘假摔低吸战法）
-    enabled: true
+    enabled: false  # P0-1: 0回测数据，待Walk-Forward验证通过后再启用
     summary: 开盘假摔+缩量收回=主力洗盘：长下影线（>3%）+ 阳线 + 缩量 + 不破前低 + 趋势向上 → 低吸介入
     params_entry: strategy_defaults.yaml
     validation: v0.7.7 新增策略，待回测验证
@@ -930,7 +932,7 @@ signal_strategies:
     module: gugu.strategies.huamulan_ghost_breakout
     class: HuamulanGhostBreakoutStrategy
     source: 战神花木兰系列文档整理（烂板成妖打板战法）
-    enabled: true
+    enabled: false  # P0-1: 0回测数据，待Walk-Forward验证通过后再启用
     summary: 炸板是主力洗盘，回封是筹码锁定：前日涨停 + 当日高开放量 + 收阳 + 盘中冲高 + 突破横盘 → 博取连板溢价
     params_entry: strategy_defaults.yaml
     validation: v0.7.7 新增策略，待回测验证

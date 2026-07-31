@@ -15,6 +15,7 @@
     uv run python scripts/backtest_all_strategies.py --days 200 --workers 10
     uv run python scripts/backtest_all_strategies.py --max-stocks 100 --report  # 回测后生成报告
 """
+
 from __future__ import annotations
 
 import argparse
@@ -40,13 +41,19 @@ logger = get_logger()
 
 # 性能参数
 _STOCK_CONCURRENCY = 10  # 数据获取并发度
-_KLINE_TIMEOUT = 15      # 单股 K 线获取超时秒
-_MIN_DATA_DAYS = 100     # 最少数据天数（不足跳过）
+_KLINE_TIMEOUT = 15  # 单股 K 线获取超时秒
+_MIN_DATA_DAYS = 100  # 最少数据天数（不足跳过）
 
 # 需要计算分布统计的指标
 _DISTRIBUTION_METRICS = [
-    "total_return", "annual_return", "sharpe", "max_drawdown",
-    "win_rate", "profit_factor", "total_trades", "avg_hold_days",
+    "total_return",
+    "annual_return",
+    "sharpe",
+    "max_drawdown",
+    "win_rate",
+    "profit_factor",
+    "total_trades",
+    "avg_hold_days",
 ]
 
 
@@ -150,7 +157,8 @@ async def run_batch_backtest(
         symbols: 股票代码列表
         strategies: 策略名列表
         days: 回测历史天数
-        strict_confirmation: 严格模式（模拟生产环境次日确认机制）
+        strict_confirmation: 已废弃，保留仅用于向后兼容。回测引擎已统一
+            使用 is_backtest=True 避免未来函数，不再通过此参数模拟确认机制。
 
     Returns:
         tuple:
@@ -376,7 +384,9 @@ async def main_async(args: argparse.Namespace) -> None:
         for k, v in summary.items():
             if isinstance(v, dict) and "raw_values" in v:
                 d = dict(v)
-                d["raw_values"] = v["raw_values"][:1000] if len(v["raw_values"]) > 1000 else v["raw_values"]
+                d["raw_values"] = (
+                    v["raw_values"][:1000] if len(v["raw_values"]) > 1000 else v["raw_values"]
+                )
                 filtered[k] = d
             else:
                 filtered[k] = v
@@ -430,10 +440,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="全市场多策略批量回测")
     parser.add_argument("--max-stocks", type=int, default=None, help="限制股票数（调试用）")
     parser.add_argument("--days", type=int, default=200, help="回测历史天数")
-    parser.add_argument("--strategies", type=str, default=None, help="逗号分隔的策略名，空则用 settings.yaml")
-    parser.add_argument("--output", type=str, default=None, help="输出 JSON 路径（默认: docs/backtest_results_YYYY-MM-DD.json）")
-    parser.add_argument("--report", action="store_true", help="回测完成后自动生成 Markdown 对比报告到 docs/ 目录")
-    parser.add_argument("--strict", action="store_true", help="严格模式：模拟生产环境次日确认机制，回测结果与生产行为一致")
+    parser.add_argument(
+        "--strategies", type=str, default=None, help="逗号分隔的策略名，空则用 settings.yaml"
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="输出 JSON 路径（默认: docs/backtest_results_YYYY-MM-DD.json）",
+    )
+    parser.add_argument(
+        "--report", action="store_true", help="回测完成后自动生成 Markdown 对比报告到 docs/ 目录"
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="严格模式：模拟生产环境次日确认机制，回测结果与生产行为一致",
+    )
     args = parser.parse_args()
     asyncio.run(main_async(args))
 

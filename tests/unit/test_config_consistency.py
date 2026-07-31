@@ -53,15 +53,19 @@ def signal_strategies(manifest_data: dict) -> dict:
 def settings_enabled_set() -> set[str]:
     """获取 settings.yaml 中所有启用的信号策略名称集合。
 
-    合并 enabled_by_regime 各 regime 策略并集 + enabled 列表，
-    与 registry.get_enabled_strategies() 的取用逻辑保持一致：
-    enabled_by_regime 非空时覆盖 enabled，但两者均纳入校验以保证完整性。
+    v0.7.5 P0-1修复：包含 verified_strategies + experimental_strategies。
+    合并 enabled_by_regime 各 regime 策略并集 + enabled 列表 + verified + experimental。
     """
     cfg = get_config().strategy
     enabled_set: set[str] = set()
     for regime_strategies in cfg.enabled_by_regime.values():
         enabled_set.update(regime_strategies)
     enabled_set.update(cfg.enabled)
+    # v0.7.5 P0-1修复：包含 verified + experimental
+    if cfg.verified_strategies:
+        enabled_set.update(cfg.verified_strategies)
+    if cfg.experimental_strategies:
+        enabled_set.update(cfg.experimental_strategies)
     return enabled_set
 
 
@@ -80,15 +84,29 @@ class TestWatchlistMonitoringConfig:
 
         get_config.cache_clear()
         cfg = refresh_config()
-        # P1-5 优化：扩大自选股池到 19 只（14 只自选 + 5 只 ETF）
+        # P1-5 优化：扩大自选股池到 18 只（13 只自选 + 5 只 ETF）
         expected = {
-            "600519", "000858", "600276", "300760", "300750",
-            "002594", "002472", "603501", "002371", "601012",
-            "600438", "300033", "002230", "562500",
-            "002714", "510500", "588000", "510310", "512480",
+            "600519",
+            "000858",
+            "600276",
+            "300760",
+            "300750",
+            "002594",
+            "002472",
+            "603501",
+            "002371",
+            "601012",
+            "600438",
+            "300033",
+            "002230",
+            "562500",
+            "510500",
+            "588000",
+            "510310",
+            "512480",
         }
         assert set(cfg.watchlist) == expected
-        assert len(cfg.watchlist) == 19
+        assert len(cfg.watchlist) == 18
 
     def test_intraday_custom_watchlist_matches_default_watchlist(self):
         """盘中实时盯盘范围与默认自选列表保持一致。"""

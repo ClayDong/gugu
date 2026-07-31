@@ -7,6 +7,7 @@
     python scripts/validate_cognitive.py --symbol 600519 --strategy turtle --days 250
     python scripts/validate_cognitive.py --symbol 600519 --all-strategies  # 对比所有策略
 """
+
 from __future__ import annotations
 
 import argparse
@@ -64,10 +65,16 @@ async def validate_one(symbol: str, strategy_name: str, days: int = 250) -> dict
     print(_fmt_metrics(result_cog.metrics, "启用认知引擎"))
 
     # 差异
-    delta_return = result_cog.metrics.get("total_return", 0) - result_base.metrics.get("total_return", 0)
+    delta_return = result_cog.metrics.get("total_return", 0) - result_base.metrics.get(
+        "total_return", 0
+    )
     delta_sharpe = result_cog.metrics.get("sharpe", 0) - result_base.metrics.get("sharpe", 0)
-    delta_dd = result_cog.metrics.get("max_drawdown", 0) - result_base.metrics.get("max_drawdown", 0)
-    delta_trades = result_cog.metrics.get("total_trades", 0) - result_base.metrics.get("total_trades", 0)
+    delta_dd = result_cog.metrics.get("max_drawdown", 0) - result_base.metrics.get(
+        "max_drawdown", 0
+    )
+    delta_trades = result_cog.metrics.get("total_trades", 0) - result_base.metrics.get(
+        "total_trades", 0
+    )
 
     print("  【认知引擎边际贡献】")
     print(f"    收益变化:     {delta_return:+.2%}")
@@ -79,6 +86,7 @@ async def validate_one(symbol: str, strategy_name: str, days: int = 250) -> dict
     # 输出 cognitive_log 摘要
     if result_cog.cognitive_log:
         from collections import Counter
+
         action_counts = Counter(e.get("action", "") for e in result_cog.cognitive_log)
         print(f"    认知引擎动作: {dict(action_counts)}")
 
@@ -150,6 +158,7 @@ async def main() -> None:
                     engine = BacktestEngine(enable_cognitive_engine=True)
                     # 修改引擎默认参数（此处简化，直接改类属性）
                     from gugu.analysis.trailing_stop import TrailingStopEngine
+
                     orig_stop = TrailingStopEngine.DEFAULT_INITIAL_STOP_PCT
                     orig_wave = TrailingStopEngine.WAVE_WINDOW
                     TrailingStopEngine.DEFAULT_INITIAL_STOP_PCT = stop_pct
@@ -172,7 +181,9 @@ async def main() -> None:
     print(f"  验证汇总: {args.symbol} × {len(results)} 策略")
     print(f"{'=' * 60}")
     for r in results:
-        print(f"  {r['strategy']}: 基线{r['base_return']:.2%} → 认知{r['cog_return']:.2%} ({r['delta_return']:+.2%}) | {r['conclusion']}")
+        print(
+            f"  {r['strategy']}: 基线{r['base_return']:.2%} → 认知{r['cog_return']:.2%} ({r['delta_return']:+.2%}) | {r['conclusion']}"
+        )
 
 
 if __name__ == "__main__":

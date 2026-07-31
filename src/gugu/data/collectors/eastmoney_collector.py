@@ -29,6 +29,19 @@ from gugu.utils.log import get_logger
 
 logger = get_logger()
 
+# 东方财富数据源标识
+_DATA_SOURCE = "eastmoney"
+_ADJUST_TYPE = "qfq"
+
+
+def _set_df_attrs(df: pd.DataFrame, fetch_timestamp: str | None = None) -> pd.DataFrame:
+    """设置 DataFrame 元数据属性（数据源/复权方式/采集时间戳）。"""
+    df.attrs["data_source"] = _DATA_SOURCE
+    df.attrs["adjust_type"] = _ADJUST_TYPE
+    df.attrs["fetch_timestamp"] = fetch_timestamp or datetime.now().isoformat()
+    return df
+
+
 # 东方财富 push API
 _EM_STOCK_GET_URL = "https://push2.eastmoney.com/api/qt/stock/get"
 _EM_KLINE_URL = "https://push2.eastmoney.com/api/qt/stock/kline/get"

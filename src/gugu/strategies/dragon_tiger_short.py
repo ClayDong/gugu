@@ -142,49 +142,65 @@ class DragonTigerShortStrategy(Strategy):
 
         buy_cond_final = core_buy_cond & (df["confidence_score"] >= min_confidence)
 
-        # 持仓与卖点
-        position_window = time_stop_window * 4
-        df["in_position"] = buy_cond_final.rolling(window=position_window).sum() > 0
-        df["entry_low"] = np.nan
-        df["entry_close"] = np.nan
-        df.loc[buy_cond_final, "entry_low"] = df.loc[buy_cond_final, "low"]
-        df.loc[buy_cond_final, "entry_close"] = df.loc[buy_cond_final, "close"]
-        df["entry_low"] = df["entry_low"].ffill()
-        df["entry_close"] = df["entry_close"].ffill()
+        # 持仓与卖点（状态机精确追踪）
 
-        cond_stop_loss_1 = df["in_position"] & (df["close"] < df["entry_low"] * (1 - stop_loss_pct))
-        cond_stop_loss_2 = df["in_position"] & (df["close"] < df["ma_trend"])
-        cond_stagnation = df["in_position"] & (
+        # 跌破 MA20 止损：要求连续 2 日收盘低于 MA20，避免单日噪音过早止损
+        cond_stop_loss_2 = (df["close"] < df["ma_trend"]) & (
+            df["close"].shift(1) < df["ma_trend"].shift(1)
+        )
+        cond_stagnation = (
             (df["vol_ratio"] >= stagnation_vol_ratio)
             & (df["upper_shadow"] > max_upper_shadow_pct)
             & (df["daily_return"].abs() < 0.02)
         )
-        df["return_since_entry"] = (df["close"] - df["entry_close"]) / df["entry_close"]
+        cond_take_profit = (df["daily_return"] >= take_profit_pct * 0.6) & df["is_yang"]
+
+        in_position = False
+        entry_idx = -1
+        df["in_position"] = False
+        df["entry_low"] = np.nan
+        df["entry_close"] = np.nan
         df["days_since_entry"] = 0
-        buy_idx_list = df.index[buy_cond_final].tolist()
+        df["return_since_entry"] = np.nan
+        sell_cond = pd.Series(False, index=df.index)
+
         for i in range(len(df)):
-            prev_buys = [idx for idx in buy_idx_list if idx <= i]
-            if prev_buys:
-                df.loc[df.index[i], "days_since_entry"] = i - prev_buys[-1]
-        cond_time_stop = (
-            df["in_position"]
-            & (df["days_since_entry"] >= time_stop_window)
-            & (df["return_since_entry"] < time_stop_threshold)
-        )
-        cond_take_profit = (
-            df["in_position"] & (df["daily_return"] >= take_profit_pct * 0.6) & df["is_yang"]
-        )
+            if not in_position:
+                if buy_cond_final.iloc[i]:
+                    in_position = True
+                    entry_idx = i
+                    df.loc[df.index[i], "entry_low"] = df["low"].iloc[i]
+                    df.loc[df.index[i], "entry_close"] = df["close"].iloc[i]
+            else:
+                df.loc[df.index[i], "days_since_entry"] = i - entry_idx
+                ret_since = (df["close"].iloc[i] - df["entry_close"].iloc[entry_idx]) / df[
+                    "entry_close"
+                ].iloc[entry_idx]
+                df.loc[df.index[i], "return_since_entry"] = ret_since
+                entry_low_val = df["entry_low"].iloc[entry_idx]
+                cond_stop_loss_1_i = df["close"].iloc[i] < entry_low_val * (1 - stop_loss_pct)
+                cond_time_stop_i = (i - entry_idx >= time_stop_window) and (
+                    ret_since < time_stop_threshold
+                )
+                sell_now = (
+                    cond_stop_loss_1_i
+                    or cond_stop_loss_2.iloc[i]
+                    or cond_stagnation.iloc[i]
+                    or cond_take_profit.iloc[i]
+                    or cond_time_stop_i
+                )
+                if sell_now:
+                    sell_cond.iloc[i] = True
+                    in_position = False
+                    entry_idx = -1
+            df.loc[df.index[i], "in_position"] = in_position
+
+        df["entry_low"] = df["entry_low"].ffill()
+        df["entry_close"] = df["entry_close"].ffill()
 
         df["signal"] = 0
         df.loc[buy_cond_final, "signal"] = 1
-        df.loc[
-            cond_stop_loss_1
-            | cond_stop_loss_2
-            | cond_stagnation
-            | cond_time_stop
-            | cond_take_profit,
-            "signal",
-        ] = -1
+        df.loc[sell_cond, "signal"] = -1
 
         df["confidence"] = 0.0
         df.loc[buy_cond_final, "confidence"] = df.loc[buy_cond_final, "confidence_score"].clip(

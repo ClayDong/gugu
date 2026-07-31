@@ -28,11 +28,16 @@ from tenacity import (
 from gugu.config import PROJECT_ROOT, env
 from gugu.notifier.formatter import (
     format_backtest_report,
+    format_cloud_trend_signal,
+    format_concept_card,
+    format_conflict_card,
     format_daily_report,
     format_holdings_sell_alert,
+    format_hot_money_signal,
     format_risk_alert,
     format_signal,
     format_system_error,
+    format_take_profit_alert,
     format_validation_report,
 )
 from gugu.screener.report import format_screener_report
@@ -107,6 +112,9 @@ class FeishuNotifier:
         # P1-4 修复：重试队列并发安全锁，保护 _enqueue 和 retry_queued 的文件操作
         self._queue_lock: asyncio.Lock = asyncio.Lock()
 
+        # P0-5 修复：近期发送卡片指纹集合（用于去重，防止重复发送）
+        self._recent_card_fingerprints: dict[str, float] = {}
+
         # 测试环境保护：通过显式环境变量将重试队列重定向到临时目录
         # 防止测试中的失败通知污染生产数据文件 data/notify_queue.jsonl
         # 不再使用 "pytest" in sys.modules 检测（避免生产代码依赖测试框架）
@@ -172,14 +180,12 @@ class FeishuNotifier:
         logger.debug("Feishu tenant_access_token refreshed")
         return self._token
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type((httpx.HTTPError, RuntimeError)),
-        reraise=True,
-    )
     async def _post_card(self, token: str, card: dict[str, Any]) -> None:
-        """Post interactive card to Feishu chat. Raises on failure (will be retried)."""
+        """Post interactive card to Feishu chat. Raises on failure.
+
+        P0-5 修复：移除 @retry 装饰器，避免 POST 成功但响应解析失败时重复发送卡片。
+        重试逻辑统一由 send_card 外层处理，确保幂等性。
+        """
         # Formatter returns {"msg_type": "interactive", "card": {...}}; extract card.
         card_payload = card.get("card", card)
         body = {
@@ -206,6 +212,9 @@ class FeishuNotifier:
         Returns True on success, False on failure or when not configured.
         失败时先等待 2 秒、刷新 token、立即重试一次，
         仍失败才入队等待后续重试。Never raises to caller.
+
+        P0-5 修复：添加卡片指纹去重，防止同一张卡片重复发送。
+        使用卡片内容的 hash 作为唯一标识，5 分钟内不重复发送。
         """
         if not self._enabled:
             logger.debug("Feishu notifications disabled by config")
@@ -214,12 +223,28 @@ class FeishuNotifier:
             logger.warning("Feishu not configured, skip card send")
             return False
 
+        # P0-5 修复：卡片指纹去重检查
+        card_fingerprint = self._get_card_fingerprint(card)
+        if card_fingerprint in self._recent_card_fingerprints:
+            logger.info("卡片已在近期发送过，跳过重复发送: {}...", card_fingerprint[:16])
+            return True
+
+        # v0.7.6 P0-13修复：信号级去重检查（跨进程）
+        signal_key = self._get_signal_key_from_card(card)
+        if signal_key and self._is_signal_notified(signal_key):
+            logger.info("信号已通知过，跳过重复发送: {}", signal_key)
+            return True
+
         try:
             token = await self._get_tenant_token()
             await self._post_card(token, card)
+            # 发送成功，记录指纹和信号去重
+            self._record_card_fingerprint(card_fingerprint)
+            if signal_key:
+                self._mark_signal_notified(signal_key)
             return True
         except Exception as e:
-            logger.warning(f"Feishu send_card 首次失败: {e}, 2秒后刷新token重试")
+            logger.warning("Feishu send_card 首次失败: {}, 2秒后刷新token重试", e)
             # 立即重试一次：等待 2 秒 + 强制刷新 token
             # 大部分 400 错误是 token 过期/限流导致，刷新后立即重试即可成功
             await asyncio.sleep(2)
@@ -229,12 +254,210 @@ class FeishuNotifier:
                 token = await self._get_tenant_token()
                 await self._post_card(token, card)
                 logger.info("Feishu send_card 重试成功")
+                # 发送成功，记录指纹和信号去重
+                self._record_card_fingerprint(card_fingerprint)
+                if signal_key:
+                    self._mark_signal_notified(signal_key)
                 return True
             except Exception as e2:
-                logger.error(f"Feishu send_card 重试仍失败: {e2}")
+                logger.error("Feishu send_card 重试仍失败: {}", e2)
                 # 入队等待后续重试（P1-4: 使用异步加锁版本，避免与 retry_queued 并发写文件）
                 await self._enqueue_async(card)
                 return False
+
+    def _get_card_fingerprint(self, card: dict[str, Any]) -> str:
+        """生成卡片指纹（用于去重）。
+
+        基于卡片静态内容的 hash 追加当前日期，排除动态数据（价格、时间戳等）。
+        日期后缀确保 23:50-00:10 窗口的跨日信号不会被误拦截。
+        v0.7.6 P0-13修复：排除动态数据，避免价格变化导致指纹不同绕过去重。
+        v0.7.9 修复：追加日期（YYYY-MM-DD），防止跨日误拦截。
+        """
+        import hashlib
+        from datetime import date
+
+        # 提取卡片标题
+        header = card.get("card", card).get("header", {})
+        title = (
+            header.get("title", {}).get("content", "")
+            if isinstance(header.get("title"), dict)
+            else ""
+        )
+
+        # 提取卡片内容，但排除包含动态数据的元素
+        elements = card.get("card", card).get("elements", [])
+        content_parts = [title]
+        for el in elements:
+            if isinstance(el, dict):
+                text = el.get("text", {})
+                if isinstance(text, dict):
+                    content = text.get("content", "")
+                    # 排除包含动态数据的行（价格、时间戳、百分比等）
+                    # 动态数据特征：包含数字、百分比、时间格式
+                    if self._is_dynamic_content(content):
+                        continue
+                    content_parts.append(content)
+        content_str = "|".join(content_parts)
+        content_hash = hashlib.md5(content_str.encode("utf-8", errors="replace")).hexdigest()
+        today = date.today().isoformat()  # YYYY-MM-DD
+        return f"{content_hash}_{today}"
+
+    @staticmethod
+    def _is_dynamic_content(content: str) -> bool:
+        """判断内容是否为动态数据（价格、时间戳等）。
+
+        动态数据会导致每次生成的指纹不同，绕过去重。
+        """
+        import re
+
+        # 空内容不是动态数据
+        if not content:
+            return False
+
+        # 包含价格模式：¥123.45、价格：123.45、现价 123.45
+        if re.search(r"[￥¥]?\s*\d+\.?\d*", content):
+            return True
+
+        # 包含百分比模式：+5.2%、-3.1%、12.5%
+        if re.search(r"[+-]?\d+\.?\d*%", content):
+            return True
+
+        # 包含时间戳模式：2026-07-29、07:39:15、2026-07-29 07:39:15
+        if re.search(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", content):
+            return True
+        if re.search(r"\d{1,2}:\d{2}(:\d{2})?", content):
+            return True
+
+        # 包含收益/盈亏模式：收益 +5.2%、盈亏 -3.1%
+        if re.search(r"(收益|盈亏|盈利|亏损)[：:]?\s*[+-]?\d+\.?\d*", content):
+            return True
+
+        return False
+
+    def _record_card_fingerprint(self, fingerprint: str) -> None:
+        """记录卡片指纹，用于近期去重。
+
+        使用内存集合存储，自动清理超过 1 小时的记录。
+        v0.7.6 P0-13修复：从5分钟增加到1小时，覆盖扫描间隔（盘中4次扫描间隔1小时+）。
+        """
+        now = time.time()
+        # 清理过期记录（1 小时）
+        self._recent_card_fingerprints = {
+            fp: ts
+            for fp, ts in self._recent_card_fingerprints.items()
+            if now - ts < 3600  # 1 小时
+        }
+        self._recent_card_fingerprints[fingerprint] = now
+
+    def _get_signal_key_from_card(self, card: dict[str, Any]) -> str | None:
+        """从卡片中提取信号去重 key。
+
+        提取格式：symbol_direction 或 symbol_direction_strategy。
+        v0.7.6 P0-13修复：用于重试队列的信号级去重。
+        """
+        try:
+            header = card.get("card", card).get("header", {})
+            title = (
+                header.get("title", {}).get("content", "")
+                if isinstance(header.get("title"), dict)
+                else ""
+            )
+            # 标题格式：📈 买入信号 - 600519 贵州茅台
+            # 或：📉 卖出信号 - 600519 贵州茅台
+            import re
+
+            # 提取方向
+            direction = None
+            if "买入" in title or "📈" in title:
+                direction = "buy"
+            elif "卖出" in title or "📉" in title:
+                direction = "sell"
+            if not direction:
+                return None
+
+            # 提取股票代码（6位数字）
+            symbol_match = re.search(r"(\d{6})", title)
+            if not symbol_match:
+                return None
+            symbol = symbol_match.group(1)
+
+            # 提取策略名（从内容中）
+            elements = card.get("card", card).get("elements", [])
+            strategy = ""
+            for el in elements:
+                if isinstance(el, dict):
+                    text = el.get("text", {})
+                    if isinstance(text, dict):
+                        content = text.get("content", "")
+                        # 查找策略信息
+                        if "策略：" in content or "策略:" in content:
+                            strategy_match = re.search(r"策略[：:]\s*(.+?)(?:\n|$)", content)
+                            if strategy_match:
+                                strategy = strategy_match.group(1).strip()
+                                break
+
+            if strategy:
+                return f"{symbol}_{direction}_{strategy}"
+            return f"{symbol}_{direction}"
+        except Exception:
+            return None
+
+    def _get_notified_signals_path(self) -> Path:
+        """获取通知记录文件路径（测试环境下使用临时目录）。"""
+        import os
+
+        if os.environ.get("GUGU_TEST_MODE"):
+            import tempfile
+
+            return Path(tempfile.gettempdir()) / "gugu_test_notified_signals.json"
+        return self._queue_path.parent / "notified_signals.json"
+
+    def _is_signal_notified(self, signal_key: str) -> bool:
+        """检查信号是否已通知过（从持久化文件读取）。
+
+        v0.7.6 P0-13修复：重试队列的信号级去重。
+        """
+        try:
+            notified_path = self._get_notified_signals_path()
+            if not notified_path.exists():
+                return False
+            with notified_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            today_str = time.strftime("%Y-%m-%d")
+            return data.get(signal_key) == today_str
+        except Exception:
+            return False
+
+    def _mark_signal_notified(self, signal_key: str) -> None:
+        """标记信号为已通知（持久化到文件）。
+
+        v0.7.6 P0-13修复：重试队列的信号级去重。
+        """
+        try:
+            notified_path = self._get_notified_signals_path()
+            data = {}
+            if notified_path.exists():
+                try:
+                    with notified_path.open("r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    data = {}
+            today_str = time.strftime("%Y-%m-%d")
+            data[signal_key] = today_str
+            # 清理过期记录（保留近7天）
+            cutoff = time.time() - 7 * 24 * 3600
+            data = {
+                k: v
+                for k, v in data.items()
+                if v >= time.strftime("%Y-%m-%d", time.localtime(cutoff))
+            }
+            # 原子写入
+            tmp_path = notified_path.with_suffix(".tmp")
+            with tmp_path.open("w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            tmp_path.replace(notified_path)
+        except Exception as e:
+            logger.warning("标记信号已通知失败: {}", e)
 
     def _enqueue(self, card: dict[str, Any]) -> None:
         """失败通知入队，持久化到 data/notify_queue.jsonl。"""
@@ -247,9 +470,9 @@ class FeishuNotifier:
             }
             with self._queue_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-            logger.info(f"通知入队等待重试: {self._queue_path}")
+            logger.info("通知入队等待重试: {}", self._queue_path)
         except Exception as e:
-            logger.error(f"通知入队失败: {e}")
+            logger.error("通知入队失败: {}", e)
 
     async def _enqueue_async(self, card: dict[str, Any]) -> None:
         """异步入队（线程安全，与 retry_queued 互斥）。"""
@@ -294,7 +517,7 @@ class FeishuNotifier:
                         except json.JSONDecodeError:
                             continue
             except Exception as e:
-                logger.error(f"读取重试队列失败: {e}")
+                logger.error("读取重试队列失败: {}", e)
                 return 0
 
             if not pending:
@@ -362,7 +585,7 @@ class FeishuNotifier:
                         }
                         await self._post_card(token, alert_card)
                     except Exception as e:
-                        logger.warning(f"发送告警卡片失败: {e}")
+                        logger.warning("发送告警卡片失败: {}", e)
                 continue
 
             card = item.get("card", {})
@@ -376,13 +599,32 @@ class FeishuNotifier:
                 )
                 continue
 
+            # P0-5 修复：重试前检查卡片指纹，防止重复发送
+            card_fingerprint = self._get_card_fingerprint(card)
+            if card_fingerprint in self._recent_card_fingerprints:
+                logger.info("重试队列中卡片已发送过，跳过: {}...", card_fingerprint[:16])
+                success_count += 1  # 计为成功（因为之前已发送成功）
+                continue
+
+            # v0.7.6 P0-13修复：重试前检查信号是否已通知过（跨进程去重）
+            signal_key = self._get_signal_key_from_card(card)
+            if signal_key and self._is_signal_notified(signal_key):
+                logger.info("重试队列中信号已通知过，跳过: {}", signal_key)
+                success_count += 1  # 计为成功（因为之前已发送成功）
+                continue
+
             try:
                 token = await self._get_tenant_token()
                 await self._post_card(token, card)
+                # 发送成功，记录指纹
+                self._record_card_fingerprint(card_fingerprint)
+                # v0.7.6 P0-13修复：发送成功，记录信号已通知
+                if signal_key:
+                    self._mark_signal_notified(signal_key)
                 success_count += 1
-                logger.info(f"重试通知成功: {success_count}")
+                logger.info("重试通知成功: {}", success_count)
             except Exception as e:
-                logger.debug(f"重试通知失败: {e}")
+                logger.debug("重试通知失败: {}", e)
                 item["retry_count"] = retry_count + 1
                 still_failed.append(item)
 
@@ -403,7 +645,7 @@ class FeishuNotifier:
                                 except json.JSONDecodeError:
                                     continue
                     except Exception as e:
-                        logger.warning(f"读取通知队列文件失败: {e}")
+                        logger.warning("读取通知队列文件失败: {}", e)
                 # 合并：新入队的在前，仍失败的在后
                 all_items = newly_queued + still_failed
                 tmp_path = self._queue_path.with_suffix(".jsonl.tmp")
@@ -413,7 +655,7 @@ class FeishuNotifier:
                             f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
                     tmp_path.rename(self._queue_path)
                 except Exception as e:
-                    logger.error(f"写入重试队列失败: {e}")
+                    logger.error("写入重试队列失败: {}", e)
                     with self._queue_path.open("w", encoding="utf-8") as f:
                         for item in all_items:
                             f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
@@ -426,8 +668,51 @@ class FeishuNotifier:
                     self._queue_path.write_text("", encoding="utf-8")
 
         if success_count > 0:
-            logger.info(f"重试队列: {success_count} 成功, {len(still_failed)} 仍失败")
+            logger.info("重试队列: {} 成功, {} 仍失败", success_count, len(still_failed))
         return success_count
+
+    # v0.7.5 P0-12修复：队列健康检查
+    QUEUE_SIZE_THRESHOLD: int = 50  # 队列长度告警阈值
+    QUEUE_ALERT_COOLDOWN: int = 3600  # 告警冷却（秒）
+    _last_queue_alert_ts: float = 0.0
+
+    def _get_queue_size(self) -> int:
+        """获取当前队列长度。"""
+        if not self._queue_path.exists():
+            return 0
+        try:
+            count = 0
+            with self._queue_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        count += 1
+            return count
+        except Exception:
+            return 0
+
+    async def check_queue_health(self) -> None:
+        """检查队列健康状态，超阈值时告警（P0-12修复）。"""
+        import time
+
+        queue_size = self._get_queue_size()
+        if queue_size < self.QUEUE_SIZE_THRESHOLD:
+            return
+        # 冷却检查
+        now = time.time()
+        if now - self._last_queue_alert_ts < self.QUEUE_ALERT_COOLDOWN:
+            return
+        self._last_queue_alert_ts = now
+        logger.warning("通知队列堆积: {} 条（阈值 {}）", queue_size, self.QUEUE_SIZE_THRESHOLD)
+        # 尝试发送告警
+        try:
+            await self.send_text(
+                f"⚠️ gugu 通知队列堆积告警\n"
+                f"队列长度: {queue_size} 条\n"
+                f"阈值: {self.QUEUE_SIZE_THRESHOLD} 条\n"
+                f"请检查飞书 API 是否正常"
+            )
+        except Exception as e:
+            logger.warning("队列告警发送失败: {}", e)
 
     @staticmethod
     def _is_expired(timestamp_str: str) -> bool:
@@ -534,7 +819,7 @@ class FeishuNotifier:
             await self._post_webhook(text)
             return True
         except Exception as e:
-            logger.error(f"Feishu send_text failed: {e}")
+            logger.error("Feishu send_text failed: {}", e)
             return False
 
     async def notify_signal(self, signal: dict[str, Any]) -> bool:
@@ -582,6 +867,18 @@ class FeishuNotifier:
                 f" symbol={signal.get('symbol', 'N/A')}"
             )
             return False
+
+        # 云策略信号使用专属卡片格式
+        strategy = signal.get("strategy", "")
+        strategies_list = signal.get("strategies", [])
+        is_cloud_trend = strategy == "cloud_trend" or "cloud_trend" in strategies_list
+        if is_cloud_trend:
+            return await self.send_card(format_cloud_trend_signal(signal))
+
+        # 游资策略信号使用专属卡片格式
+        is_hot_money = strategy == "hot_money" or "hot_money" in strategies_list
+        if is_hot_money:
+            return await self.send_card(format_hot_money_signal(signal))
 
         return await self.send_card(format_signal(signal))
 
@@ -720,7 +1017,7 @@ class FeishuNotifier:
                 cutoff = (_date.today() - _timedelta(days=2)).isoformat()
                 notified = {k: v for k, v in notified.items() if v >= cutoff}
         except Exception as e:
-            logger.warning(f"加载盘中告警去重记录失败: {e}")
+            logger.warning("加载盘中告警去重记录失败: {}", e)
             notified = {}
 
         # 过滤已通知的告警
@@ -728,7 +1025,7 @@ class FeishuNotifier:
         for alert in alerts:
             key = f"{alert.alert_type}_{alert.symbol}_{today_str}"
             if notified.get(key) == today_str:
-                logger.debug(f"盘中告警 {alert.alert_type} {alert.symbol} 当日已通知，跳过")
+                logger.debug("盘中告警 {} {} 当日已通知，跳过", alert.alert_type, alert.symbol)
                 continue
             new_alerts.append(alert)
             notified[key] = today_str
@@ -745,7 +1042,7 @@ class FeishuNotifier:
                 json.dump(notified, f, ensure_ascii=False)
             tmp_path.replace(dedup_path)
         except Exception as e:
-            logger.warning(f"保存盘中告警去重记录失败: {e}")
+            logger.warning("保存盘中告警去重记录失败: {}", e)
 
         try:
             from gugu.notifier.intraday_alert import build_intraday_alert_card
@@ -753,7 +1050,7 @@ class FeishuNotifier:
             card = build_intraday_alert_card(new_alerts)
             return await self.send_card(card)
         except Exception as e:
-            logger.warning(f"盘中告警卡片发送失败: {e}")
+            logger.warning("盘中告警卡片发送失败: {}", e)
             return False
 
     async def notify_take_profit_alert(
@@ -771,7 +1068,6 @@ class FeishuNotifier:
             signal: TakeProfitSignal 的 dict 形式。
             state: 可选的 TakeProfitState dict，用于展示减仓历史。
         """
-        from gugu.notifier.formatter import format_take_profit_alert
 
         return await self.send_card(format_take_profit_alert(symbol, name, signal, state))
 
@@ -807,7 +1103,6 @@ class FeishuNotifier:
 
     async def notify_conflict(self, symbol: str, name: str, resolution: dict[str, Any]) -> bool:
         """发送多视角冲突研讨卡片。"""
-        from gugu.notifier.formatter import format_conflict_card
 
         return await self.send_card(format_conflict_card(symbol, name, resolution))
 
@@ -815,11 +1110,98 @@ class FeishuNotifier:
         self, concept_name: str, definition: str, explanation: str, citations: list[dict[str, str]]
     ) -> bool:
         """发送每日概念卡（小白学堂）。"""
-        from gugu.notifier.formatter import format_concept_card
 
         return await self.send_card(
             format_concept_card(concept_name, definition, explanation, citations)
         )
+
+    async def notify_alpha_summary(self, summary: dict[str, Any]) -> bool:
+        """发送Alpha因子与综合评分摘要。
+
+        Args:
+            summary: {
+                "rankings": [{"symbol": "600519", "name": "贵州茅台", "total_score": 0.85, ...}],
+                "top_factors": [{"name": "动量因子", "avg_value": 0.6, ...}],
+                "altalpha_summary": "高管增持3家, 龙虎榜2家...",
+                "timestamp": "2026-07-15 18:05"
+            }
+        """
+        try:
+            rankings = summary.get("rankings", [])
+            top_factors = summary.get("top_factors", [])
+            altalpha_summary = summary.get("altalpha_summary", "")
+
+            sections: list[str] = []
+
+            # 综合评分排名
+            if rankings:
+                lines = ["**📊 综合评分 TOP**"]
+                for i, r in enumerate(rankings[:10], 1):
+                    name = r.get("name", r.get("symbol", ""))
+                    score = r.get("total_score", 0)
+                    lines.append(f"{i}. {name} {score:.3f}")
+                sections.append("\n".join(lines))
+
+            # Top因子
+            if top_factors:
+                lines = ["**📈 因子表现**"]
+                for f in top_factors[:5]:
+                    name = f.get("name", "")
+                    val = f.get("avg_value", 0)
+                    direction = "↑" if val > 0 else "↓"
+                    lines.append(f"- {name}: {val:.3f} {direction}")
+                sections.append("\n".join(lines))
+
+            # 另类因子摘要
+            if altalpha_summary:
+                sections.append(f"**📋 另类因子**\n{altalpha_summary}")
+
+            if not sections:
+                sections.append("暂无数据")
+
+            ts = summary.get("timestamp", "")
+            note = f"明策 · gugu · 因子综合报告 | {ts}"
+            from gugu.notifier.formatter import _card
+
+            card = _card("📊 因子综合评分报告", "blue", sections, note=note)
+            return await self.send_card(card)
+        except Exception as e:
+            logger.warning("发送Alpha因子摘要失败: {}", e)
+            return False
+
+    async def notify_portfolio_report(self, analysis: str, positions: list[dict[str, Any]]) -> bool:
+        """发送持仓认知分析报告飞书卡片。
+
+        Args:
+            analysis: LLM 生成的持仓分析文本
+            positions: 用户持仓数据列表（用于展示持仓概览）
+        """
+        try:
+            lines = []
+            for p in positions:
+                name = p.get("name", p.get("symbol", ""))
+                profit = p.get("profit_pct", 0)
+                emoji = (
+                    "🔴" if profit < -5 else "🟡" if profit < 0 else "🟢" if profit < 10 else "🔥"
+                )
+                lines.append(
+                    f"- {name} ({p.get('symbol', '')}) | "
+                    f"成本 {p.get('entry_price', 0):.2f} | "
+                    f"现价 {p.get('current_price', 0):.2f} | "
+                    f"盈亏 {profit:+.1f}% {emoji}"
+                )
+            portfolio_text = "\n".join(lines)
+            sections = [
+                f"**📊 持仓概览**\n{portfolio_text}",
+                f"**🧠 大师兄分析**\n{analysis}",
+            ]
+            from gugu.notifier.formatter import _card
+
+            card = _card("🧠 持仓认知分析报告", "indigo", sections, note="明策 · gugu · 每日15:35")
+            return await self.send_card(card)
+        except Exception as e:
+            logger.warning("发送持仓认知报告失败: {}", e)
+            return False
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""

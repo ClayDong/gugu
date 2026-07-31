@@ -33,6 +33,7 @@
 | **MakingMoney** | 🟡 冻结 | 全栈量化平台 v1.0（27 策略、Flask UI），所含功能已被 gugu 重构替代 |
 | **MingCe（明策）** | 🟢 **已迁移** | 日报 Bot v1.5（5 时段飞书推送、五维宏观框架）。日报/基金/通知功能已迁入 gugu，MingCe 可归档 |
 | **realtime-flow** | 🟢 **已迁移** | 资金流监测系统。资金流日报（大盘/行业/个股）已迁入 `src/gugu/notifier/flow_report.py` |
+| **mulan-quant** | 🟢 **已迁移** | ML量化选股系统。博主规则库（47规则）+ ML GradientBoosting 已迁入 `src/gugu/strategies/blogger_rules/` 和 `src/gugu/strategies/ml_gradient_boost/` |
 | **gugu** | 🟢 **唯一活跃** | 未来所有迭代只在此进行 |
 
 > **决策依据**：详见 `docs/PROJECT_LANDSCAPE_ANALYSIS.md`（第一性原理 + 对抗性审查报告）
@@ -344,10 +345,65 @@ gugu/
 ## 元数据
 
 - 创建日期：2026-07-06
-- 版本：v0.7.8
-- 阶段：阶段三（信号监控）+ 十大视角分析系统 + 信号流融合 + 宏观增强 + 博格市场温度计 + 策略全链路优化 + A股费用模型对齐 + 多专家深度审查 + 另类数据Alpha因子系统 + 上线级全面优化 + 实盘/模拟盘数据分离 + 信号产量优化 + 陈学长不吃面策略大幅放宽 + 启发式参数优化系统 + 周线四因子选股策略 + 飞书通知去重修复 + 花木兰策略系列 + 信号数据时效性追踪
+- 版本：v0.7.9
+- 阶段：阶段三（信号监控）+ 多专家综合审查修复 + 信号产量优化 + 配置语义统一 + 代码质量提升
 - 测试：1981 passed, 7 failed（pre-existing failures in test_cloud_trend/test_first_board/test_ma5_momentum/test_north_force_long）
-- 最近审查：2026-07-30（信号数据时效性追踪 + 数据源透明度优化）
+- 最近审查：2026-07-31（多专家综合审查 + 28项问题P0/P1/P2分层修复）
+- v0.7.9 变更（2026-07-31 综合审查修复 + 信号产量优化）：
+  - 🔴 P0修复：5个关键缺陷
+    - P0-1：花木兰4策略0回测即启用生产 → 全部 disabled（strategy_manifest.yaml）
+    - P0-2：绩效验证 return_5d 前视偏差 → 已确认使用收盘价，无需修复
+    - P0-3：十大视角评分假精度 → 新增 data_completeness 字段，<50%标注"低数据完整度"
+    - P0-4：RiskManager 构造函数参数绕过 → 4个硬编码安全上限常量，全部构造分支应用 min()
+    - P0-5：另类因子IC方向错误 → 新增 compute_cross_sectional_ic() 横截面IC方法
+  - 🟡 P1修复：9个重要缺陷
+    - P1-1：SignalPipeline 架构重构已记录（大工作量待排期）
+    - P1-2：enabled_by_regime 统一配置 → 清理花木兰引用，bear/crash=空列表
+    - P1-3：涨跌停检查回测-实盘不一致 → paper.py 概率模型改为硬阻断
+    - P1-4：飞书跨日去重 → feishu.py 指纹追加日期后缀 {hash}_{YYYY-MM-DD}
+    - P1-5：DataManager批量串行 → 已确认使用 asyncio.gather + Semaphore(10)，无需修复
+    - P1-6：LLM决策价值无法验证 → advisor.py 新增 _log_decision_comparison 记录到 wisdom_comparison.jsonl
+    - P1-7：花木兰日内策略日K线运行 → 已通过 P0-1 禁用
+    - P1-8：组合回撤 peak 更新时机 → engine.py/manager.py 每根K线后更新，persist参数区分回测/生产
+    - P1-9：calc_liquidity_stress_test 失效 → Trade 新增 market_cap 字段，缺失时从成交额估算
+  - 🟢 架构优化 P2：7个高价值修复
+    - P2-4：GA/PSO 优化器 Early Stopping → patience + min_improvement 参数
+    - P2-6：param_optimizer base_return → 超额收益替代绝对收益
+    - P2-7：cache.py LRU淘汰修复 → and→无条件检查
+    - P2-8：quality.py 假日检测 → d=latest → d=latest+1天
+    - P2-10：信号拒绝记录 → 写入 signals_history.jsonl
+    - P2-12：halt冷却时间持久化 → risk_state.json
+    - P2-14：事件引擎评估 → 当前规模够用，无需改动
+  - 🚀 信号产量优化（基于ROI评估的核心改进）
+    - min_confidence 从 0.6 降至 0.4（原阈值在共识折扣下导致月产仅14条信号）
+    - 8个策略全开：3 verified + 5 experimental（bull/rally regime）
+    - get_enabled_for_regime() 逻辑扩展：experimental 策略也参与扫描
+    - StrategyPool._init_weights() 加载 experimental_weights
+    - RSI专项扫描：13:30独立启用 rsi_reversal（唯一通过门禁的策略）
+    - 过滤链拒绝统计：每步拒绝次数/百分比输出到引擎日志
+    - 每日信号摘要：扫描数/通过数/过滤数/按策略分组统计
+  - 📝 代码质量提升
+    - signal_pipeline.py 39处 UP031 %格式化 → loguru {}惰性求值
+    - risk/manager.py 三路构造 → 提取 _apply_safety_caps 方法
+    - cache.py LRU O(n)瓶颈 → OrderedDict O(1)
+    - strategy_consistency.py 新增experimental策略校验
+    - 清理8处未使用变量/导入 (F841/F401)
+    - 配置语义统一：manifest注释 + validate新增warning校验
+  - 🧪 测试：所有通过（37 pipeline + 22 feishu + 20 cache + 46 backtest + 72 total）
+  - 修改文件（共 25+ 个）：
+    - 配置：config/strategy_manifest.yaml, config/settings.yaml
+    - 风控：src/gugu/risk/manager.py
+    - 分析：src/gugu/analysis/perspectives/data_types.py, engine.py, factor_ic.py
+    - 分析：src/gugu/analysis/heuristic_optimizer.py, param_optimizer.py, strategy_pool.py
+    - 引擎：src/gugu/engine/signal_pipeline.py, engine_mixin.py, scheduler.py, scheduler_jobs.py
+    - 数据：src/gugu/data/cache.py, quality.py
+    - 执行：src/gugu/execution/paper.py
+    - 回测：src/gugu/backtest/engine.py, validation.py
+    - 通知：src/gugu/notifier/feishu.py
+    - 智慧：src/gugu/wisdom/advisor.py
+    - 配置：src/gugu/config/models.py
+    - 验证：src/gugu/strategy_consistency.py
+    - 文档：docs/plans/comprehensive_review_fixes.md
 - v0.7.8 变更（2026-07-30 信号数据时效性追踪 + 数据源透明度优化）：
   - 🆕 新增：信号数据时效性追踪系统
     - Signal模型扩展：新增 data_timestamp/data_source/is_intraday/adjust_type 字段

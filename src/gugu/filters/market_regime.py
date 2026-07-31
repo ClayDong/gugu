@@ -65,7 +65,7 @@ class MarketRegimeDetector:
             df = await dm.fetch_stock_history(_HS300_SYMBOL, days=_MA_LONG + 10)
             result = self._analyze(df)
         except Exception as e:
-            logger.error(f"市场状态判断失败，安全降级为震荡市: {e}")
+            logger.error("市场状态判断失败，安全降级为震荡市: {}", e)
             result = {
                 "regime": "sideways",
                 "trend_strength": 0.0,

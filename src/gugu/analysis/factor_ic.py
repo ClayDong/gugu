@@ -91,6 +91,40 @@ class FactorICAnalyzer:
         ic, _p = stats.spearmanr(aligned["factor"], aligned["return"])
         return float(ic) if not np.isnan(ic) else 0.0
 
+    def compute_cross_sectional_ic(
+        self,
+        factor_df: pd.DataFrame,
+        forward_returns: pd.Series,
+    ) -> dict[str, float]:
+        """计算多因子的横截面 IC（Cross-Sectional IC）。
+
+        横截面 IC 适用于事件驱动型因子（高管增持、龙虎榜、大宗交易等），
+        在同一时点对所有股票的因子排名与收益排名做 Spearman 秩相关，
+        评估因子在全市场选股中的区分能力。
+
+        Args:
+            factor_df: 因子值 DataFrame，index=symbol，columns=factor_name
+            forward_returns: 未来收益 Series，index=symbol
+
+        Returns:
+            {因子名: 横截面 IC 值}
+        """
+        results: dict[str, float] = {}
+        common_idx = factor_df.index.intersection(forward_returns.index)
+        if len(common_idx) < 10:
+            return dict.fromkeys(factor_df.columns, 0.0)
+
+        r = forward_returns.reindex(common_idx)
+        for col in factor_df.columns:
+            f = factor_df[col].reindex(common_idx).fillna(0.0)
+            if f.std() == 0 or r.std() == 0:
+                results[col] = 0.0
+                continue
+            ic_val, _ = stats.spearmanr(f, r)
+            results[col] = float(ic_val) if not np.isnan(ic_val) else 0.0
+
+        return results
+
     def analyze(
         self,
         df: pd.DataFrame,
@@ -113,7 +147,7 @@ class FactorICAnalyzer:
 
         for col in factor_columns:
             if col not in df.columns:
-                logger.warning(f"因子列 {col} 不存在，跳过")
+                logger.warning("因子列 {} 不存在，跳过", col)
                 continue
 
             factor_series = df[col]

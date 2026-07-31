@@ -22,7 +22,7 @@ try:
 except ImportError:
     from enum import Enum
 
-    class StrEnum(str, Enum):  # noqa: UP042
+    class StrEnum(str, Enum):
         pass
 
 
@@ -86,12 +86,14 @@ class StageDetector:
         """判断股票当前所处的阶段。
 
         Args:
-            df: 行情DataFrame，需包含 close, high, low, volume 列
+            df: 行情 DataFrame，需包含 close, high, low, volume 列
 
         Returns:
             StageResult 判断结果
         """
-        if df.empty or len(df) < self.MA_LONG + 10:
+        # P1-3 修复：降低最小数据量阈值（MA_LONG=60 → 40），
+        # 适应部分数据源返回行数不足的情况
+        if df.empty or len(df) < 40:
             return StageResult(
                 stage=MarketStage.SIDEWAYS,
                 confidence=0.0,
@@ -103,7 +105,7 @@ class StageDetector:
         try:
             metrics = self._calculate_metrics(df)
         except Exception as e:
-            logger.warning(f"[stage-detector] 指标计算失败: {e}")
+            logger.warning("[stage-detector] 指标计算失败: {}", e)
             return StageResult(
                 stage=MarketStage.SIDEWAYS,
                 confidence=0.0,
@@ -117,8 +119,11 @@ class StageDetector:
         suggestion = self._stage_suggestion(stage)
 
         logger.info(
-            f"[stage-detector] 阶段={stage.value}, 置信度={confidence:.2f}, "
-            f"斜率={metrics.get('ma_slope', 0):.4f}, 量比={metrics.get('volume_ratio', 1):.2f}"
+            "[stage-detector] 阶段={}, 置信度={:.2f}, 斜率={:.4f}, 量比={:.2f}",
+            stage.value,
+            confidence,
+            metrics.get("ma_slope", 0),
+            metrics.get("volume_ratio", 1),
         )
 
         return StageResult(
@@ -214,7 +219,7 @@ class StageDetector:
         修复：循环中已包含最后一个点的判断，末尾不再重复添加。
         """
         swings: list[float] = []
-        for i in range(0, len(series)):
+        for i in range(len(series)):
             left = max(0, i - window)
             segment = series.iloc[left : i + 1]
             if high:

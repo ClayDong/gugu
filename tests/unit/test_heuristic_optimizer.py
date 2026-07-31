@@ -82,7 +82,7 @@ class TestGAOptimizer:
 
         def fitness(params: dict[str, float]) -> float:
             x = params["x"]
-            return -(x - 2.5) ** 2
+            return -((x - 2.5) ** 2)
 
         ga = GAOptimizer(
             param_spaces=spaces,
@@ -118,7 +118,7 @@ class TestGAOptimizer:
 
         best_so_far = -float("inf")
         for h in result.history:
-            assert h["best_score"] >= best_so_far -1e-6
+            assert h["best_score"] >= best_so_far - 1e-6
             best_so_far = h["best_score"]
 
     def test_ga_respects_constraints(self) -> None:
@@ -179,7 +179,7 @@ class TestPSOOptimizer:
 
         def fitness(params: dict[str, float]) -> float:
             x = params["x"]
-            return -(x - 1.5) ** 2
+            return -((x - 1.5) ** 2)
 
         pso = PSOOptimizer(
             param_spaces=spaces,
@@ -215,7 +215,7 @@ class TestPSOOptimizer:
 
         best_so_far = -float("inf")
         for h in result.history:
-            assert h["best_score"] >= best_so_far -1e-6
+            assert h["best_score"] >= best_so_far - 1e-6
             best_so_far = h["best_score"]
 
     def test_pso_respects_search_space(self) -> None:

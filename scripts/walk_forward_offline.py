@@ -30,6 +30,7 @@ P1 解锁条件（全部满足才能写回，防止过拟合参数污染生产�
 3. 最大回撤 < 25%
 4. 平均样本外收益 ≥ 0
 """
+
 from __future__ import annotations
 
 import argparse
@@ -59,8 +60,16 @@ logger = get_logger()
 
 # 默认 10 只不同行业代表股（如有 500+ 行缓存数据则用，否则从全市场随机抽样）
 _DEFAULT_SYMBOLS = [
-    "600519", "000858", "601318", "600036", "002714",
-    "300750", "000333", "600276", "601012", "601888",
+    "600519",
+    "000858",
+    "601318",
+    "600036",
+    "002714",
+    "300750",
+    "000333",
+    "600276",
+    "601012",
+    "601888",
 ]
 
 # 默认每只股票要求的最小行数（Walk-Forward 切 3 窗口 × 60% 训练 + 测试，至少需要 200 行）
@@ -174,15 +183,19 @@ async def run_offline_optimization(
 
     # 统计合法参数组合数
     import itertools
+
     all_combos = list(itertools.product(*param_grid.values()))
     keys = list(param_grid.keys())
     legal_combos = [
-        c for c in all_combos
+        c
+        for c in all_combos
         if constraint_fn is None or constraint_fn(dict(zip(keys, c, strict=True)))
     ]
     print(f"\n开始多股聚合 Walk-Forward 优化: {strategy_name}")
     print(f"  股票数: {len(stock_dfs)}")
-    print(f"  参数组合: {len(all_combos)} 总 / {len(legal_combos)} 合法（约束过滤 {len(all_combos) - len(legal_combos)} 个）")
+    print(
+        f"  参数组合: {len(all_combos)} 总 / {len(legal_combos)} 合法（约束过滤 {len(all_combos) - len(legal_combos)} 个）"
+    )
     print(f"  窗口数: {n_splits}, 训练比例: 60%")
     print(f"  预计回测次数: ~{len(stock_dfs) * len(legal_combos) * n_splits * 2} 次（训练+测试）")
 
@@ -264,7 +277,9 @@ async def run_offline_optimization(
 
         if unlock_report["unlocked"] or force:
             if force and not unlock_report["unlocked"]:
-                print(f"\n⚠️  --force 强制写回（跳过 {len(unlock_report['failed_checks'])} 项解锁条件）")
+                print(
+                    f"\n⚠️  --force 强制写回（跳过 {len(unlock_report['failed_checks'])} 项解锁条件）"
+                )
                 logger.warning(f"强制写回 {strategy_name} 参数: {unlock_report['failed_checks']}")
             if strategy_name not in defaults:
                 defaults[strategy_name] = {}
@@ -273,7 +288,9 @@ async def run_offline_optimization(
             write_defaults(defaults)
             print(f"\n✅ 优化参数已写回 config/strategy_defaults.yaml")
         else:
-            print(f"\n❌ 参数写回被拒绝（未通过 {len(unlock_report['failed_checks'])} 项解锁条件）:")
+            print(
+                f"\n❌ 参数写回被拒绝（未通过 {len(unlock_report['failed_checks'])} 项解锁条件）:"
+            )
             for check in unlock_report["checks"]:
                 status = "✓" if check["passed"] else "✗"
                 print(f"  {status} {check['name']}: {check['detail']}")
@@ -389,16 +406,25 @@ async def _notify_optimization_result(strategy_name: str, symbols: list[str]) ->
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="离线 Walk-Forward 参数优化（基于本地缓存）")
     parser.add_argument("--strategy", type=str, default=None, help="策略名称（默认=所有启用策略）")
-    parser.add_argument("--symbols", type=str, default=None,
-                        help="股票代码列表（逗号分隔，默认=8只代表股）")
+    parser.add_argument(
+        "--symbols", type=str, default=None, help="股票代码列表（逗号分隔，默认=8只代表股）"
+    )
     parser.add_argument("--splits", type=int, default=3, help="Walk-Forward 窗口数（默认=3）")
-    parser.add_argument("--write", action="store_true",
-                        help="将最优参数写回 strategy_defaults.yaml（需通过解锁条件）")
-    parser.add_argument("--force", action="store_true",
-                        help="强制写回，跳过解锁条件检查（紧急情况使用）")
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="将最优参数写回 strategy_defaults.yaml（需通过解锁条件）",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="强制写回，跳过解锁条件检查（紧急情况使用）"
+    )
     parser.add_argument("--show", action="store_true", help="显示当前策略参数")
     parser.add_argument("--notify", action="store_true", help="优化完成后推送飞书通知")
     parser.add_argument("--version", action="version", version="gugu 0.1.0")
     args = parser.parse_args()
 
-    asyncio.run(main(args.strategy, args.symbols, args.splits, args.write, args.show, args.force, args.notify))
+    asyncio.run(
+        main(
+            args.strategy, args.symbols, args.splits, args.write, args.show, args.force, args.notify
+        )
+    )

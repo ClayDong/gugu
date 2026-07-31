@@ -2,18 +2,34 @@
 
 提取自 TradingEngine._scan_signals，形成独立可测试的 SignalPipeline 类。
 
-过滤链顺序（实际执行顺序）：
-  [步骤0]   四阶段判断（StageDetector，牛皮/升势/疯狂/最后）
-  [步骤0.5] 危险信号检测（DangerSignalDetector，仅买入，medium+ 过滤）
-  [步骤0.7] 量价背离检测（DivergenceDetector，仅买入，严重背离过滤）
+过滤链顺序（signal_only 模式）：
+  [步骤0]   四阶段判断（StageDetector）
+  [步骤0.5] 危险信号检测（DangerSignalDetector）
+  [步骤0.7] 量价背离检测（DivergenceDetector）
   [步骤1]   基本面过滤（FundamentalFilter，仅买入）
   [步骤2]   资金流过滤（MoneyFlowFilter，仅买入）
-  [步骤2.5] 板块轮动检查（SectorRotation，仅买入，热点/冷门板块调整）
-  [步骤3]   向下摊平检查（NoAverageDownChecker，仅买入）
-  [步骤3.5] 行业约束（IndustryConstraint，仅买入 + 新建仓位）
-  [步骤4]   四阶段入场过滤（StageDetector，疯狂/最后阶段不入场）
-  [步骤5]   市场状态仓位修正（RegimeDetector，已体现在 budget 中）
-  [步骤6]   Wisdom 决策层（WisdomAdvisor，LLM + 15s 超时 fallback）
+  [步骤2.5] 板块轮动检查（SectorRotation，仅买入）
+  [步骤3]   筹码集中度（HolderConcentrationFilter，仅买入）
+  [步骤3.5] 另类Alpha因子（AltAlphaFilter，仅买入）
+  [步骤4]   向下摊平检查（NoAverageDownChecker，仅买入）
+  [步骤4.5] 行业约束（IndustryConstraint，仅买入）
+  [步骤5]   Wisdom 决策层（signal_only 仅 fallback）
+
+过滤链顺序（paper/live 模式）：
+  [步骤0]   四阶段判断（StageDetector）
+  [步骤0.5] 危险信号检测（DangerSignalDetector）
+  [步骤0.7] 量价背离检测（DivergenceDetector）
+  [步骤1]   基本面过滤（FundamentalFilter，仅买入）
+  [步骤2]   资金流过滤（MoneyFlowFilter，仅买入）
+  [步骤2.5] 板块轮动检查（SectorRotation，仅买入）
+  [步骤3]   筹码集中度（HolderConcentrationFilter，仅买入）
+  [步骤3.5] 另类Alpha因子（AltAlphaFilter，仅买入）
+  [步骤4]   向下摊平检查（NoAverageDownChecker，仅买入）
+  [步骤4.5] 行业约束（IndustryConstraint，仅买入）
+  [步骤5]   四阶段入场过滤（StageDetector）
+  [步骤6]   Wisdom 决策层（LLM 或 fallback）
+  [步骤7]   十大视角评估（PerspectiveEngine）
+  [步骤8]   综合入场判定（evaluate_entry_gate）
 
 P0 优化：signal_only 模式下跳过 Wisdom 决策和日内不变过滤。
 P0 优化：资金流数据缺失时默认放行。
@@ -25,6 +41,7 @@ import asyncio
 import json
 import threading
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -42,15 +59,17 @@ from gugu.analysis.perspectives.integrators import (
 from gugu.analysis.position_controller import PositionBudget, PositionController
 from gugu.analysis.regime_detector import MultiPeriodRegimeDetector
 from gugu.analysis.sector_rotation import SectorRotation
-from gugu.analysis.stage_detector import MarketStage, StageDetector
+from gugu.analysis.stage_detector import StageDetector
 from gugu.data.manager import DataManager
 from gugu.data.stock_names import lookup_stock_name
 from gugu.detectors.divergence_detector import DivergenceDetector
 from gugu.engine.signal_router import SignalRouter
+from gugu.filters.altalpha import AltAlphaFilter
 from gugu.filters.fundamental import FundamentalFilter
 from gugu.filters.holder_concentration import HolderConcentrationFilter
 from gugu.filters.industry_constraint import IndustryConstraint
 from gugu.filters.money_flow import MoneyFlowFilter
+from gugu.models.decision import evaluate_entry_gate
 from gugu.utils.log import get_logger
 from gugu.wisdom import WisdomAdvisor
 
@@ -81,6 +100,7 @@ class SignalPipeline:
         money_flow_filter: MoneyFlowFilter | None = None,
         industry_constraint: IndustryConstraint | None = None,
         sector_rotation: SectorRotation | None = None,
+        altalpha_filter: AltAlphaFilter | None = None,
         exec_mode: str = "paper",
     ) -> None:
         self._dm = data_manager
@@ -104,12 +124,30 @@ class SignalPipeline:
                         hc_cfg.quarterly_change_pct_threshold,
                     )
         except Exception as e:
-            logger.debug(f"筹码过滤器初始化跳过: {e}")
+            logger.debug("筹码过滤器初始化跳过: {}", e)
+        # v0.6.2 另类 Alpha 因子过滤器（事件驱动信号增强）
+        self._altalpha_filter: AltAlphaFilter | None = None
+        if altalpha_filter is not None:
+            self._altalpha_filter = altalpha_filter
+        else:
+            try:
+                cfg_aa = gugu_config.get_config()
+                if hasattr(cfg_aa, "altalpha_filter"):
+                    aa_cfg = cfg_aa.altalpha_filter
+                    if getattr(aa_cfg, "enabled", True):
+                        self._altalpha_filter = AltAlphaFilter()
+                        logger.info("另类 Alpha 因子过滤器已启用")
+            except Exception as e:
+                logger.debug("另类 Alpha 过滤器初始化跳过: {}", e)
+
         self._industry_constraint = industry_constraint or IndustryConstraint()
         self._sector_rotation = sector_rotation or SectorRotation()
         self._hot_sectors_cache: dict[str, Any] | None = None
         self._hot_sectors_ts: float = 0.0
         self._exec_mode = exec_mode
+
+        # LLM 超时配置（用于 asyncio.wait_for，比 LLM 超时稍大以容纳重试）
+        self._llm_timeout = gugu_config.get_config().wisdom.llm_timeout + 5.0
 
         self._stage_detector = StageDetector()
         self._danger_detector = DangerSignalDetector()
@@ -129,12 +167,40 @@ class SignalPipeline:
                 self._perspective_min_composite = cfg.perspective.pass_threshold
                 self._perspective_min_single = cfg.perspective.min_perspective_score
                 logger.info(
-                    "十大视角过滤已启用 (综合≥%.1f, 单项≥%.1f)",
+                    "十大视角过滤已启用 (综合≥{}, 单项≥{})",
                     self._perspective_min_composite,
                     self._perspective_min_single,
                 )
         except Exception as e:
-            logger.debug(f"十大视角引擎初始化跳过: {e}")
+            logger.debug("十大视角引擎初始化跳过: {}", e)
+            self._scan_with_perspectives = False  # P0-2 修复：异常时重置标志
+
+        # 过滤链拒绝统计（每轮扫描重置，用于日志输出）
+        self._filter_stats: dict[str, int] = defaultdict(int)
+        self._filter_scan_count: int = 0
+
+    def _inc_filter(self, step_name: str) -> None:
+        """记录某过滤步骤的拒绝次数。"""
+        self._filter_stats[step_name] += 1
+
+    def _log_filter_stats(self) -> None:
+        """输出本轮扫描的过滤链拒绝统计。"""
+        if self._filter_scan_count == 0:
+            return
+        total_rejected = sum(self._filter_stats.values())
+        if total_rejected == 0:
+            return
+        logger.info(
+            "过滤链统计: 扫描{}只, {}步拒绝{}次",
+            self._filter_scan_count,
+            len(self._filter_stats),
+            total_rejected,
+        )
+        for step, cnt in sorted(self._filter_stats.items(), key=lambda x: -x[1]):
+            pct = cnt / self._filter_scan_count * 100
+            logger.info("   {:<20s}: {:>3d}次 ({:.1f}%)", step, cnt, pct)
+        self._filter_stats.clear()
+        self._filter_scan_count = 0
 
     async def process(
         self,
@@ -149,31 +215,15 @@ class SignalPipeline:
         regime: str | None = None,
     ) -> dict | None:
         try:
+            self._filter_scan_count += 1
             signal = self._router.route(df, symbol, name=meta.get("name", ""), regime=regime)
             if not signal:
+                self._inc_filter("信号路由")
                 return None
 
-            signal["has_position"] = symbol in portfolio
-
-            # P0 修复：无持仓卖出硬检查（任何模式下都拦截，防止对空仓发卖出信号）
-            if signal["direction"] == "sell" and not signal["has_position"]:
-                logger.debug(f"{symbol} 无持仓，过滤卖出信号")
+            # 基础信号验证（无持仓卖出、停牌、ST股票）
+            if self._validate_signal_basic(signal, symbol, portfolio, meta):
                 return None
-
-            # P0 修复：停牌股票硬拦截（任何模式、任何方向都不发信号）
-            is_suspended = bool(meta.get("is_suspended", False))
-            if is_suspended:
-                logger.debug(f"{symbol} 停牌，过滤信号")
-                return None
-
-            # P0 修复：ST股票买入拦截
-            is_st = bool(meta.get("is_st", False))
-            signal["is_st"] = is_st
-            signal["is_suspended"] = is_suspended
-            if is_st and signal["direction"] == "buy":
-                logger.info(f"{symbol} 是ST股票，拦截买入信号")
-                signal["wisdom_filtered"] = True
-                signal["filter_reason"] = "ST股票不建议买入"
 
             # V5框架集成：Golden-Ratio军规检查（买入信号专用）
             # 军规线0.5破位 → 禁止新建仓（趋势已破坏）
@@ -182,14 +232,17 @@ class SignalPipeline:
                     market_cap = meta.get("market_cap")
                     gr = calc_golden_ratio(df, market_cap=market_cap)
                     if gr and gr.military_rule_broken:
+                        self._inc_filter("gr_military_rule")
                         signal["wisdom_filtered"] = True
                         signal["filter_reason"] = (
                             f"GR军规破位({gr.current_callback_pct:.1f}%回调)，禁止新建仓"
                         )
                         signal["golden_ratio"] = gr.to_dict()
                         logger.info(
-                            f"{symbol} GR军规破位: {gr.action_zone}, "
-                            f"回调{gr.current_callback_pct:.1f}%，拦截买入"
+                            "{} GR军规破位: {}, " "回调{:.1f}%，拦截买入",
+                            symbol,
+                            gr.action_zone,
+                            gr.current_callback_pct,
                         )
                     elif gr:
                         signal["golden_ratio"] = gr.to_dict()
@@ -198,470 +251,292 @@ class SignalPipeline:
                                 signal.get("confidence", 0.7) * gr.discount_factor
                             )
                 except Exception:
-                    logger.debug(f"{symbol} GR计算异常，跳过军规检查", exc_info=True)
+                    logger.debug("{} GR计算异常，跳过军规检查", symbol, exc_info=True)
 
-            signal["prev_close"] = float(df.iloc[-2]["close"]) if len(df) >= 2 else None
-            # 保留 name：API 有效就用 API 的，API 脤数据（等于代码）就留给 formatter 的 fallback 表解析
-            # 不再清空为 ""，避免下游 fallback 表查不到时只显示代码
-            raw_name = signal.get("name") or meta.get("name", "")
-            # 清洗 API 脤数据中的空白字符（如 '五 粮 液' → '五粮液'）
-            if raw_name:
-                raw_name = "".join(raw_name.split())
-            if raw_name and raw_name != signal["symbol"]:
-                signal["name"] = raw_name
-            else:
-                # API 脤数据/空：用本地映射表兜底（formatter 也会再查一次）
-                from gugu.data.stock_names import lookup_stock_name
-
-                local_name = lookup_stock_name(signal["symbol"])
-                signal["name"] = local_name  # 查不到为 ""，formatter 会 fallback 到代码
-
-            signal["price"] = float(df.iloc[-1]["close"])
-            signal["price_is_realtime"] = False
-            signal["price_note"] = ""
-            if rt_all is not None and not rt_all.empty:
-                try:
-                    row = rt_all[rt_all["symbol"] == symbol]
-                    if not row.empty:
-                        rt_price = float(row.iloc[0]["price"])
-                        if rt_price > 0:
-                            signal["price"] = rt_price
-                            signal["price_is_realtime"] = True
-                            signal["price_note"] = ""
-                except Exception:
-                    pass
-            # 非实时价格标注（不丢弃信号）：
-            # - signal_only模式：标注为参考价，正常推送（盘前/盘后分析用）
-            # - paper/live模式：标注为非实时，由wisdom层决定是否仅观察不下单
-            if not signal["price_is_realtime"]:
-                signal["price_note"] = "⚠️ 非实时价格（实时行情获取失败，使用最新收盘价）"
-                logger.info(
-                    f"{symbol} 实时行情获取失败，使用历史收盘价 price={signal['price']:.2f}（非实时）"
-                )
-
-            signal["suggested_position_ratio"] = budget.single_limit
-            signal["has_position"] = symbol in portfolio
-
-            # P0 修复：信号数据合理性校验（防止错误数据发送飞书）
-            price = signal.get("price", 0)
-            confidence = signal.get("confidence")
-            if price <= 1.0:
-                logger.warning(
-                    f"{symbol} 信号价格异常 price={price}，丢弃该信号。"
-                    f" name={meta.get('name', '')} df_close={float(df.iloc[-1]['close']) if len(df) > 0 else 'N/A'}"
-                    f" rt_available={rt_all is not None and not rt_all.empty}"
-                )
+            #  enrich signal with price, name, and basic context
+            if self._enrich_signal_with_price_and_name(
+                signal, symbol, df, meta, rt_all, budget, portfolio, account
+            ):
                 return None
-            # 非实时价格不再直接丢弃，而是标注后继续
-            # （原逻辑：实时行情失败直接丢弃 → 新逻辑：使用历史价标注非实时）
-            if confidence is None or confidence <= 0.0:
-                logger.warning(f"{symbol} 信号置信度无效 confidence={confidence}，丢弃该信号")
-                return None
-            if symbol in portfolio and account.total_value > 0:
-                pos = portfolio[symbol]
-                signal["current_position_ratio"] = (
-                    pos.quantity * pos.current_price / account.total_value
+
+            # 初始化数据质量和市场上下文
+            if "data_quality" not in signal:
+                signal["data_quality"] = (
+                    "fresh"
+                    if signal.get("price_is_realtime") and not self._dm.is_degraded
+                    else "stale"
                 )
-            else:
-                signal["current_position_ratio"] = 0.0
-
-            signal["market_context"] = {
-                "data_source": "degraded" if self._dm.is_degraded else "normal",
-                "portfolio_count": len(portfolio),
-                "cash_ratio": (
-                    account.cash / account.total_value if account.total_value > 0 else 1.0
-                ),
-                "regime": regime or "",
-            }
-
-            # 阶段判断 + 危险信号（轻量，每次执行）
-            stage_result = self._stage_detector.detect(df)
-            signal["stage"] = {
-                "stage": stage_result.stage.value,
-                "confidence": stage_result.confidence,
-                "description": stage_result.description,
-                "suggestion": stage_result.suggestion,
-            }
-            logger.info(
-                f"{symbol} 阶段判断: {stage_result.stage.value} "
-                f"(置信度 {stage_result.confidence:.2f}) — {stage_result.suggestion}"
+            signal["data_timestamp"] = signal.get("data_timestamp", pd.Timestamp.now().isoformat())
+            signal["data_sources"] = signal.get(
+                "data_sources", ["realtime"] if signal.get("price_is_realtime") else ["history"]
             )
+            self._init_market_context(signal, regime, portfolio, account)
 
-            danger_result = self._danger_detector.detect(df, prev_close=signal.get("prev_close"))
-            signal["danger_signals"] = {
-                "signals": danger_result.signals,
-                "severity": danger_result.severity,
-                "description": danger_result.description,
-                "action": danger_result.action,
-            }
-            if danger_result.has_signal and danger_result.severity in ("medium", "high"):
-                logger.warning(
-                    f"{symbol} 危险信号: {danger_result.signals}, 严重程度={danger_result.severity}"
-                )
-                if signal["direction"] == "buy":
-                    signal["wisdom_filtered"] = True
-                    signal["filter_reason"] = f"危险信号: {danger_result.description}"
+            # P1修复：盘中前视偏差防护
+            is_intraday = rt_all is not None and not rt_all.empty and pd.Timestamp.now().hour < 15
+            df_for_analysis = df.iloc[:-1] if is_intraday and len(df) > 60 else df
 
-            # 量价背离检测（《炒股的智慧》量价背离卖出）
-            # 对所有信号检测：买入遇背离应拦截（上涨乏力），卖出遇背离应增强
-            try:
-                div_result = self._divergence_detector.detect(df)
-                signal["divergence"] = div_result
-                if div_result["signals"]:
-                    logger.warning(f"{symbol} 量价背离检测: {', '.join(div_result['signals'])}")
-                    if signal["direction"] == "buy":
-                        # 量价背离说明上涨乏力，拦截买入
-                        signal["wisdom_filtered"] = True
-                        if not signal.get("filter_reason"):
-                            signal["filter_reason"] = (
-                                f"量价背离: {', '.join(div_result['signals'])}"
-                            )
-                    elif signal["direction"] == "sell":
-                        # 量价背离增强卖出信号置信度
-                        signal["confidence"] = min(1.0, float(signal.get("confidence", 0.5)) + 0.15)
-                        if signal.get("reason"):
-                            signal["reason"] += f"；量价背离({', '.join(div_result['signals'])})"
-            except Exception as e:
-                logger.warning(f"量价背离检测失败 {symbol}: {e}")
-                signal["divergence"] = {"error": str(e)}
+            # 阶段判断 + 危险信号 + 量价背离 + 周线趋势
+            self._detect_stage_and_danger(signal, symbol, df, df_for_analysis)
 
-            if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
-                try:
-                    weekly_trend = self._check_weekly_trend(df)
-                    signal["multi_period"] = weekly_trend
-                    if not weekly_trend.get("weekly_aligned", True):
-                        logger.info(
-                            f"{symbol} 周线趋势 {weekly_trend.get('weekly_trend', '?')} "
-                            f"与日线信号方向不一致，标记为周线背离"
-                        )
-                        signal["weekly_misaligned"] = True
-                        if not signal.get("filter_reason"):
-                            signal["filter_reason"] = (
-                                f"周线趋势 {weekly_trend.get('weekly_trend', '?')}"
-                                f"与买入信号方向不一致"
-                            )
-                except Exception as e:
-                    logger.debug(f"多周期趋势判断失败: {e}")
-                    signal["multi_period"] = {"error": str(e)}
-            elif signal["direction"] == "sell":
-                # 卖出信号也计算周线趋势（用于通知卡片展示上下文，不做过滤）
-                try:
-                    weekly_trend = self._check_weekly_trend(df)
-                    signal["multi_period"] = weekly_trend
-                except Exception as e:
-                    logger.debug(f"卖出信号多周期趋势判断失败: {e}")
-                    signal["multi_period"] = {"error": str(e)}
+            perspective_result = None
 
             # signal_only 模式：跳过 LLM 异步调用（降低 cost 和阻塞），但仍执行 Wisdom 硬编码 fallback
-            # P0 修复：必须获取止损价/止盈价/仓位建议，否则新手买入信号无止损违反"强制止损"铁律
             if self._exec_mode == "signal_only":
-                # signal_only 模式下，不对买入信号做硬过滤（让用户自行判断）
-                # 但保留危险信号标记，用于通知时提醒用户
-                # 买入和卖出信号都附加基本面数据，保证通知卡片数据完整
-                try:
-                    fund_result = self._fundamental_filter.check(symbol)
-                    signal["fundamental"] = fund_result
-                except Exception as e:
-                    logger.debug(f"signal_only 基本面数据获取失败 {symbol}: {e}")
-                # P0 修复：调用 Wisdom 硬编码 fallback 获取止损价/止盈价/仓位建议
-                # 不调用 LLM 异步接口，避免 cost 和阻塞，但保留风控关键字段
-                try:
-                    signal["_exec_mode"] = self._exec_mode
-                    fallback = self._wisdom._advise_fallback(signal)
-                    _wisdom_keys = (
-                        "wisdom_decision",
-                        "wisdom",
-                        "wisdom_filtered",
-                        "filter_reason",
-                        "suggested_position_ratio",
-                        "stop_loss_price",
-                        "take_profit",
-                        "conflict_resolution",
-                        "mentor_perspectives",
-                    )
-                    for _k in _wisdom_keys:
-                        if _k in fallback:
-                            signal[_k] = fallback[_k]
-                    signal["llm_pending"] = False
-                except Exception as e:
-                    logger.warning(f"signal_only Wisdom fallback 失败 {symbol}: {e}")
-                    signal["llm_pending"] = False
-                # signal_only 模式：附加视角评分数据（不过滤，仅用于通知卡片展示）
-                if self._scan_with_perspectives:
-                    try:
-                        ctx = build_context_from_signal(signal)
-                        result = self._perspective_engine.analyze(ctx)  # type: ignore[union-attr]
-                        attach_perspective_to_signal(signal, result)
-                        signal["perspective_check"] = {
-                            "composite_score": result.composite_score,
-                            "min_score": result.min_score,
-                            "passed": result.passed,
-                            "fatal_count": result.fatal_count,
-                            "verdict": result.overall_verdict,
-                        }
-                    except Exception as e:
-                        logger.debug(f"signal_only 视角分析失败 {symbol}: {e}")
-                logger.info(
-                    f"信号(仅通知): {signal['symbol']} {signal['direction']} "
-                    f"置信度 {signal['confidence']} 策略 {signal['strategies']} "
-                    f"止损={signal.get('stop_loss_price', 0)}"
+                return await self._run_signal_only_chain(
+                    signal, symbol, portfolio, perspective_result
                 )
-                # P1修复：signal_only模式止损价有效性校验（强制止损铁律）
-                sl = signal.get("stop_loss_price", 0)
-                price = signal.get("price", 0)
-                if price > 0 and (sl <= 0 or sl >= price):
-                    signal["stop_loss_price"] = round(price * 0.93, 2)  # 默认7%止损
-                    logger.warning(
-                        f"signal_only {signal['symbol']} 止损价无效(={sl})，已设为默认7%: {signal['stop_loss_price']}"
-                    )
-                return signal
 
             # ===== 以下为 paper/live 模式完整过滤链 =====
-
-            # 3.6 十大视角质量门禁（基于认知评分过滤低质量信号）
-            # 只在非 signal_only 模式下生效：综合评分低于阈值或有致命缺陷的信号被拦截
-            if self._scan_with_perspectives and not signal.get("wisdom_filtered"):
-                try:
-                    ctx = build_context_from_signal(signal)
-                    result = self._perspective_engine.analyze(ctx)  # type: ignore[union-attr]
-                    # 将视角结果附加到信号（用于通知卡片和历史记录）
-                    attach_perspective_to_signal(signal, result)
-                    signal["perspective_check"] = {
-                        "composite_score": result.composite_score,
-                        "min_score": result.min_score,
-                        "passed": result.passed,
-                        "fatal_count": result.fatal_count,
-                        "verdict": result.overall_verdict,
-                    }
-                    if not result.passed:
-                        logger.info(
-                            f"{symbol} 视角过滤: 综合{result.composite_score:.1f} "
-                            f"最低{result.min_score:.1f} 致命{result.fatal_count}条 — {result.overall_verdict}"
-                        )
-                        if result.fatal_count > 0:
-                            signal["wisdom_filtered"] = True
-                            signal["filter_reason"] = (
-                                f"视角过滤: {result.overall_verdict} "
-                                f"(致命{result.fatal_count}条/最低{result.min_score:.1f})"
-                            )
-                    else:
-                        logger.debug(
-                            f"{symbol} 视角通过: 综合{result.composite_score:.1f} "
-                            f"最低{result.min_score:.1f}"
-                        )
-                except Exception as e:
-                    logger.debug(f"视角质量检查失败 {symbol}: {e}")
-                    # 检查失败不影响信号
-
-            # 1. 基本面过滤（仅买入信号）
-            if signal["direction"] == "buy":
-                fund_result = self._fundamental_filter.check(symbol)
-                signal["fundamental"] = fund_result
-                if not fund_result["pass"]:
-                    logger.info(f"{symbol} 基本面过滤: {', '.join(fund_result['reasons'])}")
-                    signal["wisdom_filtered"] = True
-                    signal["filter_reason"] = f"基本面: {', '.join(fund_result['reasons'])}"
-
-            # 2. 资金流过滤（仅买入信号，数据缺失时默认放行）
-            if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
-                flow_result = await self._money_flow_filter.check(symbol)
-                signal["money_flow"] = flow_result
-                if not flow_result["pass"]:
-                    if flow_result.get("data_missing"):
-                        logger.debug(f"{symbol} 资金流数据缺失，默认放行")
-                    else:
-                        logger.info(f"{symbol} 资金流过滤: {', '.join(flow_result['reasons'])}")
-                        signal["wisdom_filtered"] = True
-                        signal["filter_reason"] = f"资金流: {', '.join(flow_result['reasons'])}"
-
-            # 2.2 板块轮动感知
-            if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
-                try:
-                    sector_check = await self._check_sector_rotation(symbol)
-                    signal["sector_check"] = sector_check
-                    if sector_check.get("is_hot"):
-                        logger.info(
-                            f"{symbol} 所属板块 {sector_check.get('industry', '?')} 是热点板块"
-                        )
-                    elif sector_check.get("industry"):
-                        logger.info(
-                            f"{symbol} 所属板块 {sector_check.get('industry', '?')} "
-                            f"{'是冷门板块' if sector_check.get('is_cold') else '非热点'}"
-                        )
-                except Exception as e:
-                    logger.debug(f"板块轮动检查失败 {symbol}: {e}")
-                    signal["sector_check"] = {"error": str(e)}
-
-            # 2.3 高低切换板块轮动过滤（v0.4.5 新增）
-            # 高位板块（涨幅大+资金流出）→ 拒绝买入，不追高
-            # 低位板块（跌幅深+资金流入）→ 放行并标记，适合低吸
-            if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
-                try:
-                    hl_check = await self._sector_rotation.check_high_low_filter(symbol)
-                    signal["high_low_check"] = hl_check
-                    if not hl_check.get("allow_buy", True):
-                        logger.warning(f"{symbol} 高低切换拦截: {hl_check.get('reason', '')}")
-                        signal["wisdom_filtered"] = True
-                        signal["filter_reason"] = f"高低切换: {hl_check.get('reason', '')}"
-                    elif hl_check.get("is_undervalued"):
-                        logger.info(
-                            f"{symbol} 所属板块 {hl_check.get('sector', '?')} "
-                            f"处于低位+资金流入，适合低吸"
-                        )
-                except Exception as e:
-                    logger.debug(f"高低切换检查失败 {symbol}: {e}")
-
-            # 2.4 筹码集中度过滤（v0.5.0 新增，仅买入信号）
-            # 股东户数季度披露，作为慢变量过滤器：
-            # - 避雷针信号（户数增 > 30%）→ 拒绝买入
-            # - 潜伏者信号（户数降 > 20%）→ 置信度加成
-            if (
-                signal["direction"] == "buy"
-                and not signal.get("wisdom_filtered")
-                and self._holder_concentration_filter is not None
-            ):
-                try:
-                    hc_result = await self._holder_concentration_filter.check(symbol)
-                    signal["holder_concentration"] = hc_result
-                    if not hc_result.get("pass", True):
-                        logger.warning(
-                            f"{symbol} 筹码集中度过滤: {hc_result.get('label', '')} — "
-                            f"{', '.join(hc_result.get('reasons', []))}"
-                        )
-                        signal["wisdom_filtered"] = True
-                        signal["filter_reason"] = (
-                            f"筹码结构: {hc_result.get('label', '')} — "
-                            f"{', '.join(hc_result.get('reasons', []))}"
-                        )
-                    elif hc_result.get("label") == "潜伏者":
-                        # 潜伏者信号：置信度加成
-                        boost = 0.15
-                        signal["confidence"] = min(
-                            1.0, float(signal.get("confidence", 0.5)) + boost
-                        )
-                        logger.info(f"{symbol} 筹码潜伏者信号：置信度 +{boost:.2f}")
-                except Exception as e:
-                    logger.debug(f"筹码集中度检查失败 {symbol}: {e}")
-
-            # 2.5 向下摊平检查
-            if (
-                signal["direction"] == "buy"
-                and not signal.get("wisdom_filtered")
-                and signal.get("has_position")
-            ):
-                pos = portfolio[symbol]
-                avg_down_result = self._no_avg_down_checker.check(
-                    symbol=symbol,
-                    has_position=True,
-                    cost_price=getattr(pos, "avg_cost", 0) or getattr(pos, "cost_price", 0),
-                    current_price=signal.get("price", 0),
-                    quantity=getattr(pos, "quantity", 0),
-                    lowest_price_since_position=float(getattr(pos, "lowest_price", 0) or 0),
-                )
-                signal["avg_down_check"] = {
-                    "allowed": avg_down_result.allowed,
-                    "reason": avg_down_result.reason,
-                    "profit_pct": avg_down_result.profit_pct,
-                }
-                if not avg_down_result.allowed:
-                    logger.warning(f"{symbol} 向下摊平拦截: {avg_down_result.reason}")
-                    signal["wisdom_filtered"] = True
-                    signal["filter_reason"] = f"向下摊平: {avg_down_result.reason}"
-
-            # 3. 行业分散约束
-            if (
-                signal["direction"] == "buy"
-                and not signal.get("wisdom_filtered")
-                and not signal.get("has_position")
-            ):
-                ind_result = self._industry_constraint.check_buy(
-                    symbol,
-                    portfolio,
-                    industry=signal.get("fundamental", {}).get("industry", ""),
-                )
-                signal["industry_check"] = ind_result
-                if not ind_result["allowed"]:
-                    logger.info(f"{symbol} 行业约束过滤: {ind_result['reason']}")
-                    signal["wisdom_filtered"] = True
-                    signal["filter_reason"] = f"行业约束: {ind_result['reason']}"
-
-            # 3.5 四阶段入场过滤
-            # P0 修复：DOWNTREND 阶段也拦截买入（原逻辑只拦 FRENZY/FINAL）
-            # 下跌趋势中接飞刀 = 违反《炒股的智慧》"不接飞刀"铁律
-            if (
-                signal["direction"] == "buy"
-                and not signal.get("wisdom_filtered")
-                and stage_result.stage
-                in (MarketStage.FRENZY, MarketStage.FINAL, MarketStage.DOWNTREND)
-            ):
-                logger.warning(f"{symbol} 阶段过滤: {stage_result.stage.value}，不建议入场")
-                signal["wisdom_filtered"] = True
-                signal["filter_reason"] = (
-                    f"阶段过滤: {stage_result.description}。{stage_result.suggestion}"
-                )
+            # 原则：保留安全保护过滤（ST/停牌/危险信号/四阶段），
+            # 放宽数据依赖和分析类过滤，让更多信号到达执行层
+            perspective_result = await self._run_paper_live_chain(
+                signal, symbol, portfolio, perspective_result
+            )
 
             # 4. 市场状态仓位修正（已在 budget.single_limit 中体现）
             # 5. Wisdom 决策层（await + 超时保护，确保通知前决策就绪）
             # advise_async 内部已实现 LLM→冲突裁决→硬编码规则三级降级，
             # 此处仅加超时保护防止 LLM 长时间阻塞；超时则降级到硬编码 fallback。
-            # advise_async 返回浅拷贝，需把 Wisdom 决策字段合并回原 signal。
-            _wisdom_keys = (
-                "wisdom_decision",
-                "wisdom",
-                "wisdom_filtered",
-                "filter_reason",
-                "suggested_position_ratio",
-                "stop_loss_price",
-                "take_profit",
-                "conflict_resolution",
-                "mentor_perspectives",
-            )
-            already_filtered = bool(signal.get("wisdom_filtered", False))
-            signal["_exec_mode"] = self._exec_mode
-            try:
-                if not already_filtered:
-                    wisdom_signal = await asyncio.wait_for(
-                        self._wisdom.advise_async(signal), timeout=15.0
-                    )
-                    for _k in _wisdom_keys:
-                        if _k in wisdom_signal:
-                            if _k == "wisdom_filtered" and already_filtered:
-                                continue
-                            signal[_k] = wisdom_signal[_k]
-                else:
-                    fallback = self._wisdom._advise_fallback(signal)
-                    for _k in ("stop_loss_price", "take_profit", "suggested_position_ratio"):
-                        if _k in fallback:
-                            signal[_k] = fallback[_k]
-                signal["llm_pending"] = False
-            except TimeoutError:
-                logger.warning(f"[wisdom] {symbol} LLM 决策超时(15s)，降级到硬编码 fallback")
-                fallback = self._wisdom._advise_fallback(signal)
-                for _k in _wisdom_keys:
-                    if _k in fallback:
-                        if _k == "wisdom_filtered" and already_filtered:
-                            continue
-                        signal[_k] = fallback[_k]
-                signal["llm_pending"] = False
-            except Exception as e:
-                logger.warning(f"[wisdom] {symbol} Wisdom 决策异常: {e}，降级到硬编码 fallback")
-                fallback = self._wisdom._advise_fallback(signal)
-                for _k in _wisdom_keys:
-                    if _k in fallback:
-                        if _k == "wisdom_filtered" and already_filtered:
-                            continue
-                        signal[_k] = fallback[_k]
-                signal["llm_pending"] = False
+            await self._run_wisdom_decision(signal, symbol, perspective_result)
 
             logger.info(
-                f"信号: {signal['symbol']} {signal['direction']} "
-                f"置信度 {signal['confidence']} 策略 {signal['strategies']}"
+                "信号: {} {} " "置信度 {} 策略 {}",
+                signal["symbol"],
+                signal["direction"],
+                signal["confidence"],
+                signal["strategies"],
             )
+            self._log_filter_stats()
             return signal
 
         except Exception as e:
-            logger.error(f"扫描 {symbol} 失败: {e}")
+            logger.error("扫描 {} 失败: {}", symbol, e)
             return None
+
+    def _validate_signal_basic(
+        self, signal: dict[str, Any], symbol: str, portfolio: dict[str, Any], meta: dict[str, Any]
+    ) -> bool:
+        """基础信号验证：无持仓卖出、停牌、ST股票。
+
+        Returns:
+            True if signal should be discarded, False if it passes validation.
+        """
+        # P0 修复：无持仓卖出硬检查（任何模式下都拦截，防止对空仓发卖出信号）
+        if signal["direction"] == "sell" and signal["symbol"] not in portfolio:
+            self._inc_filter("sell_no_position")
+            logger.debug("{} 无持仓，过滤卖出信号", symbol)
+            return True
+
+        # P0 修复：停牌股票硬拦截（任何模式、任何方向都不发信号）
+        is_suspended = bool(meta.get("is_suspended", False))
+        if is_suspended:
+            self._inc_filter("suspended")
+            logger.debug("{} 停牌，过滤信号", symbol)
+            return True
+
+        # P0 修复：ST股票买入拦截
+        is_st = bool(meta.get("is_st", False))
+        signal["is_st"] = is_st
+        signal["is_suspended"] = is_suspended
+        if is_st and signal["direction"] == "buy":
+            self._inc_filter("st_stock")
+            logger.info("{} 是ST股票，拦截买入信号", symbol)
+            signal["wisdom_filtered"] = True
+            signal["filter_reason"] = "ST股票不建议买入"
+
+        return False
+
+    def _enrich_signal_with_price_and_name(
+        self,
+        signal: dict[str, Any],
+        symbol: str,
+        df: pd.DataFrame,
+        meta: dict[str, Any],
+        rt_all: pd.DataFrame | None,
+        budget: PositionBudget,
+        portfolio: dict[str, Any],
+        account: Any,
+    ) -> bool:
+        """enrich signal with price, name, and basic context.
+
+        Returns:
+            True if signal should be discarded (invalid data), False if it passes.
+        """
+        signal["prev_close"] = float(df.iloc[-2]["close"]) if len(df) >= 2 else None
+
+        # 保留 name：API 有效就用 API 的，API 胖数据（等于代码）就留给 formatter 的 fallback 表解析
+        raw_name = signal.get("name") or meta.get("name", "")
+        if raw_name:
+            raw_name = "".join(raw_name.split())
+        if raw_name and raw_name != signal["symbol"]:
+            signal["name"] = raw_name
+        else:
+            from gugu.data.stock_names import lookup_stock_name
+
+            signal["name"] = lookup_stock_name(signal["symbol"])
+
+        signal["price"] = float(df.iloc[-1]["close"])
+        signal["price_is_realtime"] = False
+        signal["price_note"] = ""
+        if rt_all is not None and not rt_all.empty:
+            try:
+                row = rt_all[rt_all["symbol"] == symbol]
+                if not row.empty:
+                    rt_price = float(row.iloc[0]["price"])
+                    if rt_price > 0:
+                        signal["price"] = rt_price
+                        signal["price_is_realtime"] = True
+            except Exception:
+                pass
+
+        if not signal["price_is_realtime"]:
+            signal["price_note"] = "⚠️ 非实时价格（实时行情获取失败，使用最新收盘价）"
+
+        signal["suggested_position_ratio"] = budget.single_limit
+        signal["has_position"] = symbol in portfolio
+
+        # P0 修复：信号数据合理性校验
+        price = signal.get("price", 0)
+        confidence = signal.get("confidence")
+        if price <= 1.0:
+            self._inc_filter("price_invalid")
+            logger.warning("{} 信号价格异常 price={}，丢弃该信号。", symbol, price)
+            # P2-10: 记录被拒绝的信号到历史
+            signal["rejected"] = True
+            signal["reject_reason"] = f"价格异常 price={price}"
+            try:
+                record_signal_history(signal, None, None)
+            except Exception:
+                pass
+            return True
+        if confidence is None or confidence <= 0.0:
+            self._inc_filter("confidence_zero")
+            logger.warning("{} 信号置信度无效 confidence={}，丢弃该信号", symbol, confidence)
+            # P2-10: 记录被拒绝的信号到历史
+            signal["rejected"] = True
+            signal["reject_reason"] = f"置信度无效 confidence={confidence}"
+            try:
+                record_signal_history(signal, None, None)
+            except Exception:
+                pass
+            return True
+
+        if symbol in portfolio and account.total_value > 0:
+            pos = portfolio[symbol]
+            signal["current_position_ratio"] = (
+                pos.quantity * pos.current_price / account.total_value
+            )
+        else:
+            signal["current_position_ratio"] = 0.0
+
+        return False
+
+    def _init_market_context(
+        self, signal: dict[str, Any], regime: str | None, portfolio: dict[str, Any], account: Any
+    ) -> None:
+        """初始化市场上下文信息。"""
+        signal["market_context"] = {
+            "data_source": "degraded" if self._dm.is_degraded else "normal",
+            "data_quality": signal.get("data_quality", "fresh"),
+            "data_timestamp": signal.get("data_timestamp", pd.Timestamp.now().isoformat()),
+            "data_sources": signal.get(
+                "data_sources", ["realtime"] if signal.get("price_is_realtime") else ["history"]
+            ),
+            "portfolio_count": len(portfolio),
+            "cash_ratio": account.cash / account.total_value if account.total_value > 0 else 1.0,
+            "regime": regime or "",
+        }
+
+    def _detect_stage_and_danger(
+        self,
+        signal: dict[str, Any],
+        symbol: str,
+        df: pd.DataFrame,
+        df_for_analysis: pd.DataFrame,
+    ) -> None:
+        """阶段判断 + 危险信号 + 量价背离检测 + 周线趋势。"""
+        # 阶段判断 + 危险信号（轻量，每次执行）
+        stage_result = self._stage_detector.detect(df_for_analysis)
+        signal["stage"] = {
+            "stage": stage_result.stage.value,
+            "confidence": stage_result.confidence,
+            "description": stage_result.description,
+            "suggestion": stage_result.suggestion,
+        }
+        logger.info(
+            "{} 阶段判断: {} (置信度 {:.2f}) — {}",
+            symbol,
+            stage_result.stage.value,
+            stage_result.confidence,
+            stage_result.suggestion,
+        )
+
+        danger_result = self._danger_detector.detect(df, prev_close=signal.get("prev_close"))
+        signal["danger_signals"] = {
+            "signals": danger_result.signals,
+            "severity": danger_result.severity,
+            "description": danger_result.description,
+            "action": danger_result.action,
+        }
+        if danger_result.has_signal and danger_result.severity in ("medium", "high"):
+            logger.warning(
+                "{} 危险信号: {}, 严重程度={}",
+                symbol,
+                danger_result.signals,
+                danger_result.severity,
+            )
+            if signal["direction"] == "buy":
+                self._inc_filter("danger_signal")
+                signal["wisdom_filtered"] = True
+                signal["filter_reason"] = f"危险信号: {danger_result.description}"
+
+        # 量价背离检测
+        try:
+            div_result = self._divergence_detector.detect(df)
+            signal["divergence"] = div_result
+            if div_result["signals"]:
+                logger.warning("{} 量价背离检测: {}", symbol, ", ".join(div_result["signals"]))
+                if signal["direction"] == "buy":
+                    self._inc_filter("divergence")
+                    signal["wisdom_filtered"] = True
+                    if not signal.get("filter_reason"):
+                        signal["filter_reason"] = f"量价背离: {', '.join(div_result['signals'])}"
+                elif signal["direction"] == "sell":
+                    signal["confidence"] = min(1.0, float(signal.get("confidence", 0.5)) + 0.15)
+                    if signal.get("reason"):
+                        signal["reason"] += f"；量价背离({', '.join(div_result['signals'])})"
+        except Exception as e:
+            logger.warning("量价背离检测失败 {}: {}", symbol, e)
+            signal["divergence"] = {"error": str(e)}
+
+        # 周线趋势判断
+        if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
+            try:
+                weekly_trend = self._check_weekly_trend(df_for_analysis)
+                signal["multi_period"] = weekly_trend
+                if not weekly_trend.get("weekly_aligned", True):
+                    logger.info(
+                        "{} 周线趋势 {} 与日线信号方向不一致，标记为周线背离",
+                        symbol,
+                        weekly_trend.get("weekly_trend", "?"),
+                    )
+                    signal["weekly_misaligned"] = True
+                    if not signal.get("filter_reason"):
+                        signal["filter_reason"] = (
+                            f"周线趋势 {weekly_trend.get('weekly_trend', '?')}"
+                            f"与买入信号方向不一致"
+                        )
+            except Exception as e:
+                logger.debug("多周期趋势判断失败: {}", e)
+                signal["multi_period"] = {"error": str(e)}
+        elif signal["direction"] == "sell":
+            try:
+                weekly_trend = self._check_weekly_trend(df)
+                signal["multi_period"] = weekly_trend
+            except Exception as e:
+                logger.debug("卖出信号多周期趋势判断失败: {}", e)
+                signal["multi_period"] = {"error": str(e)}
 
     @staticmethod
     def _check_weekly_trend(df: pd.DataFrame) -> dict:
@@ -696,6 +571,474 @@ class SignalPipeline:
         except Exception:
             return {"weekly_trend": "unknown", "weekly_aligned": True}
 
+    async def _run_signal_only_chain(
+        self,
+        signal: dict[str, Any],
+        symbol: str,
+        portfolio: dict[str, Any],
+        perspective_result: Any,
+    ) -> dict[str, Any]:
+        """signal_only 模式的过滤链：仅附加数据，不拦截信号。
+
+        特点：
+        - 不对买入信号做硬过滤（让用户自行判断）
+        - 但保留危险信号标记，用于通知时提醒用户
+        - 买入和卖出信号都附加基本面数据，保证通知卡片数据完整
+        - P0 修复：调用 Wisdom 硬编码 fallback 获取止损价/止盈价/仓位建议
+        - v0.7.5 P0-2修复：signal_only 模式下十大视角不拦截信号
+        """
+        # 买入和卖出信号都附加基本面数据，保证通知卡片数据完整
+        try:
+            fund_result = self._fundamental_filter.check(symbol)
+            signal["fundamental"] = fund_result
+        except Exception as e:
+            logger.debug("signal_only 基本面数据获取失败 {}: {}", symbol, e)
+
+        # P0 修复：调用 Wisdom 硬编码 fallback 获取止损价/止盈价/仓位建议
+        # 不调用 LLM 异步接口，避免 cost 和阻塞，但保留风控关键字段
+        try:
+            signal["_exec_mode"] = self._exec_mode
+            fallback = self._wisdom.advise_fallback(signal)
+            _wisdom_keys = (
+                "wisdom_decision",
+                "wisdom",
+                "wisdom_filtered",
+                "filter_reason",
+                "suggested_position_ratio",
+                "stop_loss_price",
+                "take_profit",
+                "conflict_resolution",
+                "mentor_perspectives",
+            )
+            for _k in _wisdom_keys:
+                if _k in fallback:
+                    signal[_k] = fallback[_k]
+            if fallback.get("wisdom_filtered"):
+                self._inc_filter("wisdom_block")
+            signal["llm_pending"] = False
+        except Exception as e:
+            logger.warning("signal_only Wisdom fallback 失败 {}: {}", symbol, e)
+            signal["llm_pending"] = False
+
+        # P1修复：signal_only模式补齐过滤器（仅附加数据，不拦截信号）
+        if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
+            # 资金流过滤（仅附加数据）
+            try:
+                flow_result = await self._money_flow_filter.check(symbol)
+                signal["money_flow"] = flow_result
+            except Exception as e:
+                logger.debug("signal_only 资金流数据获取失败 {}: {}", symbol, e)
+            # 板块轮动（仅附加数据）
+            try:
+                sector_check = await self._check_sector_rotation(symbol)
+                signal["sector_check"] = sector_check
+            except Exception as e:
+                logger.debug("signal_only 板块轮动检查失败 {}: {}", symbol, e)
+            # 筹码集中度（仅附加数据）
+            if self._holder_concentration_filter is not None:
+                try:
+                    hc_result = await self._holder_concentration_filter.check(symbol)
+                    signal["holder_concentration"] = hc_result
+                except Exception as e:
+                    logger.debug("signal_only 筹码检查失败 {}: {}", symbol, e)
+            # 另类 Alpha 因子（仅附加数据）
+            if self._altalpha_filter is not None:
+                try:
+                    aa_result = await self._altalpha_filter.check(symbol)
+                    signal["altalpha"] = aa_result
+                    if aa_result.get("confidence_boost", 0) > 0:
+                        signal["confidence"] = min(
+                            1.0,
+                            float(signal.get("confidence", 0.5)) + aa_result["confidence_boost"],
+                        )
+                except Exception as e:
+                    logger.debug("signal_only 另类因子检查失败 {}: {}", symbol, e)
+            # 向下摊平检查（仅附加数据）
+            if signal.get("has_position"):
+                try:
+                    pos = portfolio[symbol]
+                    avg_down_result = self._no_avg_down_checker.check(
+                        symbol=symbol,
+                        has_position=True,
+                        cost_price=getattr(pos, "avg_cost", 0) or getattr(pos, "cost_price", 0),
+                        current_price=signal.get("price", 0),
+                        quantity=getattr(pos, "quantity", 0),
+                        lowest_price_since_position=float(getattr(pos, "lowest_price", 0) or 0),
+                    )
+                    signal["avg_down_check"] = {
+                        "allowed": avg_down_result.allowed,
+                        "reason": avg_down_result.reason,
+                        "profit_pct": avg_down_result.profit_pct,
+                    }
+                except Exception as e:
+                    logger.debug("signal_only 向下摊平检查失败 {}: {}", symbol, e)
+            # 行业约束（仅附加数据）
+            if not signal.get("has_position"):
+                try:
+                    ind_result = self._industry_constraint.check_buy(
+                        symbol,
+                        portfolio,
+                        industry=signal.get("fundamental", {}).get("industry", ""),
+                    )
+                    signal["industry_check"] = ind_result
+                except Exception as e:
+                    logger.debug("signal_only 行业约束检查失败 {}: {}", symbol, e)
+
+        # signal_only 模式：附加视角评分数据（不过滤，仅用于通知卡片展示）
+        # v0.7.5 P0-2修复：signal_only 模式下十大视角不拦截信号
+        if self._scan_with_perspectives:
+            try:
+                ctx = build_context_from_signal(signal)
+                result = self._perspective_engine.analyze(ctx)  # type: ignore[union-attr]
+                attach_perspective_to_signal(signal, result)
+                signal["perspective_check"] = {
+                    "composite_score": result.composite_score,
+                    "min_score": result.min_score,
+                    "passed": result.passed,
+                    "fatal_count": result.fatal_count,
+                    "verdict": result.overall_verdict,
+                }
+            except Exception as e:
+                logger.debug("signal_only 视角分析失败 {}: {}", symbol, e)
+                # v0.7.5 P0-2修复：signal_only 模式下视角分析失败不拦截
+                signal["perspective_check"] = {
+                    "composite_score": None,
+                    "min_score": None,
+                    "passed": None,
+                    "fatal_count": 0,
+                    "verdict": "分析失败（signal_only 模式不拦截）",
+                }
+
+        logger.info(
+            "信号(仅通知): {} {} 置信度 {} 策略 {} 止损={}",
+            signal["symbol"],
+            signal["direction"],
+            signal["confidence"],
+            signal["strategies"],
+            signal.get("stop_loss_price", 0),
+        )
+
+        # P1修复：signal_only模式止损价有效性校验（强制止损铁律）
+        sl = signal.get("stop_loss_price", 0)
+        price = signal.get("price", 0)
+        if price > 0 and (sl <= 0 or sl >= price):
+            signal["stop_loss_price"] = round(price * 0.93, 2)
+            logger.warning(
+                "signal_only {} 止损价无效(={})，已设为默认7%: {}",
+                signal["symbol"],
+                sl,
+                signal["stop_loss_price"],
+            )
+
+        # v0.7.5 P0-2修复：signal_only 模式不调用 evaluate_entry_gate（不拦截）
+        self._log_filter_stats()
+        return signal
+
+    async def _run_paper_live_chain(
+        self,
+        signal: dict[str, Any],
+        symbol: str,
+        portfolio: dict[str, Any],
+        perspective_result: Any,
+    ) -> None:
+        """paper/live 模式的过滤链（实盘精简版）。
+
+        原则：
+        - 保留安全保护过滤（ST/停牌/危险信号/四阶段）
+        - 放宽数据依赖和分析类过滤，让更多信号到达执行层
+        - 数据缺失时默认放行（实盘交易优先）
+        """
+        # 3.5 十大视角（仅附加数据，不过滤信号）
+        if self._scan_with_perspectives:
+            try:
+                ctx = build_context_from_signal(signal)
+                result = self._perspective_engine.analyze(ctx)  # type: ignore[union-attr]
+                attach_perspective_to_signal(signal, result)
+                signal["perspective_check"] = {
+                    "composite_score": result.composite_score,
+                    "min_score": result.min_score,
+                    "passed": result.passed,
+                    "fatal_count": result.fatal_count,
+                    "verdict": result.overall_verdict,
+                }
+                if result.fatal_count > 0:
+                    logger.info(
+                        "{} 视角警告(已放行): 综合{:.1f} 致命{}条 — {}",
+                        symbol,
+                        result.composite_score,
+                        result.fatal_count,
+                        result.overall_verdict,
+                    )
+            except Exception as e:
+                logger.debug("视角分析失败 {}: {}", symbol, e)
+                if signal["direction"] == "buy":
+                    self._inc_filter("perspective")
+                    signal["wisdom_filtered"] = True
+                    signal["filter_reason"] = "十大视角分析失败，缺少可信视角评分"
+
+        # 1. 基本面过滤（仅买入信号，数据不足时放行）
+        if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
+            fund_result = self._fundamental_filter.check(symbol)
+            signal["fundamental"] = fund_result
+            if not fund_result["pass"]:
+                if fund_result.get("data_missing"):
+                    logger.debug("{} 基本面数据缺失，默认放行（实盘交易优先）", symbol)
+                else:
+                    logger.info("{} 基本面过滤: {}", symbol, ", ".join(fund_result["reasons"]))
+                    self._inc_filter("fundamental")
+                    signal["wisdom_filtered"] = True
+                    signal["filter_reason"] = f"基本面: {', '.join(fund_result['reasons'])}"
+
+        # 2. 资金流过滤（仅买入信号，数据不足时放行）
+        if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
+            flow_result = await self._money_flow_filter.check(symbol)
+            signal["money_flow"] = flow_result
+            if not flow_result["pass"]:
+                if flow_result.get("data_missing"):
+                    logger.debug("{} 资金流数据缺失，默认放行（实盘交易优先）", symbol)
+                else:
+                    logger.info("{} 资金流过滤: {}", symbol, ", ".join(flow_result["reasons"]))
+                    self._inc_filter("money_flow")
+                    signal["wisdom_filtered"] = True
+                    signal["filter_reason"] = f"资金流: {', '.join(flow_result['reasons'])}"
+
+        # 2.2 板块轮动感知（仅附加数据，不过滤信号）
+        if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
+            try:
+                sector_check = await self._check_sector_rotation(symbol)
+                signal["sector_check"] = sector_check
+                if sector_check.get("is_hot"):
+                    logger.info(
+                        "{} 所属板块 {} 是热点板块",
+                        symbol,
+                        sector_check.get("industry", "?"),
+                    )
+            except Exception as e:
+                logger.debug("板块轮动检查失败 {}: {}", symbol, e)
+
+        # 2.3 高低切换（改为警告不拦截）
+        if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
+            try:
+                hl_check = await self._sector_rotation.check_high_low_filter(symbol)
+                signal["high_low_check"] = hl_check
+                if not hl_check.get("allow_buy", True):
+                    logger.info("{} 高低切换建议(已放行): {}", symbol, hl_check.get("reason", ""))
+                elif hl_check.get("is_undervalued"):
+                    logger.info("{} 板块低位+资金流入，适合低吸", symbol)
+            except Exception as e:
+                logger.debug("高低切换检查失败 {}: {}", symbol, e)
+
+        # 2.4 筹码集中度过滤（v0.5.0 新增，仅买入信号）
+        # 股东户数季度披露，作为慢变量过滤器：
+        # - 避雷针信号（户数增 > 30%）→ 拒绝买入
+        # - 潜伏者信号（户数降 > 20%）→ 置信度加成
+        if (
+            signal["direction"] == "buy"
+            and not signal.get("wisdom_filtered")
+            and self._holder_concentration_filter is not None
+        ):
+            try:
+                hc_result = await self._holder_concentration_filter.check(symbol)
+                signal["holder_concentration"] = hc_result
+                if not hc_result.get("pass", True):
+                    self._inc_filter("holder_concentration")
+                    logger.warning(
+                        "{} 筹码集中度过滤: {} — {}",
+                        symbol,
+                        hc_result.get("label", ""),
+                        ", ".join(hc_result.get("reasons", [])),
+                    )
+                    signal["wisdom_filtered"] = True
+                    signal["filter_reason"] = (
+                        f"筹码结构: {hc_result.get('label', '')} — "
+                        f"{', '.join(hc_result.get('reasons', []))}"
+                    )
+                elif hc_result.get("label") == "潜伏者":
+                    # 潜伏者信号：置信度加成
+                    boost = 0.15
+                    signal["confidence"] = min(1.0, float(signal.get("confidence", 0.5)) + boost)
+                    logger.info("{} 筹码潜伏者信号：置信度 +{:.2f}", symbol, boost)
+            except Exception as e:
+                logger.debug("筹码集中度检查失败 {}: {}", symbol, e)
+
+        # 2.45 另类 Alpha 因子过滤（v0.6.2 新增，仅买入信号）
+        # 事件驱动/行为金融信号增强：高评分提升 confidence，极低评分标记过滤
+        # 数据缺失时默认放行，避免阻塞已有策略信号
+        if (
+            signal["direction"] == "buy"
+            and not signal.get("wisdom_filtered")
+            and self._altalpha_filter is not None
+        ):
+            try:
+                aa_result = await self._altalpha_filter.check(symbol)
+                signal["altalpha"] = aa_result
+                if not aa_result.get("pass", True):
+                    self._inc_filter("altalpha")
+                    logger.info(
+                        "{} 另类因子过滤: {}", symbol, ", ".join(aa_result.get("reasons", []))
+                    )
+                    signal["wisdom_filtered"] = True
+                    signal["filter_reason"] = f"另类因子: {', '.join(aa_result.get('reasons', []))}"
+                elif aa_result.get("confidence_boost", 0) > 0:
+                    boost = aa_result["confidence_boost"]
+                    signal["confidence"] = min(1.0, float(signal.get("confidence", 0.5)) + boost)
+                    logger.info("{} 另类因子支撑：置信度 +{:.2f}", symbol, boost)
+            except Exception as e:
+                logger.debug("另类因子检查失败 {}: {}", symbol, e)
+
+        # 2.5 向下摊平检查
+        if (
+            signal["direction"] == "buy"
+            and not signal.get("wisdom_filtered")
+            and signal.get("has_position")
+        ):
+            pos = portfolio[symbol]
+            avg_down_result = self._no_avg_down_checker.check(
+                symbol=symbol,
+                has_position=True,
+                cost_price=getattr(pos, "avg_cost", 0) or getattr(pos, "cost_price", 0),
+                current_price=signal.get("price", 0),
+                quantity=getattr(pos, "quantity", 0),
+                lowest_price_since_position=float(getattr(pos, "lowest_price", 0) or 0),
+            )
+            signal["avg_down_check"] = {
+                "allowed": avg_down_result.allowed,
+                "reason": avg_down_result.reason,
+                "profit_pct": avg_down_result.profit_pct,
+            }
+            if not avg_down_result.allowed:
+                self._inc_filter("no_avg_down")
+                logger.warning("{} 向下摊平拦截: {}", symbol, avg_down_result.reason)
+                signal["wisdom_filtered"] = True
+                signal["filter_reason"] = f"向下摊平: {avg_down_result.reason}"
+
+        # 3. 行业分散约束
+        if (
+            signal["direction"] == "buy"
+            and not signal.get("wisdom_filtered")
+            and not signal.get("has_position")
+        ):
+            ind_result = self._industry_constraint.check_buy(
+                symbol,
+                portfolio,
+                industry=signal.get("fundamental", {}).get("industry", ""),
+            )
+            signal["industry_check"] = ind_result
+            if not ind_result["allowed"]:
+                self._inc_filter("industry_constraint")
+                logger.info("{} 行业约束过滤: {}", symbol, ind_result["reason"])
+                signal["wisdom_filtered"] = True
+                signal["filter_reason"] = f"行业约束: {ind_result['reason']}"
+
+        # 3.5 四阶段入场过滤
+        # P0 修复：DOWNTREND 阶段也拦截买入（原逻辑只拦 FRENZY/FINAL）
+        # 下跌趋势中接飞刀 = 违反《炒股的智慧》"不接飞刀"铁律
+        stage_result = signal.get("stage", {})
+        stage_stage = stage_result.get("stage", "")
+        if (
+            signal["direction"] == "buy"
+            and not signal.get("wisdom_filtered")
+            and stage_stage in ("frenzy", "final", "downtrend")
+        ):
+            self._inc_filter("stage_filter")
+            logger.warning("{} 阶段过滤: {}，不建议入场", symbol, stage_stage)
+            signal["wisdom_filtered"] = True
+            signal["filter_reason"] = (
+                f"阶段过滤: {stage_result.get('description', '')}。"
+                f"{stage_result.get('suggestion', '')}"
+            )
+
+    async def _run_wisdom_decision(
+        self,
+        signal: dict[str, Any],
+        symbol: str,
+        perspective_result: Any,
+    ) -> None:
+        """Wisdom 决策层：LLM 决策 + 超时保护 + 入场判定。
+
+        功能：
+        - advise_async 内部已实现 LLM→冲突裁决→硬编码规则三级降级
+        - 此处仅加超时保护防止 LLM 长时间阻塞；超时则降级到硬编码 fallback
+        - advise_async 返回浅拷贝，需把 Wisdom 决策字段合并回原 signal
+        - 买入信号额外执行 evaluate_entry_gate 综合入场判定
+        """
+        # Wisdom 决策字段列表
+        _wisdom_keys = (
+            "wisdom_decision",
+            "wisdom",
+            "wisdom_filtered",
+            "filter_reason",
+            "suggested_position_ratio",
+            "stop_loss_price",
+            "take_profit",
+            "conflict_resolution",
+            "mentor_perspectives",
+        )
+        already_filtered = bool(signal.get("wisdom_filtered", False))
+        signal["_exec_mode"] = self._exec_mode
+
+        try:
+            if not already_filtered:
+                # LLM 异步决策（带超时保护）
+                wisdom_signal = await asyncio.wait_for(
+                    self._wisdom.advise_async(signal), timeout=self._llm_timeout
+                )
+                for _k in _wisdom_keys:
+                    if _k in wisdom_signal:
+                        if _k == "wisdom_filtered" and already_filtered:
+                            continue
+                        signal[_k] = wisdom_signal[_k]
+                if wisdom_signal.get("wisdom_filtered") and not already_filtered:
+                    self._inc_filter("wisdom_block")
+            else:
+                # 已过滤信号仅获取止损/止盈/仓位建议
+                fallback = self._wisdom.advise_fallback(signal)
+                for _k in ("stop_loss_price", "take_profit", "suggested_position_ratio"):
+                    if _k in fallback:
+                        signal[_k] = fallback[_k]
+            signal["llm_pending"] = False
+        except TimeoutError:
+            # 超时降级到硬编码 fallback
+            logger.warning(
+                "[wisdom] {} LLM 决策超时({:.0f}s)，降级到硬编码 fallback",
+                symbol,
+                self._llm_timeout,
+            )
+            fallback = self._wisdom.advise_fallback(signal)
+            for _k in _wisdom_keys:
+                if _k in fallback:
+                    if _k == "wisdom_filtered" and already_filtered:
+                        continue
+                    signal[_k] = fallback[_k]
+            if fallback.get("wisdom_filtered") and not already_filtered:
+                self._inc_filter("wisdom_block")
+            signal["llm_pending"] = False
+        except Exception as e:
+            # 异常降级到硬编码 fallback
+            logger.warning("[wisdom] {} Wisdom 决策异常: {}，降级到硬编码 fallback", symbol, e)
+            fallback = self._wisdom.advise_fallback(signal)
+            for _k in _wisdom_keys:
+                if _k in fallback:
+                    if _k == "wisdom_filtered" and already_filtered:
+                        continue
+                    signal[_k] = fallback[_k]
+            if fallback.get("wisdom_filtered") and not already_filtered:
+                self._inc_filter("wisdom_block")
+            signal["llm_pending"] = False
+
+        # 买入信号：综合入场判定
+        if signal["direction"] == "buy":
+            decision = evaluate_entry_gate(signal, perspective_result)
+            if decision.status == "blocked" and signal.get("filter_reason"):
+                existing_reason = signal["filter_reason"]
+                if existing_reason not in decision.block_reasons:
+                    decision.block_reasons.insert(0, existing_reason)
+            signal["decision"] = decision.to_dict()
+            if decision.status == "blocked":
+                self._inc_filter("entry_gate")
+                signal["filter_reason"] = "；".join(decision.block_reasons)
+                signal["wisdom_filtered"] = True
+
     async def _check_sector_rotation(self, symbol: str) -> dict:
         global _sector_cache_lock
         if _sector_cache_lock is None:
@@ -708,7 +1051,7 @@ class SignalPipeline:
                     self._hot_sectors_cache = result
                     self._hot_sectors_ts = now
                 except Exception as e:
-                    logger.debug(f"获取板块轮动数据失败: {e}")
+                    logger.debug("获取板块轮动数据失败: {}", e)
                     return {
                         "is_hot": False,
                         "is_cold": False,
@@ -758,9 +1101,9 @@ def _rotate_jsonl(path: Path, max_lines: int = _SIGNAL_HISTORY_MAX_LINES) -> Non
                 keep = lines[-max_lines // 2 :]
                 with path.open("w", encoding="utf-8") as f:
                     f.writelines(keep)
-                logger.info(f"历史文件轮转: {path.name} {len(lines)}→{len(keep)} 行")
+                logger.info("历史文件轮转: {} {}→{} 行", path.name, len(lines), len(keep))
     except Exception as e:
-        logger.warning(f"历史文件轮转失败: {e}")
+        logger.warning("历史文件轮转失败: {}", e)
 
 
 _signal_history_lock = threading.Lock()
@@ -936,6 +1279,15 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "risk_allowed": getattr(risk_result, "allowed", None),
                 "risk_message": getattr(risk_result, "message", ""),
                 "order_success": getattr(order_result, "success", None),
+                "execution_success": getattr(order_result, "success", None),
+                "execution_status": (
+                    "filled"
+                    if getattr(order_result, "success", False)
+                    else "rejected"
+                    if order_result is not None
+                    else "not_submitted"
+                ),
+                "outcome_status": "open" if getattr(order_result, "success", False) else "pending",
                 "order_quantity": getattr(order_result, "quantity", 0),
                 "order_price": getattr(order_result, "price", 0),
                 "order_commission": getattr(order_result, "commission", 0),
@@ -945,4 +1297,4 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
             with path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
     except Exception as e:
-        logger.warning(f"记录信号历史失败: {e}")
+        logger.warning("记录信号历史失败: {}", e)

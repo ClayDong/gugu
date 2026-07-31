@@ -3,6 +3,7 @@
 用 fixture 数据走完完整买入信号链路，打印每个模块的输入输出实际值。
 不 mock 业务逻辑模块，仅用 fixture 数据代替网络请求。
 """
+
 from __future__ import annotations
 
 import sys
@@ -23,15 +24,19 @@ from gugu.wisdom import WisdomAdvisor
 
 
 # ========== Fixture 数据 ==========
-def make_fixture_df(days: int = 60, base_price: float = 150.0, trend: str = "down_then_up") -> pd.DataFrame:
+def make_fixture_df(
+    days: int = 60, base_price: float = 150.0, trend: str = "down_then_up"
+) -> pd.DataFrame:
     """生成模拟行情数据，确保能触发布林带/RSI 买入信号。"""
     import numpy as np
+
     np.random.seed(42)
     dates = pd.bdate_range("2024-01-01", periods=days)
     if trend == "down_then_up":
         # 前 40 天下跌，后 20 天上涨——触发布林带下轨买入
-        prices = [base_price * (1 - 0.005 * i) for i in range(40)] + \
-                 [base_price * (1 - 0.005 * 40) * (1 + 0.008 * i) for i in range(20)]
+        prices = [base_price * (1 - 0.005 * i) for i in range(40)] + [
+            base_price * (1 - 0.005 * 40) * (1 + 0.008 * i) for i in range(20)
+        ]
     else:
         prices = [base_price] * days
     close = pd.Series(prices[:days], dtype=float)
@@ -41,21 +46,25 @@ def make_fixture_df(days: int = 60, base_price: float = 150.0, trend: str = "dow
     volume = pd.Series([1_000_000] * days, dtype=float)
     amount = close * volume
 
-    return pd.DataFrame({
-        "date": dates[:days],
-        "open": open_.values,
-        "high": high.values,
-        "low": low.values,
-        "close": close.values,
-        "volume": volume.values,
-        "amount": amount.values,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates[:days],
+            "open": open_.values,
+            "high": high.values,
+            "low": low.values,
+            "close": close.values,
+            "volume": volume.values,
+            "amount": amount.values,
+        }
+    )
 
 
 def trace_buy_signal_pipeline():
     """追踪买入信号完整链路。"""
     print("=" * 70)
-    print("链路1：买入信号完整生成链路（DataManager → SignalRouter → WisdomAdvisor → RiskManager → PaperBroker）")
+    print(
+        "链路1：买入信号完整生成链路（DataManager → SignalRouter → WisdomAdvisor → RiskManager → PaperBroker）"
+    )
     print("=" * 70)
 
     # 1. DataManager 输出
@@ -95,7 +104,9 @@ def trace_buy_signal_pipeline():
         }
 
     # 3. WisdomAdvisor 输出
-    print(f"\n[WisdomAdvisor 输入] suggested_position_ratio={signal.get('suggested_position_ratio')}")
+    print(
+        f"\n[WisdomAdvisor 输入] suggested_position_ratio={signal.get('suggested_position_ratio')}"
+    )
     print(f"  price={signal.get('price')}")
     print(f"  confidence={signal.get('confidence')}")
 
@@ -103,7 +114,9 @@ def trace_buy_signal_pipeline():
     max_ratio = settings().get("risk", {}).get("max_position_ratio", 0.30)
     signal["suggested_position_ratio"] = max_ratio * 0.8
     signal["price"] = float(fixture_df["close"].iloc[-1])
-    signal["prev_close"] = float(fixture_df["close"].iloc[-2]) if len(fixture_df) >= 2 else signal["price"]
+    signal["prev_close"] = (
+        float(fixture_df["close"].iloc[-2]) if len(fixture_df) >= 2 else signal["price"]
+    )
     signal["is_st"] = False
     signal["is_suspended"] = False
     print(f"  [设基础比例后] suggested_position_ratio={signal['suggested_position_ratio']:.2%}")
@@ -118,7 +131,9 @@ def trace_buy_signal_pipeline():
     if enhanced.get("wisdom_decision", {}).get("adjusted_position_ratio") is not None:
         orig = max_ratio * 0.8
         adj = enhanced["wisdom_decision"]["adjusted_position_ratio"]
-        print(f"  仓位调整: {orig:.2%} → {adj:.2%} ({enhanced['wisdom_decision'].get('position_strategy', '')})")
+        print(
+            f"  仓位调整: {orig:.2%} → {adj:.2%} ({enhanced['wisdom_decision'].get('position_strategy', '')})"
+        )
 
     # 4. RiskManager 检查
     risk = RiskManager()
@@ -174,6 +189,7 @@ def trace_filtered_signal_pipeline():
 
     # 从真实行情获取贵州茅台最新收盘价，不使用硬编码价格
     import asyncio
+
     dm = DataManager()
     symbol = "600519"
     df = asyncio.run(dm.fetch_stock_history(symbol, days=5))

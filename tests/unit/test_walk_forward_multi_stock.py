@@ -198,6 +198,6 @@ class TestMultiStockVsSingleStock:
                 min_s = min(sharpes)
                 max_s = max(sharpes)
                 # 聚合后的平均应该在两只股票之间
-                assert min_s <= r["test_avg_sharpe"] <= max_s, (
-                    f"聚合 Sharpe {r['test_avg_sharpe']} 应在 [{min_s}, {max_s}] 之间"
-                )
+                assert (
+                    min_s <= r["test_avg_sharpe"] <= max_s
+                ), f"聚合 Sharpe {r['test_avg_sharpe']} 应在 [{min_s}, {max_s}] 之间"

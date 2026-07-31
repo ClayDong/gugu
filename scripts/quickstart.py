@@ -7,6 +7,7 @@
     python scripts/quickstart.py --stop       # 停止运行
     python scripts/quickstart.py --web-only   # 仅启动 Web 仪表盘
 """
+
 from __future__ import annotations
 
 import argparse
@@ -53,7 +54,9 @@ def _check_env_file() -> None:
     placeholders = []
     with env_file.open() as f:
         lines = f.readlines()
-    env_vars = {line.split("=", 1)[0].strip() for line in lines if "=" in line and not line.startswith("#")}
+    env_vars = {
+        line.split("=", 1)[0].strip() for line in lines if "=" in line and not line.startswith("#")
+    }
     for key in ["feishu_app_id", "feishu_app_secret", "feishu_chat_id"]:
         if key not in env_vars:
             missing.append(key)
@@ -90,6 +93,7 @@ def _check_feishu() -> None:
     """检查飞书连接。"""
     try:
         from gugu.config import env as env_getter
+
         cfg = env_getter()
         if cfg.feishu_app_id and cfg.feishu_app_secret and cfg.feishu_chat_id:
             print(f"✅ 飞书已配置 (chat_id={cfg.feishu_chat_id[:8]}...)")
@@ -103,6 +107,7 @@ def _check_llm() -> None:
     """检查 LLM 连接。"""
     try:
         from gugu.config import env as env_getter
+
         cfg = env_getter()
         if cfg.llm_api_key:
             print(f"✅ LLM 已配置 (model={cfg.llm_model})")
@@ -116,6 +121,7 @@ def _check_watchlist() -> None:
     """检查自选股配置。"""
     try:
         from gugu.config import settings
+
         wl = settings().get("watchlist", [])
         mode = settings().get("execution", {}).get("mode", "signal_only")
         print(f"✅ 自选股: {len(wl)} 只 | 运行模式: {mode}")
@@ -141,6 +147,7 @@ def start_daemon(watch: bool = True) -> None:
     Args:
         watch: 是否启用 watchdog 自动重启（进程崩溃时自动拉起）。
     """
+
     def _launch(cmd: list[str], pid_file: Path, name: str) -> subprocess.Popen | None:
         existing = is_running(pid_file)
         if existing:
@@ -160,12 +167,22 @@ def start_daemon(watch: bool = True) -> None:
 
     engine_proc = _launch(
         [sys.executable, "-m", "gugu.engine.scheduler"],
-        PID_FILE, "交易引擎",
+        PID_FILE,
+        "交易引擎",
     )
     web_proc = _launch(
-        [sys.executable, "-m", "uvicorn", "gugu.web.app:app",
-         "--host", "127.0.0.1", "--port", "8000"],
-        WEB_PID_FILE, "Web仪表盘",
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "gugu.web.app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8000",
+        ],
+        WEB_PID_FILE,
+        "Web仪表盘",
     )
 
     if not watch:
@@ -185,9 +202,27 @@ def start_daemon(watch: bool = True) -> None:
             time.sleep(cooldown)
             any_restarted = False
             for pid_file, proc_var, cmd, disp_name in [
-                (PID_FILE, engine_proc, [sys.executable, "-m", "gugu.engine.scheduler"], "交易引擎"),
-                (WEB_PID_FILE, web_proc, [sys.executable, "-m", "uvicorn", "gugu.web.app:app",
-                 "--host", "127.0.0.1", "--port", "8000"], "Web仪表盘"),
+                (
+                    PID_FILE,
+                    engine_proc,
+                    [sys.executable, "-m", "gugu.engine.scheduler"],
+                    "交易引擎",
+                ),
+                (
+                    WEB_PID_FILE,
+                    web_proc,
+                    [
+                        sys.executable,
+                        "-m",
+                        "uvicorn",
+                        "gugu.web.app:app",
+                        "--host",
+                        "127.0.0.1",
+                        "--port",
+                        "8000",
+                    ],
+                    "Web仪表盘",
+                ),
             ]:
                 if proc_var is None:
                     continue
@@ -195,15 +230,19 @@ def start_daemon(watch: bool = True) -> None:
                 if ret is not None:
                     restart_count += 1
                     remaining = max_restarts - restart_count
-                    print(f"🔄 {disp_name} 已退出 (code={ret})，第 {restart_count} 次重启..."
-                            f" 剩余 {remaining} 次")
+                    print(
+                        f"🔄 {disp_name} 已退出 (code={ret})，第 {restart_count} 次重启..."
+                        f" 剩余 {remaining} 次"
+                    )
                     if remaining <= 0:
                         print(f"❌ {disp_name} 已达最大重启次数")
                         continue
                     time.sleep(2)
                     new_proc = subprocess.Popen(
-                        cmd, cwd=PROJECT,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        cmd,
+                        cwd=PROJECT,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
                     )
                     pid_file.write_text(str(new_proc.pid))
                     if pid_file == PID_FILE:
@@ -256,9 +295,12 @@ def show_status() -> None:
         if hb.exists():
             from gugu.utils.log import get_logger
             import json
+
             try:
                 hb_data = json.loads(hb.read_text())
-                print(f"最后心跳: {hb_data.get('last_cycle_at', '?')} ({hb_data.get('status', '?')})")
+                print(
+                    f"最后心跳: {hb_data.get('last_cycle_at', '?')} ({hb_data.get('status', '?')})"
+                )
                 print(f"总资产: ¥{hb_data.get('total_value', 0):,.0f}")
             except Exception:
                 pass
@@ -292,8 +334,16 @@ def run_web_only() -> None:
 
     print("启动 Web 仪表盘 (端口 8000)...")
     proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "gugu.web.app:app",
-         "--host", "127.0.0.1", "--port", "8000"],
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "gugu.web.app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8000",
+        ],
         cwd=PROJECT,
     )
     WEB_PID_FILE.parent.mkdir(parents=True, exist_ok=True)

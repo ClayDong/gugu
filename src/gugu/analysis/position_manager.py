@@ -119,7 +119,7 @@ class PositionManager:
         trailing_stop = self._calc_trailing_stop(pos)
         if trailing_stop > pos["stop_loss"]:
             pos["stop_loss"] = trailing_stop
-            logger.info(f"{symbol} 移动止损上移至 {trailing_stop:.2f}")
+            logger.info("{} 移动止损上移至 {:.2f}", symbol, trailing_stop)
 
         # 止损检查
         if current_price <= pos["stop_loss"]:
@@ -235,7 +235,7 @@ class PositionManager:
         """移除持仓"""
         if symbol in self._positions:
             del self._positions[symbol]
-            logger.info(f"持仓移除: {symbol}")
+            logger.info("持仓移除: {}", symbol)
 
     def get_position(self, symbol: str) -> dict[str, Any] | None:
         """获取持仓信息"""

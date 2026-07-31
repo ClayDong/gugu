@@ -106,7 +106,7 @@ class LivePositionTracker(BaseBroker):
                     f"{list(self._positions.keys())}"
                 )
             except Exception as e:
-                logger.error(f"[实盘跟踪] 加载持仓文件失败: {e}")
+                logger.error("[实盘跟踪] 加载持仓文件失败: {}", e)
                 # 失败时保持空持仓，不抛异常（fail-safe，不阻塞引擎启动）
                 self._positions = {}
 
@@ -156,7 +156,7 @@ class LivePositionTracker(BaseBroker):
                         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
                 tmp_file.replace(self._state_file)
             except Exception as e:
-                logger.error(f"[实盘跟踪] 保存持仓文件失败: {e}")
+                logger.error("[实盘跟踪] 保存持仓文件失败: {}", e)
 
     def order(
         self,
@@ -259,7 +259,7 @@ class LivePositionTracker(BaseBroker):
             symbol = symbol.strip().zfill(6)
             pos = self._positions.get(symbol)
             if not pos:
-                logger.warning(f"[实盘跟踪] 尝试调整不存在的持仓 {symbol}，忽略")
+                logger.warning("[实盘跟踪] 尝试调整不存在的持仓 {}，忽略", symbol)
                 return
 
             old_avg_cost = pos.avg_cost

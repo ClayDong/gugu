@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from datetime import date, datetime, time, timedelta
 from functools import lru_cache
 
@@ -40,14 +41,24 @@ def is_trading_time(now: datetime | None = None) -> bool:
 
 @lru_cache(maxsize=1)
 def _holiday_set() -> set[date]:
-    """内置主要节假日（降级用，覆盖主要区间）。"""
+    """内置主要节日（降级用，覆盖当前年份+下一年）。
+
+    P1-13 修复：覆盖当前年份和下一年，避免跨年运行时误判。
+    """
     holidays = []
-    # 固定节假日（月-日）
+    # 固定节日（月-日）
     fixed = [(1, 1), (5, 1), (10, 1), (10, 2), (10, 3), (10, 4), (10, 5), (10, 6), (10, 7)]
-    year = date.today().year
-    for m, d in fixed:
-        holidays.append(date(year, m, d))
+    # P1-13: 覆盖当前年份和下一年
+    for year in (date.today().year, date.today().year + 1):
+        for m, d in fixed:
+            with contextlib.suppress(ValueError):
+                holidays.append(date(year, m, d))
     return set(holidays)
+
+
+def refresh_holiday_cache() -> None:
+    """刷新节日缓存（跨年后调用）。"""
+    _holiday_set.cache_clear()
 
 
 def last_trading_day(ref: date | None = None, max_lookback: int = 15) -> date:

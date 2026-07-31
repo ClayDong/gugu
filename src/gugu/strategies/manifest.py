@@ -54,14 +54,14 @@ class StrategyManifest:
     def _load(self) -> None:
         """加载策略清单。"""
         if not self._path.exists():
-            logger.warning(f"策略清单文件不存在: {self._path}")
+            logger.warning("策略清单文件不存在: {}", self._path)
             return
         try:
             self._data = yaml.safe_load(self._path.read_text(encoding="utf-8")) or {}
             total = sum(len(v) for v in self._data.values() if isinstance(v, dict))
-            logger.info(f"[manifest] 加载 {total} 个策略")
+            logger.info("[manifest] 加载 {} 个策略", total)
         except Exception as e:
-            logger.error(f"[manifest] 策略清单加载失败: {e}")
+            logger.error("[manifest] 策略清单加载失败: {}", e)
 
     # ========== 查询接口 ==========
 

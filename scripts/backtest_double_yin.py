@@ -14,6 +14,7 @@
     uv run python scripts/backtest_double_yin.py
     uv run python scripts/backtest_double_yin.py --target-count 50
 """
+
 from __future__ import annotations
 
 import argparse
@@ -39,12 +40,22 @@ from walk_forward_offline import (  # noqa: E402
 logger = get_logger()
 
 _DEFAULT_SYMBOLS = [
-    "600519", "000858", "601318", "600036", "002714",
-    "300750", "000333", "600276", "601012", "601888",
+    "600519",
+    "000858",
+    "601318",
+    "600036",
+    "002714",
+    "300750",
+    "000333",
+    "600276",
+    "601012",
+    "601888",
 ]
 
 
-def backtest_single(symbol: str, df: pd.DataFrame, strategy_cls, params: dict | None = None) -> dict:
+def backtest_single(
+    symbol: str, df: pd.DataFrame, strategy_cls, params: dict | None = None
+) -> dict:
     """对单只股票回测指定策略。"""
     try:
         strategy = strategy_cls(params)
@@ -154,7 +165,9 @@ async def run_comparison_backtest(target_count: int = 30) -> None:
         print(f"  3. 收益 ≥ 0:    {'✅' if c3 else '❌'} ({dy_stats['avg_return']:+.2%})")
         print(f"  4. 胜率 ≥ 40%:  {'✅' if c4 else '❌'} ({dy_stats['avg_win']:.0%})")
         all_pass = c1 and c2 and c3 and c4
-        print(f"\n{'✅ 双阴钱袋子策略有效，建议启用' if all_pass else '⚠️ 策略未通过验证，需调整参数或禁用'}")
+        print(
+            f"\n{'✅ 双阴钱袋子策略有效，建议启用' if all_pass else '⚠️ 策略未通过验证，需调整参数或禁用'}"
+        )
 
     # 对比结论
     if dy_stats and pl_stats:
@@ -168,7 +181,9 @@ async def run_comparison_backtest(target_count: int = 30) -> None:
         else:
             print("  ⚠️ 双阴钱袋子收益低于低吸回踩")
         if dy_stats["total_trades"] < pl_stats["total_trades"]:
-            print(f"  📊 双阴钱袋子交易次数更少（{dy_stats['total_trades']} vs {pl_stats['total_trades']}）")
+            print(
+                f"  📊 双阴钱袋子交易次数更少（{dy_stats['total_trades']} vs {pl_stats['total_trades']}）"
+            )
 
 
 async def main():

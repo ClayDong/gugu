@@ -70,7 +70,7 @@ class StrategyConfig(BaseModel):
     """策略配置."""
 
     enabled: list[str] = Field(
-        default_factory=lambda: ["box_breakout", "turtle", "dual_ma"],
+        default_factory=list,
         description="启用的策略列表（向后兼容；如配置 enabled_by_regime 则被其覆盖）",
     )
     # v0.5.6 优化1：按市场状态启用策略（替代全局 enabled）
@@ -80,6 +80,17 @@ class StrategyConfig(BaseModel):
         default_factory=dict,
         description="按市场状态启用的策略映射，键为 bull/sideways/bear/rally/crash",
     )
+    # v0.7.3 优化：策略初始权重，基于 Walk-Forward 验证结果分配
+    # 权重会在 StrategyPool 中根据近期表现动态调整
+    weights: dict[str, float] = Field(
+        default_factory=lambda: {
+            "hot_money": 0.30,
+            "box_breakout": 0.30,
+            "double_yin": 0.25,
+            "rsi_reversal": 0.15,
+        },
+        description="策略初始权重（总和应为 1.0）",
+    )
     signal_fusion: str = Field(
         default="majority", description="信号融合规则: unanimous / majority / any"
     )
@@ -87,10 +98,21 @@ class StrategyConfig(BaseModel):
     auto_select: bool = Field(default=False, description="是否启用自动选股")
     select_top_n: int = Field(default=50, ge=1, description="全市场资金流排序取前 N")
     select_max_candidates: int = Field(default=10, ge=1, description="最大选股数量")
-    # v0.4.6: 豹哥三要素选股池过滤器（默认关闭，仅与突破策略配合时开启）
-    leopard_universe_filter: LeopardUniverseConfig = Field(
-        default_factory=lambda: LeopardUniverseConfig(),
-        description="豹哥三要素选股池过滤器配置",
+    # v0.7.5 P0-1修复：策略分组管理
+    # verified_strategies: 通过 Walk-Forward 验证的策略（无条件启用）
+    verified_strategies: list[str] = Field(
+        default_factory=list,
+        description="验证通过的策略列表（通过 Walk-Forward 4项门控）",
+    )
+    # experimental_strategies: 逻辑闭环但未验证的策略（仅 paper 模式参与信号融合）
+    experimental_strategies: list[str] = Field(
+        default_factory=list,
+        description="实验性策略列表（仅 paper 模式参与信号融合）",
+    )
+    # experimental_weights: 实验性策略权重（仅 paper 模式使用）
+    experimental_weights: dict[str, float] = Field(
+        default_factory=dict,
+        description="实验性策略权重（仅 paper 模式使用）",
     )
 
     # ── aliases ──
@@ -101,10 +123,9 @@ class StrategyConfig(BaseModel):
     def get_enabled_for_regime(self, regime: str | None = None) -> list[str]:
         """获取指定市场状态下启用的策略列表。
 
-        v0.5.6 优化1：策略按市场状态启用，而非全局禁用。
-        - 若 enabled_by_regime 非空且 regime 存在：返回对应 regime 的策略列表
-        - 若 enabled_by_regime 非空但 regime 不存在：返回所有 regime 的并集（保守降级）
-        - 若 enabled_by_regime 为空：向后兼容返回 enabled 列表
+        v0.7.5 P0-1修复：优先使用 verified_strategies + experimental_strategies。
+        - 若 verified_strategies 非空：以 verified 为基础，叠加 enabled_by_regime 过滤
+        - 否则：回退到旧逻辑（enabled_by_regime → enabled）
 
         Args:
             regime: 市场状态（bull/sideways/bear/rally/crash），None 表示未知
@@ -112,13 +133,40 @@ class StrategyConfig(BaseModel):
         Returns:
             启用的策略名称列表
         """
+        # v0.7.5 P0-1修复：优先使用 verified_strategies
+        if self.verified_strategies:
+            # 如果 enabled_by_regime 有配置，按 regime 过滤
+            if self.enabled_by_regime:
+                if regime and regime in self.enabled_by_regime:
+                    # verified 策略与 regime 配置取交集
+                    verified = [
+                        s for s in self.enabled_by_regime[regime] if s in self.verified_strategies
+                    ]
+                    # experimental 策略也加入（在 track_live/paper 模式下产生信号用于绩效追踪）
+                    experimental = []
+                    if hasattr(self, "experimental_strategies") and self.experimental_strategies:
+                        experimental = [
+                            s
+                            for s in self.enabled_by_regime[regime]
+                            if s in self.experimental_strategies
+                        ]
+                    return verified + experimental
+                # regime 未知：返回所有 verified + experimental
+                result = list(self.verified_strategies)
+                if hasattr(self, "experimental_strategies") and self.experimental_strategies:
+                    result.extend(self.experimental_strategies)
+                return result
+            # 无 regime 配置：返回所有 verified
+            return list(self.verified_strategies)
+
+        # 向后兼容：旧逻辑
         if not self.enabled_by_regime:
             return list(self.enabled)
 
         if regime and regime in self.enabled_by_regime:
             return list(self.enabled_by_regime[regime])
 
-        # regime 未知或未配置：返回所有 regime 的并集（保守降级，宁可多扫描再过滤）
+        # regime 未知或未配置：返回所有 regime 的并集（保守降级）
         all_strategies: set[str] = set()
         for strategies in self.enabled_by_regime.values():
             all_strategies.update(strategies)
@@ -168,7 +216,10 @@ class LiveConfig(BaseModel):
 class ExecutionConfig(BaseModel):
     """执行层配置."""
 
-    mode: str = Field(default="paper", description="运行模式: backtest / paper / live")
+    mode: str = Field(
+        default="paper",
+        description="运行模式: signal_only / paper / track_live / live",
+    )
     paper: PaperConfig = Field(default_factory=PaperConfig)
     live: LiveConfig = Field(default_factory=LiveConfig)
     scan_concurrency: int = Field(default=10, description="全市场扫描并发数（P3 优化）")
@@ -229,7 +280,9 @@ class StockRankerConfig(BaseModel):
     money_flow_weight: float = Field(default=0.25, ge=0.0, le=1.0, description="资金流评分权重")
     sector_weight: float = Field(default=0.15, ge=0.0, le=1.0, description="板块评分权重")
     chip_score_weight: float = Field(default=0.15, ge=0.0, le=1.0, description="筹码画像评分权重")
-    chip_score_neutral: float = Field(default=0.5, ge=0.0, le=1.0, description="数据缺失时的中性评分")
+    chip_score_neutral: float = Field(
+        default=0.5, ge=0.0, le=1.0, description="数据缺失时的中性评分"
+    )
 
 
 class FlowReportConfig(BaseModel):
@@ -259,16 +312,24 @@ class SchedulerTasksConfig(BaseModel):
     signal_noon: bool = Field(default=True, description="11:35 午盘信号汇总")
     macro_noon: bool = Field(default=True, description="11:40 午间宏观简报")
     scan_afternoon: bool = Field(default=True, description="13:05 午盘扫描")
+    rsi_scan: bool = Field(default=True, description="13:30 RSI 专项扫描（仅 rsi_reversal 策略）")
     scan_close: bool = Field(default=True, description="14:30 尾盘扫描")
     screener: bool = Field(default=True, description="14:30 尾盘选股")
     flow_afternoon: bool = Field(default=True, description="14:30 盘后资金流决策报告")
     signal_close: bool = Field(default=True, description="15:10 收盘信号汇总")
     macro_close: bool = Field(default=True, description="15:15 收盘宏观简报")
-    concept_daily: bool = Field(default=True, description="20:00 每日概念")
+    signal_performance: bool = Field(default=True, description="15:20 信号绩效验证")
+    concept_daily: bool = Field(default=False, description="20:00 每日概念（默认关闭）")
+    altalpha_fetch: bool = Field(default=True, description="18:00 另类因子盘后采集")
+    alpha_summary: bool = Field(default=True, description="18:05 因子综合评分报告")
+    portfolio_report: bool = Field(default=True, description="15:35 持仓认知分析报告")
     sentiment_daily: bool = Field(default=True, description="20:30 舆情日报")
     weekly_optimize: bool = Field(default=True, description="周日 03:00 周参数优化")
     weekly_review: bool = Field(default=True, description="周日 20:00 周复盘")
     intraday_monitor: bool = Field(default=True, description="每分钟 盘中实时盯盘")
+    perspective_afternoon: bool = Field(
+        default=False, description="15:30 收盘后十大视角二次分析（默认关闭）"
+    )
 
 
 class SchedulerConfig(BaseModel):
@@ -311,17 +372,22 @@ class WisdomConfig(BaseModel):
         description="是否启用多视角裁决（默认关闭，新手不需要利弗莫尔/格雷厄姆的权重裁决）",
     )
     max_perspectives: int = Field(default=3, description="每次决策最多参考的视角数")
+    # LLM 超时与重试配置
+    llm_timeout: float = Field(default=20.0, description="LLM 请求超时时间（秒）")
+    llm_max_retries: int = Field(default=2, description="LLM 请求最大重试次数")
+    llm_retry_delay: float = Field(default=1.0, description="重试间隔（秒）")
 
 
 class FundamentalConfig(BaseModel):
     """基本面过滤配置."""
 
     pe_min: float = Field(default=0, description="PE 下限")
-    pe_max: float = Field(default=100, description="PE 上限")
+    pe_max: float = Field(default=60, description="PE 上限")
     pb_min: float = Field(default=0, description="PB 下限")
-    pb_max: float = Field(default=15, description="PB 上限")
-    roe_min: float = Field(default=0, description="ROE 下限（%）")
+    pb_max: float = Field(default=8, description="PB 上限")
+    roe_min: float = Field(default=10, description="ROE 下限（%，P1-1优化：提升到10%巴菲特标准）")
     revenue_growth_min: float = Field(default=-20, description="营收增长率下限（%）")
+    debt_ratio_max: float = Field(default=70, description="P1-1新增：负债率上限（%）")
 
 
 class LogConfig(BaseModel):
@@ -331,6 +397,19 @@ class LogConfig(BaseModel):
     dir: str = Field(default="logs", description="日志目录")
     rotation: str = Field(default="10 MB", description="日志轮转大小")
     retention: str = Field(default="30 days", description="日志保留时间")
+
+
+class WebConfig(BaseModel):
+    """Web 仪表盘安全配置."""
+
+    admin_api_key: str = Field(
+        default="",
+        description="Web 管理接口 API Key。为空时不拒绝请求（仅本地开发），生产环境务必配置。",
+    )
+    require_auth_for_sensitive: bool = Field(
+        default=False,
+        description="是否对敏感接口（下单、解除熔断等）强制 API Key 认证。",
+    )
 
 
 class PerspectiveConfig(BaseModel):
@@ -388,6 +467,25 @@ class HolderConcentrationConfig(BaseModel):
     )
 
 
+class AltAlphaFilterConfig(BaseModel):
+    """另类 Alpha 因子过滤器配置.
+
+    将事件驱动/行为金融因子接入信号流水线，为买入信号提供额外维度评分。
+    数据缺失时默认放行，避免阻塞已有策略信号。
+    """
+
+    enabled: bool = Field(default=True, description="是否启用另类 Alpha 因子过滤")
+    block_threshold: float = Field(default=-0.50, description="综合评分低于此值时标记过滤")
+    boost_threshold: float = Field(default=0.30, description="综合评分高于此值时提升 confidence")
+    confidence_boost: float = Field(
+        default=0.10, ge=0.0, le=0.5, description="高评分时的 confidence 增量"
+    )
+    altalpha_weight: float = Field(
+        default=0.30, ge=0.0, le=1.0, description="另类因子在综合评分中的权重"
+    )
+    fetch_financial: bool = Field(default=False, description="是否获取财务数据（较慢）")
+
+
 class IntradayMonitorConfig(BaseModel):
     """盘中实时盯盘配置.
 
@@ -438,10 +536,15 @@ class AppConfig(BaseModel):
     wisdom: WisdomConfig = Field(default_factory=WisdomConfig)
     fundamental: FundamentalConfig = Field(default_factory=FundamentalConfig)
     log: LogConfig = Field(default_factory=LogConfig)
+    web: WebConfig = Field(default_factory=WebConfig)
     perspective: PerspectiveConfig = Field(default_factory=PerspectiveConfig)
     holder_concentration_filter: HolderConcentrationConfig = Field(
         default_factory=HolderConcentrationConfig,
         description="筹码集中度过滤器配置",
+    )
+    altalpha_filter: AltAlphaFilterConfig = Field(
+        default_factory=AltAlphaFilterConfig,
+        description="另类 Alpha 因子过滤器配置",
     )
     intraday_monitor: IntradayMonitorConfig = Field(
         default_factory=IntradayMonitorConfig,
@@ -581,6 +684,10 @@ def flatten_config(app_config: AppConfig) -> dict[str, Any]:
             "rotation": app_config.log.rotation,
             "retention": app_config.log.retention,
         },
+        "web": {
+            "admin_api_key": app_config.web.admin_api_key,
+            "require_auth_for_sensitive": app_config.web.require_auth_for_sensitive,
+        },
         "perspective": {
             "enabled": app_config.perspective.enabled,
             "perspectives": list(app_config.perspective.perspectives),
@@ -599,6 +706,14 @@ def flatten_config(app_config: AppConfig) -> dict[str, Any]:
             "avg_hold_change_threshold": app_config.holder_concentration_filter.avg_hold_change_threshold,
             "lurker_consecutive_quarters": app_config.holder_concentration_filter.lurker_consecutive_quarters,
             "lurker_total_decline_threshold": app_config.holder_concentration_filter.lurker_total_decline_threshold,
+        },
+        "altalpha_filter": {
+            "enabled": app_config.altalpha_filter.enabled,
+            "block_threshold": app_config.altalpha_filter.block_threshold,
+            "boost_threshold": app_config.altalpha_filter.boost_threshold,
+            "confidence_boost": app_config.altalpha_filter.confidence_boost,
+            "altalpha_weight": app_config.altalpha_filter.altalpha_weight,
+            "fetch_financial": app_config.altalpha_filter.fetch_financial,
         },
         "intraday_monitor": {
             "enabled": app_config.intraday_monitor.enabled,

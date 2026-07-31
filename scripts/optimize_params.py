@@ -41,7 +41,11 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from gugu.backtest.engine import walk_forward_optimize, walk_forward_optimize_multi_stock  # noqa: E402
+from gugu.backtest.engine import (
+    walk_forward_optimize,
+    walk_forward_optimize_multi_stock,
+    BacktestEngine,
+)  # noqa: E402
 from gugu.config import PROJECT_ROOT  # noqa: E402
 from gugu.data import data_manager  # noqa: E402
 from gugu.strategies.registry import get_strategy, list_strategies  # noqa: E402
@@ -53,27 +57,64 @@ logger = get_logger()
 # 选股标准：各行业龙头 + 不同市值 + 不同估值水平
 DEFAULT_REPRESENTATIVE_STOCKS = [
     # 白酒/食品饮料
-    "600519", "000858", "002304", "600887", "603288",
+    "600519",
+    "000858",
+    "002304",
+    "600887",
+    "603288",
     # 医药生物
-    "600276", "000538", "300760", "603259", "300015",
+    "600276",
+    "000538",
+    "300760",
+    "603259",
+    "300015",
     # 银行
-    "601398", "600036", "601288", "601328", "600016",
+    "601398",
+    "600036",
+    "601288",
+    "601328",
+    "600016",
     # 保险/券商
-    "601318", "601628", "600030", "000776", "601211",
+    "601318",
+    "601628",
+    "600030",
+    "000776",
+    "601211",
     # 房地产/建筑
-    "600048", "001979", "601668", "600585",
+    "600048",
+    "001979",
+    "601668",
+    "600585",
     # 家电
-    "000333", "600690", "000651", "002508",
+    "000333",
+    "600690",
+    "000651",
+    "002508",
     # 汽车
-    "600104", "002594", "000625", "601127",
+    "600104",
+    "002594",
+    "000625",
+    "601127",
     # 电子/半导体
-    "002415", "603986", "688981", "002371",
+    "002415",
+    "603986",
+    "688981",
+    "002371",
     # 新能源
-    "300750", "002459", "601012", "600438",
+    "300750",
+    "002459",
+    "601012",
+    "600438",
     # 互联网/科技
-    "600570", "300033", "002230", "688111",
+    "600570",
+    "300033",
+    "002230",
+    "688111",
     # 消费/零售
-    "600887", "002024", "601888", "000100",
+    "600887",
+    "002024",
+    "601888",
+    "000100",
 ]
 
 # 参数网格定义：策略名 → 参数网格
@@ -185,13 +226,23 @@ STRATEGY_PARAM_GRIDS: dict[str, dict[str, list]] = {
         "hard_stop_loss_pct": [0.03, 0.05, 0.07],
         "trailing_stop_pct": [0.05, 0.07, 0.10],
     },
+    # v0.7.4 新增：5日均线动量策略参数网格
+    "ma5_momentum": {
+        "big_yang_gain_pct": [0.03, 0.05, 0.07],
+        "big_yang_vol_ratio": [1.3, 1.5, 1.8, 2.0],
+        "big_yang_lookback": [3, 5, 7],
+        "pullback_tolerance": [0.01, 0.02, 0.03],
+        "shrink_vol_ratio": [0.5, 0.6, 0.7, 0.8],
+        "profit_deviation_pct": [0.03, 0.05, 0.07],
+        "ma5_break_exit_days": [2, 3, 4],
+    },
     # v0.6.3 新增：陈学长不吃面策略参数网格
     "breakout_rebound": {
-        "shrink_vol_ratio": [0.3, 0.4, 0.5, 0.6, 0.7],      # 缩量判断标准
-        "wash_day_max": [2, 3, 4, 5],                        # 洗盘观察天数
-        "stop_loss_pct": [0.02, 0.03, 0.04, 0.05],           # 止损百分比
-        "limit_up_lookback": [3, 5, 7],                       # 涨停板回看窗口
-        "take_profit_pct": [0.06, 0.08, 0.10],               # 止盈位
+        "shrink_vol_ratio": [0.3, 0.4, 0.5, 0.6, 0.7],  # 缩量判断标准
+        "wash_day_max": [2, 3, 4, 5],  # 洗盘观察天数
+        "stop_loss_pct": [0.02, 0.03, 0.04, 0.05],  # 止损百分比
+        "limit_up_lookback": [3, 5, 7],  # 涨停板回看窗口
+        "take_profit_pct": [0.06, 0.08, 0.10],  # 止盈位
     },
 }
 
@@ -299,6 +350,17 @@ STRATEGY_CONFIG_KEYS: dict[str, list[str]] = {
         "max_track_days",
         "hard_stop_loss_pct",
         "trailing_stop_pct",
+    ],
+    # v0.7.4 新增：5日均线动量策略配置键
+    "ma5_momentum": [
+        "big_yang_gain_pct",
+        "big_yang_vol_ratio",
+        "big_yang_lookback",
+        "pullback_tolerance",
+        "shrink_vol_ratio",
+        "profit_deviation_pct",
+        "ma5_break_exit_days",
+        "vol_ma_window",
     ],
     # v0.6.3 新增：陈学长不吃面策略配置键
     "breakout_rebound": [
@@ -1051,7 +1113,9 @@ async def run_heuristic_optimization(
 
         if unlock_report["unlocked"] or force:
             if force and not unlock_report["unlocked"]:
-                print(f"\n⚠️  --force 强制写回（跳过 {len(unlock_report['failed_checks'])} 项解锁条件）")
+                print(
+                    f"\n⚠️  --force 强制写回（跳过 {len(unlock_report['failed_checks'])} 项解锁条件）"
+                )
                 logger.warning(f"强制写回 {strategy_name} 参数: {unlock_report['failed_checks']}")
             if strategy_name not in defaults:
                 defaults[strategy_name] = {}
@@ -1060,7 +1124,9 @@ async def run_heuristic_optimization(
             write_defaults(defaults)
             print(f"\n优化参数已写回 config/strategy_defaults.yaml")
         else:
-            print(f"\n❌ 参数写回被拒绝（未通过 {len(unlock_report['failed_checks'])} 项解锁条件）:")
+            print(
+                f"\n❌ 参数写回被拒绝（未通过 {len(unlock_report['failed_checks'])} 项解锁条件）:"
+            )
             for check in unlock_report["checks"]:
                 status = "✓" if check["passed"] else "✗"
                 print(f"  {status} {check['name']}: {check['detail']}")
@@ -1076,7 +1142,9 @@ async def run_heuristic_optimization(
             n_windows=1,
         )
         print(f"\n📋 优化报告: {report_path}")
-        failed_reason = "; ".join(unlock_report["failed_checks"]) if unlock_report["failed_checks"] else ""
+        failed_reason = (
+            "; ".join(unlock_report["failed_checks"]) if unlock_report["failed_checks"] else ""
+        )
         apply_optimization_result(
             strategy_name=strategy_name,
             passed=unlock_report["unlocked"],
@@ -1300,6 +1368,10 @@ async def main(
     force: bool,
     multi_stock: str | None,
     use_default_pool: bool = False,
+    algorithm: str = "walk_forward",
+    population_size: int = 20,
+    generations: int = 10,
+    seed: int | None = None,
 ) -> None:
     """主入口。"""
     if show:
@@ -1333,7 +1405,9 @@ async def main(
             print()
             for s_name in enabled:
                 try:
-                    await run_multi_stock_optimization(s_name, symbols, days, n_splits, write, force)
+                    await run_multi_stock_optimization(
+                        s_name, symbols, days, n_splits, write, force
+                    )
                     print()
                 except Exception as e:
                     logger.error(f"策略 {s_name} 多股优化失败: {e}")
@@ -1374,6 +1448,57 @@ async def main(
                     print()
                 except Exception as e:
                     logger.error(f"策略 {s_name} 多股优化失败: {e}")
+                    continue
+        return
+
+    # v0.7.3 新增：启发式优化模式（GA/PSO）
+    if algorithm in ("ga", "pso"):
+        # 解析股票列表
+        if multi_stock:
+            symbols = [s.strip().zfill(6) for s in multi_stock.split(",") if s.strip()]
+        elif use_default_pool:
+            symbols = DEFAULT_REPRESENTATIVE_STOCKS
+        else:
+            symbols = [symbol]
+
+        if strategy_name:
+            await run_heuristic_optimization(
+                strategy_name=strategy_name,
+                symbols=symbols,
+                days=days,
+                algorithm=algorithm,
+                population_size=population_size,
+                generations=generations,
+                write=write,
+                force=force,
+                seed=seed,
+            )
+        else:
+            from gugu.config import get_config
+
+            cfg = get_config()
+            enabled = cfg.strategy.enabled
+            if not enabled:
+                logger.error("无启用策略")
+                return
+            print(f"\n将对 {len(enabled)} 个策略运行启发式优化 ({algorithm.upper()})")
+            print(f"股票池: {symbols[:5]}{'...' if len(symbols) > 5 else ''}")
+            for s_name in enabled:
+                try:
+                    await run_heuristic_optimization(
+                        strategy_name=s_name,
+                        symbols=symbols,
+                        days=days,
+                        algorithm=algorithm,
+                        population_size=population_size,
+                        generations=generations,
+                        write=write,
+                        force=force,
+                        seed=seed,
+                    )
+                    print()
+                except Exception as e:
+                    logger.error(f"策略 {s_name} 启发式优化失败: {e}")
                     continue
         return
 
@@ -1436,6 +1561,31 @@ if __name__ == "__main__":
         help="P1-2 新增：使用默认50只代表性股票池进行多股聚合优化（覆盖多个行业，解决单股过拟合）",
     )
     parser.add_argument("--show", action="store_true", help="显示当前策略参数")
+    parser.add_argument(
+        "--algorithm",
+        type=str,
+        default="walk_forward",
+        choices=["walk_forward", "ga", "pso"],
+        help="优化算法：walk_forward=网格搜索 Walk-Forward（默认），ga=遗传算法，pso=粒子群优化",
+    )
+    parser.add_argument(
+        "--population",
+        type=int,
+        default=20,
+        help="启发式算法种群大小（默认=20，仅 GA/PSO 生效）",
+    )
+    parser.add_argument(
+        "--generations",
+        type=int,
+        default=10,
+        help="启发式算法迭代次数（默认=10，仅 GA/PSO 生效）",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="随机种子（默认=None，仅 GA/PSO 生效，用于结果复现）",
+    )
     parser.add_argument("--version", action="version", version="gugu 0.1.0")
     args = parser.parse_args()
 
@@ -1450,5 +1600,9 @@ if __name__ == "__main__":
             args.force,
             args.multi_stock,
             args.default_pool,
+            args.algorithm,
+            args.population,
+            args.generations,
+            args.seed,
         )
     )

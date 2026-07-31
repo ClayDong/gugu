@@ -47,6 +47,21 @@ def no_sleep():
         yield
 
 
+@pytest.fixture(autouse=True)
+def clear_notified_signals(tmp_path):
+    """每个测试前清除通知记录，避免测试间状态污染。"""
+    import os
+    from pathlib import Path
+
+    if os.environ.get("GUGU_TEST_MODE"):
+        import tempfile
+
+        notified_path = Path(tempfile.gettempdir()) / "gugu_test_notified_signals.json"
+        if notified_path.exists():
+            notified_path.unlink()
+    yield
+
+
 def _ok_handler(requests: list[httpx.Request] | None = None):
     """构造成功响应 handler：token 接口和消息接口均返回 code=0。
 

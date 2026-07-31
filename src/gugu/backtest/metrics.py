@@ -199,7 +199,9 @@ def _calmar_ratio(annual_return: float, max_drawdown: float) -> float:
 
 
 def _sortino_ratio(
-    returns: pd.Series, periods: int = _TRADING_DAYS, rf_rate: float = 0.02,
+    returns: pd.Series,
+    periods: int = _TRADING_DAYS,
+    rf_rate: float = 0.02,
 ) -> float:
     """Sortino ratio — like Sharpe but uses only downside deviation.
 

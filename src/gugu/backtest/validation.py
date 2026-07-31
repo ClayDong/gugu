@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 
 BENCHMARK_HS300 = "000300"
 
@@ -169,13 +170,15 @@ def calc_param_perturbation_stability(
         else:
             stability_score = 1.0
 
-        results.append(PerturbationResult(
-            param_name=param_name,
-            base_value=base_value,
-            base_return=base_return,
-            perturbations=perturbations,
-            stability_score=stability_score,
-        ))
+        results.append(
+            PerturbationResult(
+                param_name=param_name,
+                base_value=base_value,
+                base_return=base_return,
+                perturbations=perturbations,
+                stability_score=stability_score,
+            )
+        )
 
     return results
 
@@ -195,7 +198,13 @@ def calc_liquidity_stress_test(
         quantity = trade.get("quantity", 10000)
         trade_amount = price * quantity
 
-        market_cap = trade.get("market_cap", 100e8)
+        market_cap = trade.get("market_cap")
+        if market_cap is None or market_cap <= 0:
+            market_cap = trade_amount * 20  # 从成交额估算：假设换手率约5%
+            logger.warning(
+                f"market_cap missing for trade, estimated from trade_amount: "
+                f"{market_cap:.2f} (price={price}, quantity={quantity})"
+            )
 
         if market_cap < 50e8:
             impact_cost = trade_amount * 0.003
@@ -275,13 +284,15 @@ def calc_rolling_window_validation(
             engine = BacktestEngine(initial_capital=100000.0)
             result = engine.run(strategy, window_df)
 
-            windows.append({
-                "start": str(df_indexed.index[idx])[:10],
-                "end": str(df_indexed.index[min(end_i - 1, len(df_indexed) - 1)])[:10],
-                "return": result.metrics.get("total_return", 0.0),
-                "sharpe": result.metrics.get("sharpe", 0.0),
-                "trades": result.metrics.get("total_trades", 0),
-            })
+            windows.append(
+                {
+                    "start": str(df_indexed.index[idx])[:10],
+                    "end": str(df_indexed.index[min(end_i - 1, len(df_indexed) - 1)])[:10],
+                    "return": result.metrics.get("total_return", 0.0),
+                    "sharpe": result.metrics.get("sharpe", 0.0),
+                    "trades": result.metrics.get("total_trades", 0),
+                }
+            )
         except Exception:
             continue
 
@@ -307,7 +318,9 @@ def calc_rolling_window_validation(
     )
 
 
-async def fetch_benchmark_data(symbol: str = BENCHMARK_HS300, days: int = 500) -> pd.DataFrame | None:
+async def fetch_benchmark_data(
+    symbol: str = BENCHMARK_HS300, days: int = 500
+) -> pd.DataFrame | None:
     """获取基准指数数据。"""
     try:
         from gugu.data.manager import DataManager
@@ -361,7 +374,9 @@ def build_validation_report(
         for r in perturbation_results
     ]
     if unstable_params:
-        report["recommendations"].append(f"参数{[r.param_name for r in unstable_params]}对结果影响过大，考虑简化逻辑")
+        report["recommendations"].append(
+            f"参数{[r.param_name for r in unstable_params]}对结果影响过大，考虑简化逻辑"
+        )
 
     if liquidity_result and liquidity_result.liquidity_cost_pct > 5e-2:
         report["liquidity"] = {

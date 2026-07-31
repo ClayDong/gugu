@@ -59,7 +59,7 @@ class SignalTracker:
             信号记录列表
         """
         if not self._history_path.exists():
-            logger.warning(f"信号历史文件不存在: {self._history_path}")
+            logger.warning("信号历史文件不存在: {}", self._history_path)
             return []
 
         records: list[dict[str, Any]] = []
@@ -77,13 +77,13 @@ class SignalTracker:
                         if cutoff is None or ts >= cutoff:
                             records.append(rec)
                     except (json.JSONDecodeError, ValueError) as e:
-                        logger.debug(f"跳过无效行: {e}")
+                        logger.debug("跳过无效行: {}", e)
                         continue
         except Exception as e:
-            logger.error(f"读取信号历史失败: {e}")
+            logger.error("读取信号历史失败: {}", e)
             return []
 
-        logger.info(f"加载 {len(records)} 条信号记录（最近 {days} 天）")
+        logger.info("加载 {} 条信号记录（最近 {} 天）", len(records), days)
         return records
 
     async def generate_report(self, days: int = 30) -> dict[str, Any]:
@@ -97,8 +97,10 @@ class SignalTracker:
             - total_signals: 信号总数
             - buy_count/sell_count: 买入/卖出信号数
             - executed_count: 实际下单数
-            - win_rate: 命中率（按 5 日收益判断）
-            - avg_return_5d: 5 日平均收益
+            - forward_5d_signal_hit_rate: 前瞻 5 日信号命中率
+            - avg_return_5d: 前瞻 5 日平均收益
+            - closed_trade_win_rate: 已平仓交易胜率
+            - realized_pnl: 已实现盈亏
             - by_strategy: 按策略分组的绩效
             - recent_signals: 最近 5 条信号及追踪结果
         """
@@ -125,21 +127,39 @@ class SignalTracker:
         # 最近 5 条信号
         recent = tracked[-5:] if len(tracked) >= 5 else tracked
 
-        # 整体命中率
+        # 整体前瞻命中率：仅衡量买入信号后 5 日收益，不代表已实现交易胜率
         valid = [t for t in tracked if t.get("return_5d") is not None]
         wins = [t for t in valid if t["return_5d"] > 0]
-        win_rate = len(wins) / len(valid) if valid else 0
+        forward_5d_signal_hit_rate = len(wins) / len(valid) if valid else 0
         avg_return = sum(t["return_5d"] for t in valid) / len(valid) if valid else 0
+
+        closed_trades = [t for t in records if t.get("outcome_status") == "closed"]
+        realized_pnls: list[float] = []
+        for trade in closed_trades:
+            pnl = trade.get("realized_pnl")
+            if pnl is None:
+                pnl = (trade.get("outcome_metrics") or {}).get("realized_pnl")
+            try:
+                realized_pnls.append(float(pnl))
+            except (TypeError, ValueError):
+                continue
+        closed_trade_wins = [pnl for pnl in realized_pnls if pnl > 0]
+        closed_trade_win_rate = len(closed_trade_wins) / len(realized_pnls) if realized_pnls else 0
+        realized_pnl = sum(realized_pnls) if realized_pnls else 0
 
         return {
             "period_days": days,
             "total_signals": len(records),
             "buy_count": len(buy_signals),
             "sell_count": len(sell_signals),
+            "execution_success": len(executed),
             "executed_count": len(executed),
             "tracked_count": len(valid),
-            "win_rate": round(win_rate, 4),
+            "forward_5d_signal_hit_rate": round(forward_5d_signal_hit_rate, 4),
             "avg_return_5d": round(avg_return, 4),
+            "closed_trade_count": len(closed_trades),
+            "closed_trade_win_rate": round(closed_trade_win_rate, 4),
+            "realized_pnl": round(realized_pnl, 2),
             "by_strategy": by_strategy,
             "recent_signals": recent,
             "generated_at": datetime.now().isoformat(),
@@ -179,7 +199,7 @@ class SignalTracker:
             if isinstance(r, dict):
                 results.append(r)
             elif isinstance(r, Exception):
-                logger.debug(f"追踪信号失败: {r}")
+                logger.debug("追踪信号失败: {}", r)
 
         return results
 
@@ -218,8 +238,10 @@ class SignalTracker:
                 entry_price = float(order_result["price"])
                 price_source = "fill"
                 logger.info(
-                    f"使用实际成交价 {entry_price} 追踪 {symbol} 信号绩效 "
-                    f"（信号日: {signal_date.date()}）"
+                    "使用实际成交价 {} 追踪 {} 信号绩效（信号日: {}）",
+                    entry_price,
+                    symbol,
+                    signal_date.date(),
                 )
             else:
                 entry_price = float(df.loc[idx, "close"])
@@ -243,7 +265,7 @@ class SignalTracker:
 
             return result
         except Exception as e:
-            logger.debug(f"追踪 {symbol} 失败: {e}")
+            logger.debug("追踪 {} 失败: {}", symbol, e)
             return {**sig, "error": str(e)}
 
     def _stats_by_strategy(self, tracked: list[dict[str, Any]]) -> list[dict[str, Any]]:

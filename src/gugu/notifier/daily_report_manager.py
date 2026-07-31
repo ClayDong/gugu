@@ -80,6 +80,7 @@ class DailyReportManager:
                     "quantity": pos.quantity,
                     "profit": pos.profit,
                     "market_value": pos.market_value,
+                    "cost": pos.avg_cost * pos.quantity if pos.avg_cost else 0,
                 }
                 for sym, pos in account.positions.items()
             },
@@ -111,7 +112,7 @@ class DailyReportManager:
                         finally:
                             self._set_running(engine_running, False)
             except Exception as e:
-                logger.warning(f"持仓卖出检查失败（不影响日报）: {e}")
+                logger.warning("持仓卖出检查失败（不影响日报）: {}", e)
 
     async def _get_performance_report(self) -> dict[str, Any] | None:
         try:
@@ -120,7 +121,7 @@ class DailyReportManager:
             tracker = SignalTracker()
             return await tracker.generate_report(days=30)
         except Exception as e:
-            logger.warning(f"生成信号绩效报告失败: {e}")
+            logger.warning("生成信号绩效报告失败: {}", e)
             return None
 
     async def _get_regime_info(self) -> dict[str, Any] | None:
@@ -132,7 +133,7 @@ class DailyReportManager:
                 "total_limit": regime.get("total_position_limit", 0),
             }
         except Exception as e:
-            logger.debug(f"获取市场状态失败: {e}")
+            logger.debug("获取市场状态失败: {}", e)
             return None
 
     def _get_risk_info(self, account: Any) -> dict[str, Any] | None:
@@ -147,7 +148,7 @@ class DailyReportManager:
                 "daily_start_value": start_value,
             }
         except Exception as e:
-            logger.debug(f"获取风控状态失败: {e}")
+            logger.debug("获取风控状态失败: {}", e)
             return None
 
     def _get_trailing_stop_info(self) -> list[dict[str, Any]] | None:
@@ -167,7 +168,7 @@ class DailyReportManager:
                     )
             return stops
         except Exception as e:
-            logger.debug(f"获取移动止损状态失败: {e}")
+            logger.debug("获取移动止损状态失败: {}", e)
             return None
 
     async def _fill_portfolio_names(self, data: dict[str, Any]) -> None:
@@ -211,7 +212,7 @@ class DailyReportManager:
                         seen[key] = record
             return list(seen.values())
         except Exception as e:
-            logger.warning(f"读取今日信号失败: {e}")
+            logger.warning("读取今日信号失败: {}", e)
             return []
 
     @staticmethod

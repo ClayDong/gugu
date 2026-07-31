@@ -9,6 +9,7 @@ WEB_PID_FILE="$PROJECT/data/web.pid"
 MAX_RESTARTS=10
 COOLDOWN=5
 RESTART_COUNT=0
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
 
 mkdir -p "$LOG_DIR"
 

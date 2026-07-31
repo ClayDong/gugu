@@ -113,7 +113,7 @@ def build_index(
         (chunk_count, book_names)
     """
     if not books_dir.exists():
-        logger.error(f"[kb-indexer] 书籍目录不存在: {books_dir}")
+        logger.error("[kb-indexer] 书籍目录不存在: {}", books_dir)
         return 0, []
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -127,8 +127,9 @@ def build_index(
             old_meta = json.loads(meta_file.read_text(encoding="utf-8"))
             if _is_index_fresh(old_meta, books_dir):
                 logger.info(
-                    f"[kb-indexer] 索引已是最新（{old_meta.get('chunk_count')} 块，"
-                    f"建于 {old_meta.get('built_at')}），跳过重建。使用 force=True 强制重建。"
+                    "[kb-indexer] 索引已是最新（{} 块，建于 {}），跳过重建。使用 force=True 强制重建。",
+                    old_meta.get("chunk_count"),
+                    old_meta.get("built_at"),
                 )
                 return old_meta.get("chunk_count", 0), old_meta.get("books", [])
         except Exception:
@@ -136,10 +137,10 @@ def build_index(
 
     docx_files = sorted(books_dir.glob("*.docx"))
     if not docx_files:
-        logger.warning(f"[kb-indexer] 目录中无 docx 文件: {books_dir}")
+        logger.warning("[kb-indexer] 目录中无 docx 文件: {}", books_dir)
         return 0, []
 
-    logger.info(f"[kb-indexer] 开始构建索引：{len(docx_files)} 本书籍")
+    logger.info("[kb-indexer] 开始构建索引：{} 本书籍", len(docx_files))
     t0 = time.time()
 
     all_chunks: list[Chunk] = []
@@ -151,16 +152,16 @@ def build_index(
         try:
             text = extract_text_from_docx(docx_path)
             if not text:
-                logger.warning(f"[kb-indexer] {book_name} 文本为空，跳过")
+                logger.warning("[kb-indexer] {} 文本为空，跳过", book_name)
                 continue
             chunks = chunk_text(text, book_name)
             for chunk in chunks:
                 all_chunks.append(chunk)
                 all_tokens.append(tokenize_zh(chunk.text))
             book_names.append(book_name)
-            logger.info(f"[kb-indexer] {book_name}: {len(chunks)} 块, {len(text)} 字")
+            logger.info("[kb-indexer] {}: {} 块, {} 字", book_name, len(chunks), len(text))
         except Exception as e:
-            logger.exception(f"[kb-indexer] 解析 {book_name} 失败: {e}")
+            logger.exception("[kb-indexer] 解析 {} 失败: {}", book_name, e)
 
     if not all_chunks:
         logger.error("[kb-indexer] 无有效文本块，索引构建失败")
@@ -186,8 +187,11 @@ def build_index(
 
     elapsed = time.time() - t0
     logger.info(
-        f"[kb-indexer] 索引构建完成: {len(all_chunks)} 块, {len(book_names)} 本书, "
-        f"耗时 {elapsed:.1f}s, 输出至 {output_dir}"
+        "[kb-indexer] 索引构建完成: {} 块, {} 本书, 耗时 {:.1f}s, 输出至 {}",
+        len(all_chunks),
+        len(book_names),
+        elapsed,
+        output_dir,
     )
     return len(all_chunks), book_names
 
@@ -234,5 +238,5 @@ def load_index(output_dir: Path = INDEX_DIR) -> tuple[list[Chunk], list[list[str
         meta = json.loads(meta_file.read_text(encoding="utf-8")) if meta_file.exists() else {}
         return chunks, tokens, meta
     except Exception as e:
-        logger.exception(f"[kb-indexer] 加载索引失败: {e}")
+        logger.exception("[kb-indexer] 加载索引失败: {}", e)
         return None

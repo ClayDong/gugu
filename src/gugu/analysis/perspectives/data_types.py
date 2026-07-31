@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -141,6 +142,12 @@ class StockDataContext:
     us10y_yield: float = 0.0
     market_regime: str = ""  # 市场状态: risk_on/risk_off/neutral
 
+    # 数据质量元数据
+    data_quality: str = "unavailable"
+    data_timestamp: str = ""
+    data_sources: list[str] = field(default_factory=list)
+    missing_core_fields: list[str] = field(default_factory=list)
+
     # 原始K线数据（可选，供高级分析）
     kline_data: list[dict[str, Any]] = field(default_factory=list)
 
@@ -153,15 +160,92 @@ class StockDataContext:
         return d
 
 
+# 数据完整度检查的核心字段（共 48 个，来源于外部数据源）
+_DATA_COMPLETENESS_FIELDS = [
+    "price",
+    "change_pct",
+    "volume_ratio",
+    "turnover_pct",
+    "mcap_billion",
+    "pe_static",
+    "pe_dynamic",
+    "pb",
+    "roe",
+    "revenue_growth",
+    "profit_growth",
+    "ma5",
+    "ma10",
+    "ma20",
+    "ma60",
+    "ma120",
+    "ma250",
+    "rsi14",
+    "macd_dif",
+    "macd_dea",
+    "macd_hist",
+    "bollinger_upper",
+    "bollinger_lower",
+    "atr14",
+    "high_52w",
+    "low_52w",
+    "distance_from_52w_high",
+    "distance_from_52w_low",
+    "main_net_inflow",
+    "main_net_inflow_5d",
+    "retail_net_inflow",
+    "market_stage",
+    "sector_rotation_strength",
+    "hot_sector",
+    "debt_ratio",
+    "operating_cash_flow",
+    "free_cash_flow",
+    "dividend_yield",
+    "institutional_holding",
+    "insider_buying",
+    "insider_selling",
+    "industry",
+    "industry_pe_avg",
+    "is_monopoly",
+    "moat_type",
+    "gold_price",
+    "oil_price",
+    "usd_cny",
+    "us10y_yield",
+    "market_regime",
+]
+
+
+def calc_data_completeness(ctx: StockDataContext) -> float:
+    """计算输入上下文中真实数据填充比率。
+
+    遍历 _DATA_COMPLETENESS_FIELDS 中的每个字段，
+    统计非默认值的比例（浮点数 0、布尔 False、空字符串视为未填充）。
+    """
+    if not _DATA_COMPLETENESS_FIELDS:
+        return 1.0
+    filled = 0
+    for f in _DATA_COMPLETENESS_FIELDS:
+        val = getattr(ctx, f, 0)
+        if isinstance(val, (bool, str)):
+            if val:
+                filled += 1
+        else:
+            if val is not None and val != 0 and not (isinstance(val, float) and math.isnan(val)):
+                filled += 1
+    return round(filled / len(_DATA_COMPLETENESS_FIELDS), 2)
+
+
 @dataclass
 class PerspectiveScore:
     """单一视角的评分结果。"""
 
     perspective: str  # 视角名称
-    score: float  # 0-10 分
+    score: float | None  # 0-10 分，错误时为空
     weight: float  # 该视角权重
     confidence: float = 1.0  # 评分置信度 (0-1)，数据不足时降低
     reasoning: str = ""  # 评分推理链（可解释性）
+    status: str = "ok"  # 评分状态：ok/error
+    error: str = ""  # 评分错误信息
     key_factors: list[str] = field(default_factory=list)  # 关键因子
     risk_flags: list[str] = field(default_factory=list)  # 风险标记
     verdict: str = ""  # 一句话判定
@@ -169,17 +253,19 @@ class PerspectiveScore:
     @property
     def weighted_score(self) -> float:
         """加权得分 = 分数 × 权重 × 置信度。"""
+        if self.status != "ok" or self.score is None:
+            return 0.0
         return self.score * self.weight * self.confidence
 
     @property
     def passed(self) -> bool:
         """是否通过（≥ 通过阈值）。"""
-        return self.score >= PASS_THRESHOLD
+        return self.status == "ok" and self.score is not None and self.score >= PASS_THRESHOLD
 
     @property
     def is_fatal(self) -> bool:
         """是否致命缺陷（低于最低容忍分）。"""
-        return self.score < MIN_PERSPECTIVE_SCORE
+        return self.status == "ok" and self.score is not None and self.score < MIN_PERSPECTIVE_SCORE
 
 
 @dataclass
@@ -197,6 +283,10 @@ class PerspectiveAnalysisResult:
     min_perspective: str = ""  # 最低分视角名称
     passed_count: int = 0  # 通过视角数
     fatal_count: int = 0  # 致命缺陷数
+    expected_count: int = 0  # 预期视角数
+    scored_count: int = 0  # 有效评分数
+    missing_count: int = 0  # 缺失评分数
+    error_count: int = 0  # 评分错误数
     overall_verdict: str = ""  # 综合判定
     overall_reasoning: str = ""  # 综合推理
     top_strengths: list[str] = field(default_factory=list)  # 核心优势
@@ -205,12 +295,25 @@ class PerspectiveAnalysisResult:
     entry_price: float | None = None  # 建议入场价
     stop_loss_price: float | None = None  # 建议止损价
     target_price: float | None = None  # 建议目标价
+    data_completeness: float = 1.0  # 输入数据完整度 (0-1)，P0-3 修复
 
     @property
     def passed(self) -> bool:
         """是否通过综合评估。"""
+        expected_count = (
+            self.expected_count or len(self.scores) or self.passed_count + self.fatal_count
+        )
+        scored_count = self.scored_count or sum(1 for score in self.scores if score.status == "ok")
+        if not scored_count and not self.scores:
+            scored_count = expected_count - self.error_count - self.missing_count
+        error_count = self.error_count or sum(1 for score in self.scores if score.status == "error")
         return (
-            self.composite_score >= COMPOSITE_PASS_THRESHOLD
+            expected_count > 0
+            and scored_count == expected_count
+            and self.missing_count == 0
+            and error_count == 0
+            and self.composite_score >= COMPOSITE_PASS_THRESHOLD
+            and self.min_score >= MIN_PERSPECTIVE_SCORE
             and self.fatal_count == 0
             and self.passed_count >= 7  # 至少7个视角通过
         )
@@ -245,6 +348,10 @@ class PerspectiveAnalysisResult:
             "min_perspective": self.min_perspective,
             "passed_count": self.passed_count,
             "fatal_count": self.fatal_count,
+            "expected_count": self.expected_count,
+            "scored_count": self.scored_count,
+            "missing_count": self.missing_count,
+            "error_count": self.error_count,
             "overall_verdict": self.overall_verdict,
             "overall_reasoning": self.overall_reasoning,
             "top_strengths": self.top_strengths,
@@ -253,6 +360,7 @@ class PerspectiveAnalysisResult:
             "entry_price": self.entry_price,
             "stop_loss_price": self.stop_loss_price,
             "target_price": self.target_price,
+            "data_completeness": self.data_completeness,
             "passed": self.passed,
             "scores": [
                 {
@@ -260,6 +368,8 @@ class PerspectiveAnalysisResult:
                     "score": s.score,
                     "weight": s.weight,
                     "confidence": s.confidence,
+                    "status": s.status,
+                    "error": s.error,
                     "weighted_score": round(s.weighted_score, 3),
                     "passed": s.passed,
                     "is_fatal": s.is_fatal,

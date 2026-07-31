@@ -1,4 +1,5 @@
 """全市场扫描：从 A 股主要指数成分股中筛选当前有策略信号的股票。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -49,18 +50,22 @@ async def scan(top_n: int = 30) -> None:
 
             signal = router.route(df, symbol, name=name)
             if signal is not None:
-                results.append({
-                    "symbol": symbol,
-                    "name": name,
-                    "direction": signal["direction"],
-                    "confidence": signal["confidence"],
-                    "strategies": signal["strategies"],
-                })
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "name": name,
+                        "direction": signal["direction"],
+                        "confidence": signal["confidence"],
+                        "strategies": signal["strategies"],
+                    }
+                )
                 direction_text = {"buy": "买入", "sell": "卖出"}.get(
                     signal["direction"], signal["direction"]
                 )
-                print(f"  [{len(results)}] {name}({symbol}) {direction_text} "
-                      f"置信度={signal['confidence']:.2f} 策略={signal['strategies']}")
+                print(
+                    f"  [{len(results)}] {name}({symbol}) {direction_text} "
+                    f"置信度={signal['confidence']:.2f} 策略={signal['strategies']}"
+                )
         except Exception as e:
             pass  # 跳过失败的
 
@@ -77,12 +82,16 @@ async def scan(top_n: int = 30) -> None:
     if buy_signals:
         print(f"\n买入信号 ({len(buy_signals)}):")
         for r in sorted(buy_signals, key=lambda x: -x["confidence"]):
-            print(f"  {r['name']}({r['symbol']}) 置信度={r['confidence']:.2f} 策略={r['strategies']}")
+            print(
+                f"  {r['name']}({r['symbol']}) 置信度={r['confidence']:.2f} 策略={r['strategies']}"
+            )
 
     if sell_signals:
         print(f"\n卖出信号 ({len(sell_signals)}):")
         for r in sorted(sell_signals, key=lambda x: -x["confidence"]):
-            print(f"  {r['name']}({r['symbol']}) 置信度={r['confidence']:.2f} 策略={r['strategies']}")
+            print(
+                f"  {r['name']}({r['symbol']}) 置信度={r['confidence']:.2f} 策略={r['strategies']}"
+            )
 
     # 输出可复制的代码列表
     all_codes = [r["symbol"] for r in sorted(results, key=lambda x: -x["confidence"])]

@@ -75,7 +75,12 @@ class EngineOpsMixin:
         self._save_notified_signals()
 
     def _load_notified_signals(self) -> dict[str, str]:
-        """从文件加载已通知信号记录（持久化去重）。"""
+        """从文件加载已通知信号记录（持久化去重）。
+
+        重要：本方法只读文件、只清理内存中的过期记录。
+        不写入文件（避免与 _mark_notified 并发写入竞态）。
+        过期清理由 _save_notified_signals 在写入时顺便完成。
+        """
         try:
             if self._notified_signals_file.exists():
                 with open(self._notified_signals_file, encoding="utf-8") as f:
@@ -86,16 +91,10 @@ class EngineOpsMixin:
                 # v0.7.6 P0-13修复：保留所有格式key（包括带策略名的key）
                 cleaned = {k: v for k, v in data.items() if v >= cutoff_date}
                 if len(cleaned) != len(data):
-                    logger.info(f"清理过期去重 key: {len(data)} → {len(cleaned)} 条")
-                if cleaned:
-                    atomic_write_json(
-                        self._notified_signals_file,
-                        cleaned,
-                        ensure_ascii=False,
-                    )
+                    logger.info("清理过期去重 key: {} → {} 条", len(data), len(cleaned))
                 return cleaned
         except Exception as e:
-            logger.warning(f"加载已通知信号记录失败: {e}")
+            logger.warning("加载已通知信号记录失败: {}", e)
         return {}
 
     def _save_notified_signals(self) -> None:
@@ -106,7 +105,7 @@ class EngineOpsMixin:
                     with open(self._notified_signals_file, encoding="utf-8") as f:
                         existing = json.load(f)
                     if existing:
-                        logger.info(f"内存去重数据为空，使用文件已有数据 ({len(existing)} 条)")
+                        logger.info("内存去重数据为空，使用文件已有数据 ({} 条)", len(existing))
                         self._notified_signals = existing
                         return
                 except Exception:
@@ -125,7 +124,7 @@ class EngineOpsMixin:
                 ensure_ascii=False,
             )
         except Exception as e:
-            logger.warning(f"保存已通知信号记录失败: {e}")
+            logger.warning("保存已通知信号记录失败: {}", e)
 
     def _clear_today_notified_signals(self) -> None:
         """清除当日的信号去重记录。"""
@@ -134,7 +133,7 @@ class EngineOpsMixin:
         for k in keys_to_remove:
             del self._notified_signals[k]
         if keys_to_remove:
-            logger.info(f"已清除 {len(keys_to_remove)} 条当日信号去重记录，补发熔断期间信号")
+            logger.info("已清除 {} 条当日信号去重记录，补发熔断期间信号", len(keys_to_remove))
             self._save_notified_signals()
 
     async def _scan_signals(self, extra_symbols: list[str] | None = None) -> list[dict[str, Any]]:
@@ -147,21 +146,26 @@ class EngineOpsMixin:
         regime = await self._regime_detector.detect()
         current_regime = regime.get("regime", "unknown")
         self._current_regime = current_regime
-        logger.info(f"市场择时: {regime['reason']}")
+        logger.info("市场择时: {}", regime["reason"])
 
         market_status = await self._market_filter.check_market()
         if not regime.get("buy_signal_allowed", False):
             logger.warning(
-                f"大市过滤: {market_status['regime']} / 市场择时={current_regime}，"
-                f"禁止买入 — {market_status['reason']}，"
-                f"跳过自动选股候选，仅扫描 watchlist（{len(self._watchlist)} 只自选股）"
+                "大市过滤: {} / 市场择时={}，"
+                "禁止买入 — {}，"
+                "跳过自动选股候选，仅扫描 watchlist（{} 只自选股）",
+                market_status["regime"],
+                current_regime,
+                market_status["reason"],
+                len(self._watchlist),
             )
             scan_list = list(self._watchlist)
             extra_symbols = []
         elif not market_status["bullish"]:
             logger.info(
-                f"大市过滤: {market_status['regime']} 非 bull，"
-                f"但市场择时={current_regime} 允许买入，保留自动选股候选"
+                "大市过滤: {} 非 bull，" "但市场择时={} 允许买入，保留自动选股候选",
+                market_status["regime"],
+                current_regime,
             )
 
         try:
@@ -175,10 +179,10 @@ class EngineOpsMixin:
                 if _new_names != _old_names:
                     self._router = SignalRouter(regime_strategies)
                     logger.info(
-                        f"v0.5.6 按 regime={current_regime} 动态加载策略: {sorted(_new_names)}"
+                        "v0.5.6 按 regime={} 动态加载策略: {}", current_regime, sorted(_new_names)
                     )
         except Exception as _e:
-            logger.warning(f"v0.5.6 按 regime 加载策略失败，回退默认: {_e}")
+            logger.warning("v0.5.6 按 regime 加载策略失败，回退默认: {}", _e)
 
         budget = self._position_controller.calculate(
             regime=regime,
@@ -186,8 +190,10 @@ class EngineOpsMixin:
             is_halted=self._risk.is_halted,
         )
         logger.info(
-            f"仓位预算: 总上限={budget.total_limit:.0%}, "
-            f"单股上限={budget.single_limit:.0%}, {budget.reason}"
+            "仓位预算: 总上限={:.0%}, 单股上限={:.0%}, {}",
+            budget.total_limit,
+            budget.single_limit,
+            budget.reason,
         )
 
         self._event_engine.put(
@@ -217,7 +223,7 @@ class EngineOpsMixin:
         semaphore = asyncio.Semaphore(max_concurrency)
 
         if scan_list and len(scan_list) > 5:
-            logger.info(f"批量预取 {len(scan_list)} 只股票历史数据（并发 {max_concurrency}）...")
+            logger.info("批量预取 {} 只股票历史数据（并发 {}）...", len(scan_list), max_concurrency)
             batch_history = {}
 
             async def _prefetch_one(sym: str) -> tuple[str, Any] | None:
@@ -226,7 +232,7 @@ class EngineOpsMixin:
                     if df is not None and not df.empty:
                         return sym, df
                 except Exception as e:
-                    logger.warning(f"获取 {sym} 历史数据失败，跳过: {e}")
+                    logger.warning("获取 {} 历史数据失败，跳过: {}", sym, e)
                 return None
 
             async def _prefetch_with_sem(sym: str) -> tuple[str, Any] | None:
@@ -239,7 +245,7 @@ class EngineOpsMixin:
                 if r is not None:
                     sym, df = r
                     batch_history[sym] = df
-            logger.info(f"批量预取完成: {len(batch_history)}/{len(scan_list)}")
+            logger.info("批量预取完成: {}/{}", len(batch_history), len(scan_list))
         else:
             batch_history = {}
 
@@ -289,13 +295,15 @@ class EngineOpsMixin:
                         and regime.get("sell_signal_required")
                     ):
                         logger.info(
-                            f"{symbol} 市场状态 {regime['regime']} 建议减仓，"
-                            f"仓位上限已由 budget 限制为 {signal['suggested_position_ratio']:.2%}"
+                            "{} 市场状态 {} 建议减仓，" "仓位上限已由 budget 限制为 {:.2%}",
+                            symbol,
+                            regime["regime"],
+                            signal["suggested_position_ratio"],
                         )
 
                     return signal
                 except Exception as e:
-                    logger.error(f"扫描 {symbol} 失败: {e}")
+                    logger.error("扫描 {} 失败: {}", symbol, e)
                     return None
 
         results: list[dict[str, Any] | None] = []
@@ -305,6 +313,7 @@ class EngineOpsMixin:
             signals = [s for s in results if s is not None]
 
         self._collect_filtered_signals(results, scan_list)
+        self._log_daily_signal_summary(signals, scan_list)
 
         return signals
 
@@ -332,10 +341,41 @@ class EngineOpsMixin:
                 )
         self._filtered_signals_today = filtered
         if filtered:
-            logger.info(
-                f"今日被过滤信号: {len(filtered)} 条 — "
-                + ", ".join(f"{s['symbol']}({s['filter_reason'][:20]})" for s in filtered[:5])
+            _filter_summary = ", ".join(
+                f"{s['symbol']}({s['filter_reason'][:20]})" for s in filtered[:5]
             )
+            logger.info("今日被过滤信号: {} 条 — {}", len(filtered), _filter_summary)
+
+    def _log_daily_signal_summary(
+        self,
+        signals: list[dict[str, Any]],
+        scan_list: list[str],
+    ) -> None:
+        """记录当日信号统计摘要：累计信号数、通过/拒绝数、按策略分组。"""
+        total_signals = len(signals)
+        filtered_count = len(self._filtered_signals_today)
+
+        strategy_stats: dict[str, int] = {}
+        for sig in signals:
+            sname = sig.get("strategy", sig.get("strategies", ["unknown"]))
+            if isinstance(sname, list):
+                for s in sname:
+                    strategy_stats[s] = strategy_stats.get(s, 0) + 1
+            else:
+                strategy_stats[sname] = strategy_stats.get(sname, 0) + 1
+
+        if strategy_stats:
+            strategy_detail = " | ".join(f"{k}={v}" for k, v in sorted(strategy_stats.items()))
+        else:
+            strategy_detail = "无"
+
+        logger.info(
+            "📊 当日信号统计: 扫描 {} 只 | 通过 {} 个 | 过滤 {} 个 | {}",
+            len(scan_list),
+            total_signals,
+            filtered_count,
+            strategy_detail,
+        )
 
     async def _process_signal(self, signal: dict[str, Any]) -> None:
         """处理单个信号：signal_only/track_live 模式只通知不下单，paper/live 模式走风控+下单+通知。"""
@@ -354,13 +394,13 @@ class EngineOpsMixin:
         today_str = date.today().isoformat()
         async with self._dedup_lock:
             if self._notified_signals.get(dedup_key) == today_str:
-                logger.info(f"{symbol} {direction} 信号已通知过，跳过重复发送")
+                logger.info("{} {} 信号已通知过，跳过重复发送", symbol, direction)
                 return
             # v0.7.6 P0-13修复：先不标记，发送成功后再标记，避免发送失败但已标记导致无法重试
 
         if self._exec_mode in ("signal_only", "track_live"):
             mode_label = "track_live" if self._exec_mode == "track_live" else "signal_only"
-            logger.info(f"{symbol} {direction} 信号（{mode_label} 模式，仅通知不下单）")
+            logger.info("{} {} 信号（{} 模式，仅通知不下单）", symbol, direction, mode_label)
             try:
                 sig_price = (
                     float(signal.get("price", 0)) if signal.get("price") is not None else 0.0
@@ -372,45 +412,51 @@ class EngineOpsMixin:
             if sig_price <= 1.0:
                 if self._should_alert(f"{symbol}_price_anomaly"):
                     logger.error(
-                        f"{symbol} {mode_label} 模式价格异常 price={sig_price}，拒绝通知并跳过历史记录"
+                        "{} {} 模式价格异常 price={}，拒绝通知并跳过历史记录",
+                        symbol,
+                        mode_label,
+                        sig_price,
                     )
                 return
             if sig_confidence is None or (
                 isinstance(sig_confidence, (int, float)) and sig_confidence <= 0
             ):
                 logger.error(
-                    f"{symbol} {mode_label} 模式置信度异常 confidence={sig_confidence}，拒绝通知并跳过历史记录"
+                    "{} {} 模式置信度异常 confidence={}，拒绝通知并跳过历史记录",
+                    symbol,
+                    mode_label,
+                    sig_confidence,
                 )
                 return
             if not sig_strategies or (
                 isinstance(sig_strategies, list) and len(sig_strategies) == 0
             ):
-                logger.error(f"{symbol} {mode_label} 模式策略为空，拒绝通知并跳过历史记录")
+                logger.error("{} {} 模式策略为空，拒绝通知并跳过历史记录", symbol, mode_label)
                 return
 
             try:
                 record_signal_history(signal, None, None)
             except Exception as e:
-                logger.warning(f"记录信号历史失败: {e}")
+                logger.warning("记录信号历史失败: {}", e)
             self._inject_performance_summary(signal)
             notify_ok = await self._notifier.notify_signal(signal)
             if notify_ok:
                 self._mark_notified(signal)
             else:
-                logger.error(f"{symbol} 信号通知失败，请检查飞书配置")
+                logger.error("{} 信号通知失败，请检查飞书配置", symbol)
             return
 
         if signal.get("wisdom_filtered"):
-            logger.info(f"{symbol} 信号被 wisdom 入场过滤，仅通知不下单")
+            logger.info("{} 信号被 wisdom 入场过滤，仅通知不下单", symbol)
             try:
                 record_signal_history(signal, None, None)
             except Exception as e:
-                logger.warning(f"记录 wisdom 过滤信号历史失败: {e}")
+                logger.warning("记录 wisdom 过滤信号历史失败: {}", e)
             notify_ok = await self._notifier.notify_signal(signal)
             if notify_ok:
                 self._mark_notified(signal)
             else:
-                logger.error(f"{symbol} wisdom 过滤信号通知失败，请检查飞书配置与网络")
+                logger.error("{} wisdom 过滤信号通知失败，请检查飞书配置与网络", symbol)
             return
 
         result_dict = await self._order_manager.execute(
@@ -437,7 +483,7 @@ class EngineOpsMixin:
                 alert.symbol
             )
             if needs_alert:
-                logger.warning(f"止损告警升级 {alert.symbol}: level={level} {urgency_label}")
+                logger.warning("止损告警升级 {}: level={} {}", alert.symbol, level, urgency_label)
                 try:
                     await self._notifier.send_text(
                         f"{urgency_label} 止损告警升级\n"
@@ -447,7 +493,7 @@ class EngineOpsMixin:
                         f"请尽快手动执行止损"
                     )
                 except Exception as e:
-                    logger.warning(f"止损升级告警发送失败: {e}")
+                    logger.warning("止损升级告警发送失败: {}", e)
 
     async def _check_holdings_sell_signals(self, portfolio: dict) -> list[dict]:
         """收盘后检查持仓股卖出信号。"""
@@ -455,7 +501,7 @@ class EngineOpsMixin:
             return []
 
         symbols = list(portfolio.keys())
-        logger.info(f"持仓卖出信号检查: {len(symbols)} 只持仓股")
+        logger.info("持仓卖出信号检查: {} 只持仓股", len(symbols))
 
         signals = await self._scan_signals(extra_symbols=symbols)
         if not signals:
@@ -499,7 +545,7 @@ class EngineOpsMixin:
             )
 
         if sell_alerts:
-            logger.info(f"持仓卖出信号: {len(sell_alerts)} 只股票需关注")
+            logger.info("持仓卖出信号: {} 只股票需关注", len(sell_alerts))
         return sell_alerts
 
     @staticmethod
@@ -566,7 +612,7 @@ class EngineOpsMixin:
                 "strategies": list(strategies),
             }
         except Exception as e:
-            logger.debug(f"注入信号绩效摘要失败: {e}")
+            logger.debug("注入信号绩效摘要失败: {}", e)
 
     @staticmethod
     def _rotate_jsonl(path: Path, max_lines: int = 5000) -> None:
@@ -579,9 +625,9 @@ class EngineOpsMixin:
                     keep = lines[-max_lines // 2 :]
                     with path.open("w", encoding="utf-8") as f:
                         f.writelines(keep)
-                    logger.info(f"历史文件轮转: {path.name} {len(lines)}→{len(keep)} 行")
+                    logger.info("历史文件轮转: {} {}→{} 行", path.name, len(lines), len(keep))
         except Exception as e:
-            logger.warning(f"历史文件轮转失败: {e}")
+            logger.warning("历史文件轮转失败: {}", e)
 
     def _write_heartbeat(self, status: str) -> None:
         """写入心跳文件，便于外部监控。"""
@@ -597,7 +643,7 @@ class EngineOpsMixin:
             cash = account.cash
             positions_count = len(account.positions)
         except Exception as e:
-            logger.warning(f"心跳获取账户信息失败，使用 fallback 值: {e}")
+            logger.warning("心跳获取账户信息失败，使用 fallback 值: {}", e)
             total_value = 0.0
             cash = 0.0
             positions_count = 0
@@ -615,18 +661,18 @@ class EngineOpsMixin:
         try:
             atomic_write_text(path, payload_json)
         except Exception as e:
-            logger.warning(f"写入 heartbeat.json 失败: {e}")
+            logger.warning("写入 heartbeat.json 失败: {}", e)
 
         try:
             with history_path.open("a", encoding="utf-8") as f:
                 f.write(payload_json + "\n")
         except Exception as e:
-            logger.warning(f"写入 heartbeat_history.jsonl 失败: {e}")
+            logger.warning("写入 heartbeat_history.jsonl 失败: {}", e)
 
     def _on_risk_alert(self, event: dict[str, Any]) -> None:
         """风险事件处理器。"""
         data = event.get("data", {})
-        logger.warning(f"风险事件: level={data.get('level')}, message={data.get('message', '')}")
+        logger.warning("风险事件: level={}, message={}", data.get("level"), data.get("message", ""))
 
     def _on_stop_loss_triggered(self, event: dict[str, Any]) -> None:
         """止损触发事件处理器。"""
@@ -634,8 +680,10 @@ class EngineOpsMixin:
         symbol = data.get("symbol", "")
         if self._should_alert(f"{symbol}_stop_loss"):
             logger.warning(
-                f"止损触发事件: symbol={symbol}, "
-                f"price={data.get('price')}, quantity={data.get('quantity')}"
+                "止损触发事件: symbol={}, price={}, quantity={}",
+                symbol,
+                data.get("price"),
+                data.get("quantity"),
             )
         if self._stop_loss_escalator and symbol:
             self._stop_loss_escalator.record_stop_loss_triggered(symbol)
@@ -644,8 +692,11 @@ class EngineOpsMixin:
         """订单成交事件处理器。"""
         data = event.get("data", {})
         logger.info(
-            f"订单成交: {data.get('symbol')} "
-            f"{data.get('direction')} {data.get('quantity')}@{data.get('price')}"
+            "订单成交: {} {} {}@{}",
+            data.get("symbol"),
+            data.get("direction"),
+            data.get("quantity"),
+            data.get("price"),
         )
 
 

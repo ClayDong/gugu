@@ -17,6 +17,7 @@
     from scripts.backtest_report_generator import generate_report_from_json
     md = generate_report_from_json(data)
 """
+
 from __future__ import annotations
 
 import math
@@ -83,8 +84,12 @@ def generate_report(results: list[BacktestResult]) -> str:
     # ── 1. 策略总览汇总表 ──
     lines.append("## 1. 策略总览汇总表")
     lines.append("")
-    lines.append("| 策略 | 样本数 | 总收益(中位数) | 年化(中位数) | 夏普(中位数) | 最大回撤(中位数) | 胜率(中位数) | 盈亏比(中位数) | 交易次数(均值) | 持仓天数(均值) | 收益>0显著性 |")
-    lines.append("|------|--------|---------------|-------------|-------------|-----------------|-------------|---------------|--------------|--------------|-------------|")
+    lines.append(
+        "| 策略 | 样本数 | 总收益(中位数) | 年化(中位数) | 夏普(中位数) | 最大回撤(中位数) | 胜率(中位数) | 盈亏比(中位数) | 交易次数(均值) | 持仓天数(均值) | 收益>0显著性 |"
+    )
+    lines.append(
+        "|------|--------|---------------|-------------|-------------|-----------------|-------------|---------------|--------------|--------------|-------------|"
+    )
     for sname in sorted(summaries.keys()):
         s = summaries[sname]
         n = s["n"]
@@ -129,7 +134,23 @@ def generate_report(results: list[BacktestResult]) -> str:
             f"| {'策略':<20} | {'样本':<6} | "
             f"{'均值':>10} | {'中位数':>10} | {'Std':>10} | {'P25':>10} | {'P75':>10} |"
         )
-        sep = "|" + "-" * 22 + "|" + "-" * 8 + "|" + "-" * 12 + "|" + "-" * 12 + "|" + "-" * 12 + "|" + "-" * 12 + "|" + "-" * 12 + "|"
+        sep = (
+            "|"
+            + "-" * 22
+            + "|"
+            + "-" * 8
+            + "|"
+            + "-" * 12
+            + "|"
+            + "-" * 12
+            + "|"
+            + "-" * 12
+            + "|"
+            + "-" * 12
+            + "|"
+            + "-" * 12
+            + "|"
+        )
         lines.append(header)
         lines.append(sep)
         for sname in sorted_names:
@@ -173,10 +194,18 @@ def generate_report(results: list[BacktestResult]) -> str:
     best_wr = max(summaries.keys(), key=lambda n: summaries[n]["win_rate"]["median"])
     best_ret = max(summaries.keys(), key=lambda n: summaries[n]["total_return"]["median"])
     best_pf = max(summaries.keys(), key=lambda n: summaries[n]["profit_factor"]["median"])
-    lines.append(f"- **夏普最佳**: {best_sharpe} (中位数 {summaries[best_sharpe]['sharpe']['median']:.3f})")
-    lines.append(f"- **胜率最佳**: {best_wr} (中位数 {_pct(summaries[best_wr]['win_rate']['median'])})")
-    lines.append(f"- **收益最佳**: {best_ret} (中位数 {_pct(summaries[best_ret]['total_return']['median'])})")
-    lines.append(f"- **盈亏比最佳**: {best_pf} (中位数 {_pf_str(summaries[best_pf]['profit_factor']['median'])})")
+    lines.append(
+        f"- **夏普最佳**: {best_sharpe} (中位数 {summaries[best_sharpe]['sharpe']['median']:.3f})"
+    )
+    lines.append(
+        f"- **胜率最佳**: {best_wr} (中位数 {_pct(summaries[best_wr]['win_rate']['median'])})"
+    )
+    lines.append(
+        f"- **收益最佳**: {best_ret} (中位数 {_pct(summaries[best_ret]['total_return']['median'])})"
+    )
+    lines.append(
+        f"- **盈亏比最佳**: {best_pf} (中位数 {_pf_str(summaries[best_pf]['profit_factor']['median'])})"
+    )
     lines.append("")
 
     for sname in sorted(summaries.keys()):
@@ -184,13 +213,19 @@ def generate_report(results: list[BacktestResult]) -> str:
         ret_med = summaries[sname]["total_return"]["median"]
         sharpe_med = summaries[sname]["sharpe"]["median"]
         if sig["significant"] and ret_med > 0 and sharpe_med > 0.5:
-            lines.append(f"- ✅ **{sname}**: 收益显著为正 (p={sig['p_value']:.4f}), 夏普 {sharpe_med:.2f} → 建议保留")
+            lines.append(
+                f"- ✅ **{sname}**: 收益显著为正 (p={sig['p_value']:.4f}), 夏普 {sharpe_med:.2f} → 建议保留"
+            )
         elif not sig["significant"]:
             lines.append(f"- ⚠️ **{sname}**: 收益不显著 (p={sig['p_value']:.4f}) → 需更多数据验证")
         elif ret_med < 0 or sharpe_med < 0:
-            lines.append(f"- ❌ **{sname}**: 收益中位数 {_pct(ret_med)}, 夏普 {sharpe_med:.2f} → 建议禁用或调优")
+            lines.append(
+                f"- ❌ **{sname}**: 收益中位数 {_pct(ret_med)}, 夏普 {sharpe_med:.2f} → 建议禁用或调优"
+            )
         else:
-            lines.append(f"- ? **{sname}**: 收益 {_pct(ret_med)}, 夏普 {sharpe_med:.2f} → 边缘，需观察")
+            lines.append(
+                f"- ? **{sname}**: 收益 {_pct(ret_med)}, 夏普 {sharpe_med:.2f} → 边缘，需观察"
+            )
     lines.append("")
 
     return "\n".join(lines)
@@ -260,11 +295,7 @@ def _compute_strategy_summary(
     # 提取各指标值
     metric_values: dict[str, list[float]] = {}
     for m_key in _CORE_METRICS:
-        values = [
-            r.metrics.get(m_key, 0.0)
-            for r in results
-            if r.metrics.get(m_key) is not None
-        ]
+        values = [r.metrics.get(m_key, 0.0) for r in results if r.metrics.get(m_key) is not None]
         metric_values[m_key] = values
 
     # 计算分布统计
@@ -280,7 +311,16 @@ def _compute_strategy_summary(
 def _distribution_stats(values: list[float]) -> dict[str, float]:
     """计算一组值的分布统计。"""
     if not values:
-        return {"mean": 0.0, "median": 0.0, "std": 0.0, "p25": 0.0, "p75": 0.0, "min": 0.0, "max": 0.0, "n": 0}
+        return {
+            "mean": 0.0,
+            "median": 0.0,
+            "std": 0.0,
+            "p25": 0.0,
+            "p75": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "n": 0,
+        }
     arr = np.array(values, dtype=float)
     return {
         "mean": float(np.mean(arr)),
@@ -309,7 +349,12 @@ def _one_sample_ttest(values: list[float], popmean: float = 0.0) -> dict[str, An
     std = float(np.std(arr, ddof=1))
 
     if std == 0:
-        return {"t_stat": float("inf") if mean > popmean else float("-inf"), "p_value": 0.0, "significant": True, "mean": mean}
+        return {
+            "t_stat": float("inf") if mean > popmean else float("-inf"),
+            "p_value": 0.0,
+            "significant": True,
+            "mean": mean,
+        }
 
     se = std / math.sqrt(n)
     t_stat = (mean - popmean) / se
@@ -322,9 +367,11 @@ def _one_sample_ttest(values: list[float], popmean: float = 0.0) -> dict[str, An
     except ImportError:
         # 手动近似（正态近似，大样本下准确）
         from scipy import stats as scipy_stats
+
         # 如果 scipy 不可用，使用正态近似
         try:
             from scipy.stats import norm
+
             p_value = float(norm.sf(abs(t_stat)) * 2)
         except ImportError:
             # 极简近似：t 分布自由度大时接近正态

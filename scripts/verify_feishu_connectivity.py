@@ -2,6 +2,7 @@
 
 用于运维验证飞书配置是否正常，避免与真实信号混淆。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -57,7 +58,10 @@ async def main() -> None:
                         ),
                     },
                 },
-                {"tag": "note", "elements": [{"tag": "plain_text", "content": "gugu 信号系统运维验证"}]},
+                {
+                    "tag": "note",
+                    "elements": [{"tag": "plain_text", "content": "gugu 信号系统运维验证"}],
+                },
             ],
         }
     }

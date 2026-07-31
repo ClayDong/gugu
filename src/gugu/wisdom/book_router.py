@@ -104,7 +104,7 @@ class BookPerspectiveRouter:
         """加载所有书籍视角的SKILL.md。"""
         books_dir = PROJECT_ROOT / "src" / "gugu" / "wisdom" / "skills" / "books"
         if not books_dir.exists():
-            logger.warning(f"[book-router] 书籍目录不存在: {books_dir}")
+            logger.warning("[book-router] 书籍目录不存在: {}", books_dir)
             return
 
         for perspective_dir in books_dir.iterdir():
@@ -115,7 +115,7 @@ class BookPerspectiveRouter:
                 name = perspective_dir.name
                 self._perspectives[name] = skill_file.read_text(encoding="utf-8")
 
-        logger.info(f"[book-router] 加载 {len(self._perspectives)} 个书籍视角")
+        logger.info("[book-router] 加载 {} 个书籍视角", len(self._perspectives))
 
     @property
     def available_perspectives(self) -> list[str]:

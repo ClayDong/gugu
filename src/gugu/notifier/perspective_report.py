@@ -153,8 +153,11 @@ def build_perspective_card(result: PerspectiveAnalysisResult) -> dict[str, Any]:
             lines_action.append(f"- {r}")
         lines_action.append("")
 
-    # 操作建议
-    lines_action.append(f"**💡 操作建议**: {result.suggestion}")
+    # 操作建议：未通过统一门禁时只能观察，不展示买入建议
+    if result.passed:
+        lines_action.append(f"**💡 操作建议**: {result.suggestion}")
+    else:
+        lines_action.append("**⛔ 操作建议**: 观察，不可交易")
 
     # 价位参考
     if result.entry_price or result.stop_loss_price or result.target_price:
@@ -300,13 +303,11 @@ def build_batch_summary_card(
                 f"判定: {r.overall_verdict} | "
                 f"短板: {r.min_perspective}({r.min_score:.1f})"
             )
+            lines.append("  - ⛔ 观察，不可交易")
             # 添加核心风险（最多2条）
             if r.top_risks:
                 for risk in r.top_risks[:2]:
                     lines.append(f"  - ⚠️ {risk}")
-            # 添加操作建议
-            if r.suggestion:
-                lines.append(f"  - 💡 {r.suggestion}")
         lines.append("")
 
     lines.append("---")

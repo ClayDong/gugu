@@ -43,6 +43,7 @@ class MacroRegimeEnhancer:
 
     def __init__(self) -> None:
         self._macro_snapshot: dict[str, Any] | None = None
+        self._last_adjusted_limit: float | None = None  # P1-9: 上次调整后的上限
 
     async def enhance(self, regime_result: dict[str, Any]) -> dict[str, Any]:
         """增强市场状态判断。
@@ -94,9 +95,19 @@ class MacroRegimeEnhancer:
         if total_reduction > 0:
             old_limit = regime_result.get("total_position_limit", 0.40)
             new_limit = max(old_limit - total_reduction, 0.0)
-            logger.info(
-                f"宏观增强: 仓位上限 {old_limit:.0%} → {new_limit:.0%} ({'; '.join(reasons)})"
-            )
+
+            # P1-9 修复：仅在新上限与上次调整不同时才日志，避免重复日志风暴
+            if (
+                self._last_adjusted_limit is None
+                or abs(new_limit - self._last_adjusted_limit) > 0.001
+            ):
+                logger.info(
+                    "宏观增强: 仓位上限 {:.0%} → {:.0%} ({})",
+                    old_limit,
+                    new_limit,
+                    "; ".join(reasons),
+                )
+                self._last_adjusted_limit = new_limit
 
             return {
                 **regime_result,
@@ -126,7 +137,7 @@ class MacroRegimeEnhancer:
             snapshot = await collector.collect()
             self._macro_snapshot = snapshot.to_dict() if hasattr(snapshot, "to_dict") else {}
         except Exception as e:
-            logger.debug(f"宏观数据采集失败: {e}")
+            logger.debug("宏观数据采集失败: {}", e)
             self._macro_snapshot = {}
 
     def _resolve_value(self, dim: str, key: str) -> Any:

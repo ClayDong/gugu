@@ -88,9 +88,9 @@ class TestComputeRegimeWeights:
 
         # 不归一化的原始权重应全部低于原始值
         for name in base_weights:
-            assert raw_adjusted[name] < base_weights[name], (
-                f"{name}: {raw_adjusted[name]} >= {base_weights[name]}"
-            )
+            assert (
+                raw_adjusted[name] < base_weights[name]
+            ), f"{name}: {raw_adjusted[name]} >= {base_weights[name]}"
 
         # 趋势策略乘数最低（0.2），原始权重应降低最多
         trend_ratio = raw_adjusted["turtle"] / base_weights["turtle"]
@@ -191,9 +191,9 @@ class TestRegimeMultipliers:
         """所有市场状态都应有四类策略的乘数。"""
         expected_categories = {"trend", "mean_revert", "breakout", "main_force"}
         for regime, multipliers in REGIME_MULTIPLIERS.items():
-            assert set(multipliers.keys()) == expected_categories, (
-                f"regime={regime} missing categories"
-            )
+            assert (
+                set(multipliers.keys()) == expected_categories
+            ), f"regime={regime} missing categories"
 
     def test_crash_multipliers_are_lowest(self):
         """暴跌市的乘数应是最低的。"""
@@ -202,6 +202,6 @@ class TestRegimeMultipliers:
             if regime == "crash":
                 continue
             for category in crash_multipliers:
-                assert crash_multipliers[category] <= multipliers[category], (
-                    f"crash {category} should be <= {regime} {category}"
-                )
+                assert (
+                    crash_multipliers[category] <= multipliers[category]
+                ), f"crash {category} should be <= {regime} {category}"

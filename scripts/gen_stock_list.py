@@ -12,6 +12,7 @@
     from gen_stock_list import generate_all_codes
     codes = generate_all_codes()  # 返回 [(sina_symbol, code, ''), ...]
 """
+
 from __future__ import annotations
 
 
@@ -59,6 +60,7 @@ def main() -> None:
     print(f"总代码数: {len(codes)}")
     # 按前缀统计
     from collections import Counter
+
     prefix_count = Counter(c[1][:3] for c in codes)
     for prefix, count in sorted(prefix_count.items()):
         print(f"  {prefix}xxx: {count} 只")

@@ -332,7 +332,11 @@ class AlphaFactory:
             tp = (high + low + close) / 3.0
             tp_series = pd.Series(tp)
             tp_ma = tp_series.rolling(20).mean().iloc[-1]
-            mean_dev = tp_series.rolling(20).apply(lambda x: np.mean(np.abs(x - x.mean())), raw=True).iloc[-1]
+            mean_dev = (
+                tp_series.rolling(20)
+                .apply(lambda x: np.mean(np.abs(x - x.mean())), raw=True)
+                .iloc[-1]
+            )
             if mean_dev > 0:
                 cci = (tp[-1] - tp_ma) / (0.015 * mean_dev)
                 cci_signal = float(np.clip(cci / 200, -1, 1))
@@ -523,7 +527,9 @@ class AlphaFactory:
                     direction="neutral",
                     value=round(float(doji_ratio), 4),
                     normalized=round(float(1 - doji_ratio), 4),
-                    signal=round(float(is_doji * 0.5 if close[-1] > close[-2] else -is_doji * 0.5), 4),
+                    signal=round(
+                        float(is_doji * 0.5 if close[-1] > close[-2] else -is_doji * 0.5), 4
+                    ),
                     description="十字星",
                 )
 
@@ -533,8 +539,12 @@ class AlphaFactory:
                 upper_shadow = high[-1] - max(open_arr[-1], close[-1])
                 body2 = abs(close[-1] - open_arr[-1])
                 if body2 > 0:
-                    is_hammer = 1.0 if (lower_shadow > 2 * body2 and upper_shadow < body2 * 0.5) else 0.0
-                    hammer_signal = float(is_hammer * 0.8 if close[-1] > close[-2] else -is_hammer * 0.8)
+                    is_hammer = (
+                        1.0 if (lower_shadow > 2 * body2 and upper_shadow < body2 * 0.5) else 0.0
+                    )
+                    hammer_signal = float(
+                        is_hammer * 0.8 if close[-1] > close[-2] else -is_hammer * 0.8
+                    )
                     factors["hammer"] = AlphaFactor(
                         name="hammer",
                         category="pattern",
@@ -630,6 +640,79 @@ class AlphaFactory:
         """获取所有因子名称列表"""
         return [f[0] for f in self.FACTOR_DEFS]
 
+    def compute_altalpha_factors(self, alt_data: dict[str, float]) -> dict[str, AlphaFactor]:
+        """计算另类因子，与技术因子融合。
+
+        Args:
+            alt_data: AltAlphaFactorEngine.compute_single() 的输出
+                      {factor_name: z_score, ...}
+
+        Returns:
+            dict[str, AlphaFactor]: 另类因子字典，可与技术因子合并
+        """
+        from gugu.analysis.altalpha_factors import FACTOR_NAMES
+
+        alt_factors: dict[str, AlphaFactor] = {}
+        for name in FACTOR_NAMES:
+            z = alt_data.get(name, 0.0)
+            # z-score → signal（clip到[-1,1]）
+            signal = float(np.clip(z / 3.0, -1, 1))
+            alt_factors[name] = AlphaFactor(
+                name=name,
+                category="altalpha",
+                direction="positive",
+                value=round(z, 4),
+                normalized=round((z + 3) / 6, 4),  # z-score [-3,3] → [0,1]
+                signal=signal,
+                description=f"另类因子:{name}",
+            )
+        return alt_factors
+
+    def composite_score_with_altalpha(
+        self,
+        tech_factors: dict[str, AlphaFactor],
+        alt_factors: dict[str, AlphaFactor] | None = None,
+        altalpha_weight: float = 0.3,
+    ) -> dict[str, Any]:
+        """技术因子 + 另类因子综合评分。
+
+        Args:
+            tech_factors: compute_all() 的输出（技术因子）
+            alt_factors: compute_altalpha_factors() 的输出（另类因子），可为None
+            altalpha_weight: 另类因子权重（0-1），默认0.3
+
+        Returns:
+            dict with: score, tech_score, altalpha_score, buy_signal, sell_signal, top_factors
+        """
+        # 技术因子评分（复用 composite_score 逻辑）
+        tech_result = self.composite_score(tech_factors)
+        tech_score = tech_result["score"]
+
+        # 另类因子评分
+        alt_score = 0.0
+        if alt_factors:
+            alt_signals = [f.signal for f in alt_factors.values()]
+            alt_score = float(np.mean(alt_signals)) if alt_signals else 0.0
+
+        # 加权融合
+        tech_w = 1.0 - altalpha_weight
+        combined_score = tech_score * tech_w + alt_score * altalpha_weight
+
+        # 合并所有因子用于 top_factors 排序
+        all_factors = {**tech_factors, **(alt_factors or {})}
+        sorted_factors = sorted(all_factors.values(), key=lambda f: abs(f.signal), reverse=True)
+        top_factors = [(f.name, f.signal, f.description) for f in sorted_factors[:5]]
+
+        return {
+            "score": round(float(combined_score), 4),
+            "tech_score": round(float(tech_score), 4),
+            "altalpha_score": round(float(alt_score), 4),
+            "buy_signal": combined_score > 0.15,
+            "sell_signal": combined_score < -0.15,
+            "signal_strength": round(abs(combined_score), 4),
+            "top_factors": top_factors,
+        }
+
     # === 辅助计算函数 ===
 
     def _rsi(self, close: np.ndarray, period: int = 14) -> float:
@@ -653,18 +736,29 @@ class AlphaFactory:
         m1: int = 3,
         m2: int = 3,
     ) -> tuple[float, float, float]:
-        """计算KDJ指标"""
+        """计算KDJ指标（EMA迭代，与pandas ewm(com=m-1, adjust=False)一致）"""
         if len(close) < n:
             return 50.0, 50.0, 50.0
-        low_n = np.min(low[-n:])
-        high_n = np.max(high[-n:])
-        if high_n == low_n:
-            rsv = 50.0
-        else:
-            rsv = (close[-1] - low_n) / (high_n - low_n) * 100
-        # 用EMA近似
-        k = float(rsv * 2 / 3 + 50 * 1 / 3)  # 简化
-        d = float(k * 2 / 3 + 50 * 1 / 3)
+        # 计算RSV序列
+        rsv_series = np.full(len(close), 50.0)
+        for i in range(n - 1, len(close)):
+            low_n = np.min(low[i - n + 1 : i + 1])
+            high_n = np.max(high[i - n + 1 : i + 1])
+            if high_n == low_n:
+                rsv_series[i] = 50.0
+            else:
+                rsv_series[i] = (close[i] - low_n) / (high_n - low_n) * 100
+        # EMA迭代（与pandas ewm(com=m-1, adjust=False)一致）
+        # alpha = 1/(1+com) = 1/m
+        k_series = np.full(len(close), 50.0)
+        d_series = np.full(len(close), 50.0)
+        alpha_k = 1.0 / m1
+        alpha_d = 1.0 / m2
+        for i in range(1, len(close)):
+            k_series[i] = (1 - alpha_k) * k_series[i - 1] + alpha_k * rsv_series[i]
+            d_series[i] = (1 - alpha_d) * d_series[i - 1] + alpha_d * k_series[i]
+        k = float(k_series[-1])
+        d = float(d_series[-1])
         j = float(3 * k - 2 * d)
         return k, d, j
 
@@ -681,11 +775,13 @@ class AlphaFactory:
     ) -> float:
         """计算offset位置的KDJ值"""
         idx = len(close) + offset
+        if idx <= 0:
+            return 50.0
         if idx < n:
             return 50.0
-        slice_high = high[:idx] if idx > 0 else high[:idx]
-        slice_low = low[:idx] if idx > 0 else low[:idx]
-        slice_close = close[:idx] if idx > 0 else close[:idx]
+        slice_high = high[:idx]
+        slice_low = low[:idx]
+        slice_close = close[:idx]
         if len(slice_close) < n:
             return 50.0
         k, d, _j = self._kdj(slice_high, slice_low, slice_close, n, m1, m2)
@@ -754,9 +850,13 @@ class AlphaFactory:
         np.divide(100 * np.abs(plus_di - minus_di), di_sum, out=dx, where=di_sum > 0)
 
         if len(dx) >= period * 2:
-            adx = float(np.mean(dx[-period:]))
+            adx_arr = np.zeros(len(dx))
+            adx_arr[period * 2 - 1] = np.mean(dx[period : period * 2])  # 初始值用SMA
+            for i in range(period * 2, len(dx)):
+                adx_arr[i] = (adx_arr[i - 1] * (period - 1) + dx[i]) / period
+            adx = float(adx_arr[-1]) if adx_arr[-1] > 0 else float(np.mean(dx[-period:]))
         else:
-            adx = 25.0
+            adx = float(np.mean(dx[-period:]))
 
         return adx, float(plus_di[-1]), float(minus_di[-1])
 

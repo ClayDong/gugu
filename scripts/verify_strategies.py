@@ -51,7 +51,8 @@ def cmd_list(manifest, args):
         if not strategies:
             continue
         enabled_count = sum(
-            1 for info in strategies.values()
+            1
+            for info in strategies.values()
             if isinstance(info, dict) and info.get("enabled", False)
         )
         print(f"【{cat_name}】（{enabled_count}/{len(strategies)}）")

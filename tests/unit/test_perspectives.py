@@ -399,6 +399,52 @@ class TestPerspectiveAnalysisResult:
         )
         assert result.passed is False
 
+    def test_passed_requires_complete_scores_and_minimum_score(self):
+        """通过必须有完整评分且最低分达到阈值。"""
+        scores = [
+            PerspectiveScore(perspective=p, score=8.0, weight=0.1) for p in ALL_PERSPECTIVES[:9]
+        ]
+        result = PerspectiveAnalysisResult(
+            symbol="test",
+            name="test",
+            price=10,
+            scores=scores,
+            composite_score=8.0,
+            min_score=8.0,
+            min_perspective=ALL_PERSPECTIVES[0],
+            passed_count=9,
+            fatal_count=0,
+            scored_count=9,
+            missing_count=1,
+        )
+        assert result.passed is False
+
+        scores.append(PerspectiveScore(perspective=ALL_PERSPECTIVES[9], score=3.9, weight=0.1))
+        result.scores = scores
+        result.scored_count = 10
+        result.missing_count = 0
+        result.min_score = 3.9
+        result.fatal_count = 1
+        result.passed_count = 9
+        assert result.passed is False
+
+    def test_error_count_blocks_pass(self):
+        """评分错误必须阻止综合通过。"""
+        scores = [PerspectiveScore(perspective=p, score=8.0, weight=0.1) for p in ALL_PERSPECTIVES]
+        result = PerspectiveAnalysisResult(
+            symbol="test",
+            name="test",
+            price=10,
+            scores=scores,
+            composite_score=8.0,
+            min_score=8.0,
+            min_perspective=ALL_PERSPECTIVES[0],
+            passed_count=10,
+            scored_count=9,
+            error_count=1,
+        )
+        assert result.passed is False
+
 
 # =========================================================================
 # 测试评分函数
@@ -666,6 +712,35 @@ class TestIntegrators:
         assert ctx.symbol == "600519"
         assert ctx.price == 1800
         assert ctx.pe_static == 30
+
+    def test_missing_core_fields_are_recorded(self):
+        """缺失核心数据不得被默认零值掩盖。"""
+        ctx = build_context_from_signal({"symbol": "600519", "price": 100})
+        assert ctx.data_quality in {"partial", "unavailable"}
+        assert ctx.missing_core_fields
+
+    def test_attach_perspective_writes_decision_contract(self):
+        """视角结果应同时写入统一决策合同。"""
+        signal = {
+            "symbol": "600519",
+            "direction": "buy",
+            "price": 100,
+            "timestamp": "2026-07-20T10:00:00+08:00",
+            "data_quality": "fresh",
+        }
+        result = PerspectiveAnalysisResult(
+            symbol="600519",
+            name="茅台",
+            price=100,
+            composite_score=8.5,
+            min_score=7.0,
+            passed_count=10,
+            expected_count=10,
+            scored_count=10,
+        )
+        enhanced = attach_perspective_to_signal(signal, result)
+        assert enhanced["decision"]["action"] == "buy"
+        assert enhanced["decision"]["status"] == "approved"
 
     def test_build_context_from_kline_uptrend(self):
         """测试从K线构建上下文（上涨趋势）。"""

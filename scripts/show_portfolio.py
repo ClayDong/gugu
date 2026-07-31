@@ -5,6 +5,7 @@
     python scripts/show_portfolio.py --trades    # 查看交易记录
     python scripts/show_portfolio.py --all       # 查看全部
 """
+
 from __future__ import annotations
 
 import argparse
@@ -50,7 +51,9 @@ def show_portfolio(broker: PaperBroker) -> None:
     # 持仓详情
     if portfolio:
         print("\n📈 持仓详情")
-        print(f"  {'代码':<8} {'数量':>8} {'可用':>8} {'成本':>10} {'现价':>10} {'市值':>12} {'盈亏':>12}")
+        print(
+            f"  {'代码':<8} {'数量':>8} {'可用':>8} {'成本':>10} {'现价':>10} {'市值':>12} {'盈亏':>12}"
+        )
         print("  " + "-" * 80)
         for symbol, pos in portfolio.items():
             profit = pos.profit
@@ -80,7 +83,9 @@ def show_trades(broker: PaperBroker) -> None:
         return
 
     print(f"\n📋 共 {len(trades)} 笔交易")
-    print(f"  {'日期':<12} {'代码':<8} {'方向':<6} {'价格':>10} {'数量':>8} {'佣金':>10} {'印花税':>10}")
+    print(
+        f"  {'日期':<12} {'代码':<8} {'方向':<6} {'价格':>10} {'数量':>8} {'佣金':>10} {'印花税':>10}"
+    )
     print("  " + "-" * 80)
     for t in trades:
         direction = "买入" if t["direction"] == "buy" else "卖出"

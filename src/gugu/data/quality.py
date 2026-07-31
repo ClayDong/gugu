@@ -273,7 +273,8 @@ class FreshnessRule(ValidationRule):
             import chinese_calendar as ccal
 
             trade_days = 0
-            d = latest
+            # P2-8 修复：从 latest+1 开始计数（latest 本身已有数据）
+            d = latest + timedelta(days=1)
             while d <= date.today():
                 if ccal.is_workday(d):
                     trade_days += 1

@@ -150,7 +150,9 @@ class BreakoutReboundStrategy(Strategy):
             if col not in df.columns:
                 raise ValueError(f"缺少必要列: {col}")
 
-    def _calc_macd(self, df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
+    def _calc_macd(
+        self, df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9
+    ) -> pd.DataFrame:
         """计算MACD指标。"""
         df = df.copy()
         ema_fast = df["close"].ewm(span=fast, adjust=False).mean()
@@ -169,18 +171,38 @@ class BreakoutReboundStrategy(Strategy):
         ma_trend_window = int(self.params.get("ma_trend_window", 20))
         ma_long_window = int(self.params.get("ma_long_window", 60))
         ma_slope_window = int(self.params.get("ma_slope_window", 5))
-        limit_up_pct = float(self.params.get("limit_up_pct", 0.07))   # v0.6.4: 放宽涨停判定（8%→7%，覆盖更多涨停）
-        limit_up_lookback = int(self.params.get("limit_up_lookback", 10))  # v0.6.4: 放宽回看窗口（7→10日）
-        _breakout_vol_ratio = float(self.params.get("breakout_vol_ratio", 1.0))  # v0.6.4: 放宽放量要求（1.2→1.0，只要有放量就算）
-        stop_loss_pct = float(self.params.get("stop_loss_pct", 0.08))   # v0.6.4: 放宽止损（5%→8%）
-        take_profit_pct = float(self.params.get("take_profit_pct", 0.05))  # v0.6.4: 放宽止盈（6%→5%）
-        max_upper_shadow_pct = float(self.params.get("max_upper_shadow_pct", 0.04))  # v0.6.4: 放宽上影线（3%→4%）
-        stagnation_vol_ratio = float(self.params.get("stagnation_vol_ratio", 1.8))  # v0.6.4: 放宽滞涨（2.0→1.8）
-        time_stop_window = int(self.params.get("time_stop_window", 10))   # v0.6.4: 放宽时间止损（7→10天）
-        time_stop_threshold = float(self.params.get("time_stop_threshold", 0.01))  # v0.6.4: 放宽时间止损阈值（2%→1%）
-        wash_day_max = int(self.params.get("wash_day_max", 7))   # v0.6.4: 放宽洗盘窗口（5→7日）
-        _shrink_vol_ratio = float(self.params.get("shrink_vol_ratio", 0.85))   # v0.6.4: 放宽缩量判断（70%→85%）
-        _ground_vol_ratio = float(self.params.get("ground_vol_ratio", 0.5))   # v0.6.4: 放宽无量判断（40%→50%）
+        limit_up_pct = float(
+            self.params.get("limit_up_pct", 0.07)
+        )  # v0.6.4: 放宽涨停判定（8%→7%，覆盖更多涨停）
+        limit_up_lookback = int(
+            self.params.get("limit_up_lookback", 10)
+        )  # v0.6.4: 放宽回看窗口（7→10日）
+        _breakout_vol_ratio = float(
+            self.params.get("breakout_vol_ratio", 1.0)
+        )  # v0.6.4: 放宽放量要求（1.2→1.0，只要有放量就算）
+        stop_loss_pct = float(self.params.get("stop_loss_pct", 0.08))  # v0.6.4: 放宽止损（5%→8%）
+        take_profit_pct = float(
+            self.params.get("take_profit_pct", 0.05)
+        )  # v0.6.4: 放宽止盈（6%→5%）
+        max_upper_shadow_pct = float(
+            self.params.get("max_upper_shadow_pct", 0.04)
+        )  # v0.6.4: 放宽上影线（3%→4%）
+        stagnation_vol_ratio = float(
+            self.params.get("stagnation_vol_ratio", 1.8)
+        )  # v0.6.4: 放宽滞涨（2.0→1.8）
+        time_stop_window = int(
+            self.params.get("time_stop_window", 10)
+        )  # v0.6.4: 放宽时间止损（7→10天）
+        time_stop_threshold = float(
+            self.params.get("time_stop_threshold", 0.01)
+        )  # v0.6.4: 放宽时间止损阈值（2%→1%）
+        wash_day_max = int(self.params.get("wash_day_max", 7))  # v0.6.4: 放宽洗盘窗口（5→7日）
+        _shrink_vol_ratio = float(
+            self.params.get("shrink_vol_ratio", 0.85)
+        )  # v0.6.4: 放宽缩量判断（70%→85%）
+        _ground_vol_ratio = float(
+            self.params.get("ground_vol_ratio", 0.5)
+        )  # v0.6.4: 放宽无量判断（40%→50%）
 
         # ── 计算均线系统 ──────────────────────────────
         df["ma5"] = df["close"].rolling(5).mean()
@@ -244,8 +266,8 @@ class BreakoutReboundStrategy(Strategy):
         # ════════════════════════════════════════════════
         df["is_wash_day"] = (
             (df["limit_up_day_offset"] <= wash_day_max)
-            & (df["daily_return"] < -0.01)   # v0.6.4: -2% → -1%（只要是阴线就算洗盘）
-            & (df["vol_ratio"] > 1.0)         # v0.6.4: 1.2 → 1.0（只要放量就算）
+            & (df["daily_return"] < -0.01)  # v0.6.4: -2% → -1%（只要是阴线就算洗盘）
+            & (df["vol_ratio"] > 1.0)  # v0.6.4: 1.2 → 1.0（只要放量就算）
         )
 
         # 追踪最近一次洗盘日的属性
@@ -276,14 +298,14 @@ class BreakoutReboundStrategy(Strategy):
             df["wash_day_offset"].notna()
             & (df["wash_day_offset"] >= 1)
             & (df["wash_day_offset"] <= wash_day_max)
-            & (df["low"] <= df["support_level"] * 1.12)   # v0.6.4: 1.05 → 1.12
+            & (df["low"] <= df["support_level"] * 1.12)  # v0.6.4: 1.05 → 1.12
             & (df["close"] >= df["support_level"] * 0.88)  # v0.6.4: 0.95 → 0.88
         )
 
         # 破位收回（长下影线也算护盘信号）
         # v0.6.4: 大幅放宽条件（下影线>2%→>1%，支撑位0.93→0.85）
         df["bounce_from_support"] = (
-            (df["lower_shadow"] > 0.01)   # v0.6.4: 0.02 → 0.01
+            (df["lower_shadow"] > 0.01)  # v0.6.4: 0.02 → 0.01
             & (df["close"] >= df["support_level"] * 0.85)  # v0.6.4: 0.93 → 0.85
         )
 
@@ -318,8 +340,7 @@ class BreakoutReboundStrategy(Strategy):
         df["bottom_divergence"] = df["price_new_low"] & df["macd_not_new_low"]
 
         buy_bottom_divergence = (
-            df["bottom_divergence"]
-            & (df["vol_ratio"] <= 1.5)  # v0.6.4: shrink_vol_ratio → 1.5
+            df["bottom_divergence"] & (df["vol_ratio"] <= 1.5)  # v0.6.4: shrink_vol_ratio → 1.5
         )
 
         # ════════════════════════════════════════════════
@@ -329,11 +350,15 @@ class BreakoutReboundStrategy(Strategy):
         # 有效放量：当日量比 > 1.2（v0.6.4: 1.5→1.2）
         df["effective_volume"] = df["vol_ratio"] >= 1.2
         # 有效放量后回踩：前几日有放量，今日缩量回踩支撑位
-        df["prev_effective_vol"] = df["effective_volume"].rolling(5).max().shift(1).astype(bool)  # v0.6.4: 3→5日
+        df["prev_effective_vol"] = (
+            df["effective_volume"].rolling(5).max().shift(1).astype(bool)
+        )  # v0.6.4: 3→5日
         buy_volume_pullback = (
             df["prev_effective_vol"]
             & (df["vol_ratio"] <= 1.5)  # v0.6.4: shrink_vol_ratio → 1.5
-            & (df["wash_day_offset"].notna() | df["has_limit_up_before"])  # v0.6.4: 只要有涨停历史或洗盘就行
+            & (
+                df["wash_day_offset"].notna() | df["has_limit_up_before"]
+            )  # v0.6.4: 只要有涨停历史或洗盘就行
         )
 
         # ════════════════════════════════════════════════
@@ -362,11 +387,15 @@ class BreakoutReboundStrategy(Strategy):
         # ════════════════════════════════════════════════
         # 1. 洗盘充分度（洗盘日跌幅越大、量越大越好）
         score_wash_sufficient = (
-            (df["wash_day_low"] / df["limit_up_open"] - 1).clip(-0.20, 0).abs() / 0.20 * 0.15  # v0.6.4: 0.15→0.20
+            (df["wash_day_low"] / df["limit_up_open"] - 1).clip(-0.20, 0).abs()
+            / 0.20
+            * 0.15  # v0.6.4: 0.15→0.20
         ).fillna(0.10)  # v0.6.4: 无洗盘也给基础分
 
         # 2. 护盘强度（不破支撑位）
-        score_protection = ((df["close"] > df["support_level"]).astype(float) * 0.15).fillna(0.08)  # v0.6.4: 无支撑也给基础分
+        score_protection = ((df["close"] > df["support_level"]).astype(float) * 0.15).fillna(
+            0.08
+        )  # v0.6.4: 无支撑也给基础分
 
         # 3. 买入信号类型加权
         score_buy_type = np.where(
@@ -381,7 +410,8 @@ class BreakoutReboundStrategy(Strategy):
         # 5. 时效性（洗盘后1-7日最佳）
         # v0.6.4: 放宽窗口（1-5日→1-7日），无洗盘也给基础分
         score_timing = (
-            ((df["wash_day_offset"] >= 1) & (df["wash_day_offset"] <= wash_day_max)).astype(float) * 0.10
+            ((df["wash_day_offset"] >= 1) & (df["wash_day_offset"] <= wash_day_max)).astype(float)
+            * 0.10
         ).fillna(0.05)  # v0.6.4: 无洗盘也给基础分
 
         # 6. 量能配合（缩量回踩）
@@ -427,11 +457,7 @@ class BreakoutReboundStrategy(Strategy):
         # ── 卖点3: 量价背离 ──
         # 价格创新高但量能萎缩
         df["vol_shrink"] = df["vol_ratio"] < df["vol_ratio"].rolling(5).mean() * 0.7
-        sell_vol_price_divergence = (
-            df["in_position"]
-            & df["price_new_high"]
-            & df["vol_shrink"]
-        )
+        sell_vol_price_divergence = df["in_position"] & df["price_new_high"] & df["vol_shrink"]
 
         # ── 卖点4: 破位止损 ──
         # 跌破入场点 low × (1 - stop_loss_pct)
@@ -442,9 +468,7 @@ class BreakoutReboundStrategy(Strategy):
         # ── 卖点5: 不及预期（次日绿开/无拉升） ──
         # 简化为：持仓中价格连续下跌超过2%
         df["consecutive_decline"] = (
-            df["in_position"]
-            & (df["daily_return"] < -0.02)
-            & (df["daily_return"].shift(1) < -0.02)
+            df["in_position"] & (df["daily_return"] < -0.02) & (df["daily_return"].shift(1) < -0.02)
         )
 
         # ── 止盈1: 大阳线冲高减仓 ──
@@ -500,7 +524,8 @@ class BreakoutReboundStrategy(Strategy):
         # ════════════════════════════════════════════════
         df["confidence"] = 0.0
         df.loc[buy_cond_final, "confidence"] = df.loc[buy_cond_final, "confidence_score"].clip(
-            0.30, 0.85  # v0.6.4: 0.5→0.3, 0.90→0.85
+            0.30,
+            0.85,  # v0.6.4: 0.5→0.3, 0.90→0.85
         )
 
         return df

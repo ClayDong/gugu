@@ -10,6 +10,7 @@
     uv run python scripts/diagnose_strategy.py --strategy turtle --stocks 600519,002714
     uv run python scripts/diagnose_strategy.py --strategy turtle --stocks 600519 --days 500
 """
+
 from __future__ import annotations
 
 import argparse
@@ -216,9 +217,7 @@ def analyze_trades(
         elif trade.direction == "sell" and pending_buys:
             first_buy = pending_buys[0]
             entry_price = first_buy.price
-            hold_days = (
-                pd.Timestamp(trade.date) - pd.Timestamp(first_buy.date)
-            ).days
+            hold_days = (pd.Timestamp(trade.date) - pd.Timestamp(first_buy.date)).days
             volatility = compute_holding_volatility(df, first_buy.date, trade.date)
             regime_at_buy = lookup_regime(first_buy.date, regime_map)
             regime_at_sell = lookup_regime(trade.date, regime_map)
@@ -294,12 +293,10 @@ def generate_report(
     lines.append("")
 
     n_stocks = max(len(per_stock_results), 1)
-    avg_return = sum(
-        r["overall_metrics"].get("total_return", 0) for r in per_stock_results
-    ) / n_stocks
-    avg_sharpe = sum(
-        r["overall_metrics"].get("sharpe", 0) for r in per_stock_results
-    ) / n_stocks
+    avg_return = (
+        sum(r["overall_metrics"].get("total_return", 0) for r in per_stock_results) / n_stocks
+    )
+    avg_sharpe = sum(r["overall_metrics"].get("sharpe", 0) for r in per_stock_results) / n_stocks
     lines.append(f"**平均总收益**: {_fmt_pct(avg_return)} | **平均夏普**: {avg_sharpe:.2f}")
     lines.append("")
     if avg_return < 0 or avg_sharpe < 0:
@@ -428,9 +425,7 @@ def generate_report(
     for sym in symbols:
         s = signal_distribution.get(sym, {})
         name = lookup_stock_name(sym) or sym
-        lines.append(
-            f"| {name}({sym}) | {s.get('buy_count', 0)} | {s.get('sell_count', 0)} |"
-        )
+        lines.append(f"| {name}({sym}) | {s.get('buy_count', 0)} | {s.get('sell_count', 0)} |")
     lines.append("")
 
     # === 4. 失败 trade 归因 ===
@@ -625,9 +620,7 @@ async def diagnose(strategy_name: str, symbols: list[str], days: int) -> str:
         logger.info(f"获取 {symbol} 历史数据...")
         df = await dm.fetch_stock_history(symbol, days=days)
         if df.empty or len(df) < 60:
-            logger.warning(
-                f"{symbol} 数据不足（{len(df) if not df.empty else 0} 行），跳过"
-            )
+            logger.warning(f"{symbol} 数据不足（{len(df) if not df.empty else 0} 行），跳过")
             continue
 
         # 降级：若 HS300 不可用，用个股自身 MA120

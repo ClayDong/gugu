@@ -47,10 +47,21 @@ class StrategyPool:
 
     def _init_weights(self) -> None:
         """初始化策略权重（从配置读取）"""
-        enabled = get_config().strategy.enabled
+        config = get_config().strategy
+        enabled = config.enabled
+        weights = getattr(config, "weights", {}) if config else {}
         n = max(len(enabled), 1)
         for name in enabled:
-            self._weights[name] = StrategyWeight(name=name, weight=1.0 / n, enabled=True)
+            weight = float(weights.get(name, 1.0 / n))
+            self._weights[name] = StrategyWeight(name=name, weight=weight, enabled=True)
+        # 加载实验性策略权重（用于 paper 模式信号观察）
+        exp_weights = getattr(config, "experimental_weights", {}) if config else {}
+        if exp_weights:
+            for name, weight in exp_weights.items():
+                if name not in self._weights:
+                    self._weights[name] = StrategyWeight(
+                        name=name, weight=float(weight), enabled=True
+                    )
 
     def get_weights(self) -> dict[str, float]:
         """获取当前策略权重"""
@@ -174,10 +185,10 @@ class StrategyPool:
 
             if win_rate > 0.6:
                 w.weight *= 1.2
-                logger.info(f"策略 {name} 胜率 {win_rate:.0%}，权重提升至 {w.weight:.3f}")
+                logger.info("策略 {} 胜率 {:.0%}，权重提升至 {:.3f}", name, win_rate, w.weight)
             elif win_rate < 0.3:
                 w.weight *= 0.7
-                logger.info(f"策略 {name} 胜率 {win_rate:.0%}，权重降低至 {w.weight:.3f}")
+                logger.info("策略 {} 胜率 {:.0%}，权重降低至 {:.3f}", name, win_rate, w.weight)
 
             # 连续亏损检查
             consecutive_losses = 0
@@ -188,7 +199,7 @@ class StrategyPool:
                     break
             if consecutive_losses >= 5:
                 w.enabled = False
-                logger.warning(f"策略 {name} 连续亏损{consecutive_losses}次，已禁用")
+                logger.warning("策略 {} 连续亏损{}次，已禁用", name, consecutive_losses)
 
             # 恢复检查
             consecutive_wins = 0
@@ -199,7 +210,7 @@ class StrategyPool:
                     break
             if not w.enabled and consecutive_wins >= 3:
                 w.enabled = True
-                logger.info(f"策略 {name} 连续盈利{consecutive_wins}次，已恢复")
+                logger.info("策略 {} 连续盈利{}次，已恢复", name, consecutive_wins)
 
         # 归一化权重
         enabled_total = sum(v.weight for v in self._weights.values() if v.enabled)

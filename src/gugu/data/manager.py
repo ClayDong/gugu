@@ -79,7 +79,7 @@ class DataManager:
 
         primary_cls = _COLLECTOR_REGISTRY.get(primary_name)
         if primary_cls is None:
-            logger.warning(f"未知主数据源 '{primary_name}'，回退到 akshare")
+            logger.warning("未知主数据源 '{}'，回退到 akshare", primary_name)
             primary_cls = AkshareCollector
 
         self._primary = primary_cls()
@@ -138,12 +138,14 @@ class DataManager:
     async def _on_failure_locked(self, method: str) -> None:
         """主源失败：递增失败计数，达到阈值则降级（在锁内调用，DA-05 修复）。"""
         self._fail_count += 1
-        logger.warning(f"主源 {method} 失败 ({self._fail_count}/{self._fail_threshold})")
+        logger.warning("主源 {} 失败 ({}/{})", method, self._fail_count, self._fail_threshold)
         if self._fail_count >= self._fail_threshold:
             self._degraded_until = time.time() + self._fail_cooldown
             logger.warning(
-                f"主源连续失败 {self._fail_count} 次，降级到 {self._fallbacks[0].source}，"
-                f"冷却 {self._fail_cooldown} 秒"
+                "主源连续失败 {} 次，降级到 {}，冷却 {} 秒",
+                self._fail_count,
+                self._fallbacks[0].source,
+                self._fail_cooldown,
             )
 
     async def _is_degraded_locked(self) -> bool:
@@ -222,7 +224,7 @@ class DataManager:
                         )
                 return df
             except Exception as e:
-                logger.error(f"主源 {method} 异常: {e}")
+                logger.error("主源 {} 异常: {}", method, e)
                 async with self._lock:
                     await self._on_failure_locked(method)
 
@@ -244,7 +246,7 @@ class DataManager:
                 df = t.result()
                 if df is not None and not df.empty:
                     success_fb = next(fb for fb, task in tasks.items() if task is t)
-                    logger.info(f"降级源 {success_fb.source} 成功获取 {method}")
+                    logger.info("降级源 {} 成功获取 {}", success_fb.source, method)
                     df = self._validate(method, df, args)
                     cache().set(cache_key, df)
                     # 持久化缓存
@@ -256,7 +258,7 @@ class DataManager:
                         pt.cancel()
                     return df
             except Exception as e:
-                logger.warning(f"降级源完成结果异常: {e}")
+                logger.warning("降级源完成结果异常: {}", e)
         if pending:
             all_done, _ = await asyncio.wait(pending, timeout=45.0)
             for t in all_done:
@@ -264,7 +266,7 @@ class DataManager:
                     df = t.result()
                     if df is not None and not df.empty:
                         success_fb = next(fb for fb, task in tasks.items() if task is t)
-                        logger.info(f"降级源 {success_fb.source} 成功获取 {method}")
+                        logger.info("降级源 {} 成功获取 {}", success_fb.source, method)
                         df = self._validate(method, df, args)
                         cache().set(cache_key, df)
                         if method == "fetch_stock_history" and len(args) >= 1 and not df.empty:
@@ -275,18 +277,15 @@ class DataManager:
                 except Exception:
                     continue
 
-        logger.warning(f"所有数据源 {method} 均失败，尝试缓存兜底")
+        logger.warning("所有数据源 {} 均失败，尝试缓存兜底", method)
         # 自恢复：返回过期缓存兜底（即使TTL过期也比空df好，保证业务不中断）
         stale_cached = cache().get(cache_key, ignore_ttl=True)
         if stale_cached is not None and not stale_cached.empty:
-            logger.info(f"{method} 使用过期缓存兜底，下次请求自动重试")
+            logger.info("{} 使用过期缓存兜底，下次请求自动重试", method)
             return stale_cached
         # 修复：只清理当前失败key的缓存，不全局清空（避免缓存雪崩）
         with contextlib.suppress(Exception):
             cache().store.pop(cache_key, None)
-            if hasattr(cache(), "_order"):
-                with contextlib.suppress(ValueError):
-                    cache()._order.remove(cache_key)
         return pd.DataFrame()
 
     def _validate(self, method: str, df: pd.DataFrame, args: tuple) -> pd.DataFrame:
@@ -299,10 +298,10 @@ class DataManager:
             validated = validator(df, symbol)
             # 若原始数据非空但校验后全部被剔除，视为数据质量问题
             if not df.empty and validated.empty:
-                logger.warning(f"{method} {symbol} 数据质量校验后全部被剔除，返回空 DataFrame")
+                logger.warning("{} {} 数据质量校验后全部被剔除，返回空 DataFrame", method, symbol)
             return validated
         except Exception as e:
-            logger.warning(f"{method} 数据质量校验异常: {e}，返回空 DataFrame")
+            logger.warning("{} 数据质量校验异常: {}，返回空 DataFrame", method, e)
             return pd.DataFrame()
 
     # ===== 对外接口 =====
@@ -345,7 +344,7 @@ class DataManager:
                     df = await self.fetch_stock_history(sym, days=days)
                     return sym, df
                 except Exception as e:
-                    logger.warning(f"批量拉取 {sym} 历史数据失败: {e}")
+                    logger.warning("批量拉取 {} 历史数据失败: {}", sym, e)
                     return sym, pd.DataFrame()
 
         pairs = await asyncio.gather(*[_fetch_one(s) for s in symbols])
@@ -386,7 +385,7 @@ class DataManager:
                 if name.startswith("ST") or name.startswith("*ST") or " ST" in name:
                     meta["is_st"] = True
         except Exception as e:
-            logger.warning(f"获取 {code} 实时元数据失败: {e}")
+            logger.warning("获取 {} 实时元数据失败: {}", code, e)
 
         # 从近两日历史取前收盘价
         try:
@@ -396,7 +395,7 @@ class DataManager:
             elif not hist.empty:
                 meta["prev_close"] = float(hist.iloc[-1]["close"])
         except Exception as e:
-            logger.warning(f"获取 {code} 前收盘价失败: {e}")
+            logger.warning("获取 {} 前收盘价失败: {}", code, e)
 
         return meta
 

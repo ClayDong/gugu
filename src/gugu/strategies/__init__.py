@@ -3,7 +3,10 @@
 from gugu.strategies.base import Strategy, StrategyConfig
 from gugu.strategies.breakout import BoxBreakoutStrategy, DualThrustStrategy
 from gugu.strategies.breakout_rebound import BreakoutReboundStrategy
+from gugu.strategies.cloud_trend import CloudTrendStrategy
 from gugu.strategies.dragon_tiger_short import DragonTigerShortStrategy
+from gugu.strategies.hot_money import HotMoneyStrategy
+from gugu.strategies.industry_capital_momentum import IndustryCapitalMomentumStrategy
 from gugu.strategies.mean_revert import BollingerStrategy, KDJStrategy, RSIStrategy
 from gugu.strategies.north_force_long import NorthForceLongStrategy
 from gugu.strategies.registry import (
@@ -18,9 +21,12 @@ __all__ = [
     "BollingerStrategy",
     "BoxBreakoutStrategy",
     "BreakoutReboundStrategy",
+    "CloudTrendStrategy",
     "DragonTigerShortStrategy",
     "DualMAStrategy",
     "DualThrustStrategy",
+    "HotMoneyStrategy",
+    "IndustryCapitalMomentumStrategy",
     "KDJStrategy",
     "MACDStrategy",
     "NorthForceLongStrategy",

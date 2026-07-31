@@ -126,7 +126,7 @@ class DynamicTakeProfitEngine:
             data = json.loads(self._state_path.read_text(encoding="utf-8"))
             for symbol, s in data.items():
                 self._states[symbol] = TakeProfitState(**s)
-            logger.info(f"[take_profit] 加载 {len(self._states)} 个持仓止盈状态")
+            logger.info("[take_profit] 加载 {} 个持仓止盈状态", len(self._states))
         except Exception as e:
             logger.warning(f"[take_profit] 状态加载失败: {e}")
 
@@ -144,7 +144,7 @@ class DynamicTakeProfitEngine:
                 json.dumps(data, ensure_ascii=False, indent=2),
             )
         except Exception as e:
-            logger.error(f"[take_profit] 状态持久化失败: {e}")
+            logger.error("[take_profit] 状态持久化失败: {}", e)
 
     # ========== 生命周期 ==========
 
@@ -156,21 +156,21 @@ class DynamicTakeProfitEngine:
             entry_price: 买入均价。
         """
         if entry_price <= 0:
-            logger.warning(f"[take_profit] {symbol} 入场价无效: {entry_price}，跳过注册")
+            logger.warning("[take_profit] {} 入场价无效: {}，跳过注册", symbol, entry_price)
             return
         self._states[symbol] = TakeProfitState(
             symbol=symbol,
             entry_price=entry_price,
         )
         self._save()
-        logger.info(f"[take_profit] {symbol} 注册止盈监控，入场价 {entry_price:.2f}")
+        logger.info("[take_profit] {} 注册止盈监控，入场价 {:.2f}", symbol, entry_price)
 
     def unregister(self, symbol: str) -> None:
         """清仓时移除止盈状态。"""
         if symbol in self._states:
             del self._states[symbol]
             self._save()
-            logger.info(f"[take_profit] {symbol} 清仓，移除止盈状态")
+            logger.info("[take_profit] {} 清仓，移除止盈状态", symbol)
 
     # ========== 核心检查逻辑 ==========
 
@@ -288,7 +288,7 @@ class DynamicTakeProfitEngine:
         """
         state = self._states.get(symbol)
         if state is None:
-            logger.warning(f"[take_profit] {symbol} 未注册，无法更新状态")
+            logger.warning("[take_profit] {} 未注册，无法更新状态", symbol)
             return
 
         today = today_str or date.today().isoformat()

@@ -9,6 +9,7 @@
 用法:
     uv run python scripts/compare_regime_methods.py
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -22,7 +23,7 @@ def method_market_filter(index_df: pd.DataFrame) -> dict[str, int]:
     engine = BacktestEngine()
     regimes = {}
     for i in range(len(index_df)):
-        win = index_df.iloc[:i + 1]
+        win = index_df.iloc[: i + 1]
         if len(win) >= 200:
             r = engine._check_market_regime(win)
         else:
@@ -91,7 +92,9 @@ def method_ma120(index_df: pd.DataFrame) -> dict[str, int]:
         if i < 120:
             regimes[str(index_df["date"].iloc[i].date())] = "sideways"
         else:
-            regimes[str(index_df["date"].iloc[i].date())] = "bull" if close.iloc[i] > ma120.iloc[i] else "sideways"
+            regimes[str(index_df["date"].iloc[i].date())] = (
+                "bull" if close.iloc[i] > ma120.iloc[i] else "sideways"
+            )
     c = {}
     for r in regimes.values():
         c[r] = c.get(r, 0) + 1

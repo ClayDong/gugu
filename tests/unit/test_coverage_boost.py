@@ -19,12 +19,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from gugu.wisdom.advisor import (
-    LLM_MAX_TRIAL_RATIO,
-    WisdomAdvisor,
-    _compute_take_profit,
-    _is_profitable_signal,
-)
+from gugu.wisdom.advisor import LLM_MAX_TRIAL_RATIO, WisdomAdvisor
+from gugu.wisdom.fallback import _compute_take_profit, _is_profitable_signal
 
 
 # ==============================================================================
@@ -65,8 +61,21 @@ class TestIsProfitableSignal:
     def test_no_order_success(self):
         assert _is_profitable_signal({"direction": "buy", "order_success": False}) is False
 
-    def test_buy_with_success(self):
-        assert _is_profitable_signal({"direction": "buy", "order_success": True}) is True
+    def test_buy_with_success_is_not_profit(self):
+        assert _is_profitable_signal({"direction": "buy", "order_success": True}) is False
+
+    def test_closed_trade_with_profit(self):
+        assert (
+            _is_profitable_signal(
+                {
+                    "direction": "buy",
+                    "order_success": True,
+                    "outcome_status": "closed",
+                    "realized_pnl": 12.5,
+                }
+            )
+            is True
+        )
 
     def test_sell_with_success(self):
         assert (

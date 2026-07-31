@@ -80,10 +80,11 @@ class TestManifestQueries:
 
     def test_get_strategy_exists(self, manifest):
         """查询存在的策略应返回其信息。"""
-        info = manifest.get_strategy("turtle")
+        info = manifest.get_strategy("box_breakout")
         assert info is not None
-        assert info.get("name") == "海龟交易法则"
-        assert info.get("enabled") is False  # v0.4.2 禁用
+        assert info.get("name") == "达尔文箱体突破"
+        # v0.7.3: 策略池精简后，box_breakout 是核心启用策略之一
+        assert info.get("enabled") is True
 
     def test_get_strategy_not_exists(self, manifest):
         """查询不存在的策略应返回 None。"""

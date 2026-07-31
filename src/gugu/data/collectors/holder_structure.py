@@ -65,6 +65,15 @@ _AK_COL_MAP: dict[str, str] = {
     "户均持股-增减": "avg_hold_change",
     "截止日期": "end_date",
     "机构持股比例": "org_hold_pct",
+    # stock_zh_a_gdhs_detail_em 单股历史返回的列名别名
+    "代码": "symbol",
+    "名称": "name",
+    "股东户数-本次": "holder_num",
+    "股东户数-上次": "holder_num_prev",
+    "户均持股市值": "avg_hold_amount",
+    "户均持股数量": "avg_hold_amount",
+    "股东户数统计截止日": "end_date",
+    "股东户数公告日期": "announce_date",
 }
 
 # 东方财富 datacenter 列名 → 统一字段映射
@@ -304,12 +313,26 @@ class HolderStructureCollector:
     def _finalize(self, df: pd.DataFrame, source: str) -> pd.DataFrame | None:
         """统一字段类型、补全缺失列、计算派生字段。"""
         try:
-            # 数值列转换
+            # P0 修复：处理重复列名（akshare 可能返回重复列）
+            # 重复列名会导致 df[col] 返回 DataFrame 而非 Series，引发下游错误
+            if df.columns.duplicated().any():
+                dup_cols = df.columns[df.columns.duplicated()].tolist()
+                logger.warning(f"akshare 返回重复列名 {dup_cols}，保留首次出现列")
+                df = df.loc[:, ~df.columns.duplicated(keep="first")]
+
+            # 数值列转换（确保是 Series 而非 DataFrame）
             for col in ("holder_num", "holder_num_change", "avg_hold_amount"):
                 if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+                    col_data = df[col]
+                    # 防御：如果列重复导致返回 DataFrame，取第一列
+                    if isinstance(col_data, pd.DataFrame):
+                        col_data = col_data.iloc[:, 0]
+                    df[col] = pd.to_numeric(col_data, errors="coerce").fillna(0)
             if "org_hold_pct" in df.columns:
-                df["org_hold_pct"] = pd.to_numeric(df["org_hold_pct"], errors="coerce").fillna(0.0)
+                org_data = df["org_hold_pct"]
+                if isinstance(org_data, pd.DataFrame):
+                    org_data = org_data.iloc[:, 0]
+                df["org_hold_pct"] = pd.to_numeric(org_data, errors="coerce").fillna(0.0)
             else:
                 df["org_hold_pct"] = 0.0
 
@@ -323,26 +346,30 @@ class HolderStructureCollector:
                     axis=1,
                 )
             else:
-                df["holder_num_pct"] = pd.to_numeric(df["holder_num_pct"], errors="coerce").fillna(
-                    0.0
-                )
+                pct_data = df["holder_num_pct"]
+                if isinstance(pct_data, pd.DataFrame):
+                    pct_data = pct_data.iloc[:, 0]
+                df["holder_num_pct"] = pd.to_numeric(pct_data, errors="coerce").fillna(0.0)
 
             # holder_num_change 缺失时补 0
             if "holder_num_change" not in df.columns:
                 df["holder_num_change"] = 0.0
             else:
-                df["holder_num_change"] = pd.to_numeric(
-                    df["holder_num_change"], errors="coerce"
-                ).fillna(0.0)
+                change_data = df["holder_num_change"]
+                if isinstance(change_data, pd.DataFrame):
+                    change_data = change_data.iloc[:, 0]
+                df["holder_num_pct"] = pd.to_numeric(pct_data, errors="coerce").fillna(0.0)
+                df["holder_num_change"] = pd.to_numeric(change_data, errors="coerce").fillna(0.0)
 
             # avg_hold_change：若数据源未直接提供，由 holder_num_pct 反推
             # 假设总股本不变：avg_hold_change = -p / (100 + p) * 100
             if "avg_hold_change" not in df.columns or df["avg_hold_change"].isna().all():
                 df["avg_hold_change"] = df["holder_num_pct"].apply(_compute_avg_hold_change)
             else:
-                df["avg_hold_change"] = pd.to_numeric(
-                    df["avg_hold_change"], errors="coerce"
-                ).fillna(0.0)
+                avg_change_data = df["avg_hold_change"]
+                if isinstance(avg_change_data, pd.DataFrame):
+                    avg_change_data = avg_change_data.iloc[:, 0]
+                df["avg_hold_change"] = pd.to_numeric(avg_change_data, errors="coerce").fillna(0.0)
 
             # symbol 归一化为 6 位
             if "symbol" in df.columns:

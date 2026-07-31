@@ -146,7 +146,8 @@ class MultiPeriodRegimeDetector:
             # 波动率判断（用于识别crash/rally）
             returns = daily["close"].pct_change().dropna()
             volatility = float(returns.std() * np.sqrt(252))  # 年化波动率
-            recent_return = float(returns.tail(5).mean() * 252)  # 近5日年化收益率
+            # P1 修复：从5日改为20日窗口，避免单日极端值导致频繁误判
+            recent_return = float(returns.tail(20).mean() * 252)  # 近20日年化收益率
 
             # 确定市场状态
             if recent_return < -0.50 and volatility > 0.40:
@@ -161,7 +162,7 @@ class MultiPeriodRegimeDetector:
                 regime = "sideways"
 
             total_limit = POSITION_LIMIT_MAP[regime]
-            buy_allowed = regime not in ("crash",)
+            buy_allowed = regime in ("bull", "rally", "sideways")
             sell_required = regime in ("bear", "crash")
 
             result = {
@@ -219,14 +220,14 @@ class MultiPeriodRegimeDetector:
                     result["macro_adjustment"] = macro_adj
 
                 except Exception as e:
-                    logger.warning(f"宏观数据增强失败: {e}")
+                    logger.warning("宏观数据增强失败: {}", e)
 
             self._cache = result
             self._cache_date = today
             return result
 
         except Exception as e:
-            logger.error(f"多周期择时检测失败: {e}")
+            logger.error("多周期择时检测失败: {}", e)
             return self._fallback()
 
     async def detect_with_macro(self) -> dict[str, Any]:

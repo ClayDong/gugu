@@ -126,7 +126,7 @@ def test_halt_blocks_all_orders(manager: RiskManager, empty_portfolio: dict) -> 
 def test_reset(manager: RiskManager) -> None:
     manager.check_daily_loss(0.05)
     assert manager.is_halted
-    manager.reset()
+    manager.reset_halt()
     assert not manager.is_halted
 
 

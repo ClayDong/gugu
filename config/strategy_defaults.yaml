@@ -472,3 +472,37 @@ huamulan_ghost_breakout:
   take_profit_pct: 0.10  # 止盈10%
   time_stop_window: 5  # 时间止损5天
   time_stop_threshold: 0.02  # 时间止损阈值2%
+
+# ═══════════════════════════════════════════════════════════
+# 博主规则策略（mulan-quant迁移）
+# ═══════════════════════════════════════════════════════════
+
+chenxuezhang:
+  # 陈学长不吃面：假调整+尾盘骗线+涨停中继+趋势回踩+量价背离+突破回踩
+  ma_short: 5
+  ma_mid: 10
+  ma_long: 20
+  vol_shrink_ratio: 0.8
+  tail_move_threshold: 0.02
+  trend_pullback_tolerance: 0.03
+  vol_diverge_ratio: 0.7
+  breakout_confirm_days: 1
+
+linjudaye:
+  # 邻居大爷：地量抄底+黄金分割+缩量回踩+量能背离+箱体突破+量价齐升
+  ma_short: 5
+  ma_mid: 10
+  ma_long: 20
+  ma_longer: 60
+  golden_level: 0.618
+  vol_shrink_ratio: 0.7
+  box_range_threshold: 0.05
+
+ml_gradient_boost:
+  # ML GradientBoosting策略（基于mulan-quant v11）
+  # 注意：需要先训练模型才能产生信号
+  buy_threshold: 0.005
+  sell_threshold: -0.002
+  n_estimators: 100
+  max_depth: 4
+  learning_rate: 0.05

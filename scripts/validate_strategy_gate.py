@@ -2,6 +2,7 @@
 
 将回测、Walk-Forward、paper 绩效等指标统一成结构化门槛，避免只凭自然语言结论启用策略。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -98,7 +99,9 @@ def main() -> None:
     args = parser.parse_args()
 
     if not args.strategy:
-        print(json.dumps({"enabled_strategies": _enabled_strategies()}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps({"enabled_strategies": _enabled_strategies()}, ensure_ascii=False, indent=2)
+        )
         return
 
     if not args.metrics:
@@ -120,7 +123,10 @@ def main() -> None:
 
         metrics = _load_metrics(args.metrics)
         failed_checks = report.get("failed_checks", [])
-        issues = [f"{c}: {metrics.get(c, 'N/A')} (阈值: {GATE_THRESHOLDS.get(c, 'N/A')})" for c in failed_checks]
+        issues = [
+            f"{c}: {metrics.get(c, 'N/A')} (阈值: {GATE_THRESHOLDS.get(c, 'N/A')})"
+            for c in failed_checks
+        ]
         recs = []
         if "avg_sharpe" in failed_checks:
             recs.append("夏普比率过低，尝试优化参数或检查数据质量")

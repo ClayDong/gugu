@@ -73,7 +73,7 @@ class NewsFetcher:
             try:
                 news_list.extend(self._fetch_notices(symbol, max_news - len(news_list)))
             except Exception as e:
-                logger.warning(f"个股公告获取失败 {symbol}: {e}")
+                logger.warning("个股公告获取失败 {}: {}", symbol, e)
 
         news_list = news_list[:max_news]
         if news_list:

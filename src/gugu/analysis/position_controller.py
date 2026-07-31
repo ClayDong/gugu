@@ -27,14 +27,16 @@ class PositionController:
 
     决策逻辑（参考专业交易员的仓位管理）：
     1. 市场状态决定基准仓位上限（bull=80%, sideways=40%, bear=20%）
-    2. 账户风险调整（累计亏损>10%时仓位减半）
-    3. 持仓集中度调整（已有5只以上时降低新仓上限）
-    4. 日亏熔断时仓位归零
+    2. 总仓位上限检查（max_total_position_ratio，默认70%）
+    3. 账户风险调整（累计亏损>10%时仓位减半）
+    4. 持仓集中度调整（已有5只以上时降低新仓上限）
+    5. 日亏熔断时仓位归零
     """
 
     def __init__(self) -> None:
         rc = get_config().risk
         self._max_single = rc.max_position_ratio
+        self._max_total = getattr(rc, "max_total_position_ratio", 0.70)  # P0-3 新增：总仓位上限
         self._max_positions = rc.max_total_positions
         self._daily_loss_halt = rc.daily_loss_halt
 
@@ -80,17 +82,43 @@ class PositionController:
                 reason=f"市场状态 {regime.get('regime')} 禁止买入",
             )
 
-        # 3. 账户风险调整
+        # 3. P0-3 新增：总仓位上限检查
+        # 检查当前持仓是否已超过总仓位上限
+        current_position_ratio = 0.0
+        try:
+            total_val = float(account.total_value) if hasattr(account, "total_value") else 0.0
+            if total_val > 0:
+                positions_val = (
+                    float(account.positions_value) if hasattr(account, "positions_value") else 0.0
+                )
+                current_position_ratio = positions_val / total_val
+        except (TypeError, ValueError):
+            current_position_ratio = 0.0
+
+        if current_position_ratio >= self._max_total:
+            return PositionBudget(
+                total_limit=0.0,
+                single_limit=0.0,
+                available_budget=0.0,
+                max_positions=0,
+                reason=f"总仓位已达 {current_position_ratio:.0%}（上限 {self._max_total:.0%}），禁止新开仓",
+            )
+
+        # 4. 账户风险调整
         risk_multiplier = 1.0
         if total_pnl_pct < -0.10:
             risk_multiplier = 0.5  # 累计亏损>10%，仓位减半
-            logger.warning(f"累计亏损 {total_pnl_pct:.2%}，仓位减半")
+            logger.warning("累计亏损 {:.2%}，仓位减半", total_pnl_pct)
         elif total_pnl_pct < -0.05:
             risk_multiplier = 0.7  # 累计亏损>5%，仓位打7折
 
         total_limit = regime_limit * risk_multiplier
 
-        # 4. 持仓集中度调整
+        # P0-3 新增：进一步限制总仓位不超过 max_total_position_ratio
+        remaining_position_room = self._max_total - current_position_ratio
+        total_limit = min(total_limit, remaining_position_room)
+
+        # 5. 持仓集中度调整
         current_positions = len(account.positions) if hasattr(account, "positions") else 0
         remaining_slots = max(0, self._max_positions - current_positions)
         if remaining_slots <= 0:

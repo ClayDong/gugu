@@ -104,7 +104,7 @@ class SignalRouter:
                 if sig != 0:
                     votes.append((strategy.name, sig, conf))
             except Exception as e:
-                logger.warning(f"策略 {strategy.name} 在 {symbol} 执行失败: {e}")
+                logger.warning("策略 {} 在 {} 执行失败: {}", strategy.name, symbol, e)
 
         if not votes:
             return None
@@ -117,14 +117,10 @@ class SignalRouter:
         # P0 修复：卖出硬否决（趋势破坏时不入场 — 《炒股的智慧》铁律）
         # 趋势类/突破类策略若发出 sell，说明趋势已破坏，禁止买入
         # 这些策略的 sell 信号覆盖任何 buy 信号
+        # v0.7.3 优化：策略池精简后，仅保留核心趋势/突破类策略的卖出硬否决
         _trend_breakdown_strategies = {
-            "turtle",
-            "dual_ma",
-            "chen_jiangting",
-            "money_flow_follow",
             "box_breakout",
-            "breakout",
-            "leopard_three_factors",
+            "hot_money",
         }
         sell_strategy_names = {n for n, _ in sell_votes}
         trend_breakdown = sell_strategy_names & _trend_breakdown_strategies
@@ -296,4 +292,101 @@ class SignalRouter:
         if regime:
             result["regime"] = regime
 
+        # 云策略专属：附加三维趋势数据到 market_context
+        if "cloud_trend" in triggered:
+            cloud_data = self._extract_cloud_trend_context(df)
+            if cloud_data:
+                result["market_context"] = cloud_data
+
+        # 游资策略专属：附加三数交易法数据到 market_context
+        if "hot_money" in triggered:
+            hm_data = self._extract_hot_money_context(df)
+            if hm_data:
+                result["market_context"] = hm_data
+
         return result
+
+    def _extract_cloud_trend_context(self, df: pd.DataFrame) -> dict[str, Any] | None:
+        """从云策略输出中提取三维趋势上下文数据。
+
+        云策略在 df 上附加了 dim1_ma_bull / dim2_hl_rising / dim3_vol_healthy
+        等列，提取最后一行的值供飞书卡片展示。
+        """
+        try:
+            if df.empty:
+                return None
+            last = df.iloc[-1]
+            required_cols = [
+                "dim1_ma_bull",
+                "dim2_hl_rising",
+                "dim3_vol_healthy",
+                "trend_dims_count",
+            ]
+            if not all(c in df.columns for c in required_cols):
+                return None
+
+            context = {
+                "dim1_ma_bull": bool(last.get("dim1_ma_bull", False)),
+                "dim2_hl_rising": bool(last.get("dim2_hl_rising", False)),
+                "dim3_vol_healthy": bool(last.get("dim3_vol_healthy", False)),
+                "trend_dims_count": int(last.get("trend_dims_count", 0)),
+                "trend_all_3_days": int(last.get("trend_all_3_days", 0)),
+            }
+
+            # 判断入场类型
+            close = float(last.get("close", 0))
+            hh_prev = float(last.get("hh", 0)) if "hh" in df.columns else 0
+            ma_trend = float(last.get("ma_trend", 0))
+            vol = float(last.get("volume", 0))
+            vol_ma = float(last.get("vol_ma", 0))
+
+            if hh_prev > 0 and close > hh_prev and vol > vol_ma * 1.5:
+                context["entry_type"] = "breakout"
+            elif ma_trend > 0 and close <= ma_trend * 1.01:
+                context["entry_type"] = "pullback"
+            else:
+                context["entry_type"] = ""
+
+            # 双阴反转检测
+            is_yin = bool(last.get("is_yin", False))
+            prev_yin = (
+                bool(df["is_yin"].iloc[-2]) if len(df) >= 2 and "is_yin" in df.columns else False
+            )
+            prev2_yin = (
+                bool(df["is_yin"].iloc[-3]) if len(df) >= 3 and "is_yin" in df.columns else False
+            )
+            is_yang = bool(last.get("is_yang", False))
+            context["double_yin_reversal"] = prev_yin and prev2_yin and (not is_yin or is_yang)
+
+            return context
+        except Exception:
+            return None
+
+    def _extract_hot_money_context(self, df: pd.DataFrame) -> dict[str, Any] | None:
+        """从游资策略输出中提取三数交易法上下文数据。
+
+        游资策略在 df 上附加了 hm_has_limit_up / hm_ref_volume /
+        hm_days_since_limit_up / hm_is_shrink_entry / hm_is_expand_exit /
+        hm_is_rolling 等列，提取最后一行的值供飞书卡片展示。
+        """
+        try:
+            if df.empty:
+                return None
+            last = df.iloc[-1]
+            required_cols = ["hm_has_limit_up", "hm_ref_volume", "hm_days_since_limit_up"]
+            if not all(c in df.columns for c in required_cols):
+                return None
+
+            context = {
+                "hm_has_limit_up": bool(last.get("hm_has_limit_up", False)),
+                "hm_ref_volume": float(last.get("hm_ref_volume", 0) or 0),
+                "hm_days_since_limit_up": int(last.get("hm_days_since_limit_up", 0) or 0),
+                "hm_is_shrink_entry": bool(last.get("hm_is_shrink_entry", False)),
+                "hm_is_expand_exit": bool(last.get("hm_is_expand_exit", False)),
+                "hm_is_rolling": bool(last.get("hm_is_rolling", False)),
+                "hm_current_volume": float(last.get("volume", 0)),
+            }
+
+            return context
+        except Exception:
+            return None

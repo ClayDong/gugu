@@ -96,18 +96,27 @@ class ParamOptimizer:
                 params = self._decode(ind)
                 try:
                     metrics = self._fitness(params)
-                    # 目标函数：Calmar 比率（年化收益/最大回撤）+ 夏普比率
-                    # 修复：原权重中回撤惩罚过轻（仅 0.2），易选出高夏普高回撤参数
-                    # 改用 Calmar 比率（年化收益/最大回撤，回撤为零时取年化收益）
-                    # 同时保留夏普比率辅助，权重 Calmar:Sharpe = 0.6:0.4
+                    # 目标函数：超额收益的 Calmar 比率 + 夏普比率
+                    # P2-6 修复：使用超额收益替代绝对收益（减去基准收益）
                     sharpe = metrics.get("sharpe", 0)
                     annual_ret = metrics.get("annual_return", 0)
                     max_dd = metrics.get("max_drawdown", 0)
-                    calmar = annual_ret / max_dd if max_dd > 0 else annual_ret * 5
+                    # 获取基准收益，默认0（兼容无基准的fitness函数）
+                    benchmark_return = metrics.get(
+                        "benchmark_return", metrics.get("base_return", 0)
+                    )
+                    excess_return = annual_ret - benchmark_return
+                    calmar = (
+                        excess_return / max_dd
+                        if max_dd > 0
+                        else excess_return * 5
+                        if excess_return != 0
+                        else annual_ret * 5
+                    )
                     score = calmar * 0.6 + sharpe * 0.4
                     scores.append((score, metrics, params))
                 except Exception as e:
-                    logger.warning(f"适应度计算失败: {e}")
+                    logger.warning("适应度计算失败: {}", e)
                     scores.append((-float("inf"), {}, params))
 
             # 排序

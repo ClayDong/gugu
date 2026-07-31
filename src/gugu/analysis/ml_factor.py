@@ -50,7 +50,7 @@ class FactorOrthogonalizer:
         data = factor_df.dropna().values
 
         if len(data) < 50:
-            logger.warning(f"正交化样本不足: {len(data)}，跳过正交化")
+            logger.warning("正交化样本不足: {}，跳过正交化", len(data))
             self.scaler = None
             self.pca = None
             self.n_kept = len(self.factor_names)
@@ -68,8 +68,10 @@ class FactorOrthogonalizer:
         self.pca.fit(scaled)
         self.n_kept = self.pca.n_components_
         logger.info(
-            f"因子正交化完成：{len(self.factor_names)} → {self.n_kept} 个主成分，"
-            f"累计方差解释率: {float(np.sum(self.pca.explained_variance_ratio_)):.2%}"
+            "因子正交化完成：{} → {} 个主成分，累计方差解释率: {:.2%}",
+            len(self.factor_names),
+            self.n_kept,
+            float(np.sum(self.pca.explained_variance_ratio_)),
         )
         return self
 
@@ -133,7 +135,13 @@ def _add_feature_engineering(factor_df: pd.DataFrame, factor_columns: list[str])
 
     # 因子交互特征：Top 5 IC 因子的两两乘积
     # 只对 IC 最高的前 5 个因子做交叉，避免特征爆炸
-    top5_candidates = ["obv_divergence", "ma_deviation_60", "ma_deviation_20", "di_cross", "momentum_20d"]
+    top5_candidates = [
+        "obv_divergence",
+        "ma_deviation_60",
+        "ma_deviation_20",
+        "di_cross",
+        "momentum_20d",
+    ]
     available_top5 = [c for c in top5_candidates if c in enhanced.columns]
     for i in range(len(available_top5)):
         for j in range(i + 1, len(available_top5)):
@@ -199,7 +207,8 @@ class MLFactorModel:
 
         if factor_columns is None:
             factor_columns = [
-                c for c in factor_df.columns
+                c
+                for c in factor_df.columns
                 if c not in ("date", "close", "open", "high", "low", "volume", "amount")
                 and pd.api.types.is_numeric_dtype(factor_df[c])
             ]
@@ -207,12 +216,13 @@ class MLFactorModel:
         # 优化1：因子方向处理（需要 close 计算 IC）
         if close is not None:
             ic_means = _compute_factor_ic(factor_df, close, factor_columns, self.forward_days)
-            self.reversed_factors = [
-                name for name, ic in ic_means.items()
-                if ic < -0.02
-            ]
+            self.reversed_factors = [name for name, ic in ic_means.items() if ic < -0.02]
             if self.reversed_factors:
-                logger.info(f"反转 {len(self.reversed_factors)} 个负 IC 因子: {self.reversed_factors}")
+                logger.info(
+                    "反转 {} 个负 IC 因子: {}",
+                    len(self.reversed_factors),
+                    self.reversed_factors,
+                )
         elif not self.reversed_factors:
             logger.warning("close 为空且无预计算 reversed_factors，跳过因子方向处理")
 
@@ -242,7 +252,7 @@ class MLFactorModel:
         aligned = aligned.dropna(subset=enhanced_cols)
 
         if len(aligned) < 100:
-            logger.warning(f"训练样本不足: {len(aligned)}，跳过训练")
+            logger.warning("训练样本不足: {}，跳过训练", len(aligned))
             return {"status": "skipped", "reason": "insufficient_samples", "samples": len(aligned)}
 
         # 准备数据
@@ -251,7 +261,7 @@ class MLFactorModel:
 
         n = len(X_raw)
         if n < 100:
-            logger.warning(f"训练样本不足: {n}，跳过训练")
+            logger.warning("训练样本不足: {}，跳过训练", n)
             return {"status": "skipped", "reason": "insufficient_samples", "samples": n}
 
         # 优化4：Walk-Forward 滚动窗口（修复 PCA 前视偏差）
@@ -339,7 +349,8 @@ class MLFactorModel:
                 seed=42,
             )
             best_model.fit(
-                X_train, y_train,
+                X_train,
+                y_train,
                 eval_set=[(X_val, y_val)] if len(X_val) > 0 else None,
                 callbacks=[lgb.log_evaluation(0)],
             )
@@ -368,7 +379,7 @@ class MLFactorModel:
             "label_type": "quantile_40_60",
             "walk_forward": True,
         }
-        logger.info(f"LightGBM v2 训练完成: {result}")
+        logger.info("LightGBM v2 训练完成: {}", result)
         return result
 
     def predict(self, factor_row: pd.Series | dict[str, float]) -> float:
@@ -438,7 +449,7 @@ class MLFactorModel:
                 },
                 f,
             )
-        logger.info(f"ML 模型已保存: {path}")
+        logger.info("ML 模型已保存: {}", path)
         return path
 
     def load(self, path: Path | None = None) -> bool:
@@ -453,12 +464,12 @@ class MLFactorModel:
         self.forward_days = data["forward_days"]
         self.is_trained = data["is_trained"]
         self.reversed_factors = data.get("reversed_factors", [])
-        logger.info(f"ML 模型已加载: {path}")
+        logger.info("ML 模型已加载: {}", path)
         return True
 
     def get_feature_importance(self) -> dict[str, float]:
         if not self.is_trained or self.model is None:
             return {}
         importance = self.model.feature_importances_
-        names = [f"PC{i+1}" for i in range(len(importance))]
+        names = [f"PC{i + 1}" for i in range(len(importance))]
         return dict(zip(names, importance.tolist(), strict=True))

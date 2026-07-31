@@ -362,8 +362,14 @@ class TestValidationResult:
             close_price=1520.5,
             open_price=1530.0,
             high_price=1540.0,
+            low_price=1510.0,
+            current_price=1535.0,
             open_premium=0.62,
             intraday_high_premium=1.28,
+            current_premium=0.95,
+            close_premium=0.95,
+            intraday_max_drawdown=-1.31,
+            stop_loss_hit=False,
             screener_date="2026-06-29",
             validation_date="2026-06-30",
             passed=True,
@@ -373,6 +379,7 @@ class TestValidationResult:
         assert r.open_premium == 0.62
         assert r.intraday_high_premium == 1.28
         assert r.benchmark_open_change == 0.25
+        assert r.stop_loss_hit is False
 
     def test_excess_return_calculation(self):
         """超额收益 = 个股开盘溢价 - 基准开盘涨幅。"""
@@ -382,8 +389,14 @@ class TestValidationResult:
             close_price=1520.5,
             open_price=1530.0,
             high_price=1540.0,
+            low_price=1510.0,
+            current_price=1535.0,
             open_premium=0.62,
             intraday_high_premium=1.28,
+            current_premium=0.95,
+            close_premium=0.95,
+            intraday_max_drawdown=-1.31,
+            stop_loss_hit=False,
             screener_date="2026-06-29",
             validation_date="2026-06-30",
             passed=True,

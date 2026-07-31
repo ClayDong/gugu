@@ -8,11 +8,14 @@ import httpx
 import pytest
 
 from gugu.notifier.formatter import (
+    build_signal_performance_card,
     format_backtest_report,
     format_daily_report,
     format_risk_alert,
     format_signal,
 )
+from gugu.notifier.perspective_report import build_batch_summary_card
+from gugu.analysis.perspectives.data_types import PerspectiveAnalysisResult
 
 
 def test_format_signal_buy():
@@ -340,6 +343,75 @@ def test_format_signal_entry_filtered():
     card = format_signal(signal)
     assert card["card"]["header"]["template"] == "yellow"
     assert "已过滤" in card["card"]["header"]["title"]["content"]
+
+
+def test_perspective_batch_blocked_is_observe_not_recommended_buy():
+    """十大视角未通过时只能显示观察/不可交易，不能进入推荐买入。"""
+    result = PerspectiveAnalysisResult(
+        symbol="600519",
+        name="贵州茅台",
+        price=1500.0,
+        composite_score=6.8,
+        min_score=3.5,
+        min_perspective="buffett",
+        passed_count=6,
+        fatal_count=1,
+        expected_count=10,
+        scored_count=10,
+        overall_verdict="blocked",
+        suggestion="买入后加仓",
+    )
+    content = str(build_batch_summary_card([result]))
+    assert "推荐买入" not in content
+    assert "观察" in content
+    assert "不可交易" in content
+    assert "买入后加仓" not in content
+
+
+def test_build_signal_performance_card_distinguishes_forward_and_closed():
+    """绩效卡必须分别展示前瞻指标与已平仓指标。"""
+    card = build_signal_performance_card(
+        {
+            "total_signals": 3,
+            "buy_count": 3,
+            "sell_count": 0,
+            "executed_count": 2,
+            "tracked_count": 3,
+            "forward_5d_signal_hit_rate": 0.667,
+            "avg_return_5d": 0.031,
+            "closed_trade_win_rate": 0.5,
+            "realized_pnl": 120.0,
+        }
+    )
+    content = str(card)
+    assert "前瞻5日命中率" in content
+    assert "已平仓交易胜率" in content
+    assert "66.7%" in content
+    assert "0.667" not in content
+
+
+def test_format_signal_blocked_decision_is_observe_and_not_trade():
+    """blocked 决策必须显示观察/不可交易，不能继续显示买入和建议仓位。"""
+    signal = {
+        "symbol": "600519",
+        "direction": "buy",
+        "price": 1500.0,
+        "suggested_position_ratio": 0.2,
+        "decision": {
+            "action": "observe",
+            "status": "blocked",
+            "allowed_to_trade": False,
+            "block_reasons": ["缺少十大视角评分"],
+        },
+    }
+    card = format_signal(signal)
+    content = str(card)
+    title = card["card"]["header"]["title"]["content"]
+    assert "观察" in title
+    assert "买入信号" not in title
+    assert "不可交易" in content
+    assert "推荐买入" not in content
+    assert "缺少十大视角评分" in content
 
 
 # ========== A-06 飞书决策摘要 ==========

@@ -15,6 +15,7 @@
     uv run python scripts/backtest_offline.py --max-stocks 50
     uv run python scripts/backtest_offline.py --min-days 200  # 只用 >=200 天数据的股票
 """
+
 from __future__ import annotations
 
 import argparse
@@ -176,8 +177,14 @@ def aggregate_metrics(results: list[dict]) -> dict:
         return {}
 
     metric_keys = [
-        "total_return", "annual_return", "sharpe", "max_drawdown",
-        "win_rate", "profit_factor", "total_trades", "avg_hold_days",
+        "total_return",
+        "annual_return",
+        "sharpe",
+        "max_drawdown",
+        "win_rate",
+        "profit_factor",
+        "total_trades",
+        "avg_hold_days",
     ]
 
     summary = {}
@@ -283,7 +290,9 @@ def print_report(
         dd = summary.get("_max_dd_mean", 0)
         n = summary.get("_sample_count", 0)
         print(f"  #{i} {name}")
-        print(f"     样本={n} | 收益={ret*100:+.2f}% | 夏普={sharpe:.2f} | 胜率={wr*100:.1f}% | 盈利比={pf*100:.0f}% | 回撤={dd*100:.2f}%")
+        print(
+            f"     样本={n} | 收益={ret*100:+.2f}% | 夏普={sharpe:.2f} | 胜率={wr*100:.1f}% | 盈利比={pf*100:.0f}% | 回撤={dd*100:.2f}%"
+        )
 
     print()
     print("[建议]")
@@ -307,7 +316,9 @@ def main() -> None:
     parser.add_argument("--max-stocks", type=int, default=None, help="限制股票数（调试用）")
     parser.add_argument("--min-days", type=int, default=60, help="最少缓存天数要求（默认 60）")
     parser.add_argument("--strategies", type=str, default=None, help="逗号分隔的策略名")
-    parser.add_argument("--output", type=str, default="data/backtest_report.json", help="输出 JSON 路径")
+    parser.add_argument(
+        "--output", type=str, default="data/backtest_report.json", help="输出 JSON 路径"
+    )
     parser.add_argument("--notify", action="store_true", help="回测完成后推送飞书报告")
     args = parser.parse_args()
 
@@ -327,7 +338,7 @@ def main() -> None:
         return
 
     if args.max_stocks and len(stocks) > args.max_stocks:
-        stocks = stocks[:args.max_stocks]
+        stocks = stocks[: args.max_stocks]
         logger.info(f"限制为前 {args.max_stocks} 只股票（调试模式）")
 
     logger.info(f"可用缓存股票: {len(stocks)} 只 (min_days={args.min_days})")

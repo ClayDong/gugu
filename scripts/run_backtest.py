@@ -3,6 +3,7 @@
 用法：
     python scripts/run_backtest.py --symbol 600519 --strategy turtle --days 120
 """
+
 from __future__ import annotations
 
 import argparse

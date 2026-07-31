@@ -50,6 +50,10 @@ class TestMarketFilter:
         """牛市条件下应返回 bullish=True。"""
         mf = MarketFilter()
         mf.fetch_index_data = mock.AsyncMock(return_value=_make_bullish_index_data())
+        # P2-7 新增中小盘校验，单测中避免真实网络请求
+        mf._check_small_cap_indices = mock.AsyncMock(
+            return_value={"bullish": True, "reason": "mock"}
+        )
         result = await mf.check_market()
         assert result["bullish"] is True
         assert result["regime"] == "bull"

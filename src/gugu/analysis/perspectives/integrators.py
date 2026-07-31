@@ -15,6 +15,7 @@ from gugu.analysis.perspectives.data_types import (
     PerspectiveAnalysisResult,
     StockDataContext,
 )
+from gugu.models.decision import evaluate_entry_gate
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -28,6 +29,23 @@ def build_context_from_signal(signal: dict[str, Any]) -> StockDataContext:
     fundamental = signal.get("fundamental", {}) or {}
     money_flow = signal.get("money_flow", {}) or {}
     market = signal.get("market_context", {}) or {}
+    core_fields = ("symbol", "price", "timestamp")
+    missing_core_fields = [
+        field
+        for field in core_fields
+        if not signal.get(field) or (field == "price" and float(signal.get(field, 0)) <= 0)
+    ]
+    supplied_quality = signal.get("data_quality") or market.get("data_quality")
+    data_quality = supplied_quality or ("partial" if missing_core_fields else "fresh")
+    supplied_missing_fields = signal.get("missing_core_fields")
+    if supplied_missing_fields is None:
+        supplied_missing_fields = market.get("missing_core_fields")
+    if supplied_missing_fields is not None:
+        missing_core_fields = list(supplied_missing_fields)
+    data_sources = list(signal.get("data_sources", []) or market.get("data_sources", []) or [])
+    data_timestamp = str(
+        signal.get("data_timestamp") or market.get("data_timestamp") or signal.get("timestamp", "")
+    )
 
     return StockDataContext(
         symbol=signal.get("symbol", ""),
@@ -85,6 +103,10 @@ def build_context_from_signal(signal: dict[str, Any]) -> StockDataContext:
         industry=signal.get("industry", ""),
         is_monopoly=signal.get("is_monopoly", signal.get("monopoly", False)),
         moat_type=signal.get("moat_type", ""),
+        data_quality=data_quality,
+        data_timestamp=data_timestamp,
+        data_sources=data_sources,
+        missing_core_fields=missing_core_fields,
     )
 
 
@@ -278,13 +300,13 @@ def attach_perspective_to_signal(
     signal["perspective_min_perspective"] = result.min_perspective
     signal["perspective_passed_count"] = result.passed_count
     signal["perspective_fatal_count"] = result.fatal_count
-    signal["perspective_suggestion"] = result.suggestion
+    signal["perspective_suggestion"] = result.suggestion or ""
     if result.entry_price:
         signal["perspective_entry"] = result.entry_price
     if result.stop_loss_price:
         signal["perspective_stop_loss"] = result.stop_loss_price
-    if result.target_price:
-        signal["perspective_target"] = result.target_price
+    signal["perspective_target"] = result.target_price
+    signal["decision"] = evaluate_entry_gate(signal, result).to_dict()
     return signal
 
 
@@ -296,11 +318,12 @@ def filter_by_perspective(
     """用视角评分过滤信号列表。"""
     filtered = []
     for sig in signals:
+        has_score = "perspective_score" in sig and sig.get("perspective_score") is not None
         score = sig.get("perspective_score", 0)
         passed = sig.get("perspective_passed", False)
-        if score >= min_score and (not require_pass or passed):
+        if has_score and score >= min_score and (not require_pass or passed):
             filtered.append(sig)
-        elif score == 0:
+        elif not require_pass and not has_score:
             # 无视角评分的信号保留（向后兼容）
             filtered.append(sig)
     return filtered

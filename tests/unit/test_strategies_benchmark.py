@@ -42,9 +42,9 @@ class TestTurtleStrategyBenchmark:
         # Turtle has buy signals around days 49-55 (during the uptrend)
         uptrend_signals = signals.iloc[49:56]
         buy_count = (uptrend_signals["signal"] == 1).sum()
-        assert buy_count >= 1, (
-            f"Expected buy signal in days 49-55 (uptrend), got {buy_count} buy signals"
-        )
+        assert (
+            buy_count >= 1
+        ), f"Expected buy signal in days 49-55 (uptrend), got {buy_count} buy signals"
 
     def test_no_false_signals_in_consolidation(self, benchmark_df: pd.DataFrame) -> None:
         """Days 150-160 (consolidation) should not have turtle buy signals.
@@ -57,9 +57,9 @@ class TestTurtleStrategyBenchmark:
 
         consol_signals = signals.iloc[151:160]
         buy_count = (consol_signals["signal"] == 1).sum()
-        assert buy_count == 0, (
-            f"Expected no buy signals inside consolidation (days 151-160), got {buy_count}"
-        )
+        assert (
+            buy_count == 0
+        ), f"Expected no buy signals inside consolidation (days 151-160), got {buy_count}"
 
     def test_confidence_values(self, benchmark_df: pd.DataFrame) -> None:
         """Confidence values should be in [0, 1] range."""
@@ -155,9 +155,9 @@ class TestBollingerBenchmark:
         # Bollinger has buy signals at indices 37, 38 (around the earlier dip)
         early_signals = signals.iloc[35:45]
         buy_count = (early_signals["signal"] == 1).sum()
-        assert buy_count >= 1, (
-            f"Expected buy signals from bollinger around days 35-45, got {buy_count}"
-        )
+        assert (
+            buy_count >= 1
+        ), f"Expected buy signals from bollinger around days 35-45, got {buy_count}"
 
     def test_signal_values(self, benchmark_df: pd.DataFrame) -> None:
         """Signal values should be in {-1, 0, 1}."""
@@ -231,12 +231,12 @@ class TestAllStrategiesGeneric:
 
         assert "signal" in signals.columns, f"{strategy_name}: missing 'signal'"
         assert "confidence" in signals.columns, f"{strategy_name}: missing 'confidence'"
-        assert len(signals) == len(benchmark_df), (
-            f"{strategy_name}: output length {len(signals)} != input {len(benchmark_df)}"
-        )
-        assert signals["signal"].isin([-1, 0, 1]).all(), (
-            f"{strategy_name}: invalid signal values {set(signals['signal'].unique())}"
-        )
+        assert len(signals) == len(
+            benchmark_df
+        ), f"{strategy_name}: output length {len(signals)} != input {len(benchmark_df)}"
+        assert (
+            signals["signal"].isin([-1, 0, 1]).all()
+        ), f"{strategy_name}: invalid signal values {set(signals['signal'].unique())}"
         conf = signals["confidence"].dropna()
         assert (conf >= 0).all() and (conf <= 1).all(), f"{strategy_name}: confidence out of range"
 

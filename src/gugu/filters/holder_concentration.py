@@ -125,12 +125,12 @@ class HolderConcentrationFilter:
         try:
             df = await collector.fetch_holder_structure(symbol=code)
         except Exception as e:
-            logger.warning(f"筹码结构数据获取异常 {code}: {e}")
+            logger.warning("筹码结构数据获取异常 {}: {}", code, e)
             self._set_cached(symbol, default)
             return default
 
         if df is None or df.empty:
-            logger.debug(f"筹码结构数据为空 {code}，默认放行（慢变量）")
+            logger.debug("筹码结构数据为空 {}，默认放行（慢变量）", code)
             self._set_cached(symbol, default)
             return default
 
@@ -142,7 +142,7 @@ class HolderConcentrationFilter:
             avg_hold_change = float(row.get("avg_hold_change", 0) or 0)
             end_date = str(row.get("end_date", "") or "")
         except (IndexError, ValueError, TypeError) as e:
-            logger.warning(f"提取筹码结构数据失败 {code}: {e}")
+            logger.warning("提取筹码结构数据失败 {}: {}", code, e)
             self._set_cached(symbol, default)
             return default
 
@@ -153,7 +153,7 @@ class HolderConcentrationFilter:
                 code, quarters=thresholds["lurker_consecutive_quarters"] + 1
             )
         except Exception as e:
-            logger.debug(f"筹码历史数据获取失败 {code}（不影响单季度信号）: {e}")
+            logger.debug("筹码历史数据获取失败 {}（不影响单季度信号）: {}", code, e)
 
         # 7. 避雷针信号判定
         reasons: list[str] = []
@@ -310,7 +310,7 @@ class HolderConcentrationFilter:
 
             return consecutive, round(cumulative, 2)
         except Exception as e:
-            logger.warning(f"连续趋势计算失败: {e}")
+            logger.warning("连续趋势计算失败: {}", e)
             return 0, 0.0
 
     def _load_thresholds(self) -> dict[str, Any]:

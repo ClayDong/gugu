@@ -12,6 +12,7 @@ Levels:
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,8 @@ from gugu.filters.industry_constraint import IndustryConstraint
 from gugu.utils.log import get_logger
 
 from .rules import Position, RiskAction, RiskCheckResult, RiskLevel
+
+logger = get_logger()
 
 # Price limit ratios by board
 _MAIN_BOARD_LIMIT = 0.10  # 主板 ±10%
@@ -36,6 +39,12 @@ _BSE_PREFIXES = ("43", "83", "87", "88", "920")  # 北交所（P1-c 修复）
 # L2 熔断状态持久化文件（P0-2 修复）
 RISK_STATE_FILE: Path = PROJECT_ROOT / "data" / "risk_state.json"
 
+# P0-4 硬编码安全上限（不可被构造函数参数绕过）
+_SAFE_MAX_POSITION_RATIO = 0.50  # 单股仓位上限 ≤ 50%
+_SAFE_DAILY_LOSS_WARN = 0.05  # 日亏预警 ≤ 5%
+_SAFE_DAILY_LOSS_HALT = 0.10  # 日亏熔断 ≤ 10%
+_SAFE_MAX_DRAWDOWN_HALT = 0.30  # 回撤熔断 ≤ 30%
+
 
 class RiskManager:
     """Three-level risk manager.
@@ -50,39 +59,62 @@ class RiskManager:
     def __init__(self, config: dict[str, Any] | AppConfig | None = None) -> None:
         if isinstance(config, AppConfig):
             rc = config.risk
-            self.max_position_ratio = rc.max_position_ratio
-            self.daily_loss_warn = rc.daily_loss_warn
-            self.daily_loss_halt = rc.daily_loss_halt
+            (
+                self.max_position_ratio,
+                self.daily_loss_warn,
+                self.daily_loss_halt,
+                self._max_drawdown_halt,
+            ) = self._apply_safety_caps(
+                rc.max_position_ratio,
+                rc.daily_loss_warn,
+                rc.daily_loss_halt,
+                rc.max_drawdown_halt,
+            )
             self.max_total_positions = rc.max_total_positions
             self.t_plus_1 = rc.t_plus_1
             self.max_holding_days_warn = rc.max_holding_days_warn
             self.max_holding_days_halt = rc.max_holding_days_halt
-            self._max_drawdown_halt = rc.max_drawdown_halt
             cfg = config.flatten().get("risk", {})
         elif config is not None:
             cfg = config
-            self.max_position_ratio = float(cfg.get("max_position_ratio", 0.30))
-            self.daily_loss_warn = float(cfg.get("daily_loss_warn", 0.03))
-            self.daily_loss_halt = float(cfg.get("daily_loss_halt", 0.05))
+            (
+                self.max_position_ratio,
+                self.daily_loss_warn,
+                self.daily_loss_halt,
+                self._max_drawdown_halt,
+            ) = self._apply_safety_caps(
+                float(cfg.get("max_position_ratio", 0.30)),
+                float(cfg.get("daily_loss_warn", 0.03)),
+                float(cfg.get("daily_loss_halt", 0.05)),
+                float(cfg.get("max_drawdown_halt", 0.15)),
+            )
             self.max_total_positions = int(cfg.get("max_total_positions", 5))
             self.t_plus_1 = bool(cfg.get("t_plus_1", True))
             self.max_holding_days_warn = int(cfg.get("max_holding_days_warn", 30))
             self.max_holding_days_halt = int(cfg.get("max_holding_days_halt", 60))
-            self._max_drawdown_halt = float(cfg.get("max_drawdown_halt", 0.15))
         else:
             rc = get_config().risk
-            self.max_position_ratio = rc.max_position_ratio
-            self.daily_loss_warn = rc.daily_loss_warn
-            self.daily_loss_halt = rc.daily_loss_halt
+            (
+                self.max_position_ratio,
+                self.daily_loss_warn,
+                self.daily_loss_halt,
+                self._max_drawdown_halt,
+            ) = self._apply_safety_caps(
+                rc.max_position_ratio,
+                rc.daily_loss_warn,
+                rc.daily_loss_halt,
+                rc.max_drawdown_halt,
+            )
             self.max_total_positions = rc.max_total_positions
             self.t_plus_1 = rc.t_plus_1
             self.max_holding_days_warn = rc.max_holding_days_warn
             self.max_holding_days_halt = rc.max_holding_days_halt
-            self._max_drawdown_halt = rc.max_drawdown_halt
             cfg = get_config().flatten().get("risk", {})
         self._logger = get_logger()
         self._halted: bool = False
+        self._last_halt_reset_time: float = 0.0  # P1-7: 熔断解除时间戳
         self._last_reset_date: str = ""
+        self._liquidity_max_turnover_ratio: float = 0.0  # P2-2: 流动性仓位约束（0=禁用）
         # 组合级风控（实例级别，避免跨实例共享）
         self._portfolio_peak: float = 0.0
         # 行业分散约束
@@ -95,7 +127,7 @@ class RiskManager:
         """Whether the manager is in halt state (all trading blocked)."""
         return self._halted
 
-    def reset(self) -> None:
+    def reset_halt(self) -> None:
         """Reset halt state. Call at the start of a new trading day."""
         if self._halted:
             self._logger.info("Risk manager halt state reset")
@@ -103,6 +135,8 @@ class RiskManager:
         from datetime import date as _date
 
         self._last_reset_date = _date.today().isoformat()
+        # P1-3 修复：start-of-day 不设冷却（首日熔断器应立即生效）
+        self._last_halt_reset_time = 0.0
         self._save_halt_state()
 
     def clear_halt_only(self) -> None:
@@ -110,6 +144,9 @@ class RiskManager:
 
         用于盘中人工解除熔断后恢复交易，但保留当日亏损累计，
         避免掩盖当日已发生的亏损（铁律：L2 熔断不可被绕过）。
+
+        P1-7 增强：解除后需等待至少 N 秒才能再次触发熔断，
+        防止"解除→立即重触发→再解除"的抖动循环。
 
         注意：此方法会绕过熔断铁律，调用前应确保人工确认。
         熔断状态解除后，当日亏损继续累计，若再次触发熔断将重新阻断交易。
@@ -124,7 +161,33 @@ class RiskManager:
             self._logger.info("clear_halt_only 调用但熔断未激活，无操作")
             return
         self._halted = False
+        self._last_halt_reset_time = time.time()  # P1-7: 记录解除时间
         self._save_halt_state()
+
+    @staticmethod
+    def _apply_safety_caps(
+        max_position_ratio: float,
+        daily_loss_warn: float,
+        daily_loss_halt: float,
+        max_drawdown_halt: float,
+    ) -> tuple[float, float, float, float]:
+        """对风控参数应用硬编码安全上限，防止绕过。
+
+        Args:
+            max_position_ratio: 单股仓位上限原始值。
+            daily_loss_warn: 日亏预警阈值原始值。
+            daily_loss_halt: 日亏熔断阈值原始值。
+            max_drawdown_halt: 组合回撤熔断阈值原始值。
+
+        Returns:
+            修正后的 (max_position_ratio, daily_loss_warn, daily_loss_halt, max_drawdown_halt) 元组。
+        """
+        return (
+            min(max_position_ratio, _SAFE_MAX_POSITION_RATIO),
+            min(daily_loss_warn, _SAFE_DAILY_LOSS_WARN),
+            min(daily_loss_halt, _SAFE_DAILY_LOSS_HALT),
+            min(max_drawdown_halt, _SAFE_MAX_DRAWDOWN_HALT),
+        )
 
     def _load_halt_state(self) -> None:
         """P0-2 修复：从磁盘加载熔断状态，防止进程重启绕过熔断。
@@ -146,20 +209,25 @@ class RiskManager:
                 if halted and halt_date == today_str:
                     self._halted = True
                     self._logger.warning(
-                        f"P0-2: 恢复当日 L2 熔断状态（halt_date={halt_date}），"
-                        f"交易已被阻断，需人工 reset_halt 后恢复"
+                        "P0-2: 恢复当日 L2 熔断状态（halt_date={}），交易已被阻断，需人工 reset_halt 后恢复",
+                        halt_date,
                     )
                 self._last_reset_date = data.get("last_reset_date", "")
+                # P2-12: 恢复熔断解除冷却时间
+                loaded_cooling = data.get("last_halt_reset_time", 0.0)
+                if loaded_cooling and float(loaded_cooling) > self._last_halt_reset_time:
+                    self._last_halt_reset_time = float(loaded_cooling)
                 # P0 修复：恢复组合峰值，防止重启后组合回撤熔断失效
                 loaded_peak = data.get("portfolio_peak", 0.0)
                 if loaded_peak and loaded_peak > self._portfolio_peak:
                     self._portfolio_peak = float(loaded_peak)
-                    self._logger.info(f"恢复组合峰值: {self._portfolio_peak:.2f}")
+                    self._logger.info("恢复组合峰值: {:.2f}", self._portfolio_peak)
         except Exception as e:
             # P0 修复：fail-safe 但记录 ERROR，便于人工介入
             self._logger.error(
-                f"加载熔断状态失败({e})，文件可能损坏。"
-                f"保守恢复为非熔断状态，请人工核查 {RISK_STATE_FILE}"
+                "加载熔断状态失败({})，文件可能损坏。保守恢复为非熔断状态，请人工核查 {}",
+                e,
+                RISK_STATE_FILE,
             )
 
     @property
@@ -181,6 +249,7 @@ class RiskManager:
                 "halt_date": _date.today().isoformat(),
                 "last_reset_date": self._last_reset_date,
                 "portfolio_peak": self._portfolio_peak,  # P0: 持久化组合峰值
+                "last_halt_reset_time": self._last_halt_reset_time,  # P2-12: 持久化熔断解除冷却时间
                 "updated_at": __import__("pandas").Timestamp.now().isoformat(),
             }
             # P0 修复：原子写入
@@ -188,7 +257,7 @@ class RiskManager:
 
             atomic_write_json(RISK_STATE_FILE, data, ensure_ascii=False, indent=2)
         except Exception as e:
-            self._logger.warning(f"保存熔断状态失败: {e}")
+            self._logger.warning("保存熔断状态失败: {}", e)
 
     def check_order(
         self,
@@ -280,6 +349,8 @@ class RiskManager:
         price: float,
         portfolio: dict[str, Position],
         cash: float,
+        *,
+        avg_daily_turnover: float | None = None,
     ) -> RiskCheckResult:
         """L1 checks for buy orders: max positions, industry constraint, and single position ratio."""
         # L1: max total positions (only when opening a new position)
@@ -307,7 +378,7 @@ class RiskManager:
         current_pos = portfolio.get(symbol)
         existing_qty = current_pos.quantity if current_pos else 0
 
-        # Post-trade position value for this symbol (valued at order price)
+        # Post-trade position value for this stock (valued at order price)
         new_symbol_value = (existing_qty + quantity) * price
         # Other positions valued at their current price
         other_value = sum(p.quantity * p.current_price for s, p in portfolio.items() if s != symbol)
@@ -335,6 +406,26 @@ class RiskManager:
                     f"{self.max_position_ratio:.1%}"
                 ),
             )
+
+        # P2-2: 流动性仓位约束（基于日均成交额限制单笔仓位）
+        # 单只持仓不超过该股票 N 日平均成交额的一定比例，避免流动性风险
+        if (
+            self._liquidity_max_turnover_ratio > 0
+            and cash > 0
+            and avg_daily_turnover
+            and avg_daily_turnover > 0
+        ):
+            max_value_by_liquidity = avg_daily_turnover * self._liquidity_max_turnover_ratio
+            if new_symbol_value > max_value_by_liquidity:
+                return RiskCheckResult(
+                    level=RiskLevel.L1_POSITION,
+                    action=RiskAction.HALT,
+                    message=(
+                        f"{symbol} 仓位市值 {new_symbol_value/1e8:.2f}亿 "
+                        f"超过流动性限制 {max_value_by_liquidity/1e8:.2f}亿 "
+                        f"（{self._liquidity_max_turnover_ratio:.0%} × 日均成交额）"
+                    ),
+                )
 
         return RiskCheckResult(
             level=RiskLevel.L1_POSITION,
@@ -384,6 +475,9 @@ class RiskManager:
             message=f"Sell {symbol} {quantity}@{price} approved",
         )
 
+    # P1-7: 熔断冷却时间（解除后需等待 N 秒才能再次触发）
+    HALT_RESET_COOLDOWN_SECONDS: float = 30.0
+
     def check_daily_loss(self, loss_pct: float) -> RiskCheckResult:
         """L2: Check daily loss against circuit breaker thresholds.
 
@@ -396,12 +490,26 @@ class RiskManager:
         if loss_pct < 0:
             loss_pct = 0.0
 
+        # P1-7: 熔断冷却检查（解除后需等待 N 秒才能再次触发）
+        if self._last_halt_reset_time > 0:
+            elapsed = time.time() - self._last_halt_reset_time
+            if elapsed < self.HALT_RESET_COOLDOWN_SECONDS:
+                return RiskCheckResult(
+                    level=RiskLevel.L2_DAILY_LOSS,
+                    action=RiskAction.ALLOW,
+                    message=(
+                        f"熔断冷却中（{elapsed:.0f}s/{self.HALT_RESET_COOLDOWN_SECONDS:.0f}s），"
+                        f"暂不触发新熔断"
+                    ),
+                )
+
         if loss_pct >= self.daily_loss_halt:
             self._halted = True
             self._save_halt_state()  # P0-2: 持久化熔断状态
             self._logger.warning(
-                f"L2 HALT: daily loss {loss_pct:.2%} >= {self.daily_loss_halt:.2%}, "
-                f"trading halted until reset()"
+                "L2 HALT: daily loss {:.2%} >= {:.2%}, trading halted until reset()",
+                loss_pct,
+                self.daily_loss_halt,
             )
             return RiskCheckResult(
                 level=RiskLevel.L2_DAILY_LOSS,
@@ -414,7 +522,7 @@ class RiskManager:
 
         if loss_pct >= self.daily_loss_warn:
             self._logger.warning(
-                f"L2 WARN: daily loss {loss_pct:.2%} >= {self.daily_loss_warn:.2%}"
+                "L2 WARN: daily loss {:.2%} >= {:.2%}", loss_pct, self.daily_loss_warn
             )
             return RiskCheckResult(
                 level=RiskLevel.L2_DAILY_LOSS,
@@ -465,7 +573,7 @@ class RiskManager:
 
         if prev_close <= 0:
             self._logger.warning(
-                f"Cannot determine price limit for {symbol}: prev_close={prev_close}"
+                "Cannot determine price limit for {}: prev_close={}", symbol, prev_close
             )
             return True
 
@@ -497,19 +605,38 @@ class RiskManager:
 
     # ── P1 新增：组合级风控 ─────────────────────────────────────────
 
-    def update_portfolio_peak(self, total_value: float) -> None:
-        """更新组合历史最高净值（每日循环结束时调用）。
+    def update_portfolio_peak(self, total_value: float, *, persist: bool = True) -> None:
+        """更新组合历史最高净值。
+
+        应在每根 K 线或每个 tick 处理完后调用，确保盘中回撤检测及时。
         P0 修复：峰值更新时持久化到磁盘，防止重启后回撤熔断失效。
+
+        Args:
+            total_value: 当前组合总净值。
+            persist: 是否持久化到磁盘。生产环境保持 True，回测场景传 False
+                     避免每根 K 线写磁盘造成性能开销和文件污染。
         """
         if total_value > self._portfolio_peak:
             self._portfolio_peak = total_value
-            self._save_halt_state()  # P0: 持久化峰值防止重启绕过回撤铁律
+            if persist:
+                self._save_halt_state()
 
     def check_portfolio_drawdown(self, total_value: float) -> RiskCheckResult:
         """检查组合从高点回撤是否触发熔断。
 
         回撤 ≥ 15% 时触发熔断（设置 _halted），阻止所有交易。
         """
+        # P1-4 修复：冷却检查（防止 clear_halt_only 后立即重触发）
+        if self._last_halt_reset_time > 0:
+            import time as _time
+
+            elapsed = _time.time() - self._last_halt_reset_time
+            if elapsed < self.HALT_RESET_COOLDOWN_SECONDS:
+                return RiskCheckResult(
+                    level=RiskLevel.L2_DAILY_LOSS,
+                    action=RiskAction.ALLOW,
+                    message=f"熔断冷却中（{elapsed:.0f}s/{self.HALT_RESET_COOLDOWN_SECONDS:.0f}s），暂不触发组合回撤熔断",
+                )
         if self._portfolio_peak <= 0:
             return RiskCheckResult(
                 level=RiskLevel.L2_DAILY_LOSS,
@@ -521,8 +648,9 @@ class RiskManager:
             self._halted = True
             self._save_halt_state()
             self._logger.warning(
-                f"L2 HALT: 组合回撤 {dd:.2%} >= {self._max_drawdown_halt:.0%}, "
-                f"trading halted until reset()"
+                "L2 HALT: 组合回撤 {:.2%} >= {:.0%}, trading halted until reset()",
+                dd,
+                self._max_drawdown_halt,
             )
             return RiskCheckResult(
                 level=RiskLevel.L2_DAILY_LOSS,
@@ -583,8 +711,11 @@ class RiskManager:
         # 持仓 60 天未盈利 → 强制清仓
         if holding_days >= self.max_holding_days_halt:
             self._logger.warning(
-                f"P2-5: {symbol} 持仓 {holding_days} 天未盈利（{current_pnl_pct:+.2%}），"
-                f"强制清仓（>={self.max_holding_days_halt} 天）"
+                "P2-5: {} 持仓 {} 天未盈利（{:.2%}），强制清仓（>={} 天）",
+                symbol,
+                holding_days,
+                current_pnl_pct,
+                self.max_holding_days_halt,
             )
             return RiskCheckResult(
                 level=RiskLevel.L2_DAILY_LOSS,
@@ -598,8 +729,11 @@ class RiskManager:
         # 持仓 30 天未盈利 → 警告减半仓
         if holding_days >= self.max_holding_days_warn:
             self._logger.warning(
-                f"P2-5: {symbol} 持仓 {holding_days} 天未盈利（{current_pnl_pct:+.2%}），"
-                f"建议减半仓（>={self.max_holding_days_warn} 天）"
+                "P2-5: {} 持仓 {} 天未盈利（{:.2%}），建议减半仓（>={} 天）",
+                symbol,
+                holding_days,
+                current_pnl_pct,
+                self.max_holding_days_warn,
             )
             return RiskCheckResult(
                 level=RiskLevel.L2_DAILY_LOSS,
@@ -649,7 +783,7 @@ class RiskManager:
                     if len(ret) >= 30:
                         returns[sym] = ret
             except Exception as e:
-                logger.warning(f"获取 {sym} 历史数据失败: {e}")
+                logger.warning("获取 {} 历史数据失败: {}", sym, e)
                 continue
 
         alerts: list[dict] = []
@@ -665,6 +799,6 @@ class RiskManager:
                     if abs(corr) > threshold:
                         alerts.append({"pair": (s1, s2), "correlation": round(corr, 4)})
                 except Exception as e:
-                    logger.warning(f"相关性计算失败 {s1}/{s2}: {e}")
+                    logger.warning("相关性计算失败 {}/{}: {}", s1, s2, e)
                     continue
         return alerts

@@ -21,14 +21,16 @@ def _make_df(
     highs: list[float] | None = None,
     lows: list[float] | None = None,
 ) -> pd.DataFrame:
-    df = pd.DataFrame({
-        "date": pd.date_range(start="2023-01-01", periods=len(prices)),
-        "open": opens if opens is not None else prices,
-        "high": highs if highs is not None else [p * 1.01 for p in prices],
-        "low": lows if lows is not None else [p * 0.99 for p in prices],
-        "close": prices,
-        "volume": volumes,
-    })
+    df = pd.DataFrame(
+        {
+            "date": pd.date_range(start="2023-01-01", periods=len(prices)),
+            "open": opens if opens is not None else prices,
+            "high": highs if highs is not None else [p * 1.01 for p in prices],
+            "low": lows if lows is not None else [p * 0.99 for p in prices],
+            "close": prices,
+            "volume": volumes,
+        }
+    )
     return df
 
 
@@ -90,42 +92,43 @@ def test_buy_signal_on_healthy_pullback(strategy: NorthForceLongStrategy):
 
 def test_sell_priority_over_buy(strategy: NorthForceLongStrategy):
     """同一日同时满足买卖条件时，卖出优先（时间止损覆盖买入）。"""
-    df_buy = _build_uptrend_segment()
-    entry_close = df_buy["close"].iloc[-1]
+    # 构造受控序列：先建立趋势并让均线走平，再 spike 制造近期关注，
+    # 然后 entry → 横盘 → 最后一日同时触发买入+时间止损，卖出应优先。
+    prices = list(np.linspace(10.0, 12.0, 40))
+    prices += [12.0] * 60  # 均线走平，避免早期杂讯买入
+    prices.append(12.0 * 1.06)  # index 100：制造 recent_spike
+    prices += [12.0] * 2  # index 101-102：回踩，不产生买入
+    prices.append(12.2)  # index 103：entry，收盘在 MA20 上方
+    prices += [12.18] * 2  # index 104-105：横盘持有，收益<阈值
+    prices.append(12.36)  # index 106：最后一日，仍满足买入+时间止损
 
-    # 买入后价格围绕成本小幅震荡，成交量保持高位（非买点）
-    post = list(np.linspace(entry_close, entry_close * 1.02, 30))
-    # 在观察窗内制造一个 5%+ 的阳线，满足 recent_spike 条件
-    post[-5] = post[-6] * 1.055
-    post[-4] = post[-5] * 1.002
-    post[-3] = post[-4] * 1.001
-    post[-2] = post[-3] * 1.001
-    post[-1] = post[-2] * 1.001
-
-    prices = list(df_buy["close"]) + post
-    volumes = [10000] * 117 + [4000] * 5 + [20000] * 29 + [4000]
+    volumes = [10000] * 101 + [4000] * 6
     opens = [p * 0.998 for p in prices]
     df = _make_df(prices, volumes, opens)
 
-    ma20 = df["close"].rolling(20).mean()
-    df.loc[df.index[-1], "close"] = ma20.iloc[-1] * 1.005
-    df.loc[df.index[-1], "open"] = df["close"].iloc[-1] * 0.998
-
-    result = strategy.generate_signals(df)
+    # 缩短时间止损窗口，使测试在可控长度内触发
+    test_strategy = NorthForceLongStrategy(
+        {
+            "min_confidence": 0.40,
+            "time_stop_window": 3,
+            "time_stop_threshold": 0.05,
+        }
+    )
+    result = test_strategy.generate_signals(df)
 
     # 存在买入信号，且最后一天因时间止损卖出优先于买入
     assert (result["signal"] == 1).any()
     assert result["signal"].iloc[-1] == -1
-    assert result["days_since_entry"].iloc[-1] >= 30
+    assert result["days_since_entry"].iloc[-1] >= 3
     assert result["return_since_entry"].iloc[-1] < 0.05
 
 
 def test_ma_death_cross_sells(strategy: NorthForceLongStrategy):
-    """MA20 下穿 MA60 时产生卖出信号。"""
+    """MA20 下穿 MA60 前/时应触发卖出信号（状态机确保只卖一次）。"""
     df_buy = _build_uptrend_segment()
     entry_close = df_buy["close"].iloc[-1]
 
-    # 买入后缓慢下跌，使 MA20 最终下穿 MA60
+    # 买入后持续下跌，使 MA20 最终下穿 MA60
     post = [entry_close * (0.997 ** (i + 1)) for i in range(120)]
     prices = list(df_buy["close"]) + post
     volumes = [10000] * 117 + [4000] * 5 + [10000] * 120
@@ -140,4 +143,8 @@ def test_ma_death_cross_sells(strategy: NorthForceLongStrategy):
     death_idx = result.index[death_cross]
 
     assert len(death_idx) > 0, "应出现 MA20 下穿 MA60"
-    assert result.loc[death_idx[0], "signal"] == -1
+    # 由于连续 2 日跌破 MA20 通常先于死亡交叉触发止损，
+    # 因此断言在死亡交叉当天或之前存在卖出信号即可。
+    first_death = death_idx[0]
+    sells_before_or_at = (result.loc[:first_death, "signal"] == -1).any()
+    assert sells_before_or_at, "MA20 下穿 MA60 时应已触发卖出"

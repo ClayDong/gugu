@@ -886,9 +886,9 @@ class TestMultiPerspectiveSignalE2E:
         sell_pct = mp.get("sell_agreement_pct", 0)
 
         # buy 信号应得到 buy_pct > sell_pct（各视角综合判断）
-        assert buy_pct >= sell_pct or mp.get("consensus") == "buy", (
-            f"买入信号应偏向买入共识: buy={buy_pct}, sell={sell_pct}, consensus={mp.get('consensus')}"
-        )
+        assert (
+            buy_pct >= sell_pct or mp.get("consensus") == "buy"
+        ), f"买入信号应偏向买入共识: buy={buy_pct}, sell={sell_pct}, consensus={mp.get('consensus')}"
 
         # buy + sell + hold ≈ 1.0
         hold_pct = mp.get("hold_agreement_pct", 0)
@@ -951,7 +951,7 @@ class TestMultiPerspectiveSignalE2E:
 
         # 卖出信号应有 sell_perspectives
         sell_perspectives = mp.get("sell_perspectives", [])
-        assert len(mp.get("analyzed_count", 0)) > 0
+        assert mp.get("analyzed_count", 0) > 0
 
         # consensus 不应是 strong_buy（卖出信号的共识应偏向卖或冲突）
         consensus = mp.get("consensus", "")

@@ -277,26 +277,61 @@ class TestEquityEndpoint:
 class TestHaltEndpoint:
     """熔断重置端点测试。"""
 
-    def test_halt_reset_returns_200(self):
+    def test_halt_reset_returns_200(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """POST /api/halt/reset 返回 200。"""
+        # v0.7.5 P0-8修复：敏感接口需认证，测试环境 mock 配置
+        import os
+
+        os.environ["GUGU_ADMIN_API_KEY"] = "test_key"
+        monkeypatch.setattr(
+            "gugu.web.app._get_web_admin_api_key",
+            lambda: "test_key",
+        )
+        monkeypatch.setattr(
+            "gugu.web.app.get_config",
+            lambda: type(
+                "Cfg", (), {"web": type("W", (), {"require_auth_for_sensitive": True})()}
+            )(),
+        )
         app = create_app()
         client = TestClient(app)
         with mock.patch("gugu.engine.main.TradingEngine") as MockEngine:
             MockEngine.return_value.reset_halt.return_value = None
-            resp = client.post("/api/halt/reset")
+            resp = client.post("/api/halt/reset", headers={"X-API-Key": "test_key"})
             assert resp.status_code == 200
 
 
 class TestOrderEndpoint:
     """模拟盘下单端点测试。"""
 
-    def test_order_rejects_non_paper_mode(self):
+    # v0.7.5 P0-8修复：敏感接口需认证，测试环境统一设置 API key
+    _API_HEADERS = {"X-API-Key": "test_key"}
+
+    @staticmethod
+    def _setup_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+        import os
+
+        os.environ["GUGU_ADMIN_API_KEY"] = "test_key"
+        monkeypatch.setattr(
+            "gugu.web.app._get_web_admin_api_key",
+            lambda: "test_key",
+        )
+        monkeypatch.setattr(
+            "gugu.web.app.get_config",
+            lambda: type(
+                "Cfg", (), {"web": type("W", (), {"require_auth_for_sensitive": True})()}
+            )(),
+        )
+
+    def test_order_rejects_non_paper_mode(self, monkeypatch: pytest.MonkeyPatch):
         """非 paper 模式拒绝 Web 下单。"""
+        self._setup_auth(monkeypatch)
         app = create_app()
         client = TestClient(app)
         with mock.patch("gugu.web.app._execution_mode", return_value="signal_only"):
             resp = client.post(
                 "/api/order",
+                headers=self._API_HEADERS,
                 json={"symbol": "600276", "direction": "buy", "quantity": 100, "price": 50.0},
             )
         assert resp.status_code == 200
@@ -304,23 +339,26 @@ class TestOrderEndpoint:
         assert data["status"] == "error"
         assert "paper" in data["message"]
 
-    def test_order_rejects_invalid_quantity(self):
+    def test_order_rejects_invalid_quantity(self, monkeypatch: pytest.MonkeyPatch):
         """数量必须为正数。"""
+        self._setup_auth(monkeypatch)
         app = create_app()
         client = TestClient(app)
         with mock.patch("gugu.web.app._execution_mode", return_value="paper"):
             resp = client.post(
                 "/api/order",
+                headers=self._API_HEADERS,
                 json={"symbol": "600276", "direction": "buy", "quantity": 0, "price": 50.0},
             )
         assert resp.status_code == 200
         assert resp.json()["status"] == "error"
         assert "数量" in resp.json()["message"]
 
-    def test_order_rejects_when_risk_halts(self):
+    def test_order_rejects_when_risk_halts(self, monkeypatch: pytest.MonkeyPatch):
         """风控拒绝时不调用 broker.order。"""
         from gugu.risk.rules import RiskAction, RiskCheckResult, RiskLevel
 
+        self._setup_auth(monkeypatch)
         app = create_app()
         client = TestClient(app)
         with (
@@ -342,6 +380,7 @@ class TestOrderEndpoint:
 
             resp = client.post(
                 "/api/order",
+                headers=self._API_HEADERS,
                 json={"symbol": "600276", "direction": "buy", "quantity": 100, "price": 50.0},
             )
 
@@ -350,11 +389,12 @@ class TestOrderEndpoint:
         assert "风控拒绝" in data["message"]
         mock_broker.order.assert_not_called()
 
-    def test_order_places_paper_buy_after_risk_allows(self):
+    def test_order_places_paper_buy_after_risk_allows(self, monkeypatch: pytest.MonkeyPatch):
         """风控通过后执行模拟盘买入。"""
         from gugu.execution.base import OrderResult
         from gugu.risk.rules import RiskAction, RiskCheckResult, RiskLevel
 
+        self._setup_auth(monkeypatch)
         app = create_app()
         client = TestClient(app)
         with (
@@ -378,6 +418,7 @@ class TestOrderEndpoint:
 
             resp = client.post(
                 "/api/order",
+                headers=self._API_HEADERS,
                 json={"symbol": "600276", "direction": "buy", "quantity": 100, "price": 50.0},
             )
 

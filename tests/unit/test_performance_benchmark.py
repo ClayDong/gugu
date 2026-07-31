@@ -78,9 +78,9 @@ class TestSignalGenerationBenchmark:
         result = strategy.generate_signals(df)
         elapsed = time.perf_counter() - start
 
-        assert elapsed < 1.0 * _BENCHMARK_TOLERANCE, (
-            f"{strategy_name} 生成耗时 {elapsed:.3f}s，超出基准阈值"
-        )
+        assert (
+            elapsed < 1.0 * _BENCHMARK_TOLERANCE
+        ), f"{strategy_name} 生成耗时 {elapsed:.3f}s，超出基准阈值"
         assert "signal" in result.columns
         assert "confidence" in result.columns
         assert len(result) == len(df)
@@ -98,9 +98,9 @@ class TestSignalGenerationBenchmark:
             strategy.generate_signals(df.copy())
         elapsed = time.perf_counter() - start
 
-        assert elapsed < 10.0 * _BENCHMARK_TOLERANCE, (
-            f"50 次策略生成总耗时 {elapsed:.3f}s，超出基准阈值"
-        )
+        assert (
+            elapsed < 10.0 * _BENCHMARK_TOLERANCE
+        ), f"50 次策略生成总耗时 {elapsed:.3f}s，超出基准阈值"
 
 
 class TestDataCacheBenchmark:

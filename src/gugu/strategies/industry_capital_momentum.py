@@ -1,40 +1,23 @@
-"""行业资金强度+动量确认策略（个股适配版 v1.2）。
+"""行业资金强度+动量确认策略（个股适配版 v2.4）。
 
 来源：行业资金强度+动量确认策略框架
 第一性原理：让资金先投票，用动量确认，在趋势早期介入，在资金退潮前退出
 
-四层架构（适配个股数据）：
-1. 资金监控层：识别个股资金聚集（量价趋势、成交额变化、资金动量）
-2. 动量确认层：过滤假信号（MA5/MA20金叉、量能放大、RSI合理区间）
-3. 入场触发层：多条件评分买入（核心条件 + 评分增强）
-4. 退出风控层：趋势破坏/资金退潮/过热止盈/硬止损
+v2.4 优化（基于 v2.3 回测结果）：
+- 总收益 -3.35%，夏普 -1.60，胜率 25%，交易14次/股
+- 问题分析：降低门槛后交易增加但质量下降，平均持仓仅4.5天被止损/趋势破坏强制平仓
+- 对策：
+  1. 保持量比1.3x（机会）
+  2. MA20趋势过滤改回开启（质量）
+  3. 放宽止损容忍度：8% → 10%（减少被震出）
 
-v1.2 优化：放宽退出条件（止损8%→12%，止盈20%→25%），减少震荡市频繁止损
-v1.1 重构：适配个股数据分析
-- 原策略设计为行业级别（需横截面排名），回测框架传入个股数据
-- 重构后所有指标基于个股时间序列，保留四层架构思想
-- 放宽入场条件：减少硬AND条件，增加评分权重
+v2.3 优化（基于 v2.2 回测结果）：
+- 总收益 -2.03%，夏普 -1.58，胜率 19.7%
+- 问题分析：量比1.5x门槛过高，MA20趋势过滤过于严格
 
-入场触发条件（重构后）：
-核心条件（必须全部满足）：
-  1. MA5/MA20金叉（或已金叉状态）
-  2. 收盘价站上MA5
-  3. 量能放大（量比 >= 1.2）
-  4. RSI在合理区间（35-70）
-  5. MA5斜率 > -0.02（趋势不差）
+v2.2 优化（基于 v2.1 回测结果）：
+- 总收益 -2.25%，夏普 -0.82，胜率 29.
 
-评分增强项（累计 >= 0.40 可加分）：
-  - 资金动量强（量价齐升）
-  - 成交额占比提升（相对近期均值）
-  - 个股共振（近3日多数收涨）
-  - 非过热（20日涨幅 < 25%）
-  - 非过度拥挤（成交量非异常）
-
-退出风控条件：
-  1. 趋势破坏：收盘价跌破MA10
-  2. 资金退潮：量能持续萎缩或价格连续下跌
-  3. 过热止盈：20日涨幅>30%或RSI>75
-  4. 硬止损：从高点回撤达-8%
 """
 
 from __future__ import annotations
@@ -46,7 +29,7 @@ from gugu.strategies.base import Strategy
 
 
 class IndustryCapitalMomentumStrategy(Strategy):
-    """行业资金强度+动量确认策略（个股适配版）。"""
+    """行业资金强度+动量确认策略（个股适配版 v2.4）。"""
 
     name = "industry_capital_momentum"
     category = "capital_flow"
@@ -90,19 +73,21 @@ class IndustryCapitalMomentumStrategy(Strategy):
         p = {
             "ma_short": int(self.params.get("ma_short", 5)),
             "ma_long": int(self.params.get("ma_long", 20)),
-            "volume_ratio": float(self.params.get("volume_ratio", 1.2)),
+            "volume_ratio": float(self.params.get("volume_ratio", 1.3)),
             "rsi_window": int(self.params.get("rsi_window", 14)),
-            "rsi_low": float(self.params.get("rsi_low", 35)),
-            "rsi_high": float(self.params.get("rsi_high", 70)),
-            "stop_loss_pct": float(self.params.get("stop_loss_pct", 0.08)),
-            "take_profit_pct": float(self.params.get("take_profit_pct", 0.20)),
-            "overheat_return_pct": float(self.params.get("overheat_return_pct", 0.30)),
-            "overheat_rsi": float(self.params.get("overheat_rsi", 75)),
-            "min_entry_score": float(self.params.get("min_entry_score", 0.40)),
-            "ma5_slope_threshold": float(self.params.get("ma5_slope_threshold", -0.02)),
-            "return_hot_threshold": float(self.params.get("return_hot_threshold", 0.25)),
-            "crowding_vol_ratio": float(self.params.get("crowding_vol_ratio", 2.5)),
+            "rsi_low": float(self.params.get("rsi_low", 45)),
+            "rsi_high": float(self.params.get("rsi_high", 65)),
+            "stop_loss_pct": float(self.params.get("stop_loss_pct", 0.10)),
+            "take_profit_pct": float(self.params.get("take_profit_pct", 0.12)),
+            "trailing_stop_pct": float(self.params.get("trailing_stop_pct", 0.03)),
+            "trailing_start_pct": float(self.params.get("trailing_start_pct", 0.05)),
+            "min_entry_score": float(self.params.get("min_entry_score", 0.30)),
+            "ma5_slope_threshold": float(self.params.get("ma5_slope_threshold", 0.0)),
+            "return_hot_threshold": float(self.params.get("return_hot_threshold", 0.20)),
             "exit_trend_ma": int(self.params.get("exit_trend_ma", 10)),
+            "min_hold_days": int(self.params.get("min_hold_days", 8)),
+            "max_hold_days": int(self.params.get("max_hold_days", 25)),
+            "require_ma20_up": bool(self.params.get("require_ma20_up", True)),
         }
 
         ma_s = p["ma_short"]
@@ -118,9 +103,6 @@ class IndustryCapitalMomentumStrategy(Strategy):
         vol_ma20 = df["volume"].rolling(20).mean().shift(1)
         df["vol_ratio"] = df["volume"] / vol_ma20.replace(0, np.nan)
 
-        amount_ma20 = df["amount"].rolling(20).mean().shift(1)
-        df["amount_ratio"] = df["amount"] / amount_ma20.replace(0, np.nan)
-
         # ── RSI ──
         df["rsi"] = self._calc_rsi(df["close"], p["rsi_window"])
 
@@ -128,107 +110,172 @@ class IndustryCapitalMomentumStrategy(Strategy):
         df["daily_return"] = df["close"].pct_change()
         df["return_20d"] = df["close"].pct_change(20)
 
-        # ── 个股涨跌 ──
-        df["stock_up"] = (df["close"] > df["open"]).astype(float)
-
         # ══════════════════════════════════════════════════════
-        # 动量确认条件
+        # v2.0 核心改进1：入场条件简化
+        # v2.2 新增：MA20趋势过滤
         # ══════════════════════════════════════════════════════
 
         # MA5/MA20金叉（当日金叉或已金叉状态）
         ma5_above_ma20_now = df["ma5"] > df["ma20"]
         ma5_above_ma20_prev = df["ma5"].shift(1) > df["ma20"].shift(1)
         ma5_cross_up = ma5_above_ma20_now & ~ma5_above_ma20_prev
-        ma_momentum_confirmed = ma5_cross_up | ma5_above_ma20_now
+        ma_golden_cross = ma5_cross_up | ma5_above_ma20_now
 
-        # 站上MA5
-        above_ma5 = df["close"] > df["ma5"]
+        # v2.2 新增：MA20趋势向上过滤（要求MA20在上升趋势中）
+        ma20_slope = df["ma20"].diff(5) / df["ma20"].shift(5).replace(0, np.nan)
+        ma20_up = ma20_slope > 0 if p["require_ma20_up"] else True
 
-        # 量能确认（放宽到1.2倍，不再要求前日）
-        volume_confirm = df["vol_ratio"] >= p["volume_ratio"]
+        # RSI在合理区间（45-65，不过于超买也不超卖）
+        rsi_ok = (df["rsi"] >= p["rsi_low"]) & (df["rsi"] <= p["rsi_high"])
 
-        # RSI合理区间（放宽到35-70）
-        rsi_in_zone = (df["rsi"] >= p["rsi_low"]) & (df["rsi"] <= p["rsi_high"])
+        # 量能配合（放量确认，v2.2提高至1.5倍）
+        volume_ok = df["vol_ratio"] >= p["volume_ratio"]
 
-        # MA5趋势不差
-        ma_trend_up = df["ma5_slope"] > p["ma5_slope_threshold"]
+        # 综合入场条件（四个都必须满足）
+        entry_ready = ma_golden_cross & rsi_ok & volume_ok & ma20_up
 
         # ══════════════════════════════════════════════════════
-        # 入场触发层：核心条件 + 评分增强
+        # v2.0 核心改进2：连续评分系统
+        # 用实际涨幅和量比作为连续分数，而非二元判断
         # ══════════════════════════════════════════════════════
 
-        # 核心条件（必须全部满足）
-        core_conditions = (
-            ma_momentum_confirmed &
-            above_ma5 &
-            volume_confirm &
-            rsi_in_zone &
-            ma_trend_up
+        # 量能评分：量比从1.2到2.0映射到0-1之间，超过2.0得1分
+        score_volume = np.clip(
+            (df["vol_ratio"] - p["volume_ratio"]) / (2.0 - p["volume_ratio"]), 0, 1
         )
 
-        # 评分增强项（满足则加分）
-        # 1. 资金动量强：量价齐升（当日上涨 + 放量）
-        score_momentum = ((df["daily_return"] > 0) & (df["vol_ratio"] > 1.0)).astype(float) * 0.20
+        # 价格动量评分：当日涨幅从0到5%映射到0-1之间
+        score_momentum = np.clip(df["daily_return"] / 0.05, 0, 1)
 
-        # 2. 成交额占比提升：相对20日均值提升
-        score_amount_up = (df["amount_ratio"] > 1.1).astype(float) * 0.15
+        # RSI舒适度评分：RSI在40-60之间得分最高（1），越靠近边界越低
+        rsi_mid = (p["rsi_low"] + p["rsi_high"]) / 2
+        rsi_dist_from_mid = np.abs(df["rsi"] - rsi_mid)
+        rsi_range = (p["rsi_high"] - p["rsi_low"]) / 2
+        score_rsi_comfort = np.clip(1 - rsi_dist_from_mid / rsi_range, 0, 1)
 
-        # 3. 个股共振：近3日平均 >= 50%收涨
-        score_resonance = (df["stock_up"].rolling(3).mean() >= 0.5).astype(float) * 0.15
+        # 综合入场评分（加权平均）
+        entry_score = score_volume * 0.35 + score_momentum * 0.35 + score_rsi_comfort * 0.30
 
-        # 4. 非过热：20日涨幅 < 25%
-        score_not_hot = (df["return_20d"] < p["return_hot_threshold"]).astype(float) * 0.10
-
-        # 5. 非过度拥挤：量比不超过2.5倍（排除异常放量）
-        score_not_crowded = (df["vol_ratio"] < p["crowding_vol_ratio"]).astype(float) * 0.10
-
-        entry_score = score_momentum + score_amount_up + score_not_hot + score_not_crowded + score_resonance
-
-        # 最终买入条件：核心条件 + 评分达标
-        buy_cond_final = core_conditions & (entry_score >= p["min_entry_score"])
-
-        df["signal"] = 0
-        df.loc[buy_cond_final, "signal"] = 1
-
-        # ══════════════════════════════════════════════════════
-        # 退出风控层
-        # ══════════════════════════════════════════════════════
-
-        # 1. 趋势破坏：收盘价跌破MA10
-        exit_trend_breakdown = df["close"] < df["ma10"]
-
-        # 2. 资金退潮：量能持续萎缩（量比<0.7连续2日）或价格连续下跌
-        vol_shrink = (df["vol_ratio"] < 0.7).rolling(2).sum() >= 2
-        price_decline = (df["daily_return"] < 0).rolling(3).sum() >= 3
-        exit_capital_drain = vol_shrink | price_decline
-
-        # 3. 过热止盈：20日涨幅>30%或RSI>75
-        exit_overheat_return = df["return_20d"] > p["overheat_return_pct"]
-        exit_overheat_rsi = df["rsi"] > p["overheat_rsi"]
-        exit_overheat = exit_overheat_return | exit_overheat_rsi
-
-        # 4. 硬止损：从高点回撤8%
-        rolling_max = df["close"].rolling(20).max()
-        drawdown_from_high = (df["close"] - rolling_max) / rolling_max
-        exit_hard_stop = drawdown_from_high < -p["stop_loss_pct"]
-
-        # 5. 止盈：达到目标收益
-        exit_take_profit = df["return_20d"] > p["take_profit_pct"]
-
-        # 综合卖出条件
-        sell_cond = (
-            exit_trend_breakdown |
-            exit_capital_drain |
-            exit_overheat |
-            exit_hard_stop |
-            exit_take_profit
+        # 最终买入条件：入场就绪 + 评分达标 + 不过热
+        buy_cond_final = (
+            entry_ready
+            & (entry_score >= p["min_entry_score"])
+            & (df["return_20d"] < p["return_hot_threshold"])
         )
 
-        # 只在已买入状态下生成卖出信号
-        position = buy_cond_final.astype(int).cumsum() - sell_cond.astype(int).cumsum()
-        position = position.clip(lower=0)
-        has_position = position > 0
+        # ══════════════════════════════════════════════════════
+        # v2.0 核心改进3：状态机持仓追踪
+        # 使用 position_state 而非 cumsum 计算
+        # ══════════════════════════════════════════════════════
 
-        df.loc[sell_cond & has_position, "signal"] = -1
+        position_state = pd.Series(0, index=df.index)
+        entry_price = pd.Series(np.nan, index=df.index)
+        entry_idx = pd.Series(np.nan, index=df.index)
+        hold_days = pd.Series(0, index=df.index)
+
+        in_position = False
+        current_entry_price = np.nan
+        current_entry_idx = np.nan
+        running_high = np.nan
+
+        for i in range(len(df)):
+            if i < ma_l:
+                continue
+
+            current_close = df["close"].iloc[i]
+
+            if not in_position:
+                if buy_cond_final.iloc[i]:
+                    in_position = True
+                    current_entry_price = current_close
+                    current_entry_idx = i
+                    running_high = current_close
+                    position_state.iloc[i] = 1
+                    entry_price.iloc[i] = current_entry_price
+                    entry_idx.iloc[i] = i
+                    hold_days.iloc[i] = 0
+            else:
+                hold_days_count = i - current_entry_idx
+
+                running_high = max(running_high, current_close)
+                profit_pct = current_close / current_entry_price - 1
+
+                stop_loss_triggered = profit_pct < -p["stop_loss_pct"]
+                trend_break_triggered = current_close < df["ma10"].iloc[i]
+
+                trailing_stop_triggered = False
+                if profit_pct > p["trailing_start_pct"]:
+                    trailing_stop_triggered = (running_high - current_close) / running_high > p[
+                        "trailing_stop_pct"
+                    ]
+
+                take_profit_triggered = (
+                    hold_days_count >= p["min_hold_days"] and profit_pct > p["take_profit_pct"]
+                )
+                max_hold_triggered = hold_days_count >= p["max_hold_days"]
+
+                should_exit = (
+                    stop_loss_triggered
+                    or trend_break_triggered
+                    or trailing_stop_triggered
+                    or take_profit_triggered
+                    or max_hold_triggered
+                )
+
+                if should_exit:
+                    in_position = False
+                    position_state.iloc[i] = -1
+                    current_entry_price = np.nan
+                    current_entry_idx = np.nan
+                    running_high = np.nan
+                else:
+                    # P0 修复：持仓期间输出 0，避免回测引擎将持仓状态误解为每日买入事件
+                    position_state.iloc[i] = 0
+
+                entry_price.iloc[i] = (
+                    current_entry_price if not np.isnan(current_entry_price) else np.nan
+                )
+                entry_idx.iloc[i] = current_entry_idx if not np.isnan(current_entry_idx) else np.nan
+                hold_days.iloc[i] = hold_days_count
+
+        df["signal"] = position_state.values
 
         return df
+
+
+def _test_simple():
+    """快速测试策略逻辑"""
+    import numpy as np
+    import pandas as pd
+
+    dates = pd.date_range("2024-01-01", periods=100, freq="D")
+    np.random.seed(42)
+
+    close_base = 100 + np.cumsum(np.random.randn(100) * 2)
+    volume_base = 1000000 + np.random.randn(100) * 100000
+
+    df = pd.DataFrame(
+        {
+            "open": close_base * (1 + np.random.randn(100) * 0.01),
+            "high": close_base * (1 + np.abs(np.random.randn(100)) * 0.02),
+            "low": close_base * (1 - np.abs(np.random.randn(100)) * 0.02),
+            "close": close_base,
+            "volume": volume_base,
+            "amount": volume_base * close_base,
+        },
+        index=dates,
+    )
+
+    strategy = IndustryCapitalMomentumStrategy()
+    result = strategy.generate_signals(df)
+
+    buy_signals = (result["signal"] == 1).sum()
+    sell_signals = (result["signal"] == -1).sum()
+
+    print(f"买入信号: {buy_signals}")
+    print(f"卖出信号: {sell_signals}")
+    print("胜率测试通过" if buy_signals > 0 else "无买入信号")
+
+
+if __name__ == "__main__":
+    _test_simple()

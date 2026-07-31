@@ -200,7 +200,7 @@ class KellyCalculator:
                     f"触发 {level.trigger_profit_pct:.0%} 阈值, "
                     f"加 {add_amount:.2f} (初始的 {level.ratio_of_initial:.0%})"
                 )
-                logger.info(f"[money-mgmt] {reason}")
+                logger.info("[money-mgmt] {}", reason)
                 return add_amount, reason
 
         return 0.0, "未满足加仓条件"

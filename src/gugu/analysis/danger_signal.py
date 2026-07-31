@@ -129,7 +129,7 @@ class DangerSignalDetector:
                 descriptions.append("跌破均线：趋势支撑破坏，应减仓或止损")
 
         except Exception as e:
-            logger.warning(f"[danger-signal] 检测异常: {e}")
+            logger.warning("[danger-signal] 检测异常: {}", e)
             return DangerSignalResult(
                 severity="none",
                 description=f"检测异常: {e}",
@@ -181,7 +181,7 @@ class DangerSignalDetector:
     def _check_two_day_reversal(self, df: pd.DataFrame) -> bool:
         """检测两天转头。"""
         close = df["close"].astype(float)
-        df["high"].astype(float) if "high" in df.columns else close
+        high = df["high"].astype(float) if "high" in df.columns else close
         low = df["low"].astype(float) if "low" in df.columns else close
 
         if len(close) < self.HIGH_LOOKBACK + 2:
@@ -240,11 +240,11 @@ class DangerSignalDetector:
             if sentiment_negative:
                 # 舆情负面 + 日内下跌 > 2% = 坏消息
                 if daily_return < -0.02:
-                    logger.warning(f"[danger-signal] 舆情负面增强: 日内下跌 {daily_return:.1%}")
+                    logger.warning("[danger-signal] 舆情负面增强: 日内下跌 {:.1%}", daily_return)
                     return True
                 # 舆情负面 + 跳空低开 > 1.5%（即使未达 3% 阈值）
                 if gap_pct < -0.015:
-                    logger.warning(f"[danger-signal] 舆情负面增强: 跳空低开 {gap_pct:.1%}")
+                    logger.warning("[danger-signal] 舆情负面增强: 跳空低开 {:.1%}", gap_pct)
                     return True
 
         return False
@@ -280,7 +280,7 @@ class DangerSignalDetector:
             # 负面新闻占比 > 50% 判定为舆情负面
             return neg_count > 0 and neg_count / len(news_list) > 0.5
         except Exception as e:
-            logger.debug(f"[danger-signal] 舆情分析失败（模块可能未初始化）: {e}")
+            logger.debug("[danger-signal] 舆情分析失败（模块可能未初始化）: {}", e)
             return False
 
     def _check_price_volume_divergence(self, df: pd.DataFrame) -> bool:

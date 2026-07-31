@@ -168,9 +168,12 @@ class ConflictResolver:
         resolution = self._fuse(opinions, weights)
 
         logger.info(
-            f"[conflict-resolver] 场景={scenario} 视角数={len(opinions)} "
-            f"最终决策={resolution.final_action} 冲突={resolution.is_conflict} "
-            f"分散度={resolution.dispersion:.2f}"
+            "[conflict-resolver] 场景={} 视角数={} 最终决策={} 冲突={} 分散度={:.2f}",
+            scenario,
+            len(opinions),
+            resolution.final_action,
+            resolution.is_conflict,
+            resolution.dispersion,
         )
         return resolution
 
@@ -233,7 +236,7 @@ class ConflictResolver:
             content = resp.json()["choices"][0]["message"]["content"]
             return self._parse_opinions(content, perspectives)
         except Exception as e:
-            logger.warning(f"[conflict-resolver] LLM 获取多视角建议失败，降级: {e}")
+            logger.warning("[conflict-resolver] LLM 获取多视角建议失败，降级: {}", e)
             return self._fallback_opinions(perspectives, signal, direction)
 
     def _parse_opinions(self, content: str, perspectives: list[str]) -> list[PerspectiveOpinion]:

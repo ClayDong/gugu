@@ -20,6 +20,21 @@ from gugu.analysis.trailing_stop import (
 from gugu.analysis.danger_signal import DangerSignalDetector, DangerSignalResult
 from gugu.analysis.no_average_down import NoAverageDownChecker, AverageDownCheckResult
 from gugu.wisdom.book_router import BookPerspectiveRouter
+from gugu.wisdom.fallback import _is_profitable_signal
+
+
+def test_profitable_signal_requires_closed_positive_realized_pnl() -> None:
+    assert _is_profitable_signal({"direction": "buy", "order_success": True}) is False
+    assert (
+        _is_profitable_signal(
+            {
+                "direction": "buy",
+                "outcome_status": "closed",
+                "outcome_metrics": {"realized_pnl": 10},
+            }
+        )
+        is True
+    )
 
 
 # ---------------------------------------------------------------------------

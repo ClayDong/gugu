@@ -12,7 +12,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -22,8 +23,8 @@ from gugu.wisdom.advisor import (
     FALLBACK_STOP_LOSS_PCT,
     FALLBACK_TRIAL_RATIO,
     WisdomAdvisor,
-    _max_single_position,
 )
+from gugu.wisdom.fallback import _is_profitable_signal, _max_single_position
 
 
 # ========== Fallback 模式测试（LLM 不可用） ==========
@@ -479,3 +480,172 @@ class TestAdvisorCommon:
         assert "边界" in result
         assert "原文" not in result
         assert "历史案例" not in result
+
+
+class TestProfitableSignal:
+    def test_order_success_is_not_profit(self) -> None:
+        assert _is_profitable_signal({"direction": "buy", "order_success": True}) is False
+
+    def test_buy_pending_outcome_is_not_profit(self) -> None:
+        assert (
+            _is_profitable_signal(
+                {
+                    "direction": "buy",
+                    "order_success": True,
+                    "outcome_status": "pending",
+                    "return_5d": 0.2,
+                }
+            )
+            is False
+        )
+
+    def test_closed_positive_realized_pnl_is_profit(self) -> None:
+        assert _is_profitable_signal({"outcome_status": "closed", "realized_pnl": 12.5}) is True
+
+    def test_closed_positive_nested_realized_pnl_is_profit(self) -> None:
+        assert (
+            _is_profitable_signal(
+                {"outcome_status": "closed", "outcome_metrics": {"realized_pnl": 1}}
+            )
+            is True
+        )
+
+    def test_closed_non_positive_realized_pnl_is_not_profit(self) -> None:
+        assert (
+            _is_profitable_signal(
+                {"outcome_status": "closed", "outcome_metrics": {"realized_pnl": 0}}
+            )
+            is False
+        )
+
+    def test_open_or_filled_forward_return_is_not_closed_trade_profit(self, tmp_path) -> None:
+        records = [
+            {
+                "strategies": ["s"],
+                "order_success": True,
+                "execution_status": "filled",
+                "outcome_status": "open",
+                "realized_pnl": 100,
+            },
+            {
+                "strategies": ["s"],
+                "order_success": True,
+                "execution_status": "filled",
+                "outcome_status": "filled",
+                "return_5d": 0.2,
+            },
+            {"strategies": ["s"], "direction": "buy", "return_5d": 0.3},
+            {"strategies": ["s"], "outcome_status": "closed", "realized_pnl": 10},
+        ]
+        root = tmp_path
+        history = root / "data" / "signals_history.jsonl"
+        history.parent.mkdir()
+        history.write_text(
+            "\n".join(__import__("json").dumps(r) for r in records), encoding="utf-8"
+        )
+        with patch("gugu.config.PROJECT_ROOT", root):
+            assert WisdomAdvisor._get_strategy_win_rate("s") is None
+
+    def test_closed_trade_feedback_does_not_require_order_success(self, tmp_path) -> None:
+        records = [
+            {"strategies": ["s"], "outcome_status": "closed", "realized_pnl": 10},
+            {"strategies": ["s"], "outcome_status": "closed", "realized_pnl": -5},
+            {"strategies": ["s"], "outcome_status": "closed", "realized_pnl": 2},
+            {"strategies": ["s"], "outcome_status": "closed", "realized_pnl": -1},
+            {
+                "strategies": ["s"],
+                "outcome_status": "closed",
+                "outcome_metrics": {"realized_pnl": 3},
+            },
+        ]
+        root = tmp_path
+        history = root / "data" / "signals_history.jsonl"
+        history.parent.mkdir()
+        history.write_text(
+            "\n".join(__import__("json").dumps(r) for r in records), encoding="utf-8"
+        )
+        with patch("gugu.config.PROJECT_ROOT", root):
+            assert WisdomAdvisor._get_strategy_win_rate("s") == pytest.approx(3 / 5)
+
+
+class TestAdvisePortfolioAsync:
+    """测试持仓认知报告方法 advise_portfolio_async。"""
+
+    def test_empty_positions_returns_no_analysis(self):
+        """无持仓时直接返回提示文本。"""
+        advisor = WisdomAdvisor()
+        result = asyncio.run(advisor.advise_portfolio_async([]))
+        assert "无持仓" in result
+
+    def test_portfolio_builds_prompt_with_positions(self, monkeypatch):
+        """有持仓时应调用 LLM 并传入持仓数据。"""
+        captured = {}
+        mock_client = AsyncMock()
+
+        async def fake_post(*args, **kwargs):
+            captured["payload"] = kwargs.get("json", {})
+
+            class FakeResp:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {
+                        "choices": [
+                            {"message": {"content": "测试分析内容"}, "finish_reason": "stop"}
+                        ]
+                    }
+
+            return FakeResp()
+
+        mock_client.post = fake_post
+
+        async def fake_get_client(self):
+            return mock_client
+
+        monkeypatch.setattr(WisdomAdvisor, "_get_async_client", fake_get_client)
+        advisor = WisdomAdvisor()
+        advisor._llm_available = True
+
+        positions = [
+            {
+                "symbol": "002714",
+                "name": "牧原股份",
+                "entry_price": 36.69,
+                "current_price": 39.22,
+                "quantity": 100,
+                "market_value": 3922.0,
+                "profit_pct": 6.9,
+            }
+        ]
+        result = asyncio.run(advisor.advise_portfolio_async(positions=positions))
+        assert "测试分析内容" in result
+        messages = captured["payload"].get("messages", [])
+        assert len(messages) == 2
+        assert "牧原股份" in messages[1]["content"]
+
+    def test_portfolio_handles_llm_failure(self, monkeypatch):
+        """LLM 异常时应返回空字符串。"""
+
+        async def fake_get_client(self):
+            client = AsyncMock()
+            client.post = AsyncMock(side_effect=RuntimeError("LLM 服务不可用"))
+            return client
+
+        monkeypatch.setattr(WisdomAdvisor, "_get_async_client", fake_get_client)
+        advisor = WisdomAdvisor()
+        advisor._llm_available = True
+
+        positions = [
+            {
+                "symbol": "002714",
+                "name": "牧原股份",
+                "entry_price": 36.69,
+                "current_price": 39.22,
+                "quantity": 100,
+                "market_value": 3922.0,
+                "profit_pct": 6.9,
+            }
+        ]
+        result = asyncio.run(advisor.advise_portfolio_async(positions=positions))
+        assert result == ""

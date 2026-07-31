@@ -158,12 +158,12 @@ class TerminalScreener:
             market_state = await self._regime_detector.detect()
             regime = market_state.get("regime", "sideways")
         except Exception as e:
-            logger.warning(f"尾盘选股: 市场状态判断失败，降级为震荡市: {e}")
+            logger.warning("尾盘选股: 市场状态判断失败，降级为震荡市: {}", e)
             regime = "sideways"
 
         if self.params.should_skip(regime):
             reason = f"市场状态为 {regime}，根据配置跳过正式选股（保护性空仓）"
-            logger.info(f"尾盘选股: {reason}")
+            logger.info("尾盘选股: {}", reason)
             return ScreenerScanResult(
                 results=[], skipped=True, skip_reason=reason, market_regime=regime
             )
@@ -192,7 +192,7 @@ class TerminalScreener:
             logger.error("尾盘选股: 全市场快照获取失败（akshare + sina 均不可用）")
             return []
 
-        logger.info(f"尾盘选股: 全市场 {len(spot)} 只股票")
+        logger.info("尾盘选股: 全市场 {} 只股票", len(spot))
 
         # 2. 快照硬过滤：先用快照已有的字段过滤，大幅减少候选数
         candidates = self._hard_filter_snapshot(spot)
@@ -270,7 +270,7 @@ class TerminalScreener:
         # 条件4: 量比上限（缩量）
         if "量比" in spot.columns:
             mask &= (spot["量比"] > 0) & (spot["量比"] < self.params.max_vol_ratio)
-            logger.info(f"尾盘选股: 快照硬过滤 量比<{self.params.max_vol_ratio:.2f} 应用")
+            logger.info("尾盘选股: 快照硬过滤 量比<{:.2f} 应用", self.params.max_vol_ratio)
 
         # 条件7: 换手率区间
         if "换手率" in spot.columns:
@@ -342,7 +342,7 @@ class TerminalScreener:
                     return None
                 except Exception as e:
                     failure_count += 1
-                    logger.warning(f"尾盘选股: {code} 处理异常: {e}")
+                    logger.warning("尾盘选股: {} 处理异常: {}", code, e)
                     return None
 
         # 分批并发，便于熔断和进度日志
@@ -374,7 +374,7 @@ class TerminalScreener:
                 if isinstance(r, ScreeningResult):
                     results.append(r)
 
-            logger.info(f"尾盘选股: 进度 {completed}/{total}（累计通过 {len(results)} 只）")
+            logger.info("尾盘选股: 进度 {}/{}（累计通过 {} 只）", completed, total, len(results))
 
         return results
 
@@ -389,7 +389,7 @@ class TerminalScreener:
                 logger.info(f"尾盘选股: 使用 stock_zh_a_spot_em 全市场快照 ({len(spot)} 只)")
                 return spot
         except Exception as e:
-            logger.warning(f"尾盘选股: stock_zh_a_spot_em 失败: {e}")
+            logger.warning("尾盘选股: stock_zh_a_spot_em 失败: {}", e)
 
         # 方式2: ak.stock_zh_a_spot（旧版，字段较少）
         try:
@@ -397,17 +397,17 @@ class TerminalScreener:
 
             spot = await asyncio.wait_for(asyncio.to_thread(ak.stock_zh_a_spot), timeout=30.0)
             if spot is not None and not spot.empty:
-                logger.info(f"尾盘选股: 降级使用 stock_zh_a_spot ({len(spot)} 只)")
+                logger.info("尾盘选股: 降级使用 stock_zh_a_spot ({} 只)", len(spot))
                 return spot
         except Exception as e:
-            logger.warning(f"尾盘选股: stock_zh_a_spot 失败: {e}")
+            logger.warning("尾盘选股: stock_zh_a_spot 失败: {}", e)
 
         # 方式3: DataManager 降级（SinaCollector 实时行情）
         if self._dm is not None:
             try:
                 spot = await self._dm.fetch_stock_realtime([])
                 if spot is not None and not spot.empty:
-                    logger.info(f"尾盘选股: 降级使用 DataManager 实时行情 ({len(spot)} 只)")
+                    logger.info("尾盘选股: 降级使用 DataManager 实时行情 ({} 只)", len(spot))
                     spot = spot.rename(
                         columns={
                             "symbol": "代码",
@@ -419,7 +419,7 @@ class TerminalScreener:
                     )
                     return spot
             except Exception as e:
-                logger.warning(f"尾盘选股: DataManager 降级也失败: {e}")
+                logger.warning("尾盘选股: DataManager 降级也失败: {}", e)
 
         return None
 
@@ -436,7 +436,7 @@ class TerminalScreener:
                 yesterday = df.iloc[-2]
                 return float((today["close"] - yesterday["close"]) / yesterday["close"] * 100)
         except Exception as e:
-            logger.debug(f"akshare 获取大盘涨幅失败: {e}")
+            logger.debug("akshare 获取大盘涨幅失败: {}", e)
 
         if self._dm is not None:
             try:
@@ -662,7 +662,7 @@ class TerminalScreener:
                 if df is not None and not df.empty:
                     return df
             except Exception as e:
-                logger.debug(f"DataManager 日K线 {code} 失败: {e}")
+                logger.debug("DataManager 日K线 {} 失败: {}", code, e)
 
         return None
 

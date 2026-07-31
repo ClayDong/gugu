@@ -29,18 +29,26 @@ def scheduler(mock_engine: mock.AsyncMock) -> TradingScheduler:
 
 
 def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
-    """setup() 后应创建定时任务（scan+report+retry+macro）。"""
+    """setup() 后应创建定时任务（scan+report+retry+macro）。
+
+    任务数量随 settings.yaml scheduler.tasks 开关变化：
+    当前关闭的任务（false）不会注册对应 job：
+    - flow_afternoon / perspective_daily / altalpha_fetch
+    - sentiment_daily / perspective_afternoon / concept_daily
+    - signal_performance / alpha_summary / market_temp
+    - scan_open / scan_mid_morning / scan_afternoon / signal_noon
+    - macro_noon / macro_close
+    v0.7.5 P0-14修复：减少推送频次，关闭非核心任务
+    """
     scheduler.setup()
     jobs = scheduler._scheduler.get_jobs()
-    # 4 scan + 1 screener + 1 afternoon_flow + 1 screener_validate + 3 report + 1 retry + 4 macro + 1 fund + 1 concept + 1 sentiment + 1 cache_cleanup + 1 weekly_optimize + 1 weekly_review = 21
-    # flow_morning/flow_close 已合并到宏观卡片，不再单独注册
-    # P1-7: 新增 weekly_optimize_0300（周日 03:00 周参数优化）
-    # P2-8: 新增 weekly_review_2000（周日 20:00 周复盘推送）
-    # v0.4.4: 新增 range_observe_1030 + range_observe_1305（震荡市盘中观察列表）
-    # v0.5.0: 新增 perspective_report_0830（十大视角分析日报）
-    # v0.5.0: 新增 intraday_monitor（盘中实时盯盘，每分钟触发）
-    # v0.6.0: 新增 config_hot_reload（配置热加载检测，每5分钟）
-    assert len(jobs) == 26  # v0.5.9 移除 fund_monitor_1535 基金监控任务
+    # 4 scan + 1 screener + 1 screener_validate + 1 screener_validate_eod
+    # + 1 screener_auto_tune + 2 range_watchlist + 2 report + 1 retry + 4 macro
+    # + 1 cache_cleanup + 1 weekly_optimize + 1 weekly_review
+    # + 1 intraday_monitor + 1 config_hot_reload
+    # + 1 portfolio_report = 24
+    # flow_morning/flow_close/afternoon_flow 已合并到宏观卡片或禁用，不再单独注册
+    assert len(jobs) == 24
     job_ids = {j.id for j in jobs}
     assert "intraday_monitor" in job_ids
     assert "scan_1" in job_ids
@@ -48,24 +56,32 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     assert "scan_3" in job_ids
     assert "scan_4" in job_ids
     assert "screener_1430" in job_ids
-    assert "afternoon_flow_1430" in job_ids
     assert "screener_validate_0935" in job_ids
+    assert "screener_validate_1505" in job_ids
+    assert "screener_auto_tune_1510" in job_ids
     assert "report_morning" in job_ids
-    assert "report_noon" in job_ids
     assert "report_close" in job_ids
     assert "retry_notify" in job_ids
     assert "macro_early" in job_ids
     assert "macro_morning" in job_ids
     assert "macro_noon" in job_ids
     assert "macro_close" in job_ids
-    assert "concept_daily_2000" in job_ids
     # P1-7: weekly_optimize_0300 周参数优化任务
     assert "weekly_optimize_0300" in job_ids
     # P2-8: weekly_review_2000 周复盘推送任务
     assert "weekly_review_2000" in job_ids
-    # flow jobs should NOT exist (merged into macro)
+    # 持仓认知分析任务（15:35 收盘后推送）
+    assert "portfolio_report_1535" in job_ids
+    # 配置热加载检测
+    assert "config_hot_reload" in job_ids
+    # flow jobs should NOT exist (merged into macro or disabled)
     assert "flow_morning" not in job_ids
     assert "flow_close" not in job_ids
+    # settings.yaml 中关闭的任务不应注册
+    assert "afternoon_flow_1430" not in job_ids  # flow_afternoon: false
+    assert "altalpha_fetch_1800" not in job_ids  # altalpha_fetch: false
+    assert "perspective_report_0830" not in job_ids  # perspective_daily: false
+    assert "sentiment_daily_2030" not in job_ids  # sentiment_daily: false
 
 
 @pytest.mark.asyncio

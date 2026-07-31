@@ -110,9 +110,9 @@ class TestMoneyFlowFollowSignalGeneration:
         assert len(buy_signals) >= 1, "应至少产生1个买入信号"
         # 确认 day 144 附近有买入信号
         signal_dates = buy_signals["date"].dt.strftime("%Y-%m-%d").tolist()
-        assert any("2026-07" in d for d in signal_dates), (
-            f"买入信号应出现在放量确认日, got {signal_dates}"
-        )
+        assert any(
+            "2026-07" in d for d in signal_dates
+        ), f"买入信号应出现在放量确认日, got {signal_dates}"
 
     def test_no_buy_signal_on_flat_market(self) -> None:
         """震荡市（无趋势）不应产生买入信号。"""
@@ -212,9 +212,9 @@ class TestMoneyFlowFollowSignalGeneration:
         sell_rows = result[result["signal"] == -1]
         if not sell_rows.empty:
             conf_values = sell_rows["confidence"].unique()
-            assert all(c in (0.6, 0.8) for c in conf_values), (
-                f"卖出置信度应为 0.6 或 0.8, got {conf_values}"
-            )
+            assert all(
+                c in (0.6, 0.8) for c in conf_values
+            ), f"卖出置信度应为 0.6 或 0.8, got {conf_values}"
 
 
 class TestMoneyFlowFollowConditions:
@@ -243,9 +243,9 @@ class TestMoneyFlowFollowConditions:
             non_abnormal_buy = result[(result["signal"] == 1) & (result.index != 144)]
             if not non_abnormal_buy.empty:
                 normal_conf = float(non_abnormal_buy["confidence"].iloc[0])
-                assert abnormal_conf < normal_conf, (
-                    f"天量日置信度应低于正常买入日: abnormal={abnormal_conf}, normal={normal_conf}"
-                )
+                assert (
+                    abnormal_conf < normal_conf
+                ), f"天量日置信度应低于正常买入日: abnormal={abnormal_conf}, normal={normal_conf}"
             # 天量日置信度应被显著惩罚（扣 0.3 后通常 ≤ 0.75）
             assert abnormal_conf <= 0.75, f"天量日置信度应被惩罚 ≤0.75, got {abnormal_conf}"
 

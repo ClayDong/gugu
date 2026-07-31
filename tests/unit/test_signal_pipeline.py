@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pandas as pd
 import pytest
 
+from gugu.analysis.perspectives.integrators import build_context_from_signal
 from gugu.analysis.position_controller import PositionBudget
 from gugu.engine.signal_pipeline import SignalPipeline, record_signal_history
 
@@ -110,6 +111,177 @@ def pipeline() -> SignalPipeline:
 
 class TestSignalPipeline:
     """SignalPipeline 过滤链行为测试。"""
+
+    def test_context_preserves_signal_data_quality_and_missing_fields(self):
+        """视角上下文应可靠继承信号的数据质量元数据。"""
+        context = build_context_from_signal(
+            {
+                "symbol": "600519",
+                "price": 100.0,
+                "timestamp": "2026-07-21T09:30:00",
+                "data_quality": "partial",
+                "data_timestamp": "2026-07-21T09:29:00",
+                "data_sources": ["history"],
+                "missing_core_fields": ["volume"],
+            }
+        )
+
+        assert context.data_quality == "partial"
+        assert context.data_timestamp == "2026-07-21T09:29:00"
+        assert context.data_sources == ["history"]
+        assert context.missing_core_fields == ["volume"]
+
+    @pytest.mark.asyncio
+    async def test_perspective_analysis_error_blocks_before_wisdom(
+        self, pipeline, sample_df, budget, mock_portfolio, mock_account, rt_all
+    ):
+        """视角分析异常时应在任何 Wisdom/执行前保守阻断。"""
+        pipeline._scan_with_perspectives = True
+        pipeline._perspective_engine = MagicMock()
+        pipeline._perspective_engine.analyze.side_effect = RuntimeError("perspective unavailable")
+        pipeline._router.route.return_value = {
+            "symbol": "600519",
+            "direction": "buy",
+            "strategy": "turtle",
+            "strategies": ["turtle"],
+            "confidence": 0.8,
+            "data_quality": "fresh",
+        }
+        pipeline._fundamental_filter.check.return_value = {"pass": True, "reasons": []}
+        pipeline._money_flow_filter.check = AsyncMock(return_value={"pass": True, "reasons": []})
+        pipeline._wisdom.advise_async = AsyncMock(return_value={})
+
+        signal = await pipeline.process(
+            "600519",
+            sample_df,
+            {"name": "茅台"},
+            budget,
+            rt_all,
+            [],
+            mock_portfolio,
+            mock_account,
+        )
+
+        assert signal["decision"]["status"] == "blocked"
+        assert signal["decision"]["action"] == "observe"
+        assert signal["wisdom_filtered"] is True
+        assert signal["filter_reason"]
+        pipeline._wisdom.advise_async.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stale_buy_is_observation_and_does_not_execute_gate(
+        self, pipeline, sample_df, budget, mock_portfolio, mock_account, rt_all
+    ):
+        """非 fresh 买入候选必须进入观察/阻断状态。"""
+        pipeline._scan_with_perspectives = True
+        pipeline._perspective_engine = MagicMock()
+        pipeline._perspective_engine.analyze.return_value = MagicMock(
+            composite_score=8.0,
+            min_score=7.0,
+            passed=True,
+            fatal_count=0,
+            overall_verdict="通过",
+        )
+        pipeline._router.route.return_value = {
+            "symbol": "600519",
+            "direction": "buy",
+            "strategy": "turtle",
+            "strategies": ["turtle"],
+            "confidence": 0.8,
+            "data_quality": "stale",
+        }
+        pipeline._fundamental_filter.check.return_value = {"pass": True, "reasons": []}
+        pipeline._money_flow_filter.check = AsyncMock(return_value={"pass": True, "reasons": []})
+        pipeline._wisdom.advise_async = AsyncMock(return_value={})
+
+        signal = await pipeline.process(
+            "600519",
+            sample_df,
+            {"name": "茅台"},
+            budget,
+            rt_all,
+            [],
+            mock_portfolio,
+            mock_account,
+        )
+
+        assert signal["decision"]["status"] == "blocked"
+        assert signal["decision"]["action"] == "observe"
+
+    @pytest.mark.asyncio
+    async def test_failed_perspective_is_blocked(
+        self, pipeline, sample_df, budget, mock_portfolio, mock_account, rt_all
+    ):
+        """视角未通过或异常时不得保留可执行买入。"""
+        pipeline._scan_with_perspectives = True
+        pipeline._perspective_engine = MagicMock()
+        pipeline._perspective_engine.analyze.return_value = MagicMock(
+            composite_score=5.0,
+            min_score=3.0,
+            passed=False,
+            fatal_count=1,
+            error_count=0,
+            status="ok",
+            scores=[],
+            overall_verdict="未通过",
+        )
+        pipeline._router.route.return_value = {
+            "symbol": "600519",
+            "direction": "buy",
+            "strategy": "turtle",
+            "strategies": ["turtle"],
+            "confidence": 0.8,
+        }
+        pipeline._fundamental_filter.check.return_value = {"pass": True, "reasons": []}
+        pipeline._money_flow_filter.check = AsyncMock(return_value={"pass": True, "reasons": []})
+        pipeline._wisdom.advise_async = AsyncMock(return_value={})
+
+        signal = await pipeline.process(
+            "600519",
+            sample_df,
+            {"name": "茅台"},
+            budget,
+            rt_all,
+            [],
+            mock_portfolio,
+            mock_account,
+        )
+
+        assert signal["decision"]["status"] == "blocked"
+        assert signal["decision"]["action"] == "observe"
+        assert signal["decision"]["block_reasons"]
+
+    @pytest.mark.asyncio
+    async def test_buy_without_perspective_is_blocked(
+        self, pipeline, sample_df, budget, mock_portfolio, mock_account, rt_all
+    ):
+        """未产生视角结果的买入候选必须阻断。"""
+        pipeline._scan_with_perspectives = False
+        pipeline._router.route.return_value = {
+            "symbol": "600519",
+            "direction": "buy",
+            "strategy": "turtle",
+            "strategies": ["turtle"],
+            "confidence": 0.8,
+        }
+        pipeline._fundamental_filter.check.return_value = {"pass": True, "reasons": []}
+        pipeline._money_flow_filter.check = AsyncMock(return_value={"pass": True, "reasons": []})
+        pipeline._wisdom.advise_async = AsyncMock(return_value={})
+
+        signal = await pipeline.process(
+            "600519",
+            sample_df,
+            {"name": "茅台"},
+            budget,
+            rt_all,
+            [],
+            mock_portfolio,
+            mock_account,
+        )
+
+        assert signal["decision"]["status"] == "blocked"
+        assert signal["decision"]["action"] == "observe"
+        assert "缺少十大视角评分" in signal["decision"]["block_reasons"]
 
     @pytest.mark.asyncio
     async def test_basic_signal_passes_through(
@@ -801,6 +973,10 @@ class TestRecordSignalHistory:
             assert record["symbol"] == "600519"
             assert record["direction"] == "buy"
             assert record["order_success"] is True
+            assert record["execution_success"] is True
+            assert record["execution_status"] == "filled"
+            assert record["outcome_status"] == "open"
+            assert "realized_pnl" not in record
         finally:
             sp.gugu_config.PROJECT_ROOT = original_root
 
@@ -856,6 +1032,7 @@ class TestSignalOnlyMode:
         pl._dm.is_degraded = False
         pl._sector_rotation = MagicMock()
         pl._wisdom = MagicMock()
+        pl._holder_concentration_filter = None
 
         pl._router.route = MagicMock(
             return_value={
@@ -875,7 +1052,7 @@ class TestSignalOnlyMode:
             }
         )
         # signal_only 模式下 Wisdom.advise_async 不应被调用
-        pl._wisdom._advise_fallback = MagicMock(
+        pl._wisdom.advise_fallback = MagicMock(
             return_value={
                 "stop_loss_price": 95.0,
                 "suggested_position_ratio": 0.2,
@@ -899,7 +1076,7 @@ class TestSignalOnlyMode:
         # advise_async 不应被调用
         pl._wisdom.advise_async.assert_not_called()
         # 但 fallback 应被调用获取止损/止盈
-        pl._wisdom._advise_fallback.assert_called_once()
+        pl._wisdom.advise_fallback.assert_called_once()
         # 止损价应被设置
         assert signal.get("stop_loss_price") is not None
 
@@ -936,6 +1113,7 @@ class TestSignalOnlyMode:
         pl._dm.is_degraded = False
         pl._sector_rotation = MagicMock()
         pl._wisdom = MagicMock()
+        pl._holder_concentration_filter = None
 
         pl._router.route = MagicMock(
             return_value={
@@ -947,7 +1125,7 @@ class TestSignalOnlyMode:
                 "confidence": 0.8,
             }
         )
-        pl._wisdom._advise_fallback = MagicMock(
+        pl._wisdom.advise_fallback = MagicMock(
             return_value={
                 "stop_loss_price": 95.0,
             }
@@ -965,9 +1143,10 @@ class TestSignalOnlyMode:
             account=mock_account,
         )
 
-        # signal_only 模式下信号应通过（不硬过滤）
+        # v0.7.5 P0-2修复：signal_only 模式不硬过滤，仅附加评分展示
         assert signal is not None
-        assert signal.get("wisdom_filtered") is not True
+        assert signal.get("wisdom_filtered") is None  # signal_only 不拦截
+        assert "perspective_check" in signal  # 但附加了评分数据
 
 
 class TestDangerSignalFilter:
@@ -1574,7 +1753,7 @@ class TestWisdomTimeout:
             return {}
 
         pipeline._wisdom.advise_async = AsyncMock(side_effect=_timeout)
-        pipeline._wisdom._advise_fallback = MagicMock(
+        pipeline._wisdom.advise_fallback = MagicMock(
             return_value={
                 "stop_loss_price": 95.0,
                 "suggested_position_ratio": 0.2,

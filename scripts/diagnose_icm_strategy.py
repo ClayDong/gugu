@@ -28,15 +28,17 @@ def generate_test_data(n: int = 200, trend: str = "uptrend") -> pd.DataFrame:
     volume = np.random.uniform(500000, 2000000, n)
     amount = volume * close
 
-    df = pd.DataFrame({
-        "date": dates,
-        "open": np.round(open_, 2),
-        "high": np.round(high, 2),
-        "low": np.round(low, 2),
-        "close": close,
-        "volume": volume.astype(int),
-        "amount": amount,
-    })
+    df = pd.DataFrame(
+        {
+            "date": dates,
+            "open": np.round(open_, 2),
+            "high": np.round(high, 2),
+            "low": np.round(low, 2),
+            "close": close,
+            "volume": volume.astype(int),
+            "amount": amount,
+        }
+    )
     return df
 
 
@@ -86,7 +88,9 @@ def diagnose_conditions(df: pd.DataFrame) -> None:
     daily_return = result["daily_return"]
     vol_ratio = result["vol_ratio"]
     momentum_score = ((daily_return > 0) & (vol_ratio > 1.0)).sum()
-    print(f"\n量价齐升（涨幅>0且量比>1）的天数: {momentum_score}/{len(df)} ({100*momentum_score/len(df):.1f}%)")
+    print(
+        f"\n量价齐升（涨幅>0且量比>1）的天数: {momentum_score}/{len(df)} ({100*momentum_score/len(df):.1f}%)"
+    )
 
     # 成交额占比提升
     amount_ratio = result["amount_ratio"]
@@ -123,8 +127,12 @@ def diagnose_conditions(df: pd.DataFrame) -> None:
     # 过热止盈（v1.2: 35%和78）
     exit_overheat_return = (return_20d > 0.35).sum()
     exit_overheat_rsi = (rsi > 78).sum()
-    print(f"20日涨幅>35%（过热）的天数: {exit_overheat_return}/{len(df)} ({100*exit_overheat_return/len(df):.1f}%)")
-    print(f"RSI>78（过热）的天数: {exit_overheat_rsi}/{len(df)} ({100*exit_overheat_rsi/len(df):.1f}%)")
+    print(
+        f"20日涨幅>35%（过热）的天数: {exit_overheat_return}/{len(df)} ({100*exit_overheat_return/len(df):.1f}%)"
+    )
+    print(
+        f"RSI>78（过热）的天数: {exit_overheat_rsi}/{len(df)} ({100*exit_overheat_rsi/len(df):.1f}%)"
+    )
 
     # 硬止损（v1.2: 12%）
     rolling_max = result["close"].rolling(20).max()
@@ -138,8 +146,20 @@ def diagnose_conditions(df: pd.DataFrame) -> None:
 
     # 最近的指标值
     print("\n── 最近5日指标值 ──")
-    recent = result.tail(5)[["close", "ma5", "ma20", "ma10", "vol_ratio", "rsi",
-                              "ma5_slope", "amount_ratio", "daily_return", "signal"]]
+    recent = result.tail(5)[
+        [
+            "close",
+            "ma5",
+            "ma20",
+            "ma10",
+            "vol_ratio",
+            "rsi",
+            "ma5_slope",
+            "amount_ratio",
+            "daily_return",
+            "signal",
+        ]
+    ]
     print(recent.to_string())
 
     # 买入信号分布

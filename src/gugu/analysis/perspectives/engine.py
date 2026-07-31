@@ -19,6 +19,7 @@ from gugu.analysis.perspectives.data_types import (
     PerspectiveAnalysisResult,
     PerspectiveScore,
     StockDataContext,
+    calc_data_completeness,
 )
 from gugu.analysis.perspectives.scorer import SCORERS
 from gugu.utils.log import get_logger
@@ -58,7 +59,7 @@ class PerspectiveEngine:
         for perspective in self._perspectives:
             scorer = SCORERS.get(perspective)
             if scorer is None:
-                logger.warning(f"未知视角: {perspective}，跳过")
+                logger.warning("未知视角: {}，跳过", perspective)
                 continue
             try:
                 score = scorer(ctx)
@@ -67,15 +68,16 @@ class PerspectiveEngine:
                     score.weight = self._weights[perspective]
                 scores.append(score)
             except Exception as e:
-                logger.error(f"视角 {perspective} 评分失败: {e}")
-                # 失败时给一个中性低置信分
+                logger.error("视角 {} 评分失败: {}", perspective, e)
                 scores.append(
                     PerspectiveScore(
                         perspective=perspective,
-                        score=5.0,
+                        score=None,
                         weight=self._weights.get(perspective, 0.1),
-                        confidence=0.3,
-                        reasoning=f"评分异常: {e}",
+                        confidence=0.0,
+                        reasoning="评分异常",
+                        status="error",
+                        error=str(e),
                         verdict="评分异常",
                     )
                 )
@@ -100,33 +102,41 @@ class PerspectiveEngine:
         scores: list[PerspectiveScore],
     ) -> PerspectiveAnalysisResult:
         """聚合所有视角评分，生成综合结果。"""
-        if not scores:
+        expected_count = len(self._perspectives)
+        valid_scores = [s for s in scores if s.status == "ok" and s.score is not None]
+        error_count = sum(1 for s in scores if s.status == "error")
+        missing_count = expected_count - len(scores)
+        if not valid_scores:
             return PerspectiveAnalysisResult(
                 symbol=ctx.symbol,
                 name=ctx.name,
                 price=ctx.price,
-                overall_verdict="无评分数据",
+                scores=scores,
+                expected_count=expected_count,
+                scored_count=0,
+                missing_count=missing_count,
+                error_count=error_count,
+                overall_verdict="无有效评分",
             )
 
         # 加权综合评分
-        total_weight = sum(s.weight * s.confidence for s in scores)
-        if total_weight > 0:
-            composite = sum(s.weighted_score for s in scores) / total_weight
-        else:
-            composite = 5.0
+        total_weight = sum(s.weight * s.confidence for s in valid_scores)
+        composite = (
+            sum(s.weighted_score for s in valid_scores) / total_weight if total_weight > 0 else 0.0
+        )
 
         # 最低分（木桶效应）
-        min_score = min(s.score for s in scores)
-        min_perspective = next(s.perspective for s in scores if s.score == min_score)
+        min_score = min(s.score for s in valid_scores)
+        min_perspective = next(s.perspective for s in valid_scores if s.score == min_score)
 
         # 通过数和致命缺陷数
-        passed_count = sum(1 for s in scores if s.passed)
-        fatal_count = sum(1 for s in scores if s.is_fatal)
+        passed_count = sum(1 for s in valid_scores if s.passed)
+        fatal_count = sum(1 for s in valid_scores if s.is_fatal)
 
         # 收集优势和风险
         top_strengths: list[str] = []
         top_risks: list[str] = []
-        for s in sorted(scores, key=lambda x: x.score, reverse=True):
+        for s in sorted(valid_scores, key=lambda x: x.score, reverse=True):
             if s.score >= 7 and s.key_factors:
                 top_strengths.append(f"[{s.perspective}] {s.key_factors[0]}")
             if s.score < 5 and s.risk_flags:
@@ -136,22 +146,35 @@ class PerspectiveEngine:
         suggestion = self._generate_suggestion(composite, min_score, fatal_count, ctx)
         entry_price, stop_loss, target = self._calc_prices(ctx, composite)
 
+        # 数据完整度检查（P0-3 修复）
+        data_completeness = calc_data_completeness(ctx)
+
         # 综合推理
-        reasoning = self._build_overall_reasoning(scores, composite, min_score, min_perspective)
+        reasoning = self._build_overall_reasoning(
+            valid_scores, composite, min_score, min_perspective
+        )
 
         # 综合判定
-        if composite >= 8 and fatal_count == 0:
-            verdict = "强烈推荐买入"
-        elif composite >= 7 and fatal_count == 0:
-            verdict = "推荐买入"
-        elif composite >= 6 and fatal_count == 0:
-            verdict = "可考虑买入"
-        elif composite >= 5:
-            verdict = "中性观望"
+        complete = len(valid_scores) == expected_count and missing_count == 0 and error_count == 0
+        low_data_note = ""
+        if data_completeness < 0.50:
+            low_data_note = f"（低数据完整度 {data_completeness:.0%}，评分仅供参考）"
+        if complete and composite >= 8 and fatal_count == 0:
+            verdict = f"强烈推荐买入{low_data_note}"
+        elif complete and composite >= 7 and fatal_count == 0:
+            verdict = f"推荐买入{low_data_note}"
+        elif complete and composite >= 6 and fatal_count == 0:
+            verdict = f"可考虑买入{low_data_note}"
         elif fatal_count > 0:
             verdict = f"否决（{fatal_count}个致命缺陷）"
+        elif error_count > 0:
+            verdict = f"无法判定（{error_count}个视角评分异常）"
+        elif missing_count > 0:
+            verdict = f"无法判定（缺失{missing_count}个视角评分）"
+        elif composite >= 5:
+            verdict = f"中性观望{low_data_note}"
         else:
-            verdict = "不建议买入"
+            verdict = f"不建议买入{low_data_note}"
 
         return PerspectiveAnalysisResult(
             symbol=ctx.symbol,
@@ -164,6 +187,11 @@ class PerspectiveEngine:
             min_perspective=min_perspective,
             passed_count=passed_count,
             fatal_count=fatal_count,
+            expected_count=expected_count,
+            scored_count=len(valid_scores),
+            missing_count=missing_count,
+            error_count=error_count,
+            data_completeness=data_completeness,
             overall_verdict=verdict,
             overall_reasoning=reasoning,
             top_strengths=top_strengths[:5],

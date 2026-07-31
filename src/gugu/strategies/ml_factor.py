@@ -73,7 +73,7 @@ class MLFactorStrategy(Strategy):
             factor_cols = [c for c in factor_df.columns if c != "date"]
 
             if len(factor_df) < 100 or not factor_cols:
-                logger.warning(f"训练样本不足: {len(factor_df)}，ML 策略不产生信号")
+                logger.warning("训练样本不足: {}，ML 策略不产生信号", len(factor_df))
                 result["signal"] = 0
                 result["confidence"] = 0.0
                 return result
@@ -127,8 +127,20 @@ class MLFactorStrategy(Strategy):
 
         for i in range(n):
             vol = vol_arr[i]
-            dyn_buy = buy_threshold + 0.03 if vol > 0.3 else buy_threshold - 0.02 if vol < 0.15 else buy_threshold
-            dyn_sell = sell_threshold - 0.02 if vol > 0.3 else sell_threshold + 0.02 if vol < 0.15 else sell_threshold
+            dyn_buy = (
+                buy_threshold + 0.03
+                if vol > 0.3
+                else buy_threshold - 0.02
+                if vol < 0.15
+                else buy_threshold
+            )
+            dyn_sell = (
+                sell_threshold - 0.02
+                if vol > 0.3
+                else sell_threshold + 0.02
+                if vol < 0.15
+                else sell_threshold
+            )
 
             if scores_arr[i] > dyn_buy:
                 raw_signal[i] = 1
@@ -136,7 +148,12 @@ class MLFactorStrategy(Strategy):
                 raw_signal[i] = -1
 
             # 逐 bar 熊市过滤：MA20 < MA60 且价格 < MA60
-            if raw_signal[i] == 1 and i >= 60 and ma20_arr[i] < ma60_arr[i] and close[i] < ma60_arr[i]:
+            if (
+                raw_signal[i] == 1
+                and i >= 60
+                and ma20_arr[i] < ma60_arr[i]
+                and close[i] < ma60_arr[i]
+            ):
                 raw_signal[i] = 0
                 bear_blocked += 1
 

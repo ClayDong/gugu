@@ -197,8 +197,6 @@ class Strategy(ABC):
         if max_hold_days <= 0:
             return df
 
-        import numpy as np
-
         signal = df[signal_col].to_numpy(dtype=int, copy=True)
         n = len(signal)
         i = 0

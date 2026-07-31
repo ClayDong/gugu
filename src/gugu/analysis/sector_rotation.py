@@ -292,7 +292,7 @@ class SectorRotation:
             return result
 
         except Exception as e:
-            logger.error(f"高低切换检测失败: {e}")
+            logger.error("高低切换检测失败: {}", e)
             return self._highlow_fallback()
 
     async def check_high_low_filter(self, symbol: str) -> dict[str, Any]:
@@ -353,7 +353,7 @@ class SectorRotation:
                 }
 
         except Exception as e:
-            logger.warning(f"高低切换过滤检查失败({symbol}): {e}")
+            logger.warning("高低切换过滤检查失败({}): {}", symbol, e)
             return {
                 "allow_buy": True,
                 "is_overextended": False,

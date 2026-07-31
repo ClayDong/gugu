@@ -6,6 +6,7 @@
 用法：
     python scripts/compare_wisdom.py --symbol 600519 --strategy turtle --days 120
 """
+
 from __future__ import annotations
 
 import argparse

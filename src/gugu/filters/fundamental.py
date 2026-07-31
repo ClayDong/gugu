@@ -49,11 +49,12 @@ def _em_secid(code: str) -> str:
 # 默认过滤阈值
 _DEFAULT_THRESHOLDS: dict[str, Any] = {
     "pe_min": 0,
-    "pe_max": 100,
+    "pe_max": 60,
     "pb_min": 0,
-    "pb_max": 15,
-    "roe_min": 0,
+    "pb_max": 8,
+    "roe_min": 10,  # P1-1优化：提升到10%（巴菲特标准）
     "revenue_growth_min": -20,
+    "debt_ratio_max": 70,  # P1-1新增：负债率上限
 }
 
 
@@ -251,7 +252,7 @@ class IndustryProsperityChecker:
             self._board_cache.set(df)
             return df
         except Exception as e:
-            logger.warning(f"行业景气度：获取行业板块数据失败: {e}")
+            logger.warning("行业景气度：获取行业板块数据失败: {}", e)
             return None
 
     @staticmethod
@@ -314,6 +315,7 @@ def _load_thresholds() -> dict[str, Any]:
             "pb_max": fc.pb_max,
             "roe_min": fc.roe_min,
             "revenue_growth_min": fc.revenue_growth_min,
+            "debt_ratio_max": getattr(fc, "debt_ratio_max", 70),  # P1-1新增
         }
     except Exception:
         cfg = {}
@@ -358,7 +360,7 @@ class FundamentalFilter:
         # 查缓存
         cached = self._cache.get(symbol)
         if cached is not None:
-            logger.debug(f"基本面过滤：{symbol} 使用缓存数据")
+            logger.debug("基本面过滤：{} 使用缓存数据", symbol)
             return cached
 
         code = symbol.strip().zfill(6)
@@ -379,12 +381,13 @@ class FundamentalFilter:
                 "reasons": ["ETF/LOF 不适用个股基本面过滤，直接放行"],
             }
             self._cache.set(symbol, result)
-            logger.info(f"基本面过滤：{code} 是 ETF/LOF，跳过基本面过滤")
+            logger.info("基本面过滤：{} 是 ETF/LOF，跳过基本面过滤", code)
             return result
         pe: float | None = None
         pb: float | None = None
         roe: float | None = None
         revenue_growth: float | None = None
+        debt_ratio: float | None = None  # P1-1新增：负债率
         industry: str = ""
 
         # 1. 获取实时行情中的 PE/PB
@@ -393,8 +396,10 @@ class FundamentalFilter:
         # 2. 获取个股信息（行业）
         industry = self._fetch_industry(code)
 
-        # 3. 获取财务指标（ROE、营收增长率）
-        roe, revenue_growth = self._fetch_financial(code)
+        # 3. 获取财务指标（ROE、营收增长率、负债率）
+        roe, revenue_growth, debt_ratio = self._fetch_financial(
+            code
+        )  # P1-1修改：增加debt_ratio返回值
 
         # 过滤判断
         reasons: list[str] = []
@@ -452,6 +457,17 @@ class FundamentalFilter:
         else:
             reasons.append("营收增长率获取失败，跳过过滤")
 
+        # P1-1新增：负债率过滤
+        if debt_ratio is not None:
+            dr_max = self._thresholds["debt_ratio_max"]
+            if debt_ratio >= dr_max:
+                passed = False
+                reasons.append(f"负债率={debt_ratio:.1f}% ≥ {dr_max}%，财务风险高")
+            else:
+                reasons.append(f"负债率={debt_ratio:.1f}% < {dr_max}%")
+        else:
+            reasons.append("负债率获取失败，跳过过滤")
+
         # P0 修复：全失败硬约束——PE/PB/ROE 三项指标全部获取失败时，
         # 基本面过滤器不可"放行通过"（原逻辑 passed=True 默认放行，等于跳过过滤）
         # 全部失败说明数据源不可用，应拒绝以防止"无基本面数据即放行"的逆向选择
@@ -459,8 +475,9 @@ class FundamentalFilter:
             passed = False
             reasons.append("全部基本面指标获取失败，拒绝放行（数据源不可用）")
             logger.warning(
-                f"基本面过滤：{code} 全部指标获取失败（PE/PB/ROE/营收均 None），"
-                f"拒绝放行。akshare 与东方财富兜底均不可用。"
+                "基本面过滤：{} 全部指标获取失败（PE/PB/ROE/营收均 None），"
+                "拒绝放行。akshare 与东方财富兜底均不可用。",
+                code,
             )
 
         # P1-6：行业景气度评分（仅在基本面通过时评估，避免双重拦截）
@@ -474,8 +491,10 @@ class FundamentalFilter:
                 if score < self._prosperity_checker._HARD_FAIL_THRESHOLD:
                     passed = False
                     logger.warning(
-                        f"基本面过滤：{code} 行业「{industry}」景气度极低（{score}/100），"
-                        f"行业衰退，拒绝放行"
+                        "基本面过滤：{} 行业「{}」景气度极低（{}/100），" "行业衰退，拒绝放行",
+                        code,
+                        industry,
+                        score,
                     )
 
         result: dict[str, Any] = {
@@ -484,6 +503,7 @@ class FundamentalFilter:
             "pb": pb,
             "roe": roe,
             "revenue_growth": revenue_growth,
+            "debt_ratio": debt_ratio,  # P1-1新增
             "industry": industry,
             "industry_prosperity": prosperity,
             "reasons": reasons,
@@ -493,7 +513,8 @@ class FundamentalFilter:
         self._cache.set(symbol, result)
 
         status = "通过" if passed else "未通过"
-        logger.info(f"基本面过滤：{symbol} {status}，原因：{'; '.join(reasons)}")
+        reasons_str = "; ".join(reasons)
+        logger.info("基本面过滤：{} {}，原因：{}", symbol, status, reasons_str)
 
         return result
 
@@ -518,13 +539,13 @@ class FundamentalFilter:
                 self._snapshot_cache.set(df)
             row = df[df["代码"] == code]
             if row.empty:
-                logger.warning(f"基本面过滤：{code} akshare 未在实时行情中找到")
+                logger.warning("基本面过滤：{} akshare 未在实时行情中找到", code)
                 return None, None
             pe = _safe_float(row.iloc[0].get("市盈率-动态"))
             pb = _safe_float(row.iloc[0].get("市净率"))
             return pe, pb
         except Exception as e:
-            logger.warning(f"基本面过滤：{code} akshare 获取 PE/PB 失败: {e}")
+            logger.warning("基本面过滤：{} akshare 获取 PE/PB 失败: {}", code, e)
             return None, None
 
     def _fetch_pe_pb_eastmoney(self, code: str) -> tuple[float | None, float | None]:
@@ -543,16 +564,16 @@ class FundamentalFilter:
                 resp.raise_for_status()
                 data = resp.json()
             if not data or not data.get("data"):
-                logger.warning(f"基本面过滤：{code} 东方财富 push2 返回空数据")
+                logger.warning("基本面过滤：{} 东方财富 push2 返回空数据", code)
                 return None, None
             d = data["data"]
             pe = _safe_float(d.get("f162"))
             pb = _safe_float(d.get("f167"))
             if pe is not None or pb is not None:
-                logger.info(f"基本面过滤：{code} 东方财富兜底成功 PE={pe} PB={pb}")
+                logger.info("基本面过滤：{} 东方财富兜底成功 PE={} PB={}", code, pe, pb)
             return pe, pb
         except Exception as e:
-            logger.warning(f"基本面过滤：{code} 东方财富兜底 PE/PB 失败: {e}")
+            logger.warning("基本面过滤：{} 东方财富兜底 PE/PB 失败: {}", code, e)
             return None, None
 
     def _fetch_industry(self, code: str) -> str:
@@ -565,19 +586,20 @@ class FundamentalFilter:
                 return str(industry_rows.iloc[0]["value"])
             return ""
         except Exception as e:
-            logger.warning(f"基本面过滤：{code} 获取行业失败: {e}")
+            logger.warning("基本面过滤：{} 获取行业失败: {}", code, e)
             return ""
 
-    def _fetch_financial(self, code: str) -> tuple[float | None, float | None]:
-        """获取财务指标：ROE 和营收同比增长率。"""
+    def _fetch_financial(self, code: str) -> tuple[float | None, float | None, float | None]:
+        """获取财务指标：ROE、营收同比增长率、负债率（P1-1新增）。"""
         roe: float | None = None
         revenue_growth: float | None = None
+        debt_ratio: float | None = None  # P1-1新增
 
         try:
             df = ak.stock_financial_analysis_indicator(symbol=code)
             if df.empty:
-                logger.warning(f"基本面过滤：{code} 财务指标为空")
-                return None, None
+                logger.warning("基本面过滤：{} 财务指标为空", code)
+                return None, None, None
 
             # 取最新一期数据（第一行通常是最新的）
             latest = df.iloc[0]
@@ -596,7 +618,14 @@ class FundamentalFilter:
                     if revenue_growth is not None:
                         break
 
-        except Exception as e:
-            logger.warning(f"基本面过滤：{code} 获取财务指标失败: {e}")
+            # P1-1新增：负债率（资产负债率）
+            for col in ("资产负债率(%)", "资产负债率"):
+                if col in df.columns:
+                    debt_ratio = _safe_float(latest[col])
+                    if debt_ratio is not None:
+                        break
 
-        return roe, revenue_growth
+        except Exception as e:
+            logger.warning("基本面过滤：{} 获取财务指标失败: {}", code, e)
+
+        return roe, revenue_growth, debt_ratio

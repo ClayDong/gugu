@@ -3,6 +3,7 @@
 构造一个完整信号，经过 SignalPipeline 所有过滤层 + formatter，
 输出格式化后的飞书卡片 JSON，然后发送到飞书。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -62,10 +63,13 @@ async def main() -> None:
     # 构造仓位预算
     regime_result = await regime.detect()
     from gugu.execution import PaperBroker
+
     broker = PaperBroker()
     account = broker.get_account()
     budget = pos_ctrl.calculate(
-        regime=regime_result, account=account, is_halted=False,
+        regime=regime_result,
+        account=account,
+        is_halted=False,
     )
 
     # 通过 SignalPipeline 获取完整信号
@@ -97,7 +101,9 @@ async def main() -> None:
             }
         # 补全必要字段，走 wisdom 决策
         route_result["price"] = float(df.iloc[-1]["close"])
-        route_result["prev_close"] = float(df.iloc[-2]["close"]) if len(df) >= 2 else route_result["price"]
+        route_result["prev_close"] = (
+            float(df.iloc[-2]["close"]) if len(df) >= 2 else route_result["price"]
+        )
         route_result["suggested_position_ratio"] = budget.single_limit
         route_result["has_position"] = False
         route_result["current_position_ratio"] = 0.0
@@ -106,6 +112,7 @@ async def main() -> None:
         try:
             from gugu.analysis.sector_rotation import SectorRotation as _SR
             from gugu.filters.industry_constraint import IndustryConstraint as _IC
+
             sr = _SR()
             sr_result = await sr.detect(top_n=5)
             ic = _IC()
@@ -118,7 +125,9 @@ async def main() -> None:
                     hot_cats.add(cat)
             stock_cat = sr.SW_INDUSTRY_MAP.get(industry, "")
             is_hot = industry in hot if industry else False
-            is_cold = bool(not is_hot and stock_cat and stock_cat not in hot_cats) if industry else False
+            is_cold = (
+                bool(not is_hot and stock_cat and stock_cat not in hot_cats) if industry else False
+            )
             route_result["sector_check"] = {
                 "is_hot": is_hot,
                 "is_cold": is_cold,
@@ -129,13 +138,20 @@ async def main() -> None:
             print(f"  ✅ 板块轮动: {industry} → {hot_status} (热点={hot[:3]})")
         except Exception as e:
             print(f"  ⚠️ 板块轮动获取失败: {e}")
-            route_result["sector_check"] = {"is_hot": False, "is_cold": False, "industry": "", "hot_sectors": []}
+            route_result["sector_check"] = {
+                "is_hot": False,
+                "is_cold": False,
+                "industry": "",
+                "hot_sectors": [],
+            }
 
         # 手动补多周期趋势（模拟 SignalPipeline 步骤 0.6）
         try:
             weekly = SignalPipeline._check_weekly_trend(df)
             route_result["multi_period"] = weekly
-            print(f"  ✅ 多周期共振: 周线={weekly.get('weekly_trend', '?')} aligned={weekly.get('weekly_aligned', '?')}")
+            print(
+                f"  ✅ 多周期共振: 周线={weekly.get('weekly_trend', '?')} aligned={weekly.get('weekly_aligned', '?')}"
+            )
         except Exception as e:
             print(f"  ⚠️ 多周期趋势失败: {e}")
             route_result["multi_period"] = {"weekly_trend": "unknown", "weekly_aligned": True}
@@ -150,13 +166,22 @@ async def main() -> None:
         sc = route_result.get("sector_check", {})
         if sc.get("industry"):
             hot_status = "hot" if sc.get("is_hot") else ("cold" if sc.get("is_cold") else "neutral")
-            chain.append({"step": 2.2, "name": "板块轮动感知", "result": hot_status,
-                          "industry": sc.get("industry", ""), "passed": True})
-        chain.extend([
-            {"step": 2.5, "name": "向下摊平检查", "result": "allowed", "passed": True},
-            {"step": 3, "name": "行业约束", "result": "allowed", "passed": True},
-            {"step": 5, "name": "Wisdom决策", "result": "buy", "passed": True},
-        ])
+            chain.append(
+                {
+                    "step": 2.2,
+                    "name": "板块轮动感知",
+                    "result": hot_status,
+                    "industry": sc.get("industry", ""),
+                    "passed": True,
+                }
+            )
+        chain.extend(
+            [
+                {"step": 2.5, "name": "向下摊平检查", "result": "allowed", "passed": True},
+                {"step": 3, "name": "行业约束", "result": "allowed", "passed": True},
+                {"step": 5, "name": "Wisdom决策", "result": "buy", "passed": True},
+            ]
+        )
         route_result["decision_chain"] = chain
         enhanced = wisdom.advise(route_result)
         signal = enhanced
@@ -166,16 +191,47 @@ async def main() -> None:
         # 补 decision_chain（pipeline 中 record_signal_history 才写，这里手动补）
         if not signal.get("decision_chain"):
             signal["decision_chain"] = [
-                {"step": 0, "name": "四阶段判断", "result": signal.get("stage", {}).get("stage", "?")},
-                {"step": 0.5, "name": "危险信号检测", "result": signal.get("danger_signals", {}).get("severity", "none")},
+                {
+                    "step": 0,
+                    "name": "四阶段判断",
+                    "result": signal.get("stage", {}).get("stage", "?"),
+                },
+                {
+                    "step": 0.5,
+                    "name": "危险信号检测",
+                    "result": signal.get("danger_signals", {}).get("severity", "none"),
+                },
             ]
             if signal.get("fundamental"):
-                signal["decision_chain"].append({"step": 1, "name": "基本面过滤", "result": "pass" if signal["fundamental"].get("pass") else "fail"})
+                signal["decision_chain"].append(
+                    {
+                        "step": 1,
+                        "name": "基本面过滤",
+                        "result": "pass" if signal["fundamental"].get("pass") else "fail",
+                    }
+                )
             if signal.get("sector_check"):
-                hot_str = "hot" if signal["sector_check"].get("is_hot") else ("cold" if signal["sector_check"].get("is_cold") else "neutral")
-                signal["decision_chain"].append({"step": 2.2, "name": "板块轮动感知", "result": hot_str, "industry": signal["sector_check"].get("industry", "")})
+                hot_str = (
+                    "hot"
+                    if signal["sector_check"].get("is_hot")
+                    else ("cold" if signal["sector_check"].get("is_cold") else "neutral")
+                )
+                signal["decision_chain"].append(
+                    {
+                        "step": 2.2,
+                        "name": "板块轮动感知",
+                        "result": hot_str,
+                        "industry": signal["sector_check"].get("industry", ""),
+                    }
+                )
             if signal.get("wisdom_decision"):
-                signal["decision_chain"].append({"step": 5, "name": "Wisdom决策", "result": signal["wisdom_decision"].get("action", "?")})
+                signal["decision_chain"].append(
+                    {
+                        "step": 5,
+                        "name": "Wisdom决策",
+                        "result": signal["wisdom_decision"].get("action", "?"),
+                    }
+                )
 
     print(f"\n{'=' * 60}")
     print("信号内容:")
@@ -253,7 +309,9 @@ async def main() -> None:
     # 5. 检查多周期
     if signal.get("multi_period"):
         wp = signal["multi_period"]
-        print(f"  ✅ 多周期共振: 周线趋势={wp.get('weekly_trend', '?')} aligned={wp.get('weekly_aligned', '?')}")
+        print(
+            f"  ✅ 多周期共振: 周线趋势={wp.get('weekly_trend', '?')} aligned={wp.get('weekly_aligned', '?')}"
+        )
 
     # 打印问题
     if issues:

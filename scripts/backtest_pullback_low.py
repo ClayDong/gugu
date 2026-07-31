@@ -24,6 +24,7 @@
     # 分阶段回测
     uv run python scripts/backtest_pullback_low.py --phases
 """
+
 from __future__ import annotations
 
 import argparse
@@ -52,8 +53,16 @@ _CACHE_DIR = PROJECT_ROOT / "data" / "parquet_cache"
 
 # 代表股：与 box_breakout 回测一致，便于对比
 _DEFAULT_SYMBOLS = [
-    "600519", "000858", "601318", "600036", "002714",
-    "300750", "000333", "600276", "601012", "601888",
+    "600519",
+    "000858",
+    "601318",
+    "600036",
+    "002714",
+    "300750",
+    "000333",
+    "600276",
+    "601012",
+    "601888",
 ]
 
 # Walk-Forward 参数网格
@@ -213,10 +222,18 @@ async def run_walk_forward_optimization(target_count: int = 10) -> None:
         c2 = result.get("param_stability", 0) >= 0.5
         c3 = result.get("avg_max_dd", 0) < 0.25
         c4 = result.get("avg_return", 0) >= 0
-        print(f"  1. 样本外 Sharpe > 0:    {'✅' if c1 else '❌'} ({result.get('test_sharpe', 0):.2f})")
-        print(f"  2. 参数稳定性 ≥ 50%:     {'✅' if c2 else '❌'} ({result.get('param_stability', 0):.0%})")
-        print(f"  3. 回撤 < 25%:           {'✅' if c3 else '❌'} ({result.get('avg_max_dd', 0):.2%})")
-        print(f"  4. 收益 ≥ 0:             {'✅' if c4 else '❌'} ({result.get('avg_return', 0):+.2%})")
+        print(
+            f"  1. 样本外 Sharpe > 0:    {'✅' if c1 else '❌'} ({result.get('test_sharpe', 0):.2f})"
+        )
+        print(
+            f"  2. 参数稳定性 ≥ 50%:     {'✅' if c2 else '❌'} ({result.get('param_stability', 0):.0%})"
+        )
+        print(
+            f"  3. 回撤 < 25%:           {'✅' if c3 else '❌'} ({result.get('avg_max_dd', 0):.2%})"
+        )
+        print(
+            f"  4. 收益 ≥ 0:             {'✅' if c4 else '❌'} ({result.get('avg_return', 0):+.2%})"
+        )
 
         all_pass = c1 and c2 and c3 and c4
         if all_pass:
@@ -228,6 +245,7 @@ async def run_walk_forward_optimization(target_count: int = 10) -> None:
     except Exception as e:
         print(f"❌ Walk-Forward 优化失败: {e}")
         import traceback
+
         traceback.print_exc()
 
 

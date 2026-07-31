@@ -56,40 +56,35 @@ strategy:
   # experimental_strategies: 逻辑闭环但未完成验证，仅 paper 模式参与信号融合
   # 实验性策略在 signal_only/track_live 模式下：信号标记 experimental=True，通知卡片显示警告
   enabled_by_regime:
-    # 牛市（3/3条件满足）：核心策略全开
+    # 牛市（3/3条件满足）：核心+实验策略全开（experimental仅参与信号观察）
     bull:
       - box_breakout
       - double_yin
       - rsi_reversal
-      - huamulan_tail_pick
-      - huamulan_fake_dip
-      - huamulan_ghost_breakout
-    # 反弹（2/3条件满足）：核心策略全开
+      - hot_money
+      - ma5_momentum
+      - chenxuezhang
+      - linjudaye
+      - ml_gradient_boost
+    # 反弹（2/3条件满足）：核心+实验策略全开
     rally:
       - box_breakout
       - double_yin
       - rsi_reversal
-      - huamulan_tail_pick
-      - huamulan_fake_dip
-      - huamulan_ghost_breakout
+      - hot_money
+      - ma5_momentum
+      - chenxuezhang
+      - linjudaye
+      - ml_gradient_boost
     # 震荡（1/3条件满足）：核心策略全开
     sideways:
       - box_breakout
       - double_yin
       - rsi_reversal
-      - huamulan_tail_pick
     # 熊市/暴跌：空仓观察，不启用任何买入策略
-    # 注意：huamulan_crash_layout 在暴跌后布局，加入 crash  regime 作为特殊买入策略
     bear: []
-    crash:
-      - huamulan_crash_layout
-  # v0.7.7 新增：花木兰暴跌布局策略特殊配置
-  # 该策略在指数单日暴跌3%以上时由 scheduler 触发，不参与常规扫描
-  huamulan_crash_layout:
-    enabled: true
-    trigger_on_crash: true  # 暴跌时触发
-    crash_threshold: -0.03
-  # v0.7.5 P0-1修复：策略分组管理
+    crash: []
+  # v0.5.0 P0-1修复：策略分组管理
   # 验证通过的策略（无条件启用，参与信号融合）
   verified_strategies:
     - box_breakout      # Walk-Forward 条件通过（样本外表现最稳）
@@ -99,6 +94,9 @@ strategy:
   experimental_strategies:
     - hot_money         # 游资策略，逻辑闭环但需 paper 验证
     - ma5_momentum      # 新增待验证
+    - chenxuezhang     # 陈学长不吃面规则策略
+    - linjudaye        # 邻居大爷规则策略
+    - ml_gradient_boost # ML GradientBoosting策略（experimental）
   # 向后兼容：原 enabled 列表（当 verified_strategies + experimental_strategies 都为空时使用）
   enabled: []
   # v0.7.5 P0-1修复：仅 verified 策略参与权重分配（总和=1.0）
@@ -111,10 +109,13 @@ strategy:
   experimental_weights:
     hot_money: 0.25
     ma5_momentum: 0.20
+    chenxuezhang: 0.20
+    linjudaye: 0.15
+    ml_gradient_boost: 0.10
   # 信号融合规则：unanimous（全票通过）/ majority（多数）/ any（任一）/ weighted（策略池加权）
   # v0.4.1：恢复 weighted（多策略共识），any 模式在 A 股高噪声下产生大量假信号
   signal_fusion: weighted
-  min_confidence: 0.6            # 恢复 0.6，0.5 放宽后弱信号泛滥
+  min_confidence: 0.4            # 降低到0.4：原0.6在共识折扣下导致几乎所有信号被过滤，月产仅14条
   auto_select: true              # 启用自动选股（全市场扫描+策略信号+综合评分）
   select_top_n: 50               # 恢复 50，100 过大增加噪声
   select_max_candidates: 10      # 最大选股数量
@@ -267,6 +268,7 @@ scheduler:
     signal_noon: false          # 11:35 午盘信号汇总（关闭-合并在signal_morning）
     macro_noon: false          # 11:40 午间宏观简报（关闭-非必要）
     scan_afternoon: false       # 13:05 午盘扫描（关闭-减少噪声）
+    rsi_scan: true             # 13:30 RSI 专项扫描（仅 rsi_reversal 策略）
     scan_close: true           # 14:30 尾盘扫描（保留-接近收盘）
     screener: true             # 14:30 尾盘选股（保留）
     flow_afternoon: false      # 14:30 盘后资金流决策报告（关闭-非核心交易信号）

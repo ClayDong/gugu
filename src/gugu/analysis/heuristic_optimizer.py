@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import random
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -77,6 +76,9 @@ class BaseHeuristicOptimizer(ABC):
         population_size: int = 30,
         generations: int = 20,
         seed: int | None = None,
+        # P2-4: Early Stopping 参数
+        early_stop_patience: int = 5,  # 连续 N 代无改进时提前停止
+        early_stop_min_improvement: float = 1e-6,  # 最小改进阈值
     ):
         self.param_spaces = {p.name: p for p in param_spaces}
         self.param_names = list(self.param_spaces.keys())
@@ -84,6 +86,8 @@ class BaseHeuristicOptimizer(ABC):
         self.population_size = population_size
         self.generations = generations
         self.rng = np.random.default_rng(seed)
+        self.early_stop_patience = early_stop_patience
+        self.early_stop_min_improvement = early_stop_min_improvement
 
     @abstractmethod
     def optimize(self, verbose: bool = False) -> OptimizationResult:
@@ -126,8 +130,18 @@ class GAOptimizer(BaseHeuristicOptimizer):
         crossover_rate: float = 0.7,
         elite_ratio: float = 0.1,
         seed: int | None = None,
+        early_stop_patience: int = 5,
+        early_stop_min_improvement: float = 1e-6,
     ):
-        super().__init__(param_spaces, fitness_func, population_size, generations, seed)
+        super().__init__(
+            param_spaces,
+            fitness_func,
+            population_size,
+            generations,
+            seed,
+            early_stop_patience,
+            early_stop_min_improvement,
+        )
         self.mutation_rate = mutation_rate
         self.crossover_rate = crossover_rate
         self.elite_count = max(1, int(population_size * elite_ratio))
@@ -140,6 +154,9 @@ class GAOptimizer(BaseHeuristicOptimizer):
         best_score = -float("inf")
         best_params: dict[str, float] = {}
         best_metrics: dict[str, float] = {}
+        # P2-4: Early Stopping 计数器
+        _no_improve_count = 0
+        _prev_score: float | None = None
 
         for gen in range(self.generations):
             # 评估种群
@@ -171,12 +188,27 @@ class GAOptimizer(BaseHeuristicOptimizer):
 
             if verbose and (gen + 1) % 5 == 0:
                 logger.info(
-                    f"GA 第{gen + 1}代: 最优得分={gen_best_score:.4f}, "
-                    f"参数={gen_best_params}"
+                    f"GA 第{gen + 1}代: 最优得分={gen_best_score:.4f}, " f"参数={gen_best_params}"
                 )
 
+            # P2-4: Early Stopping
+            if gen_best_score - best_score < self.early_stop_min_improvement:
+                _no_improve_count += 1
+            else:
+                _no_improve_count = 0
+            if _no_improve_count >= self.early_stop_patience:
+                _actual_generations = gen + 1
+                if self.generations - _actual_generations > 2:
+                    logger.info(
+                        f"GA Early Stopping at gen {gen + 1}, "
+                        f"best_score={best_score:.4f} (no improvement for {_no_improve_count} gens)"
+                    )
+                break
+
             # 精英保留
-            new_population = [scored[i][2].copy() for i in range(min(self.elite_count, len(scored)))]
+            new_population = [
+                scored[i][2].copy() for i in range(min(self.elite_count, len(scored)))
+            ]
 
             # 选择、交叉、变异
             while len(new_population) < self.population_size:
@@ -212,7 +244,9 @@ class GAOptimizer(BaseHeuristicOptimizer):
         tournament_size: int = 3,
     ) -> dict[str, float]:
         """锦标赛选择。"""
-        candidates = self.rng.choice(len(scored), size=min(tournament_size, len(scored)), replace=False)
+        candidates = self.rng.choice(
+            len(scored), size=min(tournament_size, len(scored)), replace=False
+        )
         candidates = [scored[i] for i in candidates]
         return max(candidates, key=lambda x: x[0])[2]
 
@@ -258,8 +292,18 @@ class PSOOptimizer(BaseHeuristicOptimizer):
         c1: float = 1.5,
         c2: float = 1.5,
         seed: int | None = None,
+        early_stop_patience: int = 5,
+        early_stop_min_improvement: float = 1e-6,
     ):
-        super().__init__(param_spaces, fitness_func, population_size, generations, seed)
+        super().__init__(
+            param_spaces,
+            fitness_func,
+            population_size,
+            generations,
+            seed,
+            early_stop_patience,
+            early_stop_min_improvement,
+        )
         self.w = w
         self.c1 = c1
         self.c2 = c2
@@ -267,9 +311,11 @@ class PSOOptimizer(BaseHeuristicOptimizer):
     def optimize(self, verbose: bool = False) -> OptimizationResult:
         """执行粒子群优化。"""
         # 初始化粒子位置和速度
-        particles: list[dict[str, float]] = [self._random_params() for _ in range(self.population_size)]
+        particles: list[dict[str, float]] = [
+            self._random_params() for _ in range(self.population_size)
+        ]
         velocities: dict[int, dict[str, float]] = {
-            i: {name: 0.0 for name in self.param_names} for i in range(self.population_size)
+            i: dict.fromkeys(self.param_names, 0.0) for i in range(self.population_size)
         }
 
         personal_best: list[tuple[float, dict[str, float]]] = []
@@ -282,9 +328,13 @@ class PSOOptimizer(BaseHeuristicOptimizer):
 
         history: list[dict[str, Any]] = []
 
+        # P2-4: Early Stopping 计数器
+        _no_improve_count = 0
+        _prev_score: float | None = None
+
         for gen in range(self.generations):
             for i, particle in enumerate(particles):
-                score, metrics = self._evaluate(particle)
+                score, _metrics = self._evaluate(particle)
 
                 # 更新个体最优
                 if score > personal_best[i][0]:
@@ -311,7 +361,9 @@ class PSOOptimizer(BaseHeuristicOptimizer):
 
                 # 更新位置
                 for name in self.param_names:
-                    particle[name] = self.param_spaces[name].clip(particle[name] + velocities[i][name])
+                    particle[name] = self.param_spaces[name].clip(
+                        particle[name] + velocities[i][name]
+                    )
 
             history.append(
                 {
@@ -326,6 +378,24 @@ class PSOOptimizer(BaseHeuristicOptimizer):
                     f"PSO 第{gen + 1}代: 最优得分={global_best_score:.4f}, "
                     f"参数={global_best_params}"
                 )
+
+            # P2-4: Early Stopping
+            if (
+                _prev_score is not None
+                and global_best_score - _prev_score < self.early_stop_min_improvement
+            ):
+                _no_improve_count += 1
+            else:
+                _no_improve_count = 0
+            _prev_score = global_best_score
+            if _no_improve_count >= self.early_stop_patience:
+                _actual_generations = gen + 1
+                if self.generations - _actual_generations > 2:
+                    logger.info(
+                        f"PSO Early Stopping at gen {gen + 1}, "
+                        f"best_score={global_best_score:.4f} (no improvement for {_no_improve_count} gens)"
+                    )
+                break
 
         # 最终评估最优参数
         _, best_metrics = self._evaluate(global_best_params)
@@ -384,7 +454,9 @@ class StrategyParamOptimizer:
             # step 取相邻值的最小差值
             sorted_values = sorted(set(values))
             if len(sorted_values) > 1:
-                step = min(sorted_values[i + 1] - sorted_values[i] for i in range(len(sorted_values) - 1))
+                step = min(
+                    sorted_values[i + 1] - sorted_values[i] for i in range(len(sorted_values) - 1)
+                )
             else:
                 step = 1.0 if is_int else 0.01
             spaces.append(
@@ -428,7 +500,7 @@ class StrategyParamOptimizer:
                 total_score += score
                 valid_count += 1
             except Exception as e:
-                logger.debug(f"回测失败 {symbol}: {e}")
+                logger.debug("回测失败 {}: {}", symbol, e)
                 continue
 
         if valid_count == 0:
@@ -438,7 +510,10 @@ class StrategyParamOptimizer:
 
     def _clip_and_constrain(self, params: dict[str, float]) -> dict[str, float] | None:
         """裁剪参数并检查约束。"""
-        clipped = {space.name: space.clip(params.get(space.name, space.min_val)) for space in self.param_spaces}
+        clipped = {
+            space.name: space.clip(params.get(space.name, space.min_val))
+            for space in self.param_spaces
+        }
         if self.param_constraints is not None and not self.param_constraints(clipped):
             return None
         return clipped

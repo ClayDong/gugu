@@ -15,6 +15,7 @@ import fcntl
 import json
 import math
 import random
+import threading
 from datetime import date
 from typing import Any
 
@@ -39,9 +40,11 @@ LIQUIDITY_TIERS = [
     (1, 60, 0.30),  # 微小市值（10-30亿）：滑点0.6%，部分成交概率30%
 ]
 
-# 涨跌停附近成交概率
-LIMIT_UP_FILL_PROB = 0.3  # 涨停时买入成交概率 30%
-LIMIT_DOWN_FILL_PROB = 0.3  # 跌停时卖出成交概率 30%
+# P1-3 修复：涨跌停改为硬阻断（与回测一致），概率常量已不再使用
+# 保留注释作为历史记录
+# 原概率常量：
+# LIMIT_UP_FILL_PROB = 0.3   # 涨停时买入成交概率 30%
+# LIMIT_DOWN_FILL_PROB = 0.3 # 跌停时卖出成交概率 30%
 
 
 class PaperBroker(BaseBroker):
@@ -64,6 +67,8 @@ class PaperBroker(BaseBroker):
         self._daily_start_value: float | None = None
         # 部分成交状态缓存 {symbol: market_value_in_billions}
         self._market_value_cache: dict[str, float] = {}
+        # P1 修复：线程安全锁，保护 _cash / _positions / _trades
+        self._lock = threading.RLock()
         # 从磁盘恢复状态
         self._load_state()
 
@@ -111,11 +116,14 @@ class PaperBroker(BaseBroker):
 
         if partial_qty == 0:
             # 完全未成交（极低概率）
-            logger.info(f"[模拟盘] 订单完全未成交（流动性不足），请求量={quantity}")
+            logger.info("[模拟盘] 订单完全未成交（流动性不足），请求量={}", quantity)
             return 0, fill_price
 
         logger.info(
-            f"[模拟盘] 部分成交: 请求{quantity}股 → 实际{partial_qty}股 (比例={fill_ratio:.0%})"
+            "[模拟盘] 部分成交: 请求{}股 → 实际{}股 (比例={:.0%})",
+            quantity,
+            partial_qty,
+            fill_ratio,
         )
         return partial_qty, fill_price
 
@@ -132,7 +140,10 @@ class PaperBroker(BaseBroker):
     def _check_limit_tradable(
         self, direction: str, price: float, prev_close: float | None, symbol: str = ""
     ) -> bool:
-        """检查涨跌停附近是否可成交（P0 修复：按板块区分涨跌停幅度）。
+        """检查涨跌停附近是否可成交。
+
+        P1-3 修复：统一为硬阻断逻辑（与 BacktestEngine 的 RiskManager.is_tradable() 一致），
+        消除回测-实盘涨跌停检查不一致的问题。
 
         Args:
             direction: 买卖方向
@@ -141,24 +152,22 @@ class PaperBroker(BaseBroker):
             symbol: 股票代码（用于判断板块）
 
         Returns:
-            是否可成交
+            是否可成交（硬阻断：涨停不能买入，跌停不能卖出）
         """
         if prev_close is None or prev_close <= 0:
             return True
 
         change_pct = (price - prev_close) / prev_close
 
-        # P0 修复：按板块区分涨跌停幅度
-        # 原逻辑硬编码 9.5%，创业板/科创板 ±20%、北交所 ±30% 的股票在涨 9.5% 时被误判涨停
         limit_pct = self._get_limit_pct(symbol)
 
-        # 涨停附近（>= limit_pct * 0.95）— 买入概率降低
+        # 涨停附近（>= limit_pct * 0.95）— 买入硬阻断
         if direction == "buy" and change_pct >= limit_pct * 0.95:
-            return random.random() < self.__class__.LIMIT_UP_FILL_PROB
+            return False
 
-        # 跌停附近（<= -limit_pct * 0.95）— 卖出概率降低
+        # 跌停附近（<= -limit_pct * 0.95）— 卖出硬阻断
         if direction == "sell" and change_pct <= -limit_pct * 0.95:
-            return random.random() < self.__class__.LIMIT_DOWN_FILL_PROB
+            return False
 
         return True
 
@@ -207,6 +216,16 @@ class PaperBroker(BaseBroker):
         price: float | None = None,
     ) -> OrderResult:
         """下单。模拟成交，扣手续费/印花税/滑点，支持部分成交。"""
+        with self._lock:
+            return self._order_impl(symbol, direction, quantity, price)
+
+    def _order_impl(
+        self,
+        symbol: str,
+        direction: Direction,
+        quantity: int,
+        price: float | None = None,
+    ) -> OrderResult:
         symbol = symbol.strip().zfill(6)
         direction = direction.lower().strip()  # 规范化，与 RiskManager 保持一致
         if quantity <= 0 or quantity % 100 != 0:
@@ -345,7 +364,7 @@ class PaperBroker(BaseBroker):
 
             # 跌停成交检查
             if not self._check_limit_tradable("sell", cur_price, prev_close, symbol):
-                logger.info(f"[模拟盘] 跌停附近{cur_price:.2f}，卖出{quantity}股未成交(概率)")
+                logger.info("[模拟盘] 跌停附近{:.2f}，卖出{}股未成交(概率)", cur_price, quantity)
                 return OrderResult(False, symbol, direction, 0, 0, 0, message="跌停附近卖出未成交")
 
             fill_price = cur_price * (1 - effective_slippage)
@@ -406,19 +425,22 @@ class PaperBroker(BaseBroker):
         return result
 
     def get_position(self, symbol: str) -> Position | None:
-        return self._positions.get(symbol.strip().zfill(6))
+        with self._lock:
+            return self._positions.get(symbol.strip().zfill(6))
 
     def get_portfolio(self) -> dict[str, Position]:
-        return dict(self._positions)
+        with self._lock:
+            return dict(self._positions)
 
     def get_account(self) -> AccountInfo:
-        positions_value = sum(p.market_value for p in self._positions.values())
-        return AccountInfo(
-            cash=self._cash,
-            total_value=self._cash + positions_value,
-            positions=dict(self._positions),
-            positions_value=positions_value,  # P0-3 修复：补全缺失字段
-        )
+        with self._lock:
+            positions_value = sum(p.market_value for p in self._positions.values())
+            return AccountInfo(
+                cash=self._cash,
+                total_value=self._cash + positions_value,
+                positions=dict(self._positions),
+                positions_value=positions_value,  # P0-3 修复：补全缺失字段
+            )
 
     def update_price(self, symbol: str, price: float) -> None:
         """更新现价，同步将旧现价赋给 prev_close（P-06+D-08 修复）。
@@ -432,6 +454,10 @@ class PaperBroker(BaseBroker):
         adjust_for_corporate_action 调整持仓成本与数量，而非通过 update_price
         简单更新现价。
         """
+        with self._lock:
+            return self._update_price_impl(symbol, price)
+
+    def _update_price_impl(self, symbol: str, price: float) -> None:
         symbol = symbol.strip().zfill(6)
         pos = self._positions.get(symbol)
         if pos:
@@ -475,7 +501,7 @@ class PaperBroker(BaseBroker):
         symbol = symbol.strip().zfill(6)
         pos = self._positions.get(symbol)
         if not pos:
-            logger.warning(f"[模拟盘] 尝试调整不存在的持仓 {symbol}，忽略")
+            logger.warning("[模拟盘] 尝试调整不存在的持仓 {}，忽略", symbol)
             return
 
         # 记录调整前状态
@@ -517,11 +543,12 @@ class PaperBroker(BaseBroker):
 
     def settle_t_plus_1(self) -> None:
         """T+1 结算：每日开盘前调用，持仓全部变为可卖，并记录日初净值。"""
-        for pos in self._positions.values():
-            pos.available = pos.quantity
-        if self._daily_start_value is None or self._daily_start_value <= 0:
-            self._daily_start_value = self.get_account().total_value
-        self._save_state()
+        with self._lock:
+            for pos in self._positions.values():
+                pos.available = pos.quantity
+            if self._daily_start_value is None or self._daily_start_value <= 0:
+                self._daily_start_value = self.get_account().total_value
+            self._save_state()
 
     @property
     def trades(self) -> list[dict[str, Any]]:
@@ -551,52 +578,54 @@ class PaperBroker(BaseBroker):
 
         写入流程：文件锁 → 先写临时文件 → 原子 rename 覆盖目标文件。
         双进程安全：使用 fcntl.flock 互斥，引擎和 Web 进程不会同时写。
+        线程安全：使用 self._lock（RLock，可重入）。
         """
-        try:
-            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            data = {
-                "cash": self._cash,
-                "positions": {
-                    sym: {
-                        "symbol": p.symbol,
-                        "quantity": p.quantity,
-                        "available": p.available,
-                        "avg_cost": p.avg_cost,
-                        "current_price": p.current_price,
-                        "stop_loss_price": p.stop_loss_price,
-                        "prev_close": p.prev_close,
-                        "is_st": p.is_st,
-                        "is_suspended": p.is_suspended,
-                        "lowest_price": p.lowest_price,
-                        "dividend_adjusted": p.dividend_adjusted,
-                        "trailing_stop": p.trailing_stop,
-                        "danger_signals": p.danger_signals,
-                    }
-                    for sym, p in self._positions.items()
-                },
-                "trades": self._trades,
-                "daily_start_value": self._daily_start_value,
-            }
-            content = json.dumps(data, ensure_ascii=False, indent=2)
-            # 备份现有文件（保留上一版本，便于回滚）
-            if STATE_FILE.exists():
-                backup = STATE_FILE.with_suffix(STATE_FILE.suffix + ".bak")
-                try:
-                    backup.write_bytes(STATE_FILE.read_bytes())
-                except Exception as e:
-                    logger.warning(f"备份状态文件失败: {e}")
-            # 文件锁 + 原子写入：避免引擎和Web进程并发覆盖
-            # fcntl.LOCK_EX 是排他锁，其他进程读/写会阻塞等待
-            with open(STATE_FILE, "a") as lock_f:
-                fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
-                try:
-                    tmp = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
-                    tmp.write_text(content, encoding="utf-8")
-                    tmp.replace(STATE_FILE)
-                finally:
-                    fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
-        except Exception as e:
-            logger.warning(f"保存模拟盘状态失败: {e}")
+        with self._lock:
+            try:
+                STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+                data = {
+                    "cash": self._cash,
+                    "positions": {
+                        sym: {
+                            "symbol": p.symbol,
+                            "quantity": p.quantity,
+                            "available": p.available,
+                            "avg_cost": p.avg_cost,
+                            "current_price": p.current_price,
+                            "stop_loss_price": p.stop_loss_price,
+                            "prev_close": p.prev_close,
+                            "is_st": p.is_st,
+                            "is_suspended": p.is_suspended,
+                            "lowest_price": p.lowest_price,
+                            "dividend_adjusted": p.dividend_adjusted,
+                            "trailing_stop": p.trailing_stop,
+                            "danger_signals": p.danger_signals,
+                        }
+                        for sym, p in self._positions.items()
+                    },
+                    "trades": self._trades,
+                    "daily_start_value": self._daily_start_value,
+                }
+                content = json.dumps(data, ensure_ascii=False, indent=2)
+                # 备份现有文件（保留上一版本，便于回滚）
+                if STATE_FILE.exists():
+                    backup = STATE_FILE.with_suffix(STATE_FILE.suffix + ".bak")
+                    try:
+                        backup.write_bytes(STATE_FILE.read_bytes())
+                    except Exception as e:
+                        logger.warning(f"备份状态文件失败: {e}")
+                # 文件锁 + 原子写入：避免引擎和Web进程并发覆盖
+                # fcntl.LOCK_EX 是排他锁，其他进程读/写会阻塞等待
+                with open(STATE_FILE, "a") as lock_f:
+                    fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
+                    try:
+                        tmp = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
+                        tmp.write_text(content, encoding="utf-8")
+                        tmp.replace(STATE_FILE)
+                    finally:
+                        fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+            except Exception as e:
+                logger.warning(f"保存模拟盘状态失败: {e}")
 
     def _load_state(self) -> None:
         """从 JSON 文件恢复状态（P0 修复：fail-fast + .bak 回退）。
@@ -610,7 +639,7 @@ class PaperBroker(BaseBroker):
             # 尝试 .bak（可能主文件被误删但 .bak 还在）
             bak = STATE_FILE.with_suffix(STATE_FILE.suffix + ".bak")
             if bak.exists():
-                logger.warning(f"主状态文件 {STATE_FILE} 不存在，尝试 .bak 备份")
+                logger.warning("主状态文件 {} 不存在，尝试 .bak 备份", STATE_FILE)
                 self._load_from_path(bak)
                 return
             return
@@ -665,11 +694,13 @@ class PaperBroker(BaseBroker):
                     danger_signals=p.get("danger_signals"),
                 )
             except (KeyError, TypeError, ValueError) as pos_err:
-                logger.warning(f"恢复持仓 {sym} 失败，跳过该持仓: {pos_err}；原始数据: {p}")
+                logger.warning("恢复持仓 {} 失败，跳过该持仓: {}；原始数据: {}", sym, pos_err, p)
         self._trades = data.get("trades", [])
         self._daily_start_value = data.get("daily_start_value")
         if self._positions:
             logger.info(
-                f"恢复模拟盘状态: 现金 ¥{self._cash:,.2f}, "
-                f"持仓 {len(self._positions)} 只, 交易 {len(self._trades)} 笔"
+                "恢复模拟盘状态: 现金 ¥{:.2f}, 持仓 {} 只, 交易 {} 笔",
+                self._cash,
+                len(self._positions),
+                len(self._trades),
             )

@@ -107,7 +107,7 @@ def engine(
         mock.patch("gugu.engine.main.FeishuNotifier", return_value=mock_notifier),
         mock.patch("gugu.engine.main.RiskManager", return_value=mock_risk),
         mock.patch("gugu.engine.main.WisdomAdvisor"),
-        mock.patch("gugu.engine.main.StockSelector"),
+        mock.patch("gugu.selector.StockSelector"),
         mock.patch("gugu.engine.main.MarketFilter") as mock_mf,
         mock.patch("gugu.engine.main.get_config") as mock_cfg,
     ):
@@ -155,7 +155,7 @@ async def test_run_daily_cycle_trading_day(
     ):
         await engine.run_daily_cycle()
     mock_broker.settle_t_plus_1.assert_called_once()
-    engine._risk.reset.assert_called_once()
+    engine._risk.reset_halt.assert_called_once()
 
 
 @pytest.mark.asyncio

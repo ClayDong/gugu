@@ -315,7 +315,7 @@ def save_strategy(code: str, strategy_name: str | None = None) -> Path:
     file_path = STRATEGIES_DIR / f"{module_name}.py"
 
     if file_path.exists():
-        logger.warning(f"策略文件已存在，覆盖: {file_path}")
+        logger.warning("策略文件已存在，覆盖: {}", file_path)
 
     file_path.write_text(code, encoding="utf-8")
     logger.info(f"策略已保存: {file_path}")
@@ -348,4 +348,4 @@ def _register_strategy(strategy_name: str, module_name: str, class_name: str) ->
         content = content[:closing_idx] + registry_entry + content[closing_idx:]
 
     REGISTRY_FILE.write_text(content, encoding="utf-8")
-    logger.info(f"策略已注册: {strategy_name} -> {class_name}")
+    logger.info("策略已注册: {} -> {}", strategy_name, class_name)

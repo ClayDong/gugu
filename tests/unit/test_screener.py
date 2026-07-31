@@ -643,8 +643,8 @@ async def test_scan_returns_empty_when_snapshot_fails():
 
     screener = TerminalScreener()
     with patch.object(screener, "_fetch_market_snapshot", return_value=None):
-        results = await screener.scan()
-    assert results == []
+        result = await screener.scan()
+    assert result.results == []
 
 
 @pytest.mark.asyncio
@@ -671,8 +671,8 @@ async def test_scan_returns_empty_when_no_candidates():
         ]
     )
     with patch.object(screener, "_fetch_market_snapshot", return_value=empty_spot):
-        results = await screener.scan()
-    assert results == []
+        result = await screener.scan()
+    assert result.results == []
 
 
 @pytest.mark.asyncio
@@ -698,8 +698,8 @@ async def test_scan_total_timeout_returns_empty():
         original = ts._TOTAL_TIMEOUT_SEC
         ts._TOTAL_TIMEOUT_SEC = 1
         try:
-            results = await screener.scan()
-            assert results == []
+            result = await screener.scan()
+            assert result.results == []
         finally:
             ts._TOTAL_TIMEOUT_SEC = original
 

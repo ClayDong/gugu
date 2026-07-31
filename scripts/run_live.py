@@ -6,6 +6,7 @@
     python scripts/run_live.py --dry-run     # 仅检查 QMT 环境与连接
     python scripts/run_live.py --signal-only --loop 10  # 信号监控模式，每10分钟循环一次
 """
+
 from __future__ import annotations
 
 import argparse
@@ -184,7 +185,13 @@ if __name__ == "__main__":
     )
     parser.add_argument("--signal-only", action="store_true", help="信号监控模式（不下单）")
     parser.add_argument("--dry-run", action="store_true", help="仅检查环境，不下单")
-    parser.add_argument("--loop", type=int, default=0, metavar="N", help="循环间隔分钟数（signal_only 模式，0=单次）")
+    parser.add_argument(
+        "--loop",
+        type=int,
+        default=0,
+        metavar="N",
+        help="循环间隔分钟数（signal_only 模式，0=单次）",
+    )
     parser.add_argument("--version", action="version", version="gugu 0.1.0")
     args = parser.parse_args()
 

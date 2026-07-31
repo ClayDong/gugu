@@ -196,7 +196,7 @@ class KnowledgeBaseAgent:
                 source="llm",
             )
         except Exception as e:
-            logger.warning(f"[kb-agent] LLM 组织答案失败，降级为原始片段: {e}")
+            logger.warning("[kb-agent] LLM 组织答案失败，降级为原始片段: {}", e)
             answer_text = self._format_raw_chunks(chunks)
             return KBAnswer(
                 question=question,

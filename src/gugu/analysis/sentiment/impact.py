@@ -68,7 +68,7 @@ class ImpactAnalyzer:
                 json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
             )
         except Exception as e:
-            logger.warning(f"保存舆情历史失败: {e}")
+            logger.warning("保存舆情历史失败: {}", e)
 
     def calculate(self, sentiment_result: dict, source: str = "未知") -> dict[str, Any]:
         """计算舆情影响分数。"""

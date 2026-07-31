@@ -261,7 +261,7 @@ def _fetch_pe_history_lg(symbol: str, years: int = _LOOKBACK_YEARS) -> pd.DataFr
         df = df[df["date"] >= cutoff].reset_index(drop=True)
         return df if not df.empty else None
     except Exception as e:
-        logger.debug(f"乐咕乐股 {symbol} PE 数据获取失败: {e}")
+        logger.debug("乐咕乐股 {} PE 数据获取失败: {}", symbol, e)
         return None
 
 
@@ -395,7 +395,7 @@ def _fetch_buffett_index_lg(years: int = _LOOKBACK_YEARS) -> pd.DataFrame | None
         df = df[df["date"] >= cutoff].reset_index(drop=True)
         return df if not df.empty else None
     except Exception as e:
-        logger.debug(f"巴菲特指数数据获取失败: {e}")
+        logger.debug("巴菲特指数数据获取失败: {}", e)
         return None
 
 

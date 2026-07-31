@@ -25,7 +25,7 @@ try:
 except ImportError:
     from enum import Enum
 
-    class StrEnum(str, Enum):  # noqa: UP042
+    class StrEnum(str, Enum):
         pass
 
 
@@ -164,10 +164,12 @@ class TrailingStopEngine:
                 # 市场状态自适应 ATR 倍数
                 if regime and regime in self.REGIME_ATR_MULTIPLIERS:
                     mult = self.REGIME_ATR_MULTIPLIERS[regime]
-                    logger.info(f"[trailing-stop] 使用市场状态 {regime} 的 ATR 倍数: {mult}")
+                    logger.info("[trailing-stop] 使用市场状态 {} 的 ATR 倍数: {}", regime, mult)
                 else:
                     mult = atr_multiplier or self.DEFAULT_ATR_MULTIPLIER
-                atr_value = float(calc_atr(df, period=14).iloc[-1])
+                # P0 修复：使用 df.iloc[:-1] 排除当日未完成 K 线，避免回测/盘中未来函数
+                _df_for_atr = df.iloc[:-1] if len(df) > 20 else df
+                atr_value = float(calc_atr(_df_for_atr, period=14).iloc[-1])
                 if atr_value > 0:
                     stop_price = round(entry_price - mult * atr_value, 2)
                     # 安全护栏：ATR 止损不低于 2%，不高于 20%
@@ -177,14 +179,17 @@ class TrailingStopEngine:
                     elif stop_pct > 0.20:
                         stop_price = round(entry_price * 0.80, 2)
                     logger.info(
-                        f"[trailing-stop] ATR 初始止损: 入场价={entry_price:.2f}, "
-                        f"ATR={atr_value:.2f}, 倍数={mult}, 止损价={stop_price:.2f}"
+                        "[trailing-stop] ATR 初始止损: 入场价={:.2f}, ATR={:.2f}, 倍数={}, 止损价={:.2f}",
+                        entry_price,
+                        atr_value,
+                        mult,
+                        stop_price,
                     )
                 else:
                     # ATR 为 0，fallback
                     raise ValueError("ATR is zero")
             except Exception as e:
-                logger.debug(f"[trailing-stop] ATR 止损计算失败，回退到固定比例: {e}")
+                logger.debug("[trailing-stop] ATR 止损计算失败，回退到固定比例: {}", e)
                 pct = initial_stop_pct or self.DEFAULT_INITIAL_STOP_PCT
                 stop_price = round(entry_price * (1 - pct), 2)
         else:
@@ -207,8 +212,10 @@ class TrailingStopEngine:
         )
 
         logger.info(
-            f"[trailing-stop] 初始化: 入场价={entry_price:.2f}, "
-            f"初始止损={stop_price:.2f} (-{pct:.0%})"
+            "[trailing-stop] 初始化: 入场价={:.2f}, 初始止损={:.2f} (-{:.0%})",
+            entry_price,
+            stop_price,
+            pct,
         )
         return state
 
@@ -266,7 +273,9 @@ class TrailingStopEngine:
             old_stop = state.current_stop_price
             state.current_stop_price = round(latest_valley, 2)
             logger.info(
-                f"[trailing-stop] 止损上移: {old_stop:.2f} → {state.current_stop_price:.2f}"
+                "[trailing-stop] 止损上移: {:.2f} → {:.2f}",
+                old_stop,
+                state.current_stop_price,
             )
 
         # 4. 危险信号收紧止损（市场状态自适应）
@@ -285,8 +294,10 @@ class TrailingStopEngine:
                     state.current_stop_price = tighten_price
                     state.tightened = True
                     logger.warning(
-                        f"[trailing-stop] 危险信号收紧止损: {old_stop:.2f} → {tighten_price:.2f}, "
-                        f"信号={danger_signals}"
+                        "[trailing-stop] 危险信号收紧止损: {:.2f} → {:.2f}, 信号={}",
+                        old_stop,
+                        tighten_price,
+                        danger_signals,
                     )
         else:
             # 危险信号解除后复位收紧状态，下次收紧可再次触发
@@ -321,7 +332,9 @@ class TrailingStopEngine:
         try:
             from gugu.analysis.technical import atr as calc_atr
 
-            atr_value = float(calc_atr(df, period=14).iloc[-1])
+            # P0 修复：使用 df.iloc[:-1] 排除当日数据，避免未来函数
+            _df_for_atr = df.iloc[:-1] if len(df) > 20 else df
+            atr_value = float(calc_atr(_df_for_atr, period=14).iloc[-1])
             price = float(df["close"].iloc[-1])
             if price > 0:
                 atr_ratio = atr_value / price
@@ -428,7 +441,9 @@ class TrailingStopEngine:
         # 触发止损价
         if current_price <= state.current_stop_price:
             logger.warning(
-                f"[trailing-stop] 止损触发: 现价 {current_price:.2f} <= 止损价 {state.current_stop_price:.2f}"
+                "[trailing-stop] 止损触发: 现价 {:.2f} <= 止损价 {:.2f}",
+                current_price,
+                state.current_stop_price,
             )
             return TrailingStopSignal.EXIT
 
@@ -442,7 +457,9 @@ class TrailingStopEngine:
                     state.valley_break_count += 1
                     state.last_break_date = today
                     logger.warning(
-                        f"[trailing-stop] 跌破浪谷 {latest_valley:.2f}，第 {state.valley_break_count} 次"
+                        "[trailing-stop] 跌破浪谷 {:.2f}，第 {} 次",
+                        latest_valley,
+                        state.valley_break_count,
                     )
 
                     # P2-2 新增：跌破浪谷时若当日放量（量比 ≥ 1.5），直接 EXIT
@@ -453,7 +470,8 @@ class TrailingStopEngine:
                             avg_vol_20 = float(df["volume"].iloc[-20:].mean())
                             if avg_vol_20 > 0 and today_vol / avg_vol_20 >= 1.5:
                                 logger.warning(
-                                    f"[trailing-stop] 放量跌破浪谷（量比={today_vol / avg_vol_20:.2f}），直接 EXIT"
+                                    "[trailing-stop] 放量跌破浪谷（量比={:.2f}），直接 EXIT",
+                                    today_vol / avg_vol_20,
                                 )
                                 return TrailingStopSignal.EXIT
                         except Exception:
@@ -473,8 +491,10 @@ class TrailingStopEngine:
                     old_count = state.valley_break_count
                     state.valley_break_count = 0
                     logger.info(
-                        f"[trailing-stop] 价格创新高 {state.highest_price:.2f}（现价 {current_price:.2f}），"
-                        f"跌破计数 {old_count} → 0（创新高重置）"
+                        "[trailing-stop] 价格创新高 {:.2f}（现价 {:.2f}），跌破计数 {} → 0（创新高重置）",
+                        state.highest_price,
+                        current_price,
+                        old_count,
                     )
 
         # 危险信号

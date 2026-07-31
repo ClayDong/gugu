@@ -5,6 +5,7 @@
 用法:
     uv run python scripts/backtest_box_v2_ab.py --max-stocks 50
 """
+
 from __future__ import annotations
 
 import argparse
@@ -63,14 +64,16 @@ def run_v1(stock_dfs: dict[str, pd.DataFrame]) -> list[dict]:
     for symbol, df in stock_dfs.items():
         try:
             result = engine.run(strategy, df, symbol)
-            results.append({
-                "symbol": symbol,
-                "trades": len(result.trades),
-                "return": result.metrics.get("total_return", 0),
-                "sharpe": result.metrics.get("sharpe", 0),
-                "max_drawdown": result.metrics.get("max_drawdown", 0),
-                "win_rate": result.metrics.get("win_rate", 0),
-            })
+            results.append(
+                {
+                    "symbol": symbol,
+                    "trades": len(result.trades),
+                    "return": result.metrics.get("total_return", 0),
+                    "sharpe": result.metrics.get("sharpe", 0),
+                    "max_drawdown": result.metrics.get("max_drawdown", 0),
+                    "win_rate": result.metrics.get("win_rate", 0),
+                }
+            )
         except Exception as e:
             logger.debug(f"{symbol} v1 失败: {e}")
     return results
@@ -84,14 +87,16 @@ def run_v2(stock_dfs: dict[str, pd.DataFrame]) -> list[dict]:
     for symbol, df in stock_dfs.items():
         try:
             result = engine.run(strategy, df, symbol)
-            results.append({
-                "symbol": symbol,
-                "trades": len(result.trades),
-                "return": result.metrics.get("total_return", 0),
-                "sharpe": result.metrics.get("sharpe", 0),
-                "max_drawdown": result.metrics.get("max_drawdown", 0),
-                "win_rate": result.metrics.get("win_rate", 0),
-            })
+            results.append(
+                {
+                    "symbol": symbol,
+                    "trades": len(result.trades),
+                    "return": result.metrics.get("total_return", 0),
+                    "sharpe": result.metrics.get("sharpe", 0),
+                    "max_drawdown": result.metrics.get("max_drawdown", 0),
+                    "win_rate": result.metrics.get("win_rate", 0),
+                }
+            )
         except Exception as e:
             logger.debug(f"{symbol} v2 失败: {e}")
     return results
@@ -109,14 +114,16 @@ def run_v2_no_trend(stock_dfs: dict[str, pd.DataFrame]) -> list[dict]:
     for symbol, df in stock_dfs.items():
         try:
             result = engine.run(strategy, df, symbol)
-            results.append({
-                "symbol": symbol,
-                "trades": len(result.trades),
-                "return": result.metrics.get("total_return", 0),
-                "sharpe": result.metrics.get("sharpe", 0),
-                "max_drawdown": result.metrics.get("max_drawdown", 0),
-                "win_rate": result.metrics.get("win_rate", 0),
-            })
+            results.append(
+                {
+                    "symbol": symbol,
+                    "trades": len(result.trades),
+                    "return": result.metrics.get("total_return", 0),
+                    "sharpe": result.metrics.get("sharpe", 0),
+                    "max_drawdown": result.metrics.get("max_drawdown", 0),
+                    "win_rate": result.metrics.get("win_rate", 0),
+                }
+            )
         except Exception as e:
             logger.debug(f"{symbol} v2_no_trend 失败: {e}")
     return results
@@ -183,8 +190,15 @@ def main() -> None:
     print(f"{'='*70}")
     print(f"{'指标':<20} {'v1(卖出修复+无趋势)':<25} {'v2_NT(+持仓30天)':<25} {'v2(全优化)':<25}")
     print(f"{'-'*95}")
-    for key in ["stocks_with_trades", "total_trades", "avg_return", "median_return",
-                "avg_sharpe", "max_drawdown", "profitable_ratio"]:
+    for key in [
+        "stocks_with_trades",
+        "total_trades",
+        "avg_return",
+        "median_return",
+        "avg_sharpe",
+        "max_drawdown",
+        "profitable_ratio",
+    ]:
         v1_val = v1_sum.get(key, "N/A")
         v2nt_val = v2_nt_sum.get(key, "N/A")
         v2_val = v2_sum.get(key, "N/A")
@@ -199,7 +213,9 @@ def main() -> None:
     for v1, v2 in zip(v1_results, v2_results, strict=True):
         if v1["trades"] > 0 or v2["trades"] > 0:
             diff = v2["return"] - v1["return"]
-            print(f"{v1['symbol']:<10} {v1['trades']:>6} {v1['return']*100:>7.2f}% {v2['trades']:>6} {v2['return']*100:>7.2f}% {diff*100:>+7.2f}%")
+            print(
+                f"{v1['symbol']:<10} {v1['trades']:>6} {v1['return']*100:>7.2f}% {v2['trades']:>6} {v2['return']*100:>7.2f}% {diff*100:>+7.2f}%"
+            )
 
 
 if __name__ == "__main__":

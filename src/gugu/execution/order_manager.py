@@ -165,7 +165,7 @@ class OrderManager:
 
         # 价格合法性校验前置
         if price <= 0:
-            logger.warning(f"{symbol} 信号价格异常 price={price}，跳过下单并发送告警")
+            logger.warning("{} 信号价格异常 price={}，跳过下单并发送告警", symbol, price)
             notify_alert_ok = await notifier.notify_risk_alert(
                 {
                     "level": "warn",
@@ -174,7 +174,7 @@ class OrderManager:
                 }
             )
             if not notify_alert_ok:
-                logger.error(f"{symbol} 价格异常告警通知失败")
+                logger.error("{} 价格异常告警通知失败", symbol)
             return None
 
         # 最低1手保底
@@ -183,15 +183,17 @@ class OrderManager:
         if quantity <= 0 and account.cash >= one_lot_value:
             if one_lot_value / account.total_value <= max_ratio:
                 quantity = 100
-                logger.info(f"{symbol} 试仓比例过小，使用最低1手保底: 100股")
+                logger.info("{} 试仓比例过小，使用最低1手保底: 100股", symbol)
             else:
                 logger.warning(
-                    f"{symbol} 1手金额 {one_lot_value:.0f} 超过单股上限 {max_ratio:.0%}，"
-                    f"不保底（避免绕过 wisdom 仓位意图）"
+                    "{} 1手金额 {:.0f} 超过单股上限 {:.0%}，" "不保底（避免绕过 wisdom 仓位意图）",
+                    symbol,
+                    one_lot_value,
+                    max_ratio,
                 )
 
         if quantity <= 0:
-            logger.warning(f"{symbol} 计算下单数量为 0，跳过并发送告警")
+            logger.warning("{} 计算下单数量为 0，跳过并发送告警", symbol)
             notify_alert_ok = await notifier.notify_risk_alert(
                 {
                     "level": "warn",
@@ -203,7 +205,7 @@ class OrderManager:
                 }
             )
             if not notify_alert_ok:
-                logger.error(f"{symbol} 数量为0告警通知失败")
+                logger.error("{} 数量为0告警通知失败", symbol)
             return None
 
         # 风控检查
@@ -230,7 +232,7 @@ class OrderManager:
                 }
             )
             if not notify_alert_ok:
-                logger.error(f"{symbol} 风控拦截告警通知失败")
+                logger.error("{} 风控拦截告警通知失败", symbol)
             # 风控拦截也记录历史
             record_signal_history(signal, risk_result, None)
             return {
@@ -242,6 +244,19 @@ class OrderManager:
 
         # 下单
         result = broker.order(symbol, direction, quantity, price)
+
+        # 结构化交易日志
+        account = broker.get_account()
+        mode = (
+            getattr(broker, "_mode", None)
+            or broker.__class__.__name__.replace("Broker", "").lower()
+        )
+        logger.info(
+            f"[TRADE] 模式={mode} "
+            f"| 股票={symbol} | 方向={direction} | 价格={price:.2f} "
+            f"| 数量={quantity} | 结果={'success' if result.success else 'failed'} "
+            f"| 消息={result.message} | 资金={account.cash:.0f}"
+        )
 
         # 买入成功后，将止损价与 L3 元数据注入 Position
         if result.success and direction == "buy":

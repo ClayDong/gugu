@@ -56,7 +56,7 @@ class IndustryConstraint:
                 if not industry_row.empty:
                     industry = str(industry_row.iloc[0]["value"]).strip()
         except Exception as e:
-            self._logger.debug(f"stock_individual_info_em 获取 {symbol} 行业失败: {e}")
+            self._logger.debug("stock_individual_info_em 获取 {} 行业失败: {}", symbol, e)
 
         # 方式二：从全市场实时行情中查找
         if not industry:
@@ -67,14 +67,14 @@ class IndustryConstraint:
                     if not row.empty:
                         industry = str(row.iloc[0]["行业"]).strip()
             except Exception as e:
-                self._logger.debug(f"stock_zh_a_spot_em 获取 {symbol} 行业失败: {e}")
+                self._logger.debug("stock_zh_a_spot_em 获取 {} 行业失败: {}", symbol, e)
 
         # 缓存结果（包括空字符串，避免反复请求失败的股票）
         self._industry_cache[symbol] = industry
         if industry:
-            self._logger.debug(f"股票 {symbol} 所属行业: {industry}")
+            self._logger.debug("股票 {} 所属行业: {}", symbol, industry)
         else:
-            self._logger.warning(f"无法获取股票 {symbol} 的行业信息")
+            self._logger.warning("无法获取股票 {} 的行业信息", symbol)
 
         return industry
 

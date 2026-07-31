@@ -5,6 +5,7 @@
     python scripts/run_paper.py --daemon   # 守护进程模式（定时调度，保活）
     python scripts/run_paper.py --report  # 单次模式结束后发送信号汇总
 """
+
 from __future__ import annotations
 
 import argparse

@@ -4,6 +4,7 @@
     python scripts/run_web.py              # 启动仪表盘（默认 0.0.0.0:8080）
     python scripts/run_web.py --port 9090  # 指定端口
 """
+
 from __future__ import annotations
 
 import argparse

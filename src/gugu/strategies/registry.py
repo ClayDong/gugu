@@ -6,19 +6,33 @@ from functools import lru_cache
 from typing import Any
 
 from gugu.strategies.base import Strategy
+from gugu.strategies.blogger_rules import ChenXueZhangStrategy, LinJuDaYeStrategy
 from gugu.strategies.breakout import BoxBreakoutStrategy, DualThrustStrategy
 from gugu.strategies.breakout_rebound import BreakoutReboundStrategy
 from gugu.strategies.capital_flow_alert import CapitalFlowAlertStrategy
 from gugu.strategies.chen_jiangting import ChenJiangtingStrategy
+from gugu.strategies.cloud_trend import CloudTrendStrategy
 from gugu.strategies.double_yin import DoubleYinMoneyBagStrategy
 from gugu.strategies.dragon_tiger_short import DragonTigerShortStrategy
+from gugu.strategies.first_board import FirstBoardStrategy
+from gugu.strategies.hot_money import HotMoneyStrategy
+from gugu.strategies.huamulan_crash_layout import HuamulanCrashLayoutStrategy
+from gugu.strategies.huamulan_fake_dip import HuamulanFakeDipStrategy
+from gugu.strategies.huamulan_ghost_breakout import HuamulanGhostBreakoutStrategy
+from gugu.strategies.huamulan_tail_pick import HuamulanTailPickStrategy
+from gugu.strategies.industry_capital_momentum import IndustryCapitalMomentumStrategy
 from gugu.strategies.leopard_three_factors import LeopardThreeFactorsStrategy
+from gugu.strategies.ma5_momentum import MA5MomentumStrategy
+from gugu.strategies.ma20_trend import MA20TrendStrategy
 from gugu.strategies.mean_revert import BollingerStrategy, KDJStrategy, RSIStrategy
 from gugu.strategies.ml_factor import MLFactorStrategy
+from gugu.strategies.ml_gradient_boost import MLGradientBoostStrategy
 from gugu.strategies.money_flow_follow import MoneyFlowFollowStrategy
 from gugu.strategies.north_force_long import NorthForceLongStrategy
 from gugu.strategies.pullback_low import PullbackLowStrategy
 from gugu.strategies.trend import DualMAStrategy, MACDStrategy, TurtleStrategy
+from gugu.strategies.weekly_combo import WeeklyComboStrategy
+from gugu.strategies.zhen_dahu import ZhenDahuStrategy
 
 # 策略注册表：name -> class
 _REGISTRY: dict[str, type[Strategy]] = {
@@ -33,6 +47,7 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "money_flow_follow": MoneyFlowFollowStrategy,
     "chen_jiangting": ChenJiangtingStrategy,
     "leopard_three_factors": LeopardThreeFactorsStrategy,
+    "ma5_momentum": MA5MomentumStrategy,  # 5日均线动量策略（放量大阳线+回踩MA5）
     "pullback_low": PullbackLowStrategy,  # 震荡市专用低吸回踩策略
     "double_yin": DoubleYinMoneyBagStrategy,  # 双阴钱袋子策略（主力洗盘拐点）
     "breakout_rebound": BreakoutReboundStrategy,  # 断板反包策略（短线主力行为）
@@ -40,6 +55,20 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "ml_factor": MLFactorStrategy,  # LightGBM 多因子策略
     "north_force_long": NorthForceLongStrategy,  # 长线主力吸筹跟随
     "dragon_tiger_short": DragonTigerShortStrategy,  # 短线龙虎榜反包跟随
+    "cloud_trend": CloudTrendStrategy,  # 云策略：三维趋势+两类入场+分层仓位
+    "hot_money": HotMoneyStrategy,  # 游资策略：三数交易法（涨停筛选+缩量入场+放量离场）
+    "industry_capital_momentum": IndustryCapitalMomentumStrategy,  # 行业资金强度+动量确认
+    "first_board": FirstBoardStrategy,  # 首板战法（北京炒家）：首板套利+极致风控+机械执行
+    "ma20_trend": MA20TrendStrategy,  # 20日均线趋势跟随战法（趋势为王+回踩低吸+放量突破）
+    "zhen_dahu": ZhenDahuStrategy,  # 珍大户价值投资策略（价值回归+行业优先+护城河+安全边际）
+    "weekly_combo": WeeklyComboStrategy,  # 周线选股策略：四句心法实战化（倍量+金叉+回踩+三连阳）
+    "huamulan_tail_pick": HuamulanTailPickStrategy,  # 花木兰尾盘选股六步法（小资金复利首选）
+    "huamulan_crash_layout": HuamulanCrashLayoutStrategy,  # 花木兰空仓等暴跌布局法（大资金稳健复利）
+    "huamulan_fake_dip": HuamulanFakeDipStrategy,  # 花木兰早盘假摔低吸战法（捕捉主力洗盘）
+    "huamulan_ghost_breakout": HuamulanGhostBreakoutStrategy,
+    "chenxuezhang": ChenXueZhangStrategy,
+    "linjudaye": LinJuDaYeStrategy,
+    "ml_gradient_boost": MLGradientBoostStrategy,
 }
 
 

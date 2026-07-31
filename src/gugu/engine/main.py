@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
+import logging
+import time
 from datetime import date
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -17,26 +17,26 @@ import pandas as pd
 from gugu.analysis.dynamic_take_profit import DynamicTakeProfitEngine
 from gugu.analysis.position_controller import PositionController
 from gugu.analysis.regime_detector import MultiPeriodRegimeDetector
-from gugu.analysis.signal_tracker import SignalTracker
 from gugu.analysis.trailing_stop import TrailingStopEngine
 from gugu.config import PROJECT_ROOT, get_config
 from gugu.config.models import AppConfig
 from gugu.data import data_manager
+from gugu.engine.engine_mixin import EngineOpsMixin
 from gugu.engine.event_engine import (
     EVENT_CYCLE_END,
     EVENT_CYCLE_START,
     EVENT_DAILY_LOSS_HALT,
     EVENT_DAILY_LOSS_WARN,
-    EVENT_MARKET_REGIME,
     EVENT_ORDER_FILLED,
     EVENT_RISK_ALERT,
     EVENT_STOP_LOSS,
     EventEngine,
 )
 from gugu.engine.market_filter import MarketFilter
-from gugu.engine.signal_pipeline import SignalPipeline, record_signal_history
+from gugu.engine.signal_pipeline import SignalPipeline
 from gugu.engine.signal_router import SignalRouter
 from gugu.execution import OrderManager, PaperBroker, StopLossManager
+from gugu.execution.track_live import LivePositionTracker
 from gugu.filters.fundamental import FundamentalFilter
 from gugu.filters.industry_constraint import IndustryConstraint
 from gugu.filters.money_flow import MoneyFlowFilter
@@ -44,8 +44,7 @@ from gugu.notifier import FeishuNotifier
 from gugu.notifier.daily_report_manager import DailyReportManager
 from gugu.risk import RiskManager
 from gugu.risk.rules import RiskAction
-from gugu.selector import StockSelector
-from gugu.strategies.registry import get_enabled_strategies, get_enabled_strategies_for_regime
+from gugu.strategies.registry import get_enabled_strategies
 from gugu.utils.calendar import is_trading_day, is_trading_time
 from gugu.utils.log import get_logger
 from gugu.wisdom import WisdomAdvisor
@@ -53,12 +52,37 @@ from gugu.wisdom import WisdomAdvisor
 logger = get_logger()
 
 
-class TradingEngine:
+class TradingEngine(EngineOpsMixin):
     """交易主引擎。
 
     依赖注入支持：所有依赖参数可选，不传时使用默认实现（向后兼容）。
     传入参数时覆盖默认实现，便于测试 mock 和切换 broker。
     """
+
+    # 告警抑制：类级别共享，同一股票同一原因的告警在冷却期内只发一次
+    _alert_history: dict[str, float] = {}  # key: symbol_reason, value: timestamp
+    _ALERT_COOLDOWN = 600  # 10分钟冷却
+
+    def _should_alert(self, key: str) -> bool:
+        """检查是否应该发送告警（冷却期内抑制重复告警）。"""
+        now = time.time()
+        # 定期清理过期条目，防止无限增长
+        self._cleanup_alert_history()
+        last = self._alert_history.get(key, 0)
+        if now - last < self._ALERT_COOLDOWN:
+            return False
+        self._alert_history[key] = now
+        return True
+
+    def _cleanup_alert_history(self) -> None:
+        """清理超过冷却期 2 倍的过期告警条目，防止内存无限增长。"""
+        now = time.time()
+        expiry = now - self._ALERT_COOLDOWN * 2
+        stale_keys = [k for k, v in self._alert_history.items() if v < expiry]
+        for k in stale_keys:
+            del self._alert_history[k]
+        if stale_keys:
+            logger.debug("清理过期告警条目: {} 条", len(stale_keys))
 
     def __init__(
         self,
@@ -85,35 +109,45 @@ class TradingEngine:
         exec_mode: str | None = None,
         watchlist: list[str] | None = None,
     ) -> None:
-        # P1 修复：_lock 必须在可能跳过后续初始化的 mock 测试前初始化
         self._lock = asyncio.Lock()
+        self._dedup_lock = asyncio.Lock()
         self._running: bool = False
 
-        # 读取配置
         self._app_config: AppConfig | None = None
         with contextlib.suppress(Exception):
             self._app_config = get_config()
 
-        # ---- 依赖注入：若传入则用传入的，否则创建默认实现 ----
         self._notifier = notifier if notifier is not None else FeishuNotifier()
         self._dm = data_mgr if data_mgr is not None else data_manager()
-        self._broker = broker if broker is not None else PaperBroker()
+
+        cfg_mode = self._app_config.execution.mode if self._app_config else "paper"
+        self._exec_mode = exec_mode if exec_mode is not None else cfg_mode
+
+        if broker is not None:
+            self._broker = broker
+        elif self._exec_mode == "track_live":
+            self._broker = LivePositionTracker()
+            logger.info(
+                "[track_live] 使用实盘持仓跟踪器，用户真实持仓从 data/live_positions.json 加载，"
+                "系统不自动交易，仅推送止损/止盈提醒"
+            )
+        else:
+            self._broker = PaperBroker()
+
         self._risk = risk if risk is not None else RiskManager()
         self._wisdom = wisdom if wisdom is not None else WisdomAdvisor()
-        # v0.5.6 优化1：strategies 默认加载所有启用策略（向后兼容）
-        # 扫描时按 regime 动态过滤（_scan_signals 中实现）
-        # 显式传入时用于测试注入
         self._strategies = strategies if strategies is not None else get_enabled_strategies()
         self._router = router if router is not None else SignalRouter(self._strategies)
-        self._selector = (
-            selector
-            if selector is not None
-            else StockSelector(
+        if selector is not None:
+            self._selector = selector
+        else:
+            from gugu.selector import StockSelector
+
+            self._selector = StockSelector(
                 self._dm,
                 top_n=get_config().strategy.select_top_n,
                 max_candidates=get_config().strategy.select_max_candidates,
             )
-        )
         self._regime_detector = (
             regime_detector if regime_detector is not None else MultiPeriodRegimeDetector()
         )
@@ -123,7 +157,6 @@ class TradingEngine:
         self._trailing_stop_engine = (
             trailing_stop_engine if trailing_stop_engine is not None else TrailingStopEngine()
         )
-        # 财叔动态止盈减仓引擎（与移动止损互补：止损保本金，止盈锁利润）
         self._take_profit_engine = (
             take_profit_engine if take_profit_engine is not None else DynamicTakeProfitEngine()
         )
@@ -143,7 +176,16 @@ class TradingEngine:
                 take_profit_engine=self._take_profit_engine,
             )
         )
-        # 日报管理器（从 TradingEngine 提取的 send_daily_report / _load_today_signals）
+
+        self._stop_loss_escalator = None
+        if self._exec_mode == "track_live":
+            try:
+                from gugu.analysis.stop_loss_escalator import StopLossAlertEscalator
+
+                self._stop_loss_escalator = StopLossAlertEscalator()
+                logger.info("[track_live] 止损告警升级器已启用")
+            except Exception as e:
+                logger.debug("止损告警升级器初始化跳过: {}", e)
         self._report_manager = DailyReportManager(
             broker=self._broker,
             risk=self._risk,
@@ -163,28 +205,17 @@ class TradingEngine:
         self._event_engine = event_engine if event_engine is not None else EventEngine()
         self._market_filter = MarketFilter()
 
-        # 信号去重：{symbol_direction_strategy: date} 当日已通知的信号不重复发送
-        # 持久化到文件，防止引擎重启后丢失
         self._notified_signals_file = PROJECT_ROOT / "data" / "notified_signals.json"
         self._notified_signals: dict[str, str] = self._load_notified_signals()
 
-        # 自选股列表
         if watchlist is not None:
             self._watchlist = watchlist
         else:
             self._watchlist = self._load_watchlist()
 
-        # 执行模式
-        cfg_mode = self._app_config.execution.mode if self._app_config else "paper"
-        self._exec_mode = exec_mode if exec_mode is not None else cfg_mode
-
-        # P1 修复：_last_cycle_date 必须在 run_daily_cycle 使用前初始化
         self._last_cycle_date: date | None = None
-
-        # 当日被过滤信号摘要（解决沉默拒绝问题，收盘时推送）
         self._filtered_signals_today: list[dict[str, Any]] = []
 
-        # 信号过滤流水线
         self._pipeline = (
             pipeline
             if pipeline is not None
@@ -201,14 +232,26 @@ class TradingEngine:
             )
         )
 
-        # 注册事件处理器
         self._event_engine.register(EVENT_RISK_ALERT, self._on_risk_alert)
         self._event_engine.register(EVENT_STOP_LOSS, self._on_stop_loss_triggered)
         self._event_engine.register(EVENT_ORDER_FILLED, self._on_order_filled)
 
+        try:
+            from gugu.strategy_consistency import validate_strategy_consistency
+
+            consistency_issues = validate_strategy_consistency()
+            if consistency_issues:
+                logger.warning(
+                    "策略一致性校验发现 {} 个问题，详见上方日志", len(consistency_issues)
+                )
+        except Exception as e:
+            logger.debug("策略一致性校验跳过: {}", e)
+
         logger.info(
-            f"交易引擎初始化: {len(self._strategies)} 策略, "
-            f"自选股 {len(self._watchlist)} 只, 模式={self._exec_mode}"
+            "交易引擎初始化: {} 策略, 自选股 {} 只, 模式={}",
+            len(self._strategies),
+            len(self._watchlist),
+            self._exec_mode,
         )
 
     @property
@@ -219,7 +262,7 @@ class TradingEngine:
             return False
 
     def _load_watchlist(self) -> list[str]:
-        """加载自选股列表（从 AppConfig 强类型配置读取）。"""
+        """加载自选股列表。"""
         try:
             watchlist = list(get_config().watchlist)
         except Exception:
@@ -231,12 +274,8 @@ class TradingEngine:
 
     async def run_daily_cycle(self) -> None:
         """每日交易循环：采集 → 策略 → 风控 → 执行 → 通知。"""
-        # P0 修复：L2 熔断状态下仍需执行止损检查（卖出豁免），仅跳过买入相关流程
-        # 防止熔断后无法止损导致亏损从15%扩大到30%+
         if self._risk.is_halted:
-            logger.warning(
-                "L2 熔断状态激活中，跳过买入流程但仍执行止损检查（需人工 reset_halt 后恢复买入）"
-            )
+            logger.warning("L2 熔断状态激活中，跳过买入流程但仍执行止损检查")
             if not is_trading_day():
                 logger.info("非交易日，跳过")
                 return
@@ -258,15 +297,12 @@ class TradingEngine:
             logger.info("非交易日，跳过")
             return
 
-        # P0 修复：交易时段校验（原逻辑仅校验交易日，盘前盘后/午休也会"成交"）
-        # 止损检查豁免（卖出随时可执行），仅买入流程需在交易时段内
         if not is_trading_time():
-            logger.info("非交易时段（盘前/午休/盘后），跳过买入流程，仅执行止损检查")
+            logger.info("非交易时段，跳过买入流程，仅执行止损检查")
             async with self._lock:
                 if self._running:
                     return
                 self._running = True
-                # 确保事件引擎存在（兼容测试中跳过 __init__ 的场景）
                 if not hasattr(self, "_event_engine"):
                     self._event_engine = EventEngine()
                 try:
@@ -277,74 +313,60 @@ class TradingEngine:
                     self._event_engine.put(EVENT_CYCLE_END, {"off_hours": True})
             return
 
-        # P1 修复：使用 asyncio.Lock 确保整个循环的并发安全
         async with self._lock:
             if self._running:
                 logger.warning("交易循环正在运行中，跳过本次重入调用")
                 return
             self._running = True
-            # 确保事件引擎存在（兼容测试中跳过 __init__ 的场景）
             if not hasattr(self, "_event_engine"):
                 self._event_engine = EventEngine()
             self._event_engine.put(EVENT_CYCLE_START, {"timestamp": pd.Timestamp.now().isoformat()})
 
-            # 1. T+1 结算 + 日初净值重置（仅新交易日执行，防止重启后绕过 T+1）
-            # P0-1/P1-a 修复：使用 risk.last_reset_date 持久化状态判断新交易日，
-            # 若风险管理器不支持（如 mock 测试），回退到 _last_cycle_date 内存判断。
             today = date.today()
             last_date = getattr(self._risk, "last_reset_date", None)
             if last_date is None:
                 last_date = self._last_cycle_date.isoformat() if self._last_cycle_date else ""
             if last_date != today.isoformat():
                 self._broker.settle_t_plus_1()
-                self._broker.reset_daily_start_value()  # P0-1: 每日重置日初净值
-                self._risk.reset()
+                self._broker.reset_daily_start_value()
+                self._risk.reset_halt()
                 self._last_cycle_date = today
 
             try:
-                # 2. 采集行情
                 await self._update_prices()
-
-                # 3. 持仓止损检查：先止损再扫描信号（A-05 修复）
-                # 止损卖出会改变持仓与资金，必须在信号扫描前执行，
-                # 确保后续信号基于最新持仓状态生成
                 await self._check_stop_loss()
 
-                # 3.5 止损后立即检查日亏 & 组合回撤（P1-d 修复）
-                # 组合回撤检查移至止损之后，避免止损前的虚高净值
-                # 稀释回撤灵敏度（应止损但未止损的持仓计入峰值后，止损后
-                # 净值下降但峰值已虚高，导致回撤检查结果失真）
+                if self._stop_loss_escalator:
+                    await self._check_stop_loss_escalation()
+
                 await self._check_daily_loss()
                 if self._risk.is_halted:
                     logger.warning("止损后触发 L2 熔断，跳过本次信号扫描与下单")
                     self._write_heartbeat("halted")
                     return
-                # 止损后净值可能进一步下降，需再次检查组合回撤
+
                 account_after_stop = self._broker.get_account()
                 self._risk.update_portfolio_peak(account_after_stop.total_value)
                 dd_after_stop = self._risk.check_portfolio_drawdown(account_after_stop.total_value)
                 if dd_after_stop.action == RiskAction.HALT:
                     self._event_engine.put(EVENT_DAILY_LOSS_HALT, {"drawdown": True})
-                    logger.warning(f"止损后组合回撤触发熔断: {dd_after_stop.message}")
+                    logger.warning("止损后组合回撤触发熔断: {}", dd_after_stop.message)
                     await self._notifier.notify_risk_alert(
                         {
                             "level": "halt",
                             "message": dd_after_stop.message,
-                            "suggestion": "组合回撤过大，已自动熔断，需人工 reset_halt 后恢复",
+                            "suggestion": "组合回撤过大，已自动熔断",
                         }
                     )
                     self._write_heartbeat("halted")
                     return
                 elif dd_after_stop.action == RiskAction.WARN:
-                    logger.warning(f"止损后组合回撤预警: {dd_after_stop.message}")
+                    logger.warning("止损后组合回撤预警: {}", dd_after_stop.message)
 
-                # 4. 自动选股 + 自选股扫描
-                # 当日自动选股候选：仅作用于本次扫描，不写入实例 watchlist（A-01 修复）
                 today_extra: list[str] = []
                 if self.auto_select_enabled:
-                    # 降级源不支持全市场快照，降级时跳过自动选股
                     if self._dm.is_degraded:
-                        logger.info("数据源已降级，跳过自动选股（降级源不支持全市场快照）")
+                        logger.info("数据源已降级，跳过自动选股")
                     else:
                         selected = await self._selector.select()
                         if not selected:
@@ -355,39 +377,50 @@ class TradingEngine:
                                 and s["symbol"] not in today_extra
                             ):
                                 today_extra.append(s["symbol"])
-                                logger.info(f"自动选股候选（当日）: {s['symbol']}")
+                                logger.info("自动选股候选（当日）: {}", s["symbol"])
 
                 signals = await self._scan_signals(today_extra)
 
-                # 5. 执行信号（风控 + 下单）—— per-signal 异常隔离（P1-n 修复）
-                # 单个信号处理失败不影响其他信号执行
+                from gugu.analysis.signal_priority import sort_and_limit_signals
+
+                account = self._broker.get_account()
+                total_value = account.total_value if account else 1_000_000
+                positions_value = account.positions_value if account else 0
+                available_ratio = max(0, (total_value - positions_value) / total_value)
+                current_regime = getattr(self, "_current_regime", "unknown")
+                signals = sort_and_limit_signals(
+                    signals,
+                    regime=current_regime,
+                    available_position_ratio=available_ratio,
+                    strategy_pool=getattr(self._router, "_pool", None),
+                )
+
                 for signal in signals:
                     try:
                         await self._process_signal(signal)
                     except Exception as sig_err:
-                        logger.exception(f"处理信号 {signal.get('symbol')} 失败，跳过: {sig_err}")
+                        logger.exception(
+                            "处理信号 {} 失败，跳过: {}", signal.get("symbol"), sig_err
+                        )
 
-                # 6. 检查日亏 & 组合回撤
                 await self._check_daily_loss()
 
-                # 6.5 信号处理后再次检查组合回撤（账户净值已因订单执行而变化）
                 account_after = self._broker.get_account()
                 self._risk.update_portfolio_peak(account_after.total_value)
                 dd_result = self._risk.check_portfolio_drawdown(account_after.total_value)
                 if dd_result.action == RiskAction.HALT:
                     self._event_engine.put(EVENT_DAILY_LOSS_HALT, {"drawdown": True})
-                    logger.warning(f"信号处理后组合回撤触发熔断: {dd_result.message}")
+                    logger.warning("信号处理后组合回撤触发熔断: {}", dd_result.message)
                     await self._notifier.notify_risk_alert(
                         {
                             "level": "halt",
                             "message": dd_result.message,
-                            "suggestion": "组合回撤过大，已自动熔断，需人工 reset_halt 后恢复",
+                            "suggestion": "组合回撤过大，已自动熔断",
                         }
                     )
                 elif dd_result.action == RiskAction.WARN:
-                    logger.warning(f"信号处理后组合回撤预警: {dd_result.message}")
+                    logger.warning("信号处理后组合回撤预警: {}", dd_result.message)
 
-                # 事件推送：交易循环完成
                 self._event_engine.put(
                     EVENT_CYCLE_END,
                     {
@@ -398,19 +431,18 @@ class TradingEngine:
                 )
                 self._write_heartbeat("ok")
             except Exception as e:
-                logger.exception(f"交易循环异常: {e}")
-                # 异常路径：持久化 error 心跳 + 主动飞书告警
+                logger.exception("交易循环异常: {}", e)
                 self._write_heartbeat("error")
                 try:
                     await self._notifier.notify_error(
                         {
                             "module": "engine.run_daily_cycle",
                             "message": str(e)[:500],
-                            "suggestion": "检查日志 logs/gugu_*.log，必要时手动 reset_halt 或排查数据源",
+                            "suggestion": "检查日志 logs/gugu_*.log",
                         }
                     )
                 except Exception as notify_err:
-                    logger.error(f"异常告警通知失败: {notify_err}")
+                    logger.error("异常告警通知失败: {}", notify_err)
             finally:
                 self._running = False
 
@@ -422,7 +454,6 @@ class TradingEngine:
         symbols = list(portfolio.keys())
         try:
             df = await self._dm.fetch_stock_realtime(symbols)
-            # P1-e 修复：per-row try/except，单行失败不中断其余持仓现价更新
             for _, row in df.iterrows():
                 try:
                     symbol = row["symbol"]
@@ -430,395 +461,14 @@ class TradingEngine:
                     if price > 0:
                         self._broker.update_price(symbol, price)
                     else:
-                        logger.warning(f"现价更新跳过 {symbol}: price={price}")
+                        logger.warning("现价更新跳过 {}: price={}", symbol, price)
                 except (ValueError, KeyError, TypeError) as row_err:
-                    logger.warning(f"解析现价行失败，跳过该行: {row_err}")
+                    logger.warning("解析现价行失败，跳过该行: {}", row_err)
         except Exception as e:
-            logger.error(f"更新现价失败: {e}")
-
-    async def _scan_signals(self, extra_symbols: list[str] | None = None) -> list[dict[str, Any]]:
-        """扫描自选股策略信号，经过滤链后输出。
-
-        过滤链：策略信号 → 基本面过滤 → 资金流过滤 → 行业约束 → 市场状态修正 → wisdom 决策
-
-        Args:
-            extra_symbols: 当日自动选股产生的候选（仅本次扫描有效，不污染 watchlist）。
-        """
-        # 合并 watchlist + 当日候选（去重）
-        scan_list = list(self._watchlist)
-        for s in extra_symbols or []:
-            if s not in scan_list:
-                scan_list.append(s)
-
-        # 大市过滤：《炒股的智慧》铁律——大市不满足顺势条件时仅观察不选股
-        # 但 watchlist 自选股仍需扫描（用户手动关注的股票不应被大市过滤阻塞）
-        market_status = await self._market_filter.check_market()
-        if not market_status["bullish"]:
-            logger.warning(
-                f"大市过滤: {market_status['regime']} — {market_status['reason']}，"
-                f"跳过自动选股候选，仅扫描 watchlist（{len(self._watchlist)} 只自选股）"
-            )
-            # 大市不佳时，仅扫描 watchlist，不扫描 extra_symbols（自动选股候选）
-            scan_list = list(self._watchlist)
-            extra_symbols = []  # 清空自动选股候选
-
-        # 市场状态判断（每日一次，影响所有信号的仓位修正）
-        regime = await self._regime_detector.detect()
-        logger.info(f"市场择时: {regime['reason']}")
-
-        # v0.5.6 优化1：按 regime 动态选择策略
-        # 核心思想：策略没有"好/坏"之分，只有"适用/不适用"之分
-        # 牛市启用突破追势，震荡启用拐点策略，熊市空仓观察
-        current_regime = regime.get("regime", "unknown")
-        # 按 regime 重建 SignalRouter（当配置了 enabled_by_regime 时）
-        try:
-            from gugu.config import get_config as _get_cfg
-
-            _cfg = _get_cfg().strategy
-            if _cfg.enabled_by_regime:
-                regime_strategies = get_enabled_strategies_for_regime(current_regime)
-                # 仅当策略列表变化时重建（避免无谓重建）
-                _new_names = {s.name for s in regime_strategies}
-                _old_names = {s.name for s in self._strategies} if self._strategies else set()
-                if _new_names != _old_names:
-                    self._router = SignalRouter(regime_strategies)
-                    logger.info(
-                        f"v0.5.6 按 regime={current_regime} 动态加载策略: {sorted(_new_names)}"
-                    )
-        except Exception as _e:
-            logger.warning(f"v0.5.6 按 regime 加载策略失败，回退默认: {_e}")
-
-        # 计算仓位预算
-        budget = self._position_controller.calculate(
-            regime=regime,
-            account=self._broker.get_account(),
-            is_halted=self._risk.is_halted,
-        )
-        logger.info(
-            f"仓位预算: 总上限={budget.total_limit:.0%}, "
-            f"单股上限={budget.single_limit:.0%}, {budget.reason}"
-        )
-        self._event_engine.put(
-            EVENT_MARKET_REGIME,
-            {
-                "regime": current_regime,
-                "reason": regime.get("reason", ""),
-                "total_limit": budget.total_limit,
-                "single_limit": budget.single_limit,
-            },
-        )
-
-        signals = []
-        # 批量拉取实时行情一次，避免 per-symbol 重复请求（P-04 修复）
-        try:
-            rt_all = await self._dm.fetch_stock_realtime(scan_list) if scan_list else None
-        except Exception:
-            rt_all = None
-
-        # P3 优化：异步并发扫描，限制并发数避免过载
-        from gugu.config import get_config as _get_config
-
-        max_concurrency = getattr(_get_config().execution, "scan_concurrency", 10)
-        semaphore = asyncio.Semaphore(max_concurrency)
-
-        # 批量预取所有股票的历史数据（使用并发限制，避免串行等待）
-        # 原实现为串行 for 循环，N 只股票需 N 次串行 I/O
-        # 优化为 asyncio.gather 并发预取，大幅缩短预取时间
-        if scan_list and len(scan_list) > 5:
-            logger.info(f"批量预取 {len(scan_list)} 只股票历史数据（并发 {max_concurrency}）...")
-            batch_history = {}
-
-            async def _prefetch_one(sym: str) -> tuple[str, Any] | None:
-                try:
-                    # P0 修复：days=120（≈84交易日）确保覆盖 StageDetector/TrailingStop 窗口
-                    df = await self._dm.fetch_stock_history(sym, days=120)
-                    if df is not None and not df.empty:
-                        return sym, df
-                except Exception as e:
-                    logger.warning(f"获取 {sym} 历史数据失败，跳过: {e}")
-                return None
-
-            # 使用 semaphore 限制并发数
-            async def _prefetch_with_sem(sym: str) -> tuple[str, Any] | None:
-                async with semaphore:
-                    return await _prefetch_one(sym)
-
-            prefetch_tasks = [_prefetch_with_sem(sym) for sym in scan_list]
-            prefetch_results = await asyncio.gather(*prefetch_tasks)
-            for r in prefetch_results:
-                if r is not None:
-                    sym, df = r
-                    batch_history[sym] = df
-            logger.info(f"批量预取完成: {len(batch_history)}/{len(scan_list)}")
-        else:
-            batch_history = {}
-
-        async def _scan_single(symbol: str) -> dict[str, Any] | None:
-            """扫描单只股票（供并发调用）。"""
-            async with semaphore:
-                try:
-                    # 优先使用预取数据
-                    df = batch_history.get(symbol)
-                    if df is None:
-                        # P0 修复：同步 batch_history 的 days=120，保证 StageDetector 窗口充足
-                        df = await self._dm.fetch_stock_history(symbol, days=120)
-                    if df is None or df.empty:
-                        return None
-
-                    meta = await self._dm.fetch_stock_meta(symbol)
-                    portfolio = self._broker.get_portfolio()
-                    account = self._broker.get_account()
-
-                    signal = await self._pipeline.process(
-                        symbol=symbol,
-                        df=df,
-                        meta=meta,
-                        budget=budget,
-                        rt_all=rt_all,
-                        watchlist=self._watchlist,
-                        portfolio=portfolio,
-                        account=account,
-                        regime=regime["regime"],
-                    )
-                    if signal is None:
-                        return None
-
-                    # 市场 regime 覆盖
-                    signal["market_context"]["regime"] = regime["regime"]
-                    # 注入原始 df 数据，供 _process_signal 中的 ATR 自适应移动止损使用
-                    signal["_df"] = df
-
-                    # L3 市场状态仓位修正信息记录
-                    if (
-                        signal["direction"] == "buy"
-                        and not signal.get("wisdom_filtered")
-                        and regime.get("sell_signal_required")
-                    ):
-                        logger.info(
-                            f"{symbol} 市场状态 {regime['regime']} 建议减仓，"
-                            f"仓位上限已由 budget 限制为 {signal['suggested_position_ratio']:.2%}"
-                        )
-
-                    return signal
-                except Exception as e:
-                    logger.error(f"扫描 {symbol} 失败: {e}")
-                    return None
-
-        # 并发执行所有扫描任务
-        results: list[dict[str, Any] | None] = []
-        if scan_list:
-            tasks = [_scan_single(sym) for sym in scan_list]
-            results = await asyncio.gather(*tasks)
-            signals = [s for s in results if s is not None]
-
-        # 收集被过滤的信号摘要（用于收盘推送，解决沉默拒绝问题）
-        self._collect_filtered_signals(results, scan_list)
-
-        return signals
-
-    def _collect_filtered_signals(
-        self,
-        results: list[dict[str, Any] | None],
-        scan_list: list[str],
-    ) -> None:
-        """收集被过滤的信号摘要，存入实例供收盘报告使用。
-
-        解决"沉默拒绝"问题：用户不知道哪些股票触发了信号但因过滤被拒。
-        """
-        filtered: list[dict[str, Any]] = []
-        for r in results:
-            if r is None:
-                continue
-            if r.get("wisdom_filtered"):
-                filtered.append(
-                    {
-                        "symbol": r.get("symbol", ""),
-                        "name": r.get("name", ""),
-                        "direction": r.get("direction", ""),
-                        "strategy": r.get("strategy", ""),
-                        "filter_reason": r.get("filter_reason", "未知原因"),
-                        "confidence": r.get("confidence", 0),
-                        "price": r.get("price", 0),
-                    }
-                )
-        self._filtered_signals_today = filtered
-        if filtered:
-            logger.info(
-                f"今日被过滤信号: {len(filtered)} 条 — "
-                + ", ".join(f"{s['symbol']}({s['filter_reason'][:20]})" for s in filtered[:5])
-            )
-
-    def _load_notified_signals(self) -> dict[str, str]:
-        """从文件加载已通知信号记录（持久化去重）。"""
-        try:
-            if self._notified_signals_file.exists():
-                with open(self._notified_signals_file, encoding="utf-8") as f:
-                    data = json.load(f)
-                # P0 修复：原仅保留当日记录 → 改为保留近 7 天
-                # 原因：A股周一信号周二才推送时，周一的去重记录已被清理，
-                # 会导致同一信号重复推送（用户已反馈"信号重复"问题）
-                # 7 天窗口覆盖跨周末的持仓信号场景，且不会无限增长
-                from datetime import date as _date
-                from datetime import timedelta as _timedelta
-
-                today = _date.today()
-                cutoff_date = (today - _timedelta(days=7)).isoformat()
-                # P0 修复：清理旧格式 key（含 strategy_key 后缀的 3 段下划线格式）
-                # 旧格式如 "600519_sell_money_flow_follow" 会导致新代码用
-                # "{symbol}_{direction}" 查不到记录，去重失效
-                cleaned = {k: v for k, v in data.items() if v >= cutoff_date and k.count("_") <= 1}
-                if len(cleaned) != len(data):
-                    logger.info(f"清理过期/旧格式去重 key: {len(data)} → {len(cleaned)} 条")
-                return cleaned
-        except Exception as e:
-            logger.warning(f"加载已通知信号记录失败: {e}")
-        return {}
-
-    def _save_notified_signals(self) -> None:
-        """保存已通知信号记录到文件（P0 修复：原子写入）。"""
-        try:
-            from datetime import date as _date
-            from datetime import timedelta as _timedelta
-
-            # P1-4 修复：保存前清理过期记录（超过7天），防止文件无限增长
-            today = _date.today()
-            cutoff_date = (today - _timedelta(days=7)).isoformat()
-            self._notified_signals = {
-                k: v
-                for k, v in self._notified_signals.items()
-                if v >= cutoff_date and k.count("_") <= 1
-            }
-            from gugu.utils.atomic import atomic_write_json
-
-            atomic_write_json(
-                self._notified_signals_file,
-                self._notified_signals,
-                ensure_ascii=False,
-            )
-        except Exception as e:
-            logger.warning(f"保存已通知信号记录失败: {e}")
-
-    def _clear_today_notified_signals(self) -> None:
-        """清除当日的信号去重记录，使下一轮扫描能重新触发信号并推送。
-
-        用于 reset_halt 后补发熔断期间错过的信号。
-        不清除非当日的记录，避免跨日重复。
-        """
-        today_str = date.today().isoformat()
-        keys_to_remove = [k for k, v in self._notified_signals.items() if v == today_str]
-        for k in keys_to_remove:
-            del self._notified_signals[k]
-        if keys_to_remove:
-            logger.info(f"已清除 {len(keys_to_remove)} 条当日信号去重记录，补发熔断期间信号")
-            self._save_notified_signals()
-
-    def _mark_notified(self, signal: dict[str, Any]) -> None:
-        """记录信号已通知，防止多轮扫描重复发送。"""
-        symbol = signal["symbol"]
-        direction = signal["direction"]
-        # P0 修复：去重键去掉 strategy_key — 同股同方向当日只推一次
-        # 原逻辑含 strategy_key，导致同股同方向但不同策略的信号不被去重
-        dedup_key = f"{symbol}_{direction}"
-        self._notified_signals[dedup_key] = date.today().isoformat()
-        # 持久化到文件
-        self._save_notified_signals()
-
-    async def _process_signal(self, signal: dict[str, Any]) -> None:
-        """处理单个信号：signal_only 模式只通知不下单，paper/live 模式走风控+下单+通知。"""
-        symbol = signal["symbol"]
-        direction = signal["direction"]
-        _price = signal.get("price", 0)
-
-        # 信号去重：同股同方向当日已通知的信号不重复发送（防止多轮扫描重复推送）
-        if not hasattr(self, "_notified_signals"):
-            self._notified_signals = {}
-        # P0 修复：去重键去掉 strategy_key — 同股同方向当日只推一次
-        dedup_key = f"{symbol}_{direction}"
-        today_str = date.today().isoformat()
-        if self._notified_signals.get(dedup_key) == today_str:
-            logger.info(f"{symbol} {direction} 信号已通知过，跳过重复发送")
-            return
-
-        # signal_only 模式：只发信号通知，不下单（监控验证用）
-        if self._exec_mode == "signal_only":
-            logger.info(f"{symbol} {direction} 信号（signal_only 模式，仅通知不下单）")
-            # 前置硬校验：避免脏数据进入通知和历史记录
-            try:
-                sig_price = (
-                    float(signal.get("price", 0)) if signal.get("price") is not None else 0.0
-                )
-            except (TypeError, ValueError):
-                sig_price = 0.0
-            sig_confidence = signal.get("confidence")
-            sig_strategies = signal.get("strategies", [])
-            if sig_price <= 1.0:
-                logger.error(
-                    f"{symbol} signal_only 模式价格异常 price={sig_price}，拒绝通知并跳过历史记录"
-                )
-                return
-            if sig_confidence is None or (
-                isinstance(sig_confidence, (int, float)) and sig_confidence <= 0
-            ):
-                logger.error(
-                    f"{symbol} signal_only 模式置信度异常 confidence={sig_confidence}，拒绝通知并跳过历史记录"
-                )
-                return
-            if not sig_strategies or (
-                isinstance(sig_strategies, list) and len(sig_strategies) == 0
-            ):
-                logger.error(f"{symbol} signal_only 模式策略为空，拒绝通知并跳过历史记录")
-                return
-
-            # 记录信号历史（不下单，order_result=None）
-            try:
-                record_signal_history(signal, None, None)
-            except Exception as e:
-                logger.warning(f"记录信号历史失败: {e}")
-            self._inject_performance_summary(signal)
-            notify_ok = await self._notifier.notify_signal(signal)
-            if notify_ok:
-                self._mark_notified(signal)
-            else:
-                logger.error(f"{symbol} 信号通知失败，请检查飞书配置")
-            return
-
-        # 入场过滤：wisdom 判定低置信度，仅通知不下单
-        if signal.get("wisdom_filtered"):
-            logger.info(f"{symbol} 信号被 wisdom 入场过滤，仅通知不下单")
-            # P1-1 修复：被 wisdom 过滤的信号也记录历史，确保绩效分析无盲区
-            try:
-                record_signal_history(signal, None, None)
-            except Exception as e:
-                logger.warning(f"记录 wisdom 过滤信号历史失败: {e}")
-            notify_ok = await self._notifier.notify_signal(signal)
-            if notify_ok:
-                self._mark_notified(signal)
-            # P1-o 修复：统一通知失败处理，与下单后通知逻辑一致
-            else:
-                logger.error(f"{symbol} wisdom 过滤信号通知失败，请检查飞书配置与网络")
-            return
-
-        # paper/live 模式：委托给 OrderManager 执行下单全流程
-        result_dict = await self._order_manager.execute(
-            signal=signal,
-            broker=self._broker,
-            risk=self._risk,
-            notifier=self._notifier,
-            event_engine=self._event_engine,
-            data_mgr=self._dm,
-        )
-
-        # 通知成功后标记去重（TradingEngine 管理去重状态）
-        if result_dict and result_dict.get("notify_ok"):
-            self._mark_notified(signal)
-
-        return
+            logger.error("更新现价失败: {}", e)
 
     async def _check_stop_loss(self) -> None:
-        """遍历持仓，若现价触及止损价则执行卖出。
-
-        委托给 StopLossManager 执行完整的止损流程（包括移动止损、固定止损、止盈减仓）。
-        """
+        """遍历持仓，若现价触及止损价则执行卖出。"""
         await self._stop_loss_manager.execute(
             broker=self._broker,
             risk=self._risk,
@@ -846,7 +496,7 @@ class TradingEngine:
                 }
             )
             if not notify_alert_ok:
-                logger.error(f"日亏预警（{loss_pct:.2%}）通知失败")
+                logger.error("日亏预警（{:.2%}）通知失败", loss_pct)
         elif risk_result.action == RiskAction.HALT:
             self._event_engine.put(EVENT_DAILY_LOSS_HALT, {"loss_pct": loss_pct})
             notify_alert_ok = await self._notifier.notify_risk_alert(
@@ -857,11 +507,10 @@ class TradingEngine:
                 }
             )
             if not notify_alert_ok:
-                logger.error(f"日亏熔断（{loss_pct:.2%}）通知失败")
+                logger.error("日亏熔断（{:.2%}）通知失败", loss_pct)
 
     async def send_daily_report(self, period: str) -> None:
         """发送信号汇总报告。委托给 DailyReportManager。"""
-        # 收盘时传递当日被过滤信号摘要（解决沉默拒绝问题）
         filtered = self._filtered_signals_today if period == "close" else []
         await self._report_manager.send_report(
             period=period,
@@ -876,217 +525,30 @@ class TradingEngine:
         return DailyReportManager._load_today_signals()
 
     async def shutdown(self) -> None:
-        """关闭引擎资源（HTTP client 等）。"""
+        """关闭引擎资源。"""
         await self._notifier.close()
         self._write_heartbeat("shutdown")
 
     def reset_halt(self) -> None:
-        """手动解除 L2 熔断（需人工确认后执行）。
-
-        铁律：仅清除 _halted 标志，不重置日初净值，当日亏损继续累计。
-        避免盘中熔断 reset 后"掩盖"当日已发生的亏损。
-        若需跨日重置，应在新交易日由 run_daily_cycle 自动调用 _risk.reset()。
-
-        v0.5.4 增强：清除当日信号去重记录，使下一轮 run_daily_cycle
-        能重新触发熔断期间错过的信号并推送到飞书。
-        """
+        """手动解除 L2 熔断。"""
         self._risk.clear_halt_only()
-        # 清除当日信号去重记录，让下一轮 run_daily_cycle 重新扫描并推送信号
         self._clear_today_notified_signals()
         logger.warning(
             "L2 熔断状态已手动解除（clear_halt_only），已清除当日去重记录，"
             "下一轮扫描将补发熔断期间错过的信号"
         )
 
-    def _on_risk_alert(self, event: dict[str, Any]) -> None:
-        """风险事件处理器。"""
-        data = event.get("data", {})
-        logger.warning(f"风险事件: level={data.get('level')}, message={data.get('message', '')}")
-
-    def _on_stop_loss_triggered(self, event: dict[str, Any]) -> None:
-        """止损触发事件处理器。"""
-        data = event.get("data", {})
-        logger.warning(
-            f"止损触发事件: symbol={data.get('symbol')}, "
-            f"price={data.get('price')}, quantity={data.get('quantity')}"
-        )
-
-    def _on_order_filled(self, event: dict[str, Any]) -> None:
-        """订单成交事件处理器。"""
-        data = event.get("data", {})
-        logger.info(
-            f"订单成交: {data.get('symbol')} "
-            f"{data.get('direction')} {data.get('quantity')}@{data.get('price')}"
-        )
-
-    @staticmethod
-    def _rotate_jsonl(path: Path, max_lines: int = 5000) -> None:
-        """JSONL 文件行数超过 max_lines 时截断，保留最新 max_lines//2 行。"""
-        try:
-            if path.exists():
-                with path.open("r", encoding="utf-8") as f:
-                    lines = f.readlines()
-                if len(lines) > max_lines:
-                    keep = lines[-max_lines // 2 :]
-                    with path.open("w", encoding="utf-8") as f:
-                        f.writelines(keep)
-                    logger.info(f"历史文件轮转: {path.name} {len(lines)}→{len(keep)} 行")
-        except Exception as e:
-            logger.warning(f"历史文件轮转失败: {e}")
-
-    def _write_heartbeat(self, status: str) -> None:
-        """写入心跳文件，便于外部监控。
-
-        OP-05 修复：同时追加到历史文件 heartbeat_history.jsonl，
-        每行一个 JSON，便于回溯崩溃时间点与历史状态。
-        """
-        try:
-            hb_dir = PROJECT_ROOT / "data"
-            hb_dir.mkdir(exist_ok=True)
-            path = hb_dir / "heartbeat.json"
-            history_path = hb_dir / "heartbeat_history.jsonl"
-            self._rotate_jsonl(history_path)
-            account = self._broker.get_account()
-            payload = {
-                "last_cycle_at": pd.Timestamp.now().isoformat(),
-                "status": status,
-                "halted": self._risk.is_halted,
-                "total_value": account.total_value,
-                "cash": account.cash,
-                "positions_count": len(account.positions),
-            }
-            # P1-5 修复：原 path.write_text 在写入中途崩溃会导致文件截断
-            # 改用 atomic_write_text（同目录 tmp → fsync → os.replace 原子替换）
-            from gugu.utils.atomic import atomic_write_text
-
-            atomic_write_text(path, json.dumps(payload, ensure_ascii=False))
-            # 历史记录追加写入（每行一个 JSON，append 模式天然原子）
-            with history_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-        except Exception as e:
-            logger.warning(f"写入心跳文件失败: {e}")
-
-    async def _check_holdings_sell_signals(self, portfolio: dict) -> list[dict]:
-        """收盘后检查持仓股卖出信号。
-
-        遍历所有持仓股，运行策略信号扫描，若 sell > buy 达到阈值则生成告警。
-        迁移自 MingCe _check_holdings_sell_signals。
-
-        Args:
-            portfolio: {symbol: Position} 持仓字典。
-
-        Returns:
-            卖出信号明确的股票列表，每项含 name, symbol, price, profit_pct, sell_count 等。
-        """
-        if not portfolio:
-            return []
-
-        symbols = list(portfolio.keys())
-        logger.info(f"持仓卖出信号检查: {len(symbols)} 只持仓股")
-
-        # 用现有信号管道扫描所有持仓股
-        signals = await self._scan_signals(extra_symbols=symbols)
-        if not signals:
-            return []
-
-        # 获取最新行情用于计算盈亏
-
-        sell_alerts = []
-        for sig in signals:
-            sym = sig.get("symbol", "")
-            if sym not in portfolio:
-                continue
-            direction = str(sig.get("direction", "")).lower()
-            if direction != "sell":
-                continue
-            pos = portfolio[sym]
-            if not isinstance(pos, dict) and not hasattr(pos, "avg_cost"):
-                continue
-            cost = float(
-                pos.get("avg_cost", 0) if isinstance(pos, dict) else getattr(pos, "avg_cost", 0)
-            )
-            price = sig.get("price", 0) or 0
-            profit_pct = ((price - cost) / cost * 100) if cost and price else 0
-
-            signal_strategies = (
-                sig.get("strategies", [])
-                if isinstance(sig.get("strategies"), list)
-                else [sig.get("strategy", "?")]
-            )
-            sell_alerts.append(
-                {
-                    "name": sig.get("name", sym),
-                    "symbol": sym,
-                    "price": price,
-                    "profit_pct": round(profit_pct, 2),
-                    "sell_count": len(signal_strategies),
-                    "buy_count": 1 if sig.get("buy_signals") else 0,
-                    "sell_signals": [
-                        {"strategy_name": s, "signal_strength": sig.get("confidence", 0.5)}
-                        for s in signal_strategies
-                    ],
-                }
-            )
-
-        if sell_alerts:
-            logger.info(f"持仓卖出信号: {len(sell_alerts)} 只股票需关注")
-        return sell_alerts
-
-    @staticmethod
-    def _inject_performance_summary(signal: dict[str, Any]) -> None:
-        """注入同类信号历史表现摘要到信号 dict 中。
-
-        通过 SignalTracker 查询最近 30 天的同策略买入信号表现，
-        将胜率/平均收益等数据写入 signal["performance_summary"]，
-        供 formatter 在卡片中展示。
-        """
-        try:
-            tracker = SignalTracker()
-            records = tracker.load_history(days=30)
-            if len(records) < 3:
-                return
-
-            strategies = set()
-            sig_strategies = signal.get("strategies", [])
-            if isinstance(sig_strategies, str):
-                strategies.add(sig_strategies)
-            elif isinstance(sig_strategies, list):
-                strategies.update(sig_strategies)
-            if not strategies:
-                return
-
-            buy_records = [r for r in records if r.get("direction") == "buy"]
-            relevant = [
-                r
-                for r in buy_records
-                if set(
-                    r.get("strategies", [])
-                    if isinstance(r.get("strategies"), list)
-                    else [r.get("strategy", "")]
-                )
-                & strategies
-            ]
-            if len(relevant) < 3:
-                return
-
-            valid = [r for r in relevant if r.get("return_5d") is not None]
-            if len(valid) < 3:
-                return
-            wins = [r for r in valid if r["return_5d"] > 0]
-            returns = [r["return_5d"] for r in valid]
-            signal["performance_summary"] = {
-                "sample_count": len(valid),
-                "win_rate": round(len(wins) / len(valid), 3),
-                "avg_return_5d": round(sum(returns) / len(valid), 4),
-                "best_return": round(max(returns), 4),
-                "worst_return": round(min(returns), 4),
-                "strategies": list(strategies),
-            }
-        except Exception as e:
-            logger.debug(f"注入信号绩效摘要失败: {e}")
-
 
 def run_engine() -> None:
     """运行交易引擎（同步入口）。"""
     engine = TradingEngine()
     asyncio.run(engine.run_daily_cycle())
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    run_engine()
+
+
+# Backward compatibility re-export for conftest.py monkeypatch
+from gugu.engine.signal_pipeline import record_signal_history  # noqa: E402,F401

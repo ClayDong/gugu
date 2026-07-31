@@ -1,6 +1,7 @@
-"""行业资金强度+动量确认策略单元测试（个股适配版 v1.1）。
+"""行业资金强度+动量确认策略单元测试（个股适配版 v2.0）。
 
 覆盖四层架构：资金监控层、动量确认层、入场触发层、退出风控层。
+v2.0 重构：状态机持仓追踪、连续评分系统、简化入场条件。
 """
 
 from __future__ import annotations
@@ -36,15 +37,17 @@ def _make_trending_df(n: int = 120, trend: str = "up") -> pd.DataFrame:
     volume = np.random.uniform(800000, 1500000, n)
     amount = volume * close
 
-    return pd.DataFrame({
-        "date": dates,
-        "open": np.round(open_, 2),
-        "high": np.round(high, 2),
-        "low": np.round(low, 2),
-        "close": close,
-        "volume": volume.astype(int),
-        "amount": amount,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": np.round(open_, 2),
+            "high": np.round(high, 2),
+            "low": np.round(low, 2),
+            "close": close,
+            "volume": volume.astype(int),
+            "amount": amount,
+        }
+    )
 
 
 def _make_capital_inflow_df(n: int = 120) -> pd.DataFrame:
@@ -60,22 +63,75 @@ def _make_capital_inflow_df(n: int = 120) -> pd.DataFrame:
 
     base_vol = 800000
     # 前期平稳，后期放量（确保量比 > 1.2）
-    vol_multiplier = np.concatenate([
-        np.ones(40) * 1.0,
-        np.linspace(1.0, 2.5, n - 40)
-    ])
+    vol_multiplier = np.concatenate([np.ones(40) * 1.0, np.linspace(1.0, 2.5, n - 40)])
     volume = (base_vol * vol_multiplier + np.random.normal(0, 50000, n)).astype(int)
     amount = volume * close
 
-    return pd.DataFrame({
-        "date": dates,
-        "open": np.round(open_, 2),
-        "high": np.round(high, 2),
-        "low": np.round(low, 2),
-        "close": close,
-        "volume": volume,
-        "amount": amount,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": np.round(open_, 2),
+            "high": np.round(high, 2),
+            "low": np.round(low, 2),
+            "close": close,
+            "volume": volume,
+            "amount": amount,
+        }
+    )
+
+
+def _make_golden_cross_df(n: int = 120) -> pd.DataFrame:
+    """生成包含MA5/MA20金叉的DataFrame（v2.0入场条件测试用）。
+
+    设计：
+    - 前35天：价格稳定在10元附近，MA5<MA20（空头排列），低量500000
+    - 第35-55天：价格从10急涨到15，MA5上穿MA20（金叉），高量3000000
+    - 第55天后：价格在15元附近震荡上行，MA5>MA20（多头排列），持续高量
+
+    vol_ratio计算使用shift(1)的20日均量，所以：
+    - 前35天低量 → 20日均量保持在~500000
+    - 第35天起突然放量3000000 → vol_ratio ≈ 3000000/500000 ≈ 6.0 >> 1.2
+    """
+    np.random.seed(42)
+    dates = pd.date_range("2024-01-01", periods=n, freq="B")
+
+    close = np.zeros(n)
+    for i in range(n):
+        if i < 35:
+            close[i] = 10 + np.random.normal(0, 0.1)
+        elif i < 55:
+            progress = (i - 35) / 20
+            close[i] = 10 + progress * 5 + np.random.normal(0, 0.15)
+        else:
+            base = 15 + (i - 55) * 0.015
+            close[i] = base + np.random.normal(0, 0.12)
+
+    close = np.round(close, 2)
+    open_ = close + np.random.normal(0, 0.08, n)
+    high = np.maximum(open_, close) + np.abs(np.random.normal(0, 0.12, n))
+    low = np.minimum(open_, close) - np.abs(np.random.normal(0, 0.12, n))
+
+    volume = np.zeros(n, dtype=int)
+    for i in range(n):
+        if i < 35:
+            volume[i] = int(500000 + np.random.normal(0, 20000))
+        else:
+            volume[i] = int(3000000 + np.random.normal(0, 100000))
+    volume = np.clip(volume, 100000, None)
+
+    amount = volume * close
+
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": np.round(open_, 2),
+            "high": np.round(high, 2),
+            "low": np.round(low, 2),
+            "close": close,
+            "volume": volume,
+            "amount": amount,
+        }
+    )
 
 
 def _make_overheat_df(n: int = 120) -> pd.DataFrame:
@@ -83,11 +139,13 @@ def _make_overheat_df(n: int = 120) -> pd.DataFrame:
     np.random.seed(42)
     dates = pd.date_range("2024-01-01", periods=n, freq="B")
 
-    base = np.concatenate([
-        np.linspace(10, 14, 40),
-        np.linspace(14, 16, 30),
-        np.linspace(16, 15, 50),
-    ])
+    base = np.concatenate(
+        [
+            np.linspace(10, 14, 40),
+            np.linspace(14, 16, 30),
+            np.linspace(16, 15, 50),
+        ]
+    )
     close = np.round(base + np.random.normal(0, 0.1, n), 2)
     open_ = close + np.random.normal(0, 0.05, n)
     high = np.maximum(open_, close) + np.abs(np.random.normal(0, 0.1, n))
@@ -95,15 +153,17 @@ def _make_overheat_df(n: int = 120) -> pd.DataFrame:
     volume = np.random.uniform(1000000, 2000000, n).astype(int)
     amount = volume * close
 
-    return pd.DataFrame({
-        "date": dates,
-        "open": np.round(open_, 2),
-        "high": np.round(high, 2),
-        "low": np.round(low, 2),
-        "close": close,
-        "volume": volume,
-        "amount": amount,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": np.round(open_, 2),
+            "high": np.round(high, 2),
+            "low": np.round(low, 2),
+            "close": close,
+            "volume": volume,
+            "amount": amount,
+        }
+    )
 
 
 def _make_strong_uptrend_df(n: int = 120) -> pd.DataFrame:
@@ -119,15 +179,17 @@ def _make_strong_uptrend_df(n: int = 120) -> pd.DataFrame:
     volume = np.random.uniform(1200000, 2000000, n).astype(int)
     amount = volume * close
 
-    return pd.DataFrame({
-        "date": dates,
-        "open": np.round(open_, 2),
-        "high": np.round(high, 2),
-        "low": np.round(low, 2),
-        "close": close,
-        "volume": volume,
-        "amount": amount,
-    })
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": np.round(open_, 2),
+            "high": np.round(high, 2),
+            "low": np.round(low, 2),
+            "close": close,
+            "volume": volume,
+            "amount": amount,
+        }
+    )
 
 
 # ============================================================
@@ -199,15 +261,6 @@ class TestCapitalMonitoringLayer:
         assert "vol_ratio" in result.columns
         assert result["vol_ratio"].notna().sum() > 0
 
-    def test_amount_ratio_computed(self) -> None:
-        """成交额占比指标正确计算。"""
-        strategy = IndustryCapitalMomentumStrategy()
-        df = _make_capital_inflow_df()
-        result = strategy.generate_signals(df, is_backtest=True)
-
-        assert "amount_ratio" in result.columns
-        assert result["amount_ratio"].notna().sum() > 0
-
     def test_ma5_slope_computed(self) -> None:
         """MA5斜率正确计算。"""
         strategy = IndustryCapitalMomentumStrategy()
@@ -232,15 +285,6 @@ class TestCapitalMonitoringLayer:
         result = strategy.generate_signals(df, is_backtest=True)
 
         assert "return_20d" in result.columns
-
-    def test_stock_up_computed(self) -> None:
-        """个股涨跌标记正确计算。"""
-        strategy = IndustryCapitalMomentumStrategy()
-        df = _make_capital_inflow_df()
-        result = strategy.generate_signals(df, is_backtest=True)
-
-        assert "stock_up" in result.columns
-        assert set(result["stock_up"].dropna().unique()).issubset({0.0, 1.0})
 
 
 # ============================================================
@@ -299,13 +343,18 @@ class TestEntryTriggerLayer:
         assert result["signal"].isin([-1, 0, 1]).all()
 
     def test_uptrend_generates_buy_signal(self) -> None:
-        """上升趋势+资金流入应生成买入信号。"""
+        """上升趋势+资金流入应生成买入信号（v2.0状态机版本）。"""
         strategy = IndustryCapitalMomentumStrategy()
-        df = _make_capital_inflow_df(n=200)
+        df = _make_golden_cross_df(n=120)
         result = strategy.generate_signals(df, is_backtest=True)
 
         buy_signals = (result["signal"] == 1).sum()
-        assert buy_signals > 0, "上升趋势+放量应产生买入信号"
+        assert buy_signals > 0, (
+            f"上升趋势+放量应产生买入信号，实际: {buy_signals}。"
+            f"MA5>MA20天数={((result['ma5'] > result['ma20']).sum())}, "
+            f"RSI在40-70天数={((result['rsi'] >= 40) & (result['rsi'] <= 70)).sum()}, "
+            f"量比范围={result['vol_ratio'].min():.2f}-{result['vol_ratio'].max():.2f}"
+        )
 
     def test_downtrend_no_buy_signal(self) -> None:
         """下降趋势不应生成买入信号。"""
@@ -330,10 +379,17 @@ class TestEntryTriggerLayer:
         volume = np.random.uniform(800000, 1500000, n)
         amount = volume * close
 
-        df = pd.DataFrame({
-            "date": dates, "open": np.round(open_, 2), "high": np.round(high, 2),
-            "low": np.round(low, 2), "close": close, "volume": volume.astype(int), "amount": amount
-        })
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": np.round(open_, 2),
+                "high": np.round(high, 2),
+                "low": np.round(low, 2),
+                "close": close,
+                "volume": volume.astype(int),
+                "amount": amount,
+            }
+        )
 
         result = strategy.generate_signals(df, is_backtest=True)
 
@@ -354,10 +410,17 @@ class TestEntryTriggerLayer:
         volume = np.random.uniform(1000000, 2000000, n)
         amount = volume * close
 
-        df = pd.DataFrame({
-            "date": dates, "open": np.round(open_, 2), "high": np.round(high, 2),
-            "low": np.round(low, 2), "close": close, "volume": volume.astype(int), "amount": amount
-        })
+        df = pd.DataFrame(
+            {
+                "date": dates,
+                "open": np.round(open_, 2),
+                "high": np.round(high, 2),
+                "low": np.round(low, 2),
+                "close": close,
+                "volume": volume.astype(int),
+                "amount": amount,
+            }
+        )
 
         result = strategy.generate_signals(df, is_backtest=True)
 
@@ -388,7 +451,9 @@ class TestExitRiskControlLayer:
         strategy = IndustryCapitalMomentumStrategy()
         df = _make_trending_df(trend="up", n=80)
         tail = _make_trending_df(trend="down", n=40)
-        tail["date"] = pd.date_range(df["date"].iloc[-1] + pd.Timedelta(days=1), periods=40, freq="B")
+        tail["date"] = pd.date_range(
+            df["date"].iloc[-1] + pd.Timedelta(days=1), periods=40, freq="B"
+        )
         combined = pd.concat([df, tail], ignore_index=True)
 
         result = strategy.generate_signals(combined, is_backtest=True)

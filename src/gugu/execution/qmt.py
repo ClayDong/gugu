@@ -61,7 +61,7 @@ class QmtBroker(BaseBroker):
             logger.warning("xtquant 未安装，无法使用 QMT 实盘")
             return False
         except Exception as e:
-            logger.error(f"QMT 连接失败: {e}")
+            logger.error("QMT 连接失败: {}", e)
             return False
 
     def _health_check(self) -> bool:
@@ -135,7 +135,7 @@ class QmtBroker(BaseBroker):
         Returns:
             是否成功撤销
         """
-        logger.warning(f"QMT 撤单未实现（阶段四）: order_id={order_id}")
+        logger.warning("QMT 撤单未实现（阶段四）: order_id={}", order_id)
         return False
 
     def cancel_all(self, direction: str | None = None) -> int:
@@ -156,7 +156,7 @@ class QmtBroker(BaseBroker):
         Returns:
             订单状态字典，含 status/filled_qty/avg_price 等字段
         """
-        logger.warning(f"QMT 订单状态查询未实现（阶段四）: order_id={order_id}")
+        logger.warning("QMT 订单状态查询未实现（阶段四）: order_id={}", order_id)
         return None
 
     def sync_positions(self) -> None:
@@ -192,7 +192,6 @@ class QmtBroker(BaseBroker):
 
     def update_price(self, symbol: str, price: float) -> None:
         """实盘自动更新，无需手动调用。"""
-        pass
 
     def emergency_close_all(self) -> None:
         """一键平仓应急脚本（阶段四实现）。

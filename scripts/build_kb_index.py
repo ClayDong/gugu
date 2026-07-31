@@ -5,6 +5,7 @@
     python scripts/build_kb_index.py --force     # 强制重建
     python scripts/build_kb_index.py --stats     # 查看索引统计
 """
+
 from __future__ import annotations
 
 import argparse

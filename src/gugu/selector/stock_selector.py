@@ -68,7 +68,7 @@ class StockSelector:
                 }
             )
         except Exception as e:
-            logger.warning(f"豹哥三要素过滤器初始化失败，跳过预筛: {e}")
+            logger.warning("豹哥三要素过滤器初始化失败，跳过预筛: {}", e)
             return None
 
     async def select(self) -> list[dict[str, Any]]:
@@ -140,7 +140,7 @@ class StockSelector:
                         prev_close,
                         direction=signal["direction"],
                     ):
-                        logger.info(f"选股：{symbol} 涨跌停，跳过")
+                        logger.info("选股：{} 涨跌停，跳过", symbol)
                         return None
 
                     return signal
@@ -188,7 +188,7 @@ class StockSelector:
         # 无论评分是否成功，都截断到 max_candidates
         signal_stocks = signal_stocks[: self._max_candidates]
 
-        logger.info(f"选股完成：{len(signal_stocks)} 只候选股")
+        logger.info("选股完成：{} 只候选股", len(signal_stocks))
         return signal_stocks
 
     @staticmethod

@@ -119,8 +119,20 @@ class KDJStrategy(Strategy):
         df["j"] = 3 * df["k"] - 2 * df["d"]
 
         df["signal"] = 0
+        # P1修复：添加下跌趋势过滤（与Bollinger/RSI一致）
+        if len(df) >= 60:
+            ma20 = df["close"].rolling(20).mean()
+            ma60 = df["close"].rolling(60).mean()
+            downtrend_filter = ma20 >= ma60  # MA20 < MA60 时不接飞刀
+        else:
+            downtrend_filter = pd.Series(True, index=df.index)
         # K 在超卖区金叉 D
-        golden = (df["k"] > df["d"]) & (df["k"].shift(1) <= df["d"].shift(1)) & (df["k"] < oversold)
+        golden = (
+            (df["k"] > df["d"])
+            & (df["k"].shift(1) <= df["d"].shift(1))
+            & (df["k"] < oversold)
+            & downtrend_filter
+        )
         df.loc[golden, "signal"] = 1
         # K 在超买区死叉 D
         death = (

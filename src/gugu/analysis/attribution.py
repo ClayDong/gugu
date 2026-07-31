@@ -56,11 +56,12 @@ class AttributionReport:
 
         # 整体绩效
         self.total_tracked: int = 0
-        self.win_rate: float = 0.0
+        self.forward_5d_signal_hit_rate: float = 0.0
         self.avg_return_5d: float = 0.0
+        self.closed_trade_win_rate: float = 0.0
+        self.realized_pnl: float = 0.0
         self.best_signal: dict[str, Any] | None = None
         self.worst_signal: dict[str, Any] | None = None
-        self.total_pnl: float = 0.0
 
         # 最近信号（用于日报）
         self.recent_signals: list[dict[str, Any]] = []
@@ -78,9 +79,10 @@ class AttributionReport:
             "by_wisdom_action": self.by_wisdom_action,
             "performance": {
                 "total_tracked": self.total_tracked,
-                "win_rate": round(self.win_rate, 4),
+                "forward_5d_signal_hit_rate": round(self.forward_5d_signal_hit_rate, 4),
                 "avg_return_5d": round(self.avg_return_5d, 4),
-                "total_pnl": round(self.total_pnl, 2),
+                "closed_trade_win_rate": round(self.closed_trade_win_rate, 4),
+                "realized_pnl": round(self.realized_pnl, 2),
             },
             "best_signal": self.best_signal,
             "worst_signal": self.worst_signal,
@@ -186,34 +188,39 @@ class AttributionAnalyzer:
         # 4. 按 Wisdom 决策归因
         report.by_wisdom_action = self._analyze_by_wisdom(records)
 
-        # 5. 绩效追踪（针对买入信号）
-        buy_signals = [r for r in executed if r.get("direction") == "buy"]
-        if buy_signals:
-            tracked = await self._track_signals(buy_signals)
-            valid = [t for t in tracked if t.get("return_5d") is not None]
-            report.total_tracked = len(valid)
-
-            if valid:
-                wins = [t for t in valid if t["return_5d"] > 0]
-                report.win_rate = len(wins) / len(valid)
-                report.avg_return_5d = sum(t["return_5d"] for t in valid) / len(valid)
-
-                # 最佳/最差信号
-                report.best_signal = max(valid, key=lambda t: t.get("return_5d", -999))
-                report.worst_signal = min(valid, key=lambda t: t.get("return_5d", 999))
-
-                # 总 PnL（基于 5 日收益和仓位）
-                for t in valid:
-                    suggested_ratio = t.get("suggested_position_ratio", 0.1) or 0.1
-                    report.total_pnl += t["return_5d"] * suggested_ratio
-
+        # 前瞻信号统计与闭仓交易统计严格分离。
+        buy_signals = [r for r in records if r.get("direction") == "buy"]
+        tracked = await self._track_signals(buy_signals) if buy_signals else []
+        valid = [t for t in tracked if t.get("return_5d") is not None]
+        report.total_tracked = len(valid)
+        if valid:
+            wins = [t for t in valid if t["return_5d"] > 0]
+            report.forward_5d_signal_hit_rate = len(wins) / len(valid)
+            report.avg_return_5d = sum(t["return_5d"] for t in valid) / len(valid)
+            report.best_signal = max(valid, key=lambda t: t.get("return_5d", -999))
+            report.worst_signal = min(valid, key=lambda t: t.get("return_5d", 999))
             report.recent_signals = valid[-10:] if len(valid) >= 10 else valid
-            # 补充 name
             for s in report.recent_signals:
                 sym = s.get("symbol", "")
                 name = s.get("name", "")
                 if not name or name == sym:
                     s["name"] = lookup_stock_name(sym) or sym
+
+        closed_trades = [r for r in records if r.get("outcome_status") == "closed"]
+        realized_pnls: list[float] = []
+        for trade in closed_trades:
+            pnl = trade.get("realized_pnl")
+            if pnl is None:
+                pnl = (trade.get("outcome_metrics") or {}).get("realized_pnl")
+            try:
+                realized_pnls.append(float(pnl))
+            except (TypeError, ValueError):
+                continue
+        if realized_pnls:
+            report.closed_trade_win_rate = sum(pnl > 0 for pnl in realized_pnls) / len(
+                realized_pnls
+            )
+            report.realized_pnl = sum(realized_pnls)
 
         return report
 
@@ -358,8 +365,18 @@ class AttributionAnalyzer:
         )
 
         return {
-            "buy": {"count": buy_count, "executed": buy_executed, "filtered": buy_filtered},
-            "sell": {"count": sell_count, "executed": sell_executed, "filtered": sell_filtered},
+            "buy": {
+                "count": buy_count,
+                "execution_success": buy_executed,
+                "executed": buy_executed,
+                "filtered": buy_filtered,
+            },
+            "sell": {
+                "count": sell_count,
+                "execution_success": sell_executed,
+                "executed": sell_executed,
+                "filtered": sell_filtered,
+            },
         }
 
     def _analyze_by_wisdom(self, records: list[dict]) -> list[dict[str, Any]]:
@@ -447,5 +464,5 @@ class AttributionAnalyzer:
 
             return result
         except Exception as e:
-            logger.debug(f"追踪 {symbol} 失败: {e}")
+            logger.debug("追踪 {} 失败: {}", symbol, e)
             return {**sig, "error": str(e)}

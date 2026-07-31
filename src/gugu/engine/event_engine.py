@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from gugu.utils.log import get_logger
@@ -21,6 +21,7 @@ from gugu.utils.log import get_logger
 logger = get_logger()
 
 HandlerType = Callable[[dict[str, Any]], None]
+AsyncHandlerType = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
 
 # ========== 事件类型常量 ==========
 
@@ -84,6 +85,7 @@ class EventEngine:
 
     def __init__(self) -> None:
         self._handlers: dict[str, list[HandlerType]] = defaultdict(list)
+        self._async_handlers: dict[str, list[AsyncHandlerType]] = defaultdict(list)
         self._active = True
 
     def register(self, event_type: str, handler: HandlerType) -> None:
@@ -94,7 +96,17 @@ class EventEngine:
             handler: 处理函数，签名为 handler(event: dict) -> None
         """
         self._handlers[event_type].append(handler)
-        logger.debug(f"事件处理器注册: {event_type} -> {handler.__name__}")
+        logger.debug("事件处理器注册: {} -> {}", event_type, handler.__name__)
+
+    def register_async(self, event_type: str, handler: AsyncHandlerType) -> None:
+        """注册异步事件处理器。
+
+        Args:
+            event_type: 事件类型
+            handler: 异步处理函数
+        """
+        self._async_handlers[event_type].append(handler)
+        logger.debug("异步事件处理器注册: {} -> {}", event_type, handler.__name__)
 
     def unregister(self, event_type: str, handler: HandlerType) -> None:
         """注销事件处理器。"""
@@ -102,14 +114,15 @@ class EventEngine:
             self._handlers[event_type].remove(handler)
 
     def put(self, event_type: str, data: dict[str, Any] | None = None) -> None:
-        """推送事件，同步触发所有注册的处理器。
+        """推送事件，同步触发所有注册的同步处理器。
 
         Args:
             event_type: 事件类型（建议使用 EVENT_* 常量）
             data: 事件数据
 
         Note:
-            处理器按注册顺序同步执行。单个处理器抛异常不影响其他处理器。
+            同步处理器按注册顺序执行。单个处理器抛异常不影响其他处理器。
+            异步处理器通过 put_async 执行。
         """
         if not self._active:
             return
@@ -118,7 +131,33 @@ class EventEngine:
             try:
                 handler(event)
             except Exception as e:
-                logger.error(f"事件处理异常 [{event_type}]: {e}")
+                logger.error("事件处理异常 [{}]: {}", event_type, e)
+
+    async def put_async(self, event_type: str, data: dict[str, Any] | None = None) -> None:
+        """推送事件，异步触发所有处理器（同步+异步）。
+
+        Args:
+            event_type: 事件类型
+            data: 事件数据
+
+        Note:
+            先同步处理器，再异步处理器。单个处理器抛异常不影响其他处理器。
+        """
+        if not self._active:
+            return
+        event = {"type": event_type, "data": data or {}}
+        # 同步处理器
+        for handler in self._handlers.get(event_type, []):
+            try:
+                handler(event)
+            except Exception as e:
+                logger.error("事件处理异常 [{}]: {}", event_type, e)
+        # 异步处理器
+        for handler in self._async_handlers.get(event_type, []):
+            try:
+                await handler(event)
+            except Exception as e:
+                logger.error("异步事件处理异常 [{}]: {}", event_type, e)
 
     def start(self) -> None:
         """启动事件引擎。"""

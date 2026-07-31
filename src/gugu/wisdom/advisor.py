@@ -14,6 +14,7 @@ LLM 决策优势：
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -24,70 +25,30 @@ import httpx
 from gugu.config import PROJECT_ROOT, env, get_config
 from gugu.models.signal import Signal
 from gugu.utils.log import get_logger
+from gugu.wisdom import perspective
 from gugu.wisdom.book_router import BookPerspectiveRouter
+from gugu.wisdom.fallback import (
+    FALLBACK_STOP_LOSS_PCT,
+    _compute_take_profit,
+    _max_single_position,
+    advise_fallback,
+    get_strategy_win_rate,
+)
 
 logger = get_logger()
-
-# ========== 硬编码 fallback 常量（LLM 不可用时使用） ==========
-# 来源：stock-position-sizing / stock-stop-loss-decision / stock-entry-decision
-
-FALLBACK_TRIAL_RATIO = 0.20  # 试仓比例 20%
-FALLBACK_ADD_RATIO = 0.40  # 加码比例 40%
-FALLBACK_STOP_LOSS_PCT = 0.08  # 默认止损比例 8%
-FALLBACK_ENTRY_MIN_CONFIDENCE = 0.6  # 最低入场置信度
-FALLBACK_TAKE_PROFIT_T1 = 0.10  # 第一止盈目标 +10%
-FALLBACK_TAKE_PROFIT_T2 = 0.20  # 第二止盈目标 +20%
 
 # ========== LLM 安全护栏 ==========
 LLM_MAX_TRIAL_RATIO = 0.15  # LLM 首次试仓硬上限 15%
 LLM_MIN_STOP_LOSS_PCT = 0.05  # LLM 止损最小幅度 5%
 LLM_MAX_STOP_LOSS_PCT = 0.10  # LLM 止损最大幅度 10%
 
+# ========== 决策对比日志 ==========
+# P1-6: 记录 LLM 决策 vs 硬编码 fallback 决策的对比日志
+WISDOM_COMPARISON_LOG = PROJECT_ROOT / "data" / "wisdom_comparison.jsonl"
+
 # ========== LLM 输出校验增强 ==========
-# 价格合理性: 拒绝价格偏离市场均价超过 N 倍标准差
 LLM_PRICE_DEVIATION_STD = 3.0
-# 仓位一致性: LLM 建议仓位与信号方向不一致时拒绝
-# 止损价位置: 止损价必须低于当前价 >= 2%（买入时）
 LLM_STOP_LOSS_MIN_DISTANCE = 0.02
-
-
-def _max_single_position() -> float:
-    """从配置读取单股最大仓位上限，与风控 L1 保持一致。"""
-    return get_config().risk.max_position_ratio
-
-
-def _compute_take_profit(entry_price: float, atr: float = 0) -> dict:
-    """计算止盈方案：第一目标 +10%、第二目标 +20%。
-
-    若有 ATR 数据，用 ATR 校准止盈幅度；
-    若无 ATR 则用固定百分比 fallback。
-
-    Returns:
-        {"target_1": float, "target_1_pct": float,
-         "target_2": float, "target_2_pct": float,
-         "reduce_at_target1": str, "note": str}
-    """
-    tp1_pct = FALLBACK_TAKE_PROFIT_T1
-    tp2_pct = FALLBACK_TAKE_PROFIT_T2
-
-    # ATR 校准：若 ATR/price > 3%，目标上调；若 < 1%，目标下调
-    if atr > 0 and entry_price > 0:
-        atr_ratio = atr / entry_price
-        if atr_ratio > 0.03:
-            tp1_pct = min(0.15, tp1_pct * 1.5)
-            tp2_pct = min(0.30, tp2_pct * 1.5)
-        elif atr_ratio < 0.01:
-            tp1_pct = max(0.05, tp1_pct * 0.5)
-            tp2_pct = max(0.10, tp2_pct * 0.5)
-
-    return {
-        "target_1": round(entry_price * (1 + tp1_pct), 2),
-        "target_1_pct": tp1_pct,
-        "target_2": round(entry_price * (1 + tp2_pct), 2),
-        "target_2_pct": tp2_pct,
-        "reduce_at_target1": "50%",
-        "note": f"止损 {FALLBACK_STOP_LOSS_PCT:.0%} / 止盈 {tp1_pct:.0%}-{tp2_pct:.0%}，盈亏比 1:{tp2_pct / FALLBACK_STOP_LOSS_PCT:.1f}",
-    }
 
 
 def _wisdom_dirs() -> list[Path]:
@@ -105,40 +66,12 @@ def _wisdom_dirs() -> list[Path]:
     return dirs
 
 
-# LLM 决策输出的 JSON Schema
-_DECISION_SCHEMA = {
+DECISION_SCHEMA = {
     "action": "buy|sell|hold|filter",
     "position_ratio": "0.0-1.0, 建议仓位占总资产比例",
     "stop_loss_price": "止损价（仅 buy 时必填）",
     "reason": "基于交易智慧的决策理由（1-2 句话）",
 }
-
-
-def _is_profitable_signal(signal_record: dict) -> bool:
-    """根据信号记录判断是否为盈利信号。
-
-    通过 order_result 中的成交价和成交量判断（简化版）：
-    若 signal_record 中有 order_success=True，并且信号方向为 'buy'，
-    在信号历史中查找后续卖出记录或根据 order_result 估算。
-
-    简化实现：基于信号的建议方向和是否被 wisdom_filtered 判断。
-    精确实现需要追踪每笔交易的实际平仓盈亏。
-
-    Args:
-        signal_record: 信号历史记录 dict
-
-    Returns:
-        是否盈利（简化版：buy 信号通常假设为盈利方向）
-    """
-    # 简化版：记录有 order_success=True 且 direction='buy' 的信号视为待验证的正向信号
-    # 实际胜率依赖 AttributionAnalyzer 的精确追踪
-    direction = signal_record.get("direction", "")
-    success = signal_record.get("order_success", False)
-    if not success:
-        return False
-    # 简化：buy 信号 + order_success 视为预期盈利
-    # TODO: 接入 AttributionAnalyzer 追踪实际平仓盈亏
-    return direction == "buy"
 
 
 class WisdomAdvisor:
@@ -150,11 +83,6 @@ class WisdomAdvisor:
     3. 调用 LLM 获取结构化决策
     4. 解析 LLM 输出并应用到信号
     5. LLM 失败时降级到硬编码规则
-
-    Async 支持：
-    - advise() 同步方法（向后兼容）
-    - advise_async() 异步方法（推荐，避免阻塞事件循环）
-    - _advise_llm_async() 使用 AsyncClient 调用 LLM
     """
 
     def __init__(self, book_router: BookPerspectiveRouter | None = None) -> None:
@@ -162,10 +90,6 @@ class WisdomAdvisor:
         self._skill_names: list[str] = get_config().wisdom.skill_names
         self._load_skills()
 
-        # 加载仓颉蒸馏的多视角书籍认知
-        # P0 修复：根据 enable_multi_perspective 开关决定是否启用多视角注入
-        # 原逻辑无条件创建 BookPerspectiveRouter，导致 settings.yaml 的
-        # enable_multi_perspective: false 配置完全不生效
         self._enable_multi_perspective = get_config().wisdom.enable_multi_perspective
         if book_router is not None:
             self._book_router = book_router
@@ -174,22 +98,31 @@ class WisdomAdvisor:
         else:
             self._book_router = None
 
-        # async HTTP client 连接池（复用，避免每次创建新连接）
+        # async HTTP client 连接池
         self._async_client: httpx.AsyncClient | None = None
 
-        # Circuit Breaker（熔断器）：连续失败后快速降级，避免LLM服务异常拖慢信号流水线
+        # Circuit Breaker
         self._cb_failure_threshold = 5
         self._cb_recovery_timeout = 120.0
         self._cb_failure_count = 0
         self._cb_last_failure_time = 0.0
         self._cb_state = "closed"
 
+        # LLM 超时与重试配置
+        wc = get_config().wisdom
+        self._llm_timeout = wc.llm_timeout
+        self._llm_max_retries = wc.llm_max_retries
+        self._llm_retry_delay = wc.llm_retry_delay
+
+        # 重入防护
+        self._in_pipeline = False
+
         # 检测 LLM 可用性
         cfg = env()
         self._llm_available = bool(cfg.llm_api_key and cfg.llm_base_url and cfg.llm_model)
         if self._llm_available:
             logger.info(
-                f"[wisdom] LLM 决策已启用: model={cfg.llm_model}, base_url={cfg.llm_base_url}"
+                "[wisdom] LLM 决策已启用: model={}, base_url={}", cfg.llm_model, cfg.llm_base_url
             )
         else:
             logger.warning(
@@ -200,17 +133,11 @@ class WisdomAdvisor:
     async def _get_async_client(self) -> httpx.AsyncClient:
         """获取 async HTTP client（懒加载，复用连接池）。"""
         if self._async_client is None:
-            self._async_client = httpx.AsyncClient(timeout=30.0)
+            self._async_client = httpx.AsyncClient(timeout=self._llm_timeout)
         return self._async_client
 
     def _cb_allow_request(self) -> bool:
-        """Circuit Breaker: 判断是否允许调用LLM。
-
-        三态：
-        - closed（正常）：允许请求，失败计数累加
-        - open（熔断）：连续失败≥阈值后拒绝，冷却时间过后进入half-open
-        - half-open（半开）：冷却时间到，允许单次探测请求
-        """
+        """Circuit Breaker: 判断是否允许调用LLM。"""
         now = time.monotonic()
         if self._cb_state == "open":
             if now - self._cb_last_failure_time >= self._cb_recovery_timeout:
@@ -233,13 +160,14 @@ class WisdomAdvisor:
         if self._cb_state == "half_open":
             self._cb_state = "open"
             logger.warning(
-                f"[wisdom] CB: probe failed, reopening circuit (failures={self._cb_failure_count})"
+                "[wisdom] CB: probe failed, reopening circuit (failures={})", self._cb_failure_count
             )
         elif self._cb_failure_count >= self._cb_failure_threshold:
             self._cb_state = "open"
             logger.warning(
-                f"[wisdom] CB: circuit OPEN after {self._cb_failure_count} failures, "
-                f"cooling down for {self._cb_recovery_timeout}s"
+                "[wisdom] CB: circuit OPEN after {} failures, cooling down for {}s",
+                self._cb_failure_count,
+                self._cb_recovery_timeout,
             )
 
     async def close(self) -> None:
@@ -248,130 +176,68 @@ class WisdomAdvisor:
             await self._async_client.aclose()
             self._async_client = None
 
-    # ========== 多视角共识注入 ==========
-
-    def _inject_perspective_consensus(self, signal: dict[str, Any]) -> dict[str, Any]:
-        """将多视角分析结果注入信号。
-
-        调用 book_router.get_advice(signal) 获取多视角分析，
-        计算共识指标并更新 mentor_perspectives 字段。
-        高共识增强置信度，低共识降低置信度。
+    def _log_decision_comparison(
+        self,
+        signal: dict[str, Any],
+        llm_result: dict[str, Any] | None,
+        fallback_result: dict[str, Any],
+        source: str,
+    ) -> None:
+        """记录 LLM 决策与硬编码 fallback 决策的对比日志到 wisdom_comparison.jsonl。
 
         Args:
-            signal: 信号 dict（需包含 direction, confidence 等字段）
-
-        Returns:
-            更新后的信号 dict（含 mentor_perspectives 字段）
+            signal: 原始信号字典
+            llm_result: LLM 决策结果（None 表示 LLM 不可用或失败）
+            fallback_result: 硬编码 fallback 决策结果
+            source: 日志来源标识（"advise" / "advise_async"）
         """
-        if self._book_router is None:
-            return signal
-
         try:
-            advice = self._book_router.get_advice(signal)
-            perspectives = advice.get("perspectives", [])
-            if not perspectives:
-                return signal
-
-            consensus = advice.get("consensus", {})
-            buy_pct = consensus.get("buy_pct", 0)
-            sell_pct = consensus.get("sell_pct", 0)
-            hold_pct = consensus.get("hold_pct", 0)
-
-            # 分类视角
-            buy_perspectives: list[str] = []
-            sell_perspectives: list[str] = []
-            hold_perspectives: list[str] = []
-            top_reasons: list[dict] = []
-
-            for p in perspectives:
-                action = p.get("action", "")
-                name = p.get("name", "")
-                reason = p.get("reason", "")
-                if action == "buy":
-                    buy_perspectives.append(name)
-                elif action == "sell":
-                    sell_perspectives.append(name)
-                else:
-                    hold_perspectives.append(name)
-
-                # 收集置信度最高的视角理由
-                top_reasons.append(
-                    {
-                        "perspective": name,
-                        "reason": reason,
-                    }
-                )
-
-            # 取 top-3 理由
-            top_reasons = sorted(
-                top_reasons,
-                key=lambda x: next(
-                    (
-                        p.get("confidence", 0)
-                        for p in perspectives
-                        if p.get("name") == x["perspective"]
+            record = {
+                "timestamp": time.time(),
+                "source": source,
+                "symbol": signal.get("symbol", ""),
+                "strategy": signal.get("strategy", ""),
+                "direction": signal.get("direction", ""),
+                "price": signal.get("price", 0),
+                "confidence": signal.get("confidence", 0),
+                "llm_decision": {
+                    "action": llm_result.get("wisdom_decision", {}).get("action")
+                    if llm_result
+                    else None,
+                    "position_ratio": llm_result.get("suggested_position_ratio", 0)
+                    if llm_result
+                    else None,
+                    "stop_loss_price": llm_result.get("stop_loss_price") if llm_result else None,
+                    "reason": llm_result.get("wisdom_decision", {}).get("llm_reason")
+                    if llm_result
+                    else None,
+                    "filter_reason": llm_result.get("wisdom_decision", {}).get("filter_reason")
+                    if llm_result
+                    else None,
+                }
+                if llm_result
+                else None,
+                "fallback_decision": {
+                    "action": fallback_result.get("wisdom_decision", {}).get("action"),
+                    "position_ratio": fallback_result.get("suggested_position_ratio", 0),
+                    "stop_loss_price": fallback_result.get("stop_loss_price"),
+                    "reason": fallback_result.get("wisdom_decision", {}).get("llm_reason"),
+                    "filter_reason": fallback_result.get("wisdom_decision", {}).get(
+                        "filter_reason"
                     ),
-                    0,
-                ),
-                reverse=True,
-            )[:3]
-
-            # 确定共识标签
-            if buy_pct >= 0.7:
-                consensus_label = "strong_buy"
-            elif buy_pct >= 0.5 and buy_pct > sell_pct:
-                consensus_label = "buy"
-            elif sell_pct >= 0.7:
-                consensus_label = "strong_sell"
-            elif sell_pct >= 0.5 and sell_pct > buy_pct:
-                consensus_label = "sell"
-            elif abs(buy_pct - sell_pct) < 0.2 and buy_pct > 0 and sell_pct > 0:
-                consensus_label = "conflict"
-            else:
-                consensus_label = "conflict"
-
-            mentor_perspectives = {
-                "analyzed_count": len(perspectives),
-                "buy_agreement_pct": buy_pct,
-                "sell_agreement_pct": sell_pct,
-                "hold_agreement_pct": hold_pct,
-                "buy_perspectives": buy_perspectives,
-                "sell_perspectives": sell_perspectives,
-                "hold_perspectives": hold_perspectives,
-                "top_reasons": top_reasons,
-                "consensus": consensus_label,
+                },
+                "llm_available": self._llm_available,
+                "llm_used": llm_result is not None,
             }
 
-            signal["mentor_perspectives"] = mentor_perspectives
-
-            # 高共识（>70%同意买入）→ 增强置信度
-            if buy_pct > 0.70:
-                current_conf = float(signal.get("confidence", 0.5))
-                signal["confidence"] = min(1.0, current_conf + 0.1)
-                logger.info(
-                    f"[wisdom-perspective] 高共识({buy_pct:.0%}买入)增强置信度: "
-                    f"{current_conf:.2f} → {signal['confidence']:.2f}"
-                )
-            # 低共识（<30%同意买入）→ 降低置信度
-            elif buy_pct < 0.30 and signal.get("direction") == "buy":
-                current_conf = float(signal.get("confidence", 0.5))
-                signal["confidence"] = max(0.1, current_conf - 0.1)
-                logger.info(
-                    f"[wisdom-perspective] 低共识({buy_pct:.0%}买入)降低置信度: "
-                    f"{current_conf:.2f} → {signal['confidence']:.2f}"
-                )
-
+            WISDOM_COMPARISON_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with WISDOM_COMPARISON_LOG.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
         except Exception as e:
-            logger.warning(f"[wisdom-perspective] 多视角分析异常，跳过: {e}")
-
-        return signal
+            logger.debug("[wisdom] 写入决策对比日志失败: {}", e)
 
     def _load_skills(self) -> None:
-        """加载配置中指定的交易决策 skill（按配置目录顺序，后加载的不覆盖先加载的）。
-
-        只加载 settings.yaml 中 wisdom.skill_names 列出的 skill，
-        忽略目录中存在但未配置的 skill。
-        """
+        """加载配置中指定的交易决策 skill。"""
         loaded_from: set[str] = set()
         for wisdom_dir in _wisdom_dirs():
             if not wisdom_dir.exists():
@@ -380,7 +246,6 @@ class WisdomAdvisor:
                 if not skill_dir.is_dir():
                     continue
                 skill_name = skill_dir.name
-                # 只加载配置中指定的 skill
                 if skill_name not in self._skill_names:
                     continue
                 if skill_name in loaded_from:
@@ -396,85 +261,123 @@ class WisdomAdvisor:
                 "如需启用，请将 books2skill 的 skill 复制到 config/settings.yaml 中配置的 wisdom.skill_dir。"
             )
         logger.info(
-            f"[wisdom] 加载 {len(self._skills)} 个交易智慧 skill: {list(self._skills.keys())}"
+            "[wisdom] 加载 {} 个交易智慧 skill: {}", len(self._skills), list(self._skills.keys())
         )
 
     @staticmethod
+    def _get_strategy_win_rate(strategy_name: str) -> float | None:
+        """获取策略的历史胜率（向后兼容委托到 fallback 模块）。"""
+        return get_strategy_win_rate(strategy_name)
+
+    def _inject_perspective_consensus(self, signal: dict[str, Any]) -> dict[str, Any]:
+        """向后兼容委托到 perspective 模块。"""
+        return perspective.inject_perspective_consensus(self._book_router, signal)
+
+    def _build_data_driven_advice(self, signal: dict[str, Any], direction: str) -> dict[str, str]:
+        """向后兼容委托到 fallback 模块。"""
+        from gugu.wisdom.fallback import build_data_driven_advice
+
+        return build_data_driven_advice(self._skills, signal, direction)
+
+    def _get_skill_advice(self, skill_name: str) -> str:
+        """向后兼容委托到 fallback 模块。"""
+        from gugu.wisdom.fallback import get_skill_advice
+
+        return get_skill_advice(self._skills, skill_name)
+
+    def _get_skill_source(self, skill_name: str) -> str:
+        """向后兼容委托到 fallback 模块。"""
+        from gugu.wisdom.fallback import get_skill_source
+
+        return get_skill_source(self._skills, skill_name)
+
+    def _advise_fallback(self, signal: dict[str, Any]) -> dict[str, Any]:
+        """向后兼容委托到 fallback 模块。"""
+        from gugu.wisdom.fallback import advise_fallback
+
+        return advise_fallback(self._skills, signal, get_strategy_win_rate)
+
+    @staticmethod
     def _as_dict(signal: dict[str, Any] | Signal) -> dict[str, Any]:
-        """将 Signal 或 dict 统一转为 dict（兼容新旧接口）。"""
+        """将 Signal 或 dict 统一转为 dict。"""
         if isinstance(signal, Signal):
             return signal.to_dict()
         return dict(signal)
 
     def advise(self, signal: dict[str, Any] | Signal) -> dict[str, Any]:
-        """为策略信号提供交易智慧决策。
-
-        优先使用 LLM 决策，LLM 不可用时降级到硬编码规则。
-        同时接受 Signal 数据类和 dict 作为输入。
-
-        决策完成后注入多视角共识分析。
-
-        Args:
-            signal: 策略信号，Signal 数据类或 dict
-
-        Returns:
-            增强信号（dict 格式）。若输入为 Signal，可转为 Signal.from_dict(result) 恢复。
-        """
+        """为策略信号提供交易智慧决策（同步版）。"""
         signal = self._as_dict(signal)
+
+        llm_result: dict[str, Any] | None = None
+        fallback_result: dict[str, Any]
 
         if self._llm_available:
             try:
-                result = self._advise_llm(signal)
-                return self._inject_perspective_consensus(result)
+                llm_result = self._advise_llm(signal)
             except Exception as e:
-                logger.warning(f"[wisdom] LLM 决策失败，降级到硬编码规则: {e}")
+                logger.warning("[wisdom] LLM 决策失败，降级到硬编码规则: {}", e)
 
-        result = self._advise_fallback(signal)
-        return self._inject_perspective_consensus(result)
+        if llm_result is not None:
+            result = llm_result
+            fallback_result = advise_fallback(self._skills, signal, get_strategy_win_rate)
+        else:
+            result = advise_fallback(self._skills, signal, get_strategy_win_rate)
+            fallback_result = result
+
+        self._log_decision_comparison(signal, llm_result, fallback_result, "advise")
+        return perspective.inject_perspective_consensus(self._book_router, result)
 
     async def advise_async(self, signal: dict[str, Any] | Signal) -> dict[str, Any]:
-        """异步版本：为策略信号提供交易智慧决策。
-
-        与 advise() 行为完全一致，但 LLM 调用不阻塞事件循环。
-        推荐 SignalPipeline 等异步代码路径使用此方法。
-
-        优先使用冲突裁决器（多维权重融合），失败时降级到单LLM决策，
-        再失败降级到硬编码规则。
-        Circuit Breaker：连续失败≥5次后熔断120秒，期间直接走fallback，
-        避免LLM服务不可用时拖慢整个信号流水线。
-        """
+        """异步版本：为策略信号提供交易智慧决策。"""
         signal = self._as_dict(signal)
 
-        if self._llm_available and self._cb_allow_request():
-            try:
-                result = await self._advise_with_conflict_resolution(signal)
-                if result is not None:
-                    self._cb_on_success()
-                    return self._inject_perspective_consensus(result)
-            except Exception as e:
-                logger.warning(f"[wisdom] 冲突裁决失败，降级到单LLM决策: {e}")
+        if self._in_pipeline:
+            logger.warning("[wisdom] 重入调用检测，降级到 fallback")
+            fallback_result = advise_fallback(self._skills, signal, get_strategy_win_rate)
+            self._log_decision_comparison(signal, None, fallback_result, "advise_async")
+            return perspective.inject_perspective_consensus(self._book_router, fallback_result)
+        self._in_pipeline = True
 
-            try:
-                result = await self._advise_llm_async(signal)
-                self._cb_on_success()
-                return self._inject_perspective_consensus(result)
-            except Exception as e:
-                logger.warning(f"[wisdom] LLM 异步决策失败，降级到硬编码规则: {e}")
-                self._cb_on_failure()
-        elif self._llm_available and self._cb_state == "open":
-            logger.debug("[wisdom] CB: circuit open, using fallback")
+        llm_result: dict[str, Any] | None = None
+        fallback_result: dict[str, Any]
 
-        result = self._advise_fallback(signal)
-        return self._inject_perspective_consensus(result)
+        try:
+            if self._llm_available and self._cb_allow_request():
+                try:
+                    llm_result = await self._advise_with_conflict_resolution(signal)
+                    if llm_result is not None:
+                        self._cb_on_success()
+                except Exception as e:
+                    logger.warning("[wisdom] 冲突裁决失败，降级到单LLM决策: {}", e)
+
+                if llm_result is None:
+                    try:
+                        llm_result = await self._advise_llm_async(signal)
+                        self._cb_on_success()
+                    except Exception as e:
+                        self._cb_on_failure()
+                        logger.warning("[wisdom] LLM 决策失败，降级到 fallback: {}", e)
+        finally:
+            self._in_pipeline = False
+
+        if llm_result is not None:
+            result = llm_result
+            fallback_result = advise_fallback(self._skills, signal, get_strategy_win_rate)
+        else:
+            result = advise_fallback(self._skills, signal, get_strategy_win_rate)
+            fallback_result = result
+
+        self._log_decision_comparison(signal, llm_result, fallback_result, "advise_async")
+        return perspective.inject_perspective_consensus(self._book_router, result)
+
+    def advise_fallback(self, signal: dict[str, Any]) -> dict[str, Any]:
+        """公开的 fallback 决策接口。"""
+        return advise_fallback(self._skills, signal, get_strategy_win_rate)
 
     async def _advise_with_conflict_resolution(
         self, signal: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """使用冲突裁决器进行多视角加权融合决策。
-
-        Returns:
-            增强后的信号 dict，或 None（裁决器不可用时）
-        """
+        """使用冲突裁决器进行多视角加权融合决策。"""
         from gugu.wisdom.conflict_resolver import get_conflict_resolver
 
         direction = signal.get("direction", "")
@@ -494,7 +397,6 @@ class WisdomAdvisor:
         if resolution is None:
             return None
 
-        # 将裁决结果应用到信号（复用 _apply_llm_decision 的逻辑）
         llm_decision = {
             "action": resolution.final_action,
             "position_ratio": resolution.final_position_ratio,
@@ -506,7 +408,6 @@ class WisdomAdvisor:
             ),
         }
 
-        # 附加裁决详情到信号（供通知层展示"导师视角"栏）
         signal["conflict_resolution"] = resolution.to_dict()
         signal["mentor_perspectives"] = [
             {
@@ -515,7 +416,7 @@ class WisdomAdvisor:
                 "reason": o.reason,
                 "weight": resolution.weights.get(o.perspective, 0),
             }
-            for o in resolution.opinions[:2]  # 仅取 top-2 供通知展示
+            for o in resolution.opinions[:2]
         ]
 
         return self._apply_llm_decision(signal, llm_decision)
@@ -523,49 +424,18 @@ class WisdomAdvisor:
     # ========== LLM 决策核心 ==========
 
     def _advise_llm(self, signal: dict[str, Any]) -> dict[str, Any]:
-        """LLM 决策（同步版，向后兼容）：将信号上下文 + skill 知识发送给 LLM。"""
+        """LLM 决策（同步版）。"""
         import httpx
 
         direction = signal.get("direction", "")
         cfg = env()
 
-        # 1. 选择相关 skill 知识
         skill_context = self._build_skill_context(direction)
-
-        # 2. 构建信号上下文
         signal_context = self._build_signal_context(signal)
-
-        # 2.5 构建多视角书籍认知上下文
-        scenario = (
-            "entry"
-            if direction == "buy"
-            else "profit_taking"
-            if direction == "sell"
-            else "psychology_check"
-        )
-        # P2 修复：使用波动率感知的动态路由
-        # P0 修复：enable_multi_perspective=false 时跳过多视角注入
-        atr = signal.get("atr", 0)
-        price = signal.get("price", 0)
-        market_vol = (atr / price) if (atr > 0 and price > 0) else None
-        book_context = ""
-        if self._book_router is not None:
-            book_context = self._book_router.build_context(scenario, direction, signal)
-            # 若 market_vol 可用，额外附上动态视角选择说明
-            if market_vol is not None:
-                dyn_perspectives = self._book_router.select_perspectives_dynamic(
-                    scenario, direction, market_volatility=market_vol, signal=signal
-                )
-                if dyn_perspectives:
-                    book_context += (
-                        f"\n（波动率={market_vol:.2%}，动态选择视角: {dyn_perspectives[:2]}）"
-                    )
-
-        # 3. 构建 prompt
+        book_context = self._build_book_context(signal)
         system_prompt = self._build_system_prompt()
         user_prompt = f"{signal_context}\n\n{skill_context}\n\n{book_context}"
 
-        # 4. 调用 LLM
         resp = httpx.post(
             f"{cfg.llm_base_url}/v1/chat/completions",
             headers={"Authorization": f"Bearer {cfg.llm_api_key}"},
@@ -584,115 +454,101 @@ class WisdomAdvisor:
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
 
-        # 5. 解析 LLM 输出
         llm_decision = self._parse_llm_response(content)
         if llm_decision is None:
-            logger.warning(f"[wisdom] LLM 输出无法解析，降级到硬编码规则: {content[:200]}")
-            return self._advise_fallback(signal)
+            logger.warning("[wisdom] LLM 输出无法解析，降级到硬编码规则: {}", content[:200])
+            return advise_fallback(self._skills, signal, get_strategy_win_rate)
 
-        # 6. 应用 LLM 决策到信号
         return self._apply_llm_decision(signal, llm_decision)
 
     async def _advise_llm_async(self, signal: dict[str, Any]) -> dict[str, Any]:
-        """LLM 决策（异步版，推荐）：使用 AsyncClient 避免阻塞事件循环。"""
+        """LLM 决策（异步版，推荐）。
+
+        带重试逻辑：LLM 请求失败时自动重试，达到最大重试次数后降级到 fallback。
+        """
         direction = signal.get("direction", "")
         cfg = env()
 
-        # 1. 选择相关 skill 知识
         skill_context = self._build_skill_context(direction)
-
-        # 2. 构建信号上下文
         signal_context = self._build_signal_context(signal)
-
-        # 2.5 构建多视角书籍认知上下文
-        scenario = (
-            "entry"
-            if direction == "buy"
-            else "profit_taking"
-            if direction == "sell"
-            else "psychology_check"
-        )
-        atr = signal.get("atr", 0)
-        price = signal.get("price", 0)
-        market_vol = (atr / price) if (atr > 0 and price > 0) else None
-        book_context = self._book_router.build_context(scenario, direction, signal)
-        if market_vol is not None:
-            dyn_perspectives = self._book_router.select_perspectives_dynamic(
-                scenario, direction, market_volatility=market_vol, signal=signal
-            )
-            if dyn_perspectives:
-                book_context += (
-                    f"\n（波动率={market_vol:.2%}，动态选择视角: {dyn_perspectives[:2]}）"
-                )
-
-        # 3. 构建 prompt
+        book_context = self._build_book_context(signal)
         system_prompt = self._build_system_prompt()
         user_prompt = f"{signal_context}\n\n{skill_context}\n\n{book_context}"
 
-        # 4. 调用 LLM（异步，不阻塞事件循环）
         client = await self._get_async_client()
-        resp = await client.post(
-            f"{cfg.llm_base_url}/v1/chat/completions",
-            headers={"Authorization": f"Bearer {cfg.llm_api_key}"},
-            json={
-                "model": cfg.llm_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "max_tokens": 800,
-                "temperature": 0.2,
-                "response_format": {"type": "json_object"},
-            },
-        )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
+        for attempt in range(self._llm_max_retries + 1):
+            try:
+                resp = await client.post(
+                    f"{cfg.llm_base_url}/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {cfg.llm_api_key}"},
+                    json={
+                        "model": cfg.llm_model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "max_tokens": 800,
+                        "temperature": 0.2,
+                        "response_format": {"type": "json_object"},
+                    },
+                )
+                resp.raise_for_status()
+                content = resp.json()["choices"][0]["message"]["content"]
 
-        # 5. 解析 LLM 输出
-        llm_decision = self._parse_llm_response(content)
-        if llm_decision is None:
-            logger.warning(f"[wisdom] LLM 异步输出无法解析，降级到硬编码规则: {content[:200]}")
-            return self._advise_fallback(signal)
+                llm_decision = self._parse_llm_response(content)
+                if llm_decision is None:
+                    logger.warning(
+                        "[wisdom] LLM 异步输出无法解析，降级到硬编码规则: {}", content[:200]
+                    )
+                    return advise_fallback(self._skills, signal, get_strategy_win_rate)
 
-        # 6. 应用 LLM 决策到信号
-        return self._apply_llm_decision(signal, llm_decision)
+                return self._apply_llm_decision(signal, llm_decision)
+
+            except Exception as e:
+                if attempt < self._llm_max_retries:
+                    logger.warning(
+                        "[wisdom] LLM 请求失败 (尝试 {}/{}): {}，{}s 后重试",
+                        attempt + 1,
+                        self._llm_max_retries + 1,
+                        e,
+                        self._llm_retry_delay,
+                    )
+                    await asyncio.sleep(self._llm_retry_delay)
+                else:
+                    logger.error(
+                        "[wisdom] LLM 请求失败，已达最大重试次数 ({})，降级到硬编码规则: {}",
+                        self._llm_max_retries + 1,
+                        e,
+                    )
+
+        return advise_fallback(self._skills, signal, get_strategy_win_rate)
 
     async def advise_macro_async(self, macro_summary: str, portfolio_summary: str = "") -> str:
-        """生成大师兄视角的宏观市场解读（异步）。
-
-        与个股决策不同，宏观解读不输出 action/position_ratio，
-        而是直接返回一段市场分析文本。
-
-        Args:
-            macro_summary: 宏观数据摘要文本（金油汇债G + A股指数 + 资金流）
-            portfolio_summary: 用户当前持仓摘要（可选，用于个性化建议）
-
-        Returns:
-            大师兄解读文本（纯文本，非 JSON）
-        """
+        """生成大师兄视角的宏观市场解读（异步）。"""
         cfg = env()
         has_portfolio = bool(portfolio_summary and portfolio_summary.strip())
         system_prompt = (
-            "你是「大师兄」——一位融合28本股书智慧的资深市场分析师。\n"
-            "你的认知来自陈江挺《炒股的智慧》、利弗莫尔《股票大作手回忆录》、\n"
-            "海龟交易法则、邱国鹭《投资中最简单的事》、达利欧《原则》等经典。\n\n"
-            "你的职责是根据当日宏观数据（金/油/汇/债/G + A股指数 + 资金流向），\n"
-            "输出一段有结构、有深度、可操作的大师视角解读。\n\n"
-            "P0 修复：6节精简为3节，每节必须有完整因果链而非数据罗列。\n"
+            "你是「大师兄」——一位融合实战经验与宏观洞察的资深市场分析师。\n"
+            "你的认知来自几十年实业和投资实战经验，核心框架是「五维宏观」：\n"
+            "金（黄金）、油（石油）、汇（汇率）、债（国债收益率）、G（指数）。\n"
+            "你相信「长期主义」和「留一口」的投资哲学。\n\n"
+            "你的职责是根据当日宏观数据，输出一段有结构、有深度、可操作的大师视角解读。\n\n"
+            "你必须用五维宏观框架来分析：先判断五个维度的综合方向，\n"
+            "再解读资金流向和板块轮动背后的宏观逻辑，最后给出操作建议。\n\n"
             "输出格式（必须严格按以下 3 节输出，每节标题用###）：\n"
-            "### 1. 关键变化与含义\n"
-            "- 用 2-3 条说明今日最重要、最反常或最具指示意义的数据变化；\n"
-            "- 必须解释'这个数据意味着什么'，禁止只报数字不复述涨跌。\n"
-            "### 2. 对A股的逻辑传导\n"
-            "- 解释宏观数据到A股的传导链路（如：实际利率→估值→成长股）；\n"
-            "- 结合资金流向判断主力在买什么/卖什么，市场风格（成长/价值/防御）及持续性。\n"
+            "### 1. 五维宏观速览\n"
+            "- 分别点评金/油/汇/债/G 五个维度的当日变化，用 1-2 句话说明每个维度的信号含义；\n"
+            "- 给出综合判断：五维整体方向是（宽松/收紧/中性/分化）。\n"
+            "### 2. 板块与资金逻辑\n"
+            "- 结合资金流向判断主力在买什么/卖什么，市场风格及持续性；\n"
+            "- 指出是否有板块轮动信号，哪些板块在吸筹、哪些在出货。\n"
             "### 3. 明日推演与操作建议\n"
-            "- 2-3 个明日盘面关键观察点（价格/量能/资金/事件）；\n"
-            "- 具体仓位建议（加仓/减仓/观望/调仓），必须说明止损纪律。\n"
+            "- 2-3 个明日盘面关键观察点；\n"
+            "- 具体仓位建议，必须说明止损纪律。\n"
         )
         if has_portfolio:
             system_prompt += (
-                "### 4. 对你持仓的影响（仅持仓时输出）\n"
+                "### 4. 对你持仓的影响\n"
                 "- 逐一点评持仓标的与当前宏观逻辑的共振/错配；\n"
                 "- 给出针对每只票的具体调仓/止损/加仓建议，必须具体到盈亏和仓位。\n"
             )
@@ -702,7 +558,7 @@ class WisdomAdvisor:
             "- 拒绝空话套话，每句话都要传递增量信息；\n"
             "- 使用专业术语但要给出散户能懂的解释；\n"
             "- 不要重复数据，要分析数据背后的逻辑；\n"
-            "- 语气像有经验的老交易员给同门师弟师妹讲课。\n"
+            "- 语气像有经验的老交易员给同门师弟妹讲课。\n"
         )
         user_prompt = f"## 今日宏观数据\n\n{macro_summary}"
         if has_portfolio:
@@ -719,11 +575,6 @@ class WisdomAdvisor:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    # v0.5.2 修复：原 max_tokens=1200 不足以生成4节内容
-                    # （有持仓时第4节"对你持仓的影响"逐一点评持仓标的），
-                    # 导致 LLM 输出在生成中途被截断（finish_reason=length），
-                    # 用户收到的飞书通知内容不完整。
-                    # 1192 字中文 ≈ 1800 tokens，提高到 2500 确保完整输出
                     "max_tokens": 2500,
                     "temperature": 0.3,
                 },
@@ -731,24 +582,138 @@ class WisdomAdvisor:
             resp.raise_for_status()
             resp_data = resp.json()
             content = resp_data["choices"][0]["message"]["content"]
-
-            # v0.5.2 修复：检查 finish_reason，如果被截断则记录警告
             finish_reason = resp_data["choices"][0].get("finish_reason", "unknown")
             if finish_reason == "length":
                 logger.warning(
-                    f"[wisdom-LLM] 大师兄宏观解读被 max_tokens 截断 "
-                    f"(已生成 {len(content)} 字，finish_reason=length)，"
-                    f"内容可能不完整"
+                    "[wisdom-LLM] 大师兄宏观解读被 max_tokens 截断 "
+                    "(已生成 {} 字，finish_reason=length)，内容可能不完整",
+                    len(content),
                 )
             else:
                 logger.info(
-                    f"[wisdom-LLM] 大师兄宏观解读生成成功: {len(content)} 字 "
-                    f"(finish_reason={finish_reason})"
+                    "[wisdom-LLM] 大师兄宏观解读生成成功: {} 字 (finish_reason={})",
+                    len(content),
+                    finish_reason,
                 )
             return content.strip()
         except Exception as e:
-            logger.warning(f"[wisdom-LLM] 大师兄宏观解读失败: {e}")
+            logger.warning("[wisdom-LLM] 大师兄宏观解读失败: {}", e)
             return ""
+
+    async def advise_portfolio_async(
+        self,
+        positions: list[dict[str, Any]],
+        market_summary: str = "",
+        macro_summary: str = "",
+    ) -> str:
+        """基于用户真实持仓生成个性化认知分析与建议（异步）。"""
+        cfg = env()
+        if not positions:
+            return "当前无持仓，无需分析。"
+
+        pos_lines = []
+        for p in positions:
+            profit_pct = p.get("profit_pct", 0)
+            emoji = (
+                "🔴"
+                if profit_pct < -5
+                else "🟡"
+                if profit_pct < 0
+                else "🟢"
+                if profit_pct < 10
+                else "🔥"
+            )
+            pos_lines.append(
+                f"- {p.get('name', p.get('symbol', '?'))} ({p.get('symbol', '')}) | "
+                f"成本 {p.get('entry_price', 0):.2f} | "
+                f"现价 {p.get('current_price', 0):.2f} | "
+                f"盈亏 {profit_pct:+.1f}% {emoji} | "
+                f"市值 {p.get('market_value', 0):.1f} 元"
+            )
+        portfolio_text = "\n".join(pos_lines)
+
+        system_prompt = (
+            "你是「大师兄」——融合28本投资经典智慧的个性化持仓顾问。\n"
+            "你的核心框架是三位一体：\n"
+            "1. 技术面（趋势/均线/量价关系）\n"
+            "2. 基本面（行业/估值/财务健康）\n"
+            "3. 宏观面（五维：金油汇债G + 市场温度）\n\n"
+            "你的职责是根据用户的真实持仓数据，输出一份个性化持仓分析报告。\n"
+            "输出格式：\n"
+            "### 1. 持仓健康度总评\n"
+            "- 逐一评价每只持仓的当前状态，给出整体组合评分\n"
+            "### 2. 风险信号（如有）\n"
+            "- 逐只指出：止损是否触发、是否破位、是否趋势走坏\n"
+            "- 给出具体建议：减仓/止损/持有观望\n"
+            "### 3. 调仓机会（如有）\n"
+            "- 如果某只持仓已大幅盈利，是否需要落袋为安\n"
+            "- 如果某只持仓亏损但逻辑仍在，是否值得加仓做低成本\n"
+            "- 如果当前仓位过重，是否需要降低风险暴露\n"
+            "### 4. 明日操作计划\n"
+            "- 开盘前该关注什么关键价位\n"
+            "- 每只票的止损价应该定在哪里\n\n"
+            "写作要求：\n"
+            "- 总字数 400-800 字\n"
+            "- 每条建议必须包含因果链：因为 X，所以建议 Y，预期结果 Z\n"
+            "- 语气务实，像有经验的老交易员在给同门分析持仓\n"
+            "- 拒绝空话套话\n"
+        )
+        user_prompt = f"## 我的持仓\n\n{portfolio_text}"
+        if market_summary:
+            user_prompt += f"\n\n## 当日市场概况\n\n{market_summary}"
+        if macro_summary:
+            user_prompt += f"\n\n## 宏观数据参考\n\n{macro_summary}"
+
+        try:
+            client = await self._get_async_client()
+            resp = await client.post(
+                f"{cfg.llm_base_url}/v1/chat/completions",
+                headers={"Authorization": f"Bearer {cfg.llm_api_key}"},
+                json={
+                    "model": cfg.llm_model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "max_tokens": 2500,
+                    "temperature": 0.3,
+                },
+            )
+            resp.raise_for_status()
+            resp_data = resp.json()
+            content = resp_data["choices"][0]["message"]["content"]
+            logger.info("[wisdom-LLM] 持仓认知报告生成成功: {} 字", len(content))
+            return content.strip()
+        except Exception as e:
+            logger.warning("[wisdom-LLM] 持仓认知报告生成失败: {}", e)
+            return ""
+
+    def _build_book_context(self, signal: dict[str, Any]) -> str:
+        """构建多视角书籍认知上下文。"""
+        direction = signal.get("direction", "")
+        scenario = (
+            "entry"
+            if direction == "buy"
+            else "profit_taking"
+            if direction == "sell"
+            else "psychology_check"
+        )
+        atr = signal.get("atr", 0)
+        price = signal.get("price", 0)
+        market_vol = (atr / price) if (atr > 0 and price > 0) else None
+
+        book_context = ""
+        if self._book_router is not None:
+            book_context = self._book_router.build_context(scenario, direction, signal)
+            if market_vol is not None:
+                dyn_perspectives = self._book_router.select_perspectives_dynamic(
+                    scenario, direction, market_volatility=market_vol, signal=signal
+                )
+                if dyn_perspectives:
+                    book_context += (
+                        f"\n（波动率={market_vol:.2%}，动态选择视角: {dyn_perspectives[:2]}）"
+                    )
+        return book_context
 
     def _build_system_prompt(self) -> str:
         """构建 LLM 系统提示词。"""
@@ -803,12 +768,10 @@ class WisdomAdvisor:
                 lines.append("- ⚠️ ST 股票")
             if signal.get("is_suspended"):
                 lines.append("- ⚠️ 停牌中")
-
         elif direction == "sell":
             if signal.get("stop_loss_price"):
                 lines.append(f"- 预设止损价: {signal['stop_loss_price']:.2f}")
 
-        # 市场环境上下文
         market_ctx = signal.get("market_context", {})
         if market_ctx:
             lines.append(f"- 数据源状态: {market_ctx.get('data_source', 'unknown')}")
@@ -819,11 +782,8 @@ class WisdomAdvisor:
 
     def _build_skill_context(self, direction: str) -> str:
         """根据信号方向选择相关 skill 知识。"""
-        # 买入相关 skill
         buy_skills = ["stock-entry-decision", "stock-stop-loss-decision", "stock-position-sizing"]
-        # 卖出相关 skill
         sell_skills = ["stock-profit-taking-decision", "stock-trailing-stop"]
-        # 通用 skill
         common_skills = ["stock-psychology-check"]
 
         if direction == "buy":
@@ -837,7 +797,6 @@ class WisdomAdvisor:
         for skill_name in relevant:
             content = self._skills.get(skill_name, "")
             if content:
-                # 截取方法论骨架（I 段）和执行步骤（E 段），这是最核心的决策依据
                 extracted = self._extract_decision_rules(content)
                 if extracted:
                     parts.append(f"### {skill_name}\n{extracted}\n")
@@ -845,18 +804,13 @@ class WisdomAdvisor:
         return "\n".join(parts)
 
     def _extract_decision_rules(self, content: str) -> str:
-        """从 SKILL.md 中提取决策相关的核心内容（I 段方法论 + E 段执行步骤 + B 段边界）。
-
-        跳过 R 段（原文引用）和 A1/A2 段（历史案例/触发场景），聚焦可操作的规则。
-        """
+        """从 SKILL.md 中提取决策相关的核心内容。"""
         lines = content.split("\n")
         result_lines: list[str] = []
         in_section = False
 
         for line in lines:
-            # 检测段落标题
             if line.startswith("## "):
-                # 只保留 I 段（方法论骨架）、E 段（执行步骤）、B 段（边界）
                 if (
                     "I —" in line
                     or "I—" in line
@@ -871,14 +825,11 @@ class WisdomAdvisor:
                     in_section = True
                     result_lines.append(line)
                 else:
-                    # R 段、A1 段、A2 段等跳过
                     in_section = False
                 continue
 
             if in_section:
                 result_lines.append(line)
-
-            # 限制长度，避免 prompt 过长
             if len("\n".join(result_lines)) > 2000:
                 break
 
@@ -887,10 +838,8 @@ class WisdomAdvisor:
     def _parse_llm_response(self, content: str) -> dict[str, Any] | None:
         """解析 LLM 输出的 JSON 决策。"""
         try:
-            # 尝试直接解析
             data = json.loads(content)
         except json.JSONDecodeError:
-            # 尝试从 markdown code block 中提取
             import re
 
             match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", content, re.DOTALL)
@@ -902,7 +851,6 @@ class WisdomAdvisor:
             else:
                 return None
 
-        # 验证必要字段
         if "action" not in data:
             return None
         if data["action"] not in ("buy", "sell", "hold", "filter"):
@@ -913,13 +861,7 @@ class WisdomAdvisor:
     def _apply_llm_decision(
         self, signal: dict[str, Any], llm_decision: dict[str, Any]
     ) -> dict[str, Any]:
-        """将 LLM 决策应用到信号。
-
-        安全墙（新增）：
-        1. Action 一致性校验：LLM action 必须与信号场景匹配
-        2. 止损价位置校验：止损价不能高于入场价的 2%（买入时）
-        3. 仓位数值域校验：position_ratio 必须 0-1
-        """
+        """将 LLM 决策应用到信号（安全墙）。"""
         action = llm_decision["action"]
         reason = llm_decision.get("reason", "")
         position_ratio = float(llm_decision.get("position_ratio", 0))
@@ -928,36 +870,43 @@ class WisdomAdvisor:
         # 安全墙：校验 action 与 direction 的兼容性
         direction = signal.get("direction", "")
         if direction == "buy" and action not in ("buy", "hold", "filter"):
+            _original_action = action
             logger.warning(
-                f"[wisdom-LLM] {signal.get('symbol', '')} 安全墙: "
-                f"买入信号被 LLM 输出非买入 action={action}，强制转为 filter"
+                "[wisdom-LLM] {} 安全墙: 买入信号被 LLM 输出非买入 action={}，强制转为 filter",
+                signal.get("symbol", ""),
+                _original_action,
             )
             action = "filter"
-            reason = f"安全墙: 买入信号不兼容 LLM action={action}"
+            reason = f"安全墙: 买入信号不兼容 LLM action={_original_action}"
         elif direction == "sell" and action not in ("sell", "hold", "filter"):
+            _original_action = action
             logger.warning(
-                f"[wisdom-LLM] {signal.get('symbol', '')} 安全墙: "
-                f"卖出信号被 LLM 输出非卖出 action={action}，强制转为 filter"
+                "[wisdom-LLM] {} 安全墙: 卖出信号被 LLM 输出非卖出 action={}，强制转为 filter",
+                signal.get("symbol", ""),
+                _original_action,
             )
             action = "filter"
-            reason = f"安全墙: 卖出信号不兼容 LLM action={action}"
+            reason = f"安全墙: 卖出信号不兼容 LLM action={_original_action}"
 
         # 安全墙：校验 position_ratio 值域
         if not (0.0 <= position_ratio <= 1.0):
             logger.warning(
-                f"[wisdom-LLM] {signal.get('symbol', '')} 安全墙: "
-                f"position_ratio={position_ratio} 超出 0-1 范围，截断为 0"
+                "[wisdom-LLM] {} 安全墙: position_ratio={} 超出 0-1 范围，截断为 0",
+                signal.get("symbol", ""),
+                position_ratio,
             )
             position_ratio = max(0.0, min(1.0, position_ratio))
 
-        # 安全墙：校验止损价位置（买入时必须低于当前价至少 2%）
+        # 安全墙：校验止损价位置
         price = signal.get("price", 0)
         if stop_loss_price is not None and float(stop_loss_price) > 0 and price > 0:
             sl = float(stop_loss_price)
             if sl >= price * (1 - LLM_STOP_LOSS_MIN_DISTANCE):
                 logger.warning(
-                    f"[wisdom-LLM] {signal.get('symbol', '')} 安全墙: "
-                    f"止损价 {sl:.2f} 距离当前价 {price:.2f} 不足 2%，已修正"
+                    "[wisdom-LLM] {} 安全墙: 止损价 {:.2f} 距离当前价 {:.2f} 不足 2%，已修正",
+                    signal.get("symbol", ""),
+                    sl,
+                    price,
                 )
                 stop_loss_price = round(price * (1 - LLM_STOP_LOSS_MIN_DISTANCE), 2)
 
@@ -970,529 +919,123 @@ class WisdomAdvisor:
             "llm_decision": f"LLM 建议: {action} — {reason}",
         }
 
-        # 根据信号方向 + LLM action 综合决策
-        direction = signal.get("direction", "")
-        max_ratio = _max_single_position()
+        max_ratio_val = _max_single_position()
 
         if action == "filter":
-            # LLM 建议过滤
             signal["wisdom_filtered"] = True
             decision["filter_reason"] = reason
             signal["suggested_position_ratio"] = 0.0
-            logger.info(f"[wisdom-LLM] {signal.get('symbol', '')} 过滤: {reason}")
+            logger.info("[wisdom-LLM] {} 过滤: {}", signal.get("symbol", ""), reason)
 
         elif action == "hold":
-            # LLM 建议持有不动（不买也不卖）
             signal["wisdom_filtered"] = True
             decision["filter_reason"] = f"建议持有观望: {reason}"
             signal["suggested_position_ratio"] = 0.0
-            logger.info(f"[wisdom-LLM] {signal.get('symbol', '')} 建议持有: {reason}")
+            logger.info("[wisdom-LLM] {} 建议持有: {}", signal.get("symbol", ""), reason)
 
         elif direction == "buy" and action == "buy":
-            # LLM 同意买入，应用仓位和止损
-            # 安全校验：仓位不超过风控上限
             current_ratio = float(signal.get("current_position_ratio", 0))
-            remaining = max_ratio - current_ratio
-            safe_ratio = min(position_ratio, remaining, max_ratio)
+            remaining = max_ratio_val - current_ratio
+            safe_ratio = min(position_ratio, remaining, max_ratio_val)
             safe_ratio = max(0.0, safe_ratio)
 
-            # 安全护栏：首次试仓硬上限
             is_trial = current_ratio <= 0
             if is_trial and safe_ratio > LLM_MAX_TRIAL_RATIO:
                 logger.warning(
-                    f"[wisdom-LLM] {signal.get('symbol', '')} 仓位护栏: "
-                    f"LLM建议 {safe_ratio:.2%} > 试仓上限 {LLM_MAX_TRIAL_RATIO:.2%}，已截断"
+                    "[wisdom-LLM] {} 仓位护栏: LLM建议 {:.2%} > 试仓上限 {:.2%}，已截断",
+                    signal.get("symbol", ""),
+                    safe_ratio,
+                    LLM_MAX_TRIAL_RATIO,
                 )
                 safe_ratio = LLM_MAX_TRIAL_RATIO
 
             if safe_ratio <= 0:
                 signal["wisdom_filtered"] = True
                 decision["filter_reason"] = (
-                    f"现有持仓占比 {current_ratio:.2%} 已达上限 {max_ratio:.2%}，不再加仓"
+                    f"现有持仓占比 {current_ratio:.2%} 已达上限 {max_ratio_val:.2%}，不再加仓"
                 )
                 signal["suggested_position_ratio"] = 0.0
                 logger.info(
-                    f"[wisdom-LLM] {signal.get('symbol', '')} 加仓过滤: "
-                    f"现有占比 {current_ratio:.2%} >= 上限 {max_ratio:.2%}"
+                    "[wisdom-LLM] {} 加仓过滤: 现有占比 {:.2%} >= 上限 {:.2%}",
+                    signal.get("symbol", ""),
+                    current_ratio,
+                    max_ratio_val,
                 )
             else:
                 original_ratio = signal.get("suggested_position_ratio", 0)
                 signal["suggested_position_ratio"] = safe_ratio
                 decision["position_strategy"] = "add" if current_ratio > 0 else "trial"
                 logger.info(
-                    f"[wisdom-LLM] {signal.get('symbol', '')} 买入确认: "
-                    f"仓位 {original_ratio:.2%} → {safe_ratio:.2%}, 理由: {reason}"
+                    "[wisdom-LLM] {} 买入确认: 仓位 {:.2%} → {:.2%}, 理由: {}",
+                    signal.get("symbol", ""),
+                    original_ratio,
+                    safe_ratio,
+                    reason,
                 )
 
             # 止损价安全护栏
-            price = signal.get("price", 0)
             if stop_loss_price and float(stop_loss_price) > 0:
                 sl = float(stop_loss_price)
-                # 校验止损幅度在 5%-10% 之间
                 if price > 0:
                     sl_pct = (price - sl) / price
                     if sl_pct < LLM_MIN_STOP_LOSS_PCT:
-                        # 止损太近，调整到最小幅度
                         sl = round(price * (1 - LLM_MIN_STOP_LOSS_PCT), 2)
                         logger.warning(
-                            f"[wisdom-LLM] {signal.get('symbol', '')} 止损护栏: "
-                            f"LLM止损幅度 {sl_pct:.2%} < {LLM_MIN_STOP_LOSS_PCT:.2%}，"
-                            f"调整到 {sl:.2f}"
+                            "[wisdom-LLM] {} 止损护栏: LLM止损幅度 {:.2%} < {:.2%}，调整到 {:.2f}",
+                            signal.get("symbol", ""),
+                            sl_pct,
+                            LLM_MIN_STOP_LOSS_PCT,
+                            sl,
                         )
                     elif sl_pct > LLM_MAX_STOP_LOSS_PCT:
-                        # 止损太远，调整到最大幅度
                         sl = round(price * (1 - LLM_MAX_STOP_LOSS_PCT), 2)
                         logger.warning(
-                            f"[wisdom-LLM] {signal.get('symbol', '')} 止损护栏: "
-                            f"LLM止损幅度 {sl_pct:.2%} > {LLM_MAX_STOP_LOSS_PCT:.2%}，"
-                            f"调整到 {sl:.2f}"
+                            "[wisdom-LLM] {} 止损护栏: LLM止损幅度 {:.2%} > {:.2%}，调整到 {:.2f}",
+                            signal.get("symbol", ""),
+                            sl_pct,
+                            LLM_MAX_STOP_LOSS_PCT,
+                            sl,
                         )
                 signal["stop_loss_price"] = round(sl, 2)
                 decision["stop_loss_price"] = round(sl, 2)
             elif price > 0:
-                # LLM 未给出止损价，用默认规则
                 default_stop = price * (1 - FALLBACK_STOP_LOSS_PCT)
                 signal["stop_loss_price"] = round(default_stop, 2)
                 decision["stop_loss_price"] = round(default_stop, 2)
                 decision["stop_loss_source"] = "fallback"
 
-            # 止盈方案（基于入场价 + 固定百分比）
+            # 止盈方案
             if price > 0:
                 tp = _compute_take_profit(price, signal.get("atr", 0))
                 signal["take_profit"] = tp
                 decision["take_profit"] = tp
 
         elif direction == "sell" and action == "sell":
-            # LLM 同意卖出
             decision["sell_reason"] = reason
-            logger.info(f"[wisdom-LLM] {signal.get('symbol', '')} 卖出确认: {reason}")
+            logger.info("[wisdom-LLM] {} 卖出确认: {}", signal.get("symbol", ""), reason)
 
         elif direction == "buy" and action == "sell":
-            # 策略建议买入但 LLM 建议卖出 → 过滤买入信号
             signal["wisdom_filtered"] = True
             decision["filter_reason"] = f"LLM 建议卖出而非买入: {reason}"
             signal["suggested_position_ratio"] = 0.0
-            logger.info(f"[wisdom-LLM] {signal.get('symbol', '')} 买入被否决: {reason}")
+            logger.info("[wisdom-LLM] {} 买入被否决: {}", signal.get("symbol", ""), reason)
 
         elif direction == "sell" and action == "buy":
-            # 策略建议卖出但 LLM 建议买入 → 过滤卖出信号
             signal["wisdom_filtered"] = True
             decision["filter_reason"] = f"LLM 建议持有而非卖出: {reason}"
-            logger.info(f"[wisdom-LLM] {signal.get('symbol', '')} 卖出被否决: {reason}")
+            logger.info("[wisdom-LLM] {} 卖出被否决: {}", signal.get("symbol", ""), reason)
 
         else:
-            # 其他情况：应用 LLM 的仓位建议
             if position_ratio > 0:
-                signal["suggested_position_ratio"] = min(position_ratio, max_ratio)
+                signal["suggested_position_ratio"] = min(position_ratio, max_ratio_val)
             decision["action_detail"] = f"direction={direction}, llm_action={action}"
 
         signal["wisdom"] = advice
         signal["wisdom_decision"] = decision
         return signal
 
-    # ========== 硬编码 fallback ==========
-
-    def _advise_fallback(self, signal: dict[str, Any]) -> dict[str, Any]:
-        """硬编码规则 fallback（LLM 不可用时使用）。
-
-        历史胜率注入：若该策略历史胜率 < 30%，降低入场置信度阈值（从 0.6 降至 0.4）。
-        """
-        signal = dict(signal)
-        direction = signal.get("direction", "")
-        price = signal.get("price", 0.0)
-        confidence = signal.get("confidence", 1.0)
-
-        # P2 修复：历史胜率注入 — 对历史表现差的策略降低置信度
-        strategies = signal.get("strategies", []) or [signal.get("strategy", "")]
-        if isinstance(strategies, str):
-            strategies = [strategies]
-        for s_name in strategies:
-            if s_name:
-                hist_win_rate = self._get_strategy_win_rate(s_name)
-                if hist_win_rate is not None and hist_win_rate < 0.30:
-                    logger.info(
-                        f"[wisdom-fallback] 策略 {s_name} 历史胜率 {hist_win_rate:.1%} < 30%%，"
-                        f"降低入场置信度阈值（0.6 → 0.4）"
-                    )
-                    # 降低置信度阈值：原 0.6 降至 0.4
-                    min_conf = 0.4
-                    if confidence < min_conf:
-                        logger.info(
-                            f"[wisdom-fallback] 策略 {s_name} 低胜率 {hist_win_rate:.1%}，"
-                            f"置信度 {confidence:.2f} < {min_conf}，过滤信号"
-                        )
-                        signal["wisdom_filtered"] = True
-                        signal["filter_reason"] = (
-                            f"策略 {s_name} 历史胜率 {hist_win_rate:.1%} 过低，信号被过滤"
-                        )
-                        return signal
-
-        advice: dict[str, str] = {}
-        decision: dict[str, Any] = {"source": "fallback"}
-
-        if direction == "buy":
-            # 数据驱动建议（替代格言摘录）
-            advice = self._build_data_driven_advice(signal, "buy")
-
-            # 入场过滤——低置信度信号降级
-            if confidence < FALLBACK_ENTRY_MIN_CONFIDENCE:
-                decision["entry_filtered"] = True
-                decision["filter_reason"] = (
-                    f"信心度 {confidence:.2f} 低于入场阈值 {FALLBACK_ENTRY_MIN_CONFIDENCE}"
-                )
-                signal["wisdom_filtered"] = True
-                logger.info(
-                    f"[wisdom-fallback] {signal.get('symbol', '')} 入场过滤: "
-                    f"信心度 {confidence:.2f} < {FALLBACK_ENTRY_MIN_CONFIDENCE}"
-                )
-
-            # 仓位调整——分层下注（三档：试仓/加仓/满仓）
-            original_ratio = signal.get("suggested_position_ratio", 0.0)
-            # signal_only 模式下，即使仓位预算为0（如熊市），也提供参考性仓位建议
-            # 标注"仅参考"，不强制下单
-            is_signal_only = signal.get("_exec_mode") == "signal_only"
-            if original_ratio <= 0 and is_signal_only:
-                original_ratio = FALLBACK_TRIAL_RATIO  # signal_only 模式下用默认试仓比例作为参考
-                decision["position_note"] = "当前市场状态仓位建议为0%，此为参考性试仓比例"
-            if original_ratio > 0:
-                has_position = signal.get("has_position", False)
-                profit_pct = signal.get("profit_pct", 0.0)
-                if has_position:
-                    # 持仓盈利 >5% → 趋势确认，允许加码更多
-                    if profit_pct > 0.05:
-                        adjusted_ratio = original_ratio * FALLBACK_ADD_RATIO * 1.5
-                        strategy_label = "add_confirmed"
-                    else:
-                        adjusted_ratio = original_ratio * FALLBACK_ADD_RATIO
-                        strategy_label = "add"
-                else:
-                    adjusted_ratio = original_ratio * FALLBACK_TRIAL_RATIO
-                    strategy_label = "trial"
-                current_ratio = signal.get("current_position_ratio", 0.0)
-                max_ratio = _max_single_position()
-                remaining = max_ratio - float(current_ratio)
-                if remaining <= 0 and not is_signal_only:
-                    adjusted_ratio = 0.0
-                    decision["filter_reason"] = (
-                        f"现有持仓占比 {current_ratio:.2%} 已达上限 {max_ratio:.2%}，不再加仓"
-                    )
-                    signal["wisdom_filtered"] = True
-                else:
-                    if is_signal_only:
-                        # signal_only模式：仅建议不下单，不受remaining硬限制，仍受单股max_ratio保护
-                        adjusted_ratio = min(adjusted_ratio, max_ratio)
-                    else:
-                        adjusted_ratio = min(adjusted_ratio, remaining)
-                decision["adjusted_position_ratio"] = adjusted_ratio
-                decision["position_strategy"] = strategy_label
-                signal["suggested_position_ratio"] = adjusted_ratio
-                logger.info(
-                    f"[wisdom-fallback] {signal.get('symbol', '')} 仓位调整: "
-                    f"{original_ratio:.2%} → {adjusted_ratio:.2%} ({strategy_label})"
-                )
-
-            # 止损价预设
-            if price > 0:
-                stop_price = price * (1 - FALLBACK_STOP_LOSS_PCT)
-                decision["stop_loss_price"] = round(stop_price, 2)
-                signal["stop_loss_price"] = round(stop_price, 2)
-                # 止盈方案
-                tp = _compute_take_profit(price, signal.get("atr", 0))
-                signal["take_profit"] = tp
-                decision["take_profit"] = tp
-                logger.info(
-                    f"[wisdom-fallback] {signal.get('symbol', '')} 止损预设: "
-                    f"{stop_price:.2f} (-{FALLBACK_STOP_LOSS_PCT:.0%})"
-                    f" | 止盈目标: +{tp.get('target_1_pct', 0):.0%}/+{tp.get('target_2_pct', 0):.0%}"
-                )
-
-        elif direction == "sell":
-            # 数据驱动建议（替代格言摘录）
-            advice = self._build_data_driven_advice(signal, "sell")
-
-            # P1 修复：fallback 卖出信号校验——无持仓时过滤卖出信号
-            has_position = signal.get("has_position", False)
-            if not has_position:
-                signal["wisdom_filtered"] = True
-                decision["filter_reason"] = "无持仓，过滤卖出信号"
-                logger.info(f"[wisdom-fallback] {signal.get('symbol', '')} 卖出过滤: 无持仓")
-            elif price > 0:
-                decision["sell_reason"] = "策略信号触发卖出"
-                # P0-6 修复：sell 信号补充 stop_loss_price（语义为"立即在当前价退出"）
-                # 原遗漏导致所有 sell 信号 stop_loss_price=null，下游 NULL 检查可能失败
-                # 对抗性审查结论：sell 信号触发后持仓应已清空，止损价无实际意义
-                # 但保持字段一致性可避免下游分支异常
-                exit_price = round(price, 2)
-                decision["stop_loss_price"] = exit_price
-                signal["stop_loss_price"] = exit_price
-                logger.info(
-                    f"[wisdom-fallback] {signal.get('symbol', '')} 卖出决策: 策略信号触发, "
-                    f"退出价: {exit_price:.2f}"
-                )
-
-        signal["wisdom"] = advice
-        signal["wisdom_decision"] = decision
-
-        # 注入多视角共识分析（signal_only 模式下也填充 mentor_perspectives）
-        return self._inject_perspective_consensus(signal)
-
-    @staticmethod
-    def _get_strategy_win_rate(strategy_name: str) -> float | None:
-        """获取策略的历史胜率（从 signals_history.jsonl 计算）。
-
-        胜率定义：该策略发出的信号中，5 日后收益 > 0 的比例。
-        若历史记录不足（< 5 条），返回 None（表示数据不足，不调整）。
-
-        Args:
-            strategy_name: 策略名称
-
-        Returns:
-            历史胜率 (0-1) 或 None（数据不足）
-        """
-        import json
-
-        from gugu.config import PROJECT_ROOT
-
-        path = PROJECT_ROOT / "data" / "signals_history.jsonl"
-        if not path.exists():
-            return None
-
-        # 读取最近 100 条信号
-        records: list[dict] = []
-        try:
-            with path.open("r", encoding="utf-8") as f:
-                for i, line in enumerate(f):
-                    if i >= 500:  # 最多读取 500 行
-                        break
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        rec = json.loads(line)
-                        records.append(rec)
-                    except json.JSONDecodeError:
-                        continue
-        except Exception:
-            return None
-
-        if not records:
-            return None
-
-        # 过滤该策略的信号
-        strategy_signals = []
-        for r in records:
-            strategies = r.get("strategies", []) or [r.get("strategy", "")]
-            if isinstance(strategies, str):
-                strategies = [strategies]
-            if strategy_name in strategies and r.get("order_success"):
-                strategy_signals.append(r)
-
-        if len(strategy_signals) < 5:
-            return None  # 数据不足
-
-        # 胜率 = 执行后盈利的信号 / 总执行信号
-        wins = sum(1 for r in strategy_signals if _is_profitable_signal(r))
-        return wins / len(strategy_signals)
-
-    def _get_skill_advice(self, skill_name: str) -> str:
-        """获取指定 skill 的核心建议（截取关键段落，用于 fallback 展示）。"""
-        content = self._skills.get(skill_name, "")
-        if not content:
-            return ""
-
-        lines = content.split("\n")
-        summary_lines = []
-        for line in lines:
-            if line.startswith("#") or line.startswith("- ") or line.startswith("  "):
-                summary_lines.append(line)
-            if len("\n".join(summary_lines)) > 500:
-                break
-        return "\n".join(summary_lines)
-
-    def _get_skill_source(self, skill_name: str) -> str:
-        """从 SKILL.md 的 YAML frontmatter 提取 source_book 字段。"""
-        content = self._skills.get(skill_name, "")
-        if not content:
-            return ""
-        # 解析 YAML frontmatter
-        if content.startswith("---"):
-            end = content.find("---", 3)
-            if end > 0:
-                frontmatter = content[3:end]
-                for line in frontmatter.split("\n"):
-                    if line.strip().startswith("source_book:"):
-                        return line.split(":", 1)[1].strip()
-        return ""
-
-    def _build_data_driven_advice(self, signal: dict[str, Any], direction: str) -> dict[str, str]:
-        """基于信号实际数据生成交易智慧建议（替代格言摘录）。
-
-        每条建议包含：
-        1. 基于当前信号数据的具体结论
-        2. 应用的策略原则（含出处）
-        """
-        advice: dict[str, str] = {}
-        symbol = signal.get("symbol", "")
-        name = signal.get("name", "") or symbol
-        price = signal.get("price", 0.0)
-        confidence = signal.get("confidence", 1.0)
-        atr = signal.get("atr", 0.0)
-        has_position = signal.get("has_position", False)
-        profit_pct = signal.get("profit_pct", 0.0)
-        strategies = signal.get("strategies", []) or [signal.get("strategy", "")]
-        if isinstance(strategies, str):
-            strategies = [strategies]
-
-        # 市场分析数据（从 signal_pipeline 注入）
-        stage = signal.get("stage", "")
-        danger_signals = signal.get("danger_signals", [])
-        divergence = signal.get("divergence", {})
-        money_flow = signal.get("money_flow", {})
-        fundamental = signal.get("fundamental", {})
-        _multi_period = signal.get("multi_period", {})
-
-        if direction == "buy":
-            # ── 入场建议 ──
-            entry_parts: list[str] = []
-            entry_parts.append(f"**{name}({symbol})** 当前价 ¥{price:.2f}，置信度 {confidence:.0%}")
-
-            # 阶段判断
-            if stage:
-                stage_map = {
-                    "bullish": "升势",
-                    "crazy": "疯狂",
-                    "final": "最后",
-                    "flat": "牛皮市",
-                }
-                stage_text = stage_map.get(stage, stage)
-                entry_parts.append(f"市场阶段：{stage_text}")
-                if stage in ("crazy", "final"):
-                    entry_parts.append("⚠️ 疯狂/最后阶段禁止入场（P0 规则）")
-
-            # 危险信号
-            if danger_signals:
-                entry_parts.append(
-                    f"⚠️ 检测到 {len(danger_signals)} 个危险信号：{', '.join(danger_signals[:2])}"
-                )
-
-            # 量价背离
-            if divergence and isinstance(divergence, dict) and divergence.get("diverged"):
-                entry_parts.append("⚠️ 量价背离：价涨量缩，警惕主力出货")
-
-            # 资金流
-            if money_flow and isinstance(money_flow, dict):
-                net_inflow = money_flow.get("net_inflow", 0)
-                if net_inflow < 0:
-                    entry_parts.append(f"⚠️ 资金净流出 {abs(net_inflow):.2f}亿，主力在撤")
-
-            # 基本面
-            if fundamental and isinstance(fundamental, dict):
-                pe = fundamental.get("pe")
-                if pe and pe > 0:
-                    entry_parts.append(f"PE={pe:.1f}")
-
-            # 策略出处
-            source = self._get_skill_source("stock-entry-decision")
-            entry_parts.append(
-                f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》"
-            )
-            advice["entry_check"] = "\n".join(entry_parts)
-
-            # ── 止损建议 ──
-            stop_parts: list[str] = []
-            stop_price = signal.get("stop_loss_price", 0.0)
-            if stop_price and price > 0:
-                stop_pct = (price - stop_price) / price
-                stop_parts.append(f"建议止损价：¥{stop_price:.2f}（-{stop_pct:.1%}）")
-                if atr > 0:
-                    stop_parts.append(f"ATR={atr:.2f}（占价 {atr / price:.1%}），止损幅度参考 ATR")
-                else:
-                    stop_parts.append("无 ATR 数据，使用默认 8% 止损")
-            else:
-                stop_parts.append(
-                    f"建议止损价：¥{price * 0.92:.2f}（-8%）" if price > 0 else "价格无效"
-                )
-            stop_parts.append("原则：止损是铁律，不可违反，跌破立即执行")
-            source = self._get_skill_source("stock-stop-loss-decision")
-            stop_parts.append(f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》")
-            advice["stop_loss"] = "\n".join(stop_parts)
-
-            # ── 仓位建议 ──
-            pos_parts: list[str] = []
-            ratio = signal.get("suggested_position_ratio", 0.0)
-            if has_position:
-                pos_parts.append(f"已持仓，当前盈利 {profit_pct:+.1%}")
-                if profit_pct > 0.05:
-                    pos_parts.append(f"盈利确认，可加码至 {ratio:.1%}（加仓策略）")
-                else:
-                    pos_parts.append(f"建议加码比例：{ratio:.1%}")
-            else:
-                pos_parts.append(f"未持仓，建议试仓 {ratio:.1%}（首次建仓 20%）")
-                pos_parts.append("分层下注：试仓 20% → 盈利确认加码 40% → 满仓 30%")
-            source = self._get_skill_source("stock-position-sizing")
-            pos_parts.append(f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》")
-            advice["position_sizing"] = "\n".join(pos_parts)
-
-        elif direction == "sell":
-            # ── 止盈建议 ──
-            profit_parts: list[str] = []
-            profit_parts.append(f"**{name}({symbol})** 卖出信号触发")
-            profit_parts.append(f"当前价 ¥{price:.2f}，持仓盈利 {profit_pct:+.1%}")
-            if profit_pct > 0.30:
-                profit_parts.append("⚠️ 已达 +30%，按财叔策略应减仓 1/3")
-            elif profit_pct > 0.15:
-                profit_parts.append("💡 盈利 >15%，考虑部分止盈")
-            elif profit_pct < -0.08:
-                profit_parts.append("⚠️ 亏损 >8%，应执行止损")
-            source = self._get_skill_source("stock-profit-taking-decision")
-            profit_parts.append(
-                f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》"
-            )
-            advice["profit_taking"] = "\n".join(profit_parts)
-
-            # ── 追踪止损 ──
-            trail_parts: list[str] = []
-            if has_position and profit_pct > 0:
-                trail_parts.append(f"持仓盈利 {profit_pct:+.1%}，启用追踪止损")
-                trail_parts.append("止损价随浪谷上移，只上不下")
-            else:
-                trail_parts.append("无持仓或亏损中，不适用追踪止损")
-            source = self._get_skill_source("stock-trailing-stop")
-            trail_parts.append(
-                f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》"
-            )
-            advice["trailing_stop"] = "\n".join(trail_parts)
-
-        # ── 心态检查 ──
-        psych_parts: list[str] = []
-        if direction == "buy":
-            if confidence < 0.6:
-                psych_parts.append("⚠️ 置信度偏低，警惕 FOMO 情绪驱动入场")
-            if stage in ("crazy", "final"):
-                psych_parts.append("⚠️ 市场过热，警惕贪婪情绪")
-        elif direction == "sell":
-            if profit_pct > 0.30:
-                psych_parts.append("💡 盈利丰厚，警惕贪婪不愿卖")
-            elif profit_pct < -0.05:
-                psych_parts.append("💡 亏损中，警惕侥幸心理不止损")
-        psych_parts.append("原则：纪律 > 情绪，按策略执行而非凭感觉")
-        source = self._get_skill_source("stock-psychology-check")
-        psych_parts.append(f"📍 策略出处：{source}" if source else "📍 策略出处：《炒股的智慧》")
-        advice["psychology_check"] = "\n".join(psych_parts)
-
-        return advice
-
-    # ========== LLM 自然语言解读（保留，用于飞书通知） ==========
-
     def llm_interpret(self, signal: dict[str, Any]) -> str | None:
-        """用 LLM 做自然语言解读（用于飞书通知展示）。
-
-        Args:
-            signal: 含 wisdom 字段的信号
-
-        Returns:
-            自然语言解读文本，无 LLM 配置返回 None
-        """
+        """用 LLM 做自然语言解读。"""
         cfg = env()
         if not cfg.llm_api_key:
             return None
@@ -1521,7 +1064,7 @@ class WisdomAdvisor:
             resp.raise_for_status()
             return cast(str | None, resp.json()["choices"][0]["message"]["content"])
         except Exception as e:
-            logger.warning(f"[wisdom] LLM 解读失败: {e}")
+            logger.warning("[wisdom] LLM 解读失败: {}", e)
             return None
 
     @staticmethod

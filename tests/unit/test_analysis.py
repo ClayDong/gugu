@@ -24,6 +24,99 @@ from gugu.analysis.position_manager import PositionAdvice, PositionManager
 from gugu.analysis.performance import PerformanceAnalyzer, PerformanceReport
 from gugu.analysis.regime_detector import MultiPeriodRegimeDetector
 from gugu.analysis.strategy_pool import StrategyPool, StrategyWeight
+from gugu.analysis.signal_tracker import SignalTracker
+from gugu.analysis.attribution import AttributionAnalyzer
+
+
+def test_signal_tracker_report_separates_forward_hit_rate() -> None:
+    tracker = SignalTracker()
+    tracker.load_history = lambda days=30: [
+        {
+            "timestamp": "2026-01-01T00:00:00",
+            "symbol": "000001",
+            "direction": "buy",
+            "strategies": ["s"],
+        },
+        {
+            "timestamp": "2026-01-02T00:00:00",
+            "symbol": "000002",
+            "direction": "buy",
+            "strategies": ["s"],
+        },
+        {
+            "timestamp": "2026-01-03T00:00:00",
+            "symbol": "000003",
+            "direction": "buy",
+            "strategies": ["s"],
+        },
+    ]
+    tracker._track_signals = lambda signals: _tracked_with_forward_returns(signals)
+    report = __import__("asyncio").run(tracker.generate_report())
+    assert report["forward_5d_signal_hit_rate"] == pytest.approx(1 / 3, abs=1e-4)
+    assert "closed_trade_win_rate" in report
+    assert report["closed_trade_win_rate"] == 0
+
+
+async def _tracked_with_forward_returns(signals):
+    return [
+        {**signals[0], "return_5d": 0.1},
+        {**signals[1], "return_5d": -0.1},
+        {**signals[2], "return_5d": 0.0},
+    ]
+
+
+def test_attribution_report_names_forward_metrics() -> None:
+    report = AttributionAnalyzer()._analyze_by_direction([])
+    assert report["buy"]["execution_success"] == 0
+    output = AttributionAnalyzer()
+    attribution = output
+    report_obj = __import__(
+        "gugu.analysis.attribution", fromlist=["AttributionReport"]
+    ).AttributionReport()
+    report_obj.forward_5d_signal_hit_rate = 0.5
+    report_obj.closed_trade_win_rate = 0.25
+    report_obj.realized_pnl = 12.0
+    payload = report_obj.to_dict()["performance"]
+    assert payload["forward_5d_signal_hit_rate"] == 0.5
+    assert payload["closed_trade_win_rate"] == 0.25
+    assert payload["realized_pnl"] == 12.0
+    assert "win_rate" not in payload
+
+
+def test_attribution_closed_trade_feedback_excludes_open_and_forward_only() -> None:
+    analyzer = AttributionAnalyzer()
+    analyzer.load_history = lambda days=7: [
+        {
+            "timestamp": "2026-01-01",
+            "symbol": "000001",
+            "direction": "buy",
+            "order_success": True,
+            "outcome_status": "open",
+            "realized_pnl": 100,
+            "return_5d": 0.2,
+        },
+        {
+            "timestamp": "2026-01-02",
+            "symbol": "000002",
+            "direction": "buy",
+            "order_success": True,
+            "execution_status": "filled",
+            "outcome_status": "filled",
+            "return_5d": 0.1,
+        },
+        {"timestamp": "2026-01-03", "symbol": "000003", "direction": "buy", "return_5d": -0.1},
+        {
+            "timestamp": "2026-01-04",
+            "symbol": "000004",
+            "direction": "buy",
+            "outcome_status": "closed",
+            "outcome_metrics": {"realized_pnl": 20},
+        },
+    ]
+    analyzer._track_signals = lambda signals: __import__("asyncio").sleep(0, result=signals)
+    report = __import__("asyncio").run(analyzer.analyze())
+    assert report.to_dict()["performance"]["closed_trade_win_rate"] == 1.0
+    assert report.to_dict()["performance"]["realized_pnl"] == 20.0
 
 
 # =========================================================================
@@ -380,9 +473,9 @@ class TestPositionController:
         budget = controller.calculate(regime=regime, account=account)
 
         assert budget.total_limit == 0.40, f"默认震荡总仓位应为 0.40, 实际 {budget.total_limit}"
-        assert budget.available_budget == 400_000, (
-            f"可用预算应为 400k, 实际 {budget.available_budget}"
-        )
+        assert (
+            budget.available_budget == 400_000
+        ), f"可用预算应为 400k, 实际 {budget.available_budget}"
         assert 0 < budget.single_limit <= 0.40, f"单股上限应 (0, 0.4], 实际 {budget.single_limit}"
 
     def test_accumulated_loss_halves_limit(self) -> None:
@@ -394,9 +487,9 @@ class TestPositionController:
         budget = controller.calculate(regime=regime, account=account, total_pnl_pct=-0.15)
 
         # 0.80 * 0.5 = 0.40
-        assert budget.total_limit == pytest.approx(0.40, abs=1e-4), (
-            f"亏损减半预期 0.40, 实际 {budget.total_limit}"
-        )
+        assert budget.total_limit == pytest.approx(
+            0.40, abs=1e-4
+        ), f"亏损减半预期 0.40, 实际 {budget.total_limit}"
         assert "风险系数" in budget.reason or "减半" in budget.reason
 
     def test_buy_not_allowed_zero_budget(self) -> None:
@@ -504,9 +597,9 @@ class TestPositionManager:
 
         assert advice.action == "reduce", f"预期 reduce, 实际 {advice.action}"
         # 止盈 30%，2000 * 0.3 = 600，取整到 100 -> 600
-        assert advice.suggested_quantity == 600, (
-            f"止盈数量预期 600, 实际 {advice.suggested_quantity}"
-        )
+        assert (
+            advice.suggested_quantity == 600
+        ), f"止盈数量预期 600, 实际 {advice.suggested_quantity}"
         assert "止盈" in advice.reason
 
     def test_trailing_stop_activated(self) -> None:
@@ -520,9 +613,9 @@ class TestPositionManager:
 
         # 移动止损应激活：10.80 * 0.97 = 10.476
         pos = pm.get_position("000001")
-        assert pos["stop_loss"] == pytest.approx(10.476, abs=0.01), (
-            f"移动止损应上移至 10.476, 实际 {pos['stop_loss']}"
-        )
+        assert pos["stop_loss"] == pytest.approx(
+            10.476, abs=0.01
+        ), f"移动止损应上移至 10.476, 实际 {pos['stop_loss']}"
 
         # 记录加仓，使 add_count > 0，避免下一轮返回 add
         pm.record_add("000001", add_qty=500, add_price=10.80)
@@ -586,9 +679,9 @@ class TestPerformanceAnalyzer:
         report = await analyzer.analyze(trades=trades, daily_equity=equity)
 
         assert report.total_trades == 3
-        assert report.win_rate == pytest.approx(2 / 3, abs=0.001), (
-            f"胜率应为 2/3, 实际 {report.win_rate}"
-        )
+        assert report.win_rate == pytest.approx(
+            2 / 3, abs=0.001
+        ), f"胜率应为 2/3, 实际 {report.win_rate}"
         assert report.total_return > 0, "总收益应为正"
         assert report.max_drawdown >= 0, "最大回撤应 >= 0"
 
@@ -956,9 +1049,9 @@ class TestExecutionOptimizer:
             opt.record_execution(base_report)
 
         quality = opt.get_execution_quality()
-        assert quality["total_executions"] == 1000, (
-            f"历史应截断至 1000 条, 实际 {quality['total_executions']}"
-        )
+        assert (
+            quality["total_executions"] == 1000
+        ), f"历史应截断至 1000 条, 实际 {quality['total_executions']}"
 
 
 # =========================================================================
@@ -1100,9 +1193,9 @@ class TestParamOptimizer:
         result = optimizer.optimize(verbose=False)
 
         # 应能找到 period >= 25 的参数
-        assert result.best_params.get("period", 0) >= 25, (
-            f"应收敛到大 period, 实际 {result.best_params}"
-        )
+        assert (
+            result.best_params.get("period", 0) >= 25
+        ), f"应收敛到大 period, 实际 {result.best_params}"
         assert result.best_score > 0.0
         assert len(result.history) == 5
 

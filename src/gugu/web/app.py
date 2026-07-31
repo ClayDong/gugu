@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import Any, cast
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from gugu.config import settings
+from gugu.config import get_config, settings
 from gugu.data import data_manager
 from gugu.data.stock_names import lookup_stock_name
 from gugu.execution import PaperBroker
 from gugu.execution.base import Direction
+from gugu.execution.track_live import LivePositionTracker
 from gugu.risk import RiskManager
 
 
@@ -36,11 +38,24 @@ _web_broker: Any = None
 _web_risk: Any = None
 
 
-def _get_web_broker() -> PaperBroker:
+def _get_web_broker() -> Any:
+    """根据 execution.mode 选择 broker（v0.6.1 track_live 支持）。
+
+    - track_live: LivePositionTracker（只读用户真实持仓）
+    - paper/signal_only: PaperBroker（模拟盘）
+    """
     global _web_broker
     if _web_broker is None:
-        _web_broker = PaperBroker()
-    return cast(PaperBroker, _web_broker)
+        try:
+            mode = get_config().execution.mode
+        except Exception:
+            mode = "paper"
+        if mode == "track_live":
+            _web_broker = LivePositionTracker()
+            logger.info("[Web] 使用 LivePositionTracker（track_live 模式）")
+        else:
+            _web_broker = PaperBroker()
+    return _web_broker
 
 
 def _get_web_risk() -> RiskManager:
@@ -55,6 +70,41 @@ from gugu.utils.log import get_logger
 logger = get_logger()
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+# P0 修复：Web 敏感接口 API Key 认证
+def _get_web_admin_api_key() -> str:
+    """读取 Web 管理接口 API Key（支持环境变量覆盖）。"""
+    import os
+
+    env_key = os.environ.get("GUGU_ADMIN_API_KEY", "")
+    if env_key:
+        return env_key
+    try:
+        cfg = get_config()
+        return cfg.web.admin_api_key
+    except Exception:
+        return ""
+
+
+def _require_admin_auth(x_api_key: str | None = Header(None, alias="X-API-Key")) -> None:
+    """敏感接口依赖：校验管理 API Key。"""
+    cfg_key = _get_web_admin_api_key()
+    cfg = get_config()
+    require_auth = False
+    with contextlib.suppress(Exception):
+        require_auth = cfg.web.require_auth_for_sensitive
+
+    # 未配置 key 且未强制认证时放行（仅本地开发）
+    if not cfg_key and not require_auth:
+        return
+
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="缺少 API Key（请求头 X-API-Key）")
+    if x_api_key != cfg_key:
+        logger.warning("Web 敏感接口收到无效 API Key")
+        raise HTTPException(status_code=403, detail="无效的 API Key")
+    return
 
 
 def create_app() -> FastAPI:
@@ -147,38 +197,55 @@ def create_app() -> FastAPI:
         """获取净值历史曲线数据。
 
         从 heartbeat_history.jsonl 读取，每行一个时间点的总资产。
+        当 history 为空时，fallback 到 heartbeat.json 的当前值，确保净值曲线有数据。
         """
         import json
         from datetime import datetime, timedelta
 
         hb_dir = Path("data")
         path = hb_dir / "heartbeat_history.jsonl"
-        if not path.exists():
-            return {"points": [], "count": 0}
-
         cutoff = datetime.now() - timedelta(days=days)
         points: list[dict[str, Any]] = []
-        try:
-            lines = path.read_text(encoding="utf-8").strip().split("\n")
-            for line in lines:
-                try:
-                    rec = json.loads(line)
-                    ts = datetime.fromisoformat(rec.get("last_cycle_at", ""))
-                    if ts < cutoff:
+        if path.exists():
+            try:
+                lines = path.read_text(encoding="utf-8").strip().split("\n")
+                for line in lines:
+                    try:
+                        rec = json.loads(line)
+                        ts = datetime.fromisoformat(rec.get("last_cycle_at", ""))
+                        if ts < cutoff:
+                            continue
+                        points.append(
+                            {
+                                "timestamp": rec["last_cycle_at"],
+                                "total_value": rec.get("total_value", 0),
+                                "cash": rec.get("cash", 0),
+                                "status": rec.get("status", ""),
+                                "halted": rec.get("halted", False),
+                            }
+                        )
+                    except (json.JSONDecodeError, ValueError, KeyError):
                         continue
+            except Exception as e:
+                logger.warning(f"读取净值历史失败: {e}")
+
+        # Fallback: 如果history为空，至少返回当前heartbeat的值
+        if not points:
+            hb_path = hb_dir / "heartbeat.json"
+            if hb_path.exists():
+                try:
+                    hb = json.loads(hb_path.read_text(encoding="utf-8"))
                     points.append(
                         {
-                            "timestamp": rec["last_cycle_at"],
-                            "total_value": rec.get("total_value", 0),
-                            "cash": rec.get("cash", 0),
-                            "status": rec.get("status", ""),
-                            "halted": rec.get("halted", False),
+                            "timestamp": hb.get("last_cycle_at", ""),
+                            "total_value": hb.get("total_value", 0),
+                            "cash": hb.get("cash", 0),
+                            "status": hb.get("status", ""),
+                            "halted": hb.get("halted", False),
                         }
                     )
-                except (json.JSONDecodeError, ValueError, KeyError):
-                    continue
-        except Exception as e:
-            logger.warning(f"读取净值历史失败: {e}")
+                except Exception:
+                    pass
 
         return {"points": points, "count": len(points)}
 
@@ -247,7 +314,7 @@ def create_app() -> FastAPI:
                 books.append({"name": name, "summary": summary})
             return {"books": books, "count": len(books)}
         except Exception as e:
-            logger.warning(f"获取书籍视角失败: {e}")
+            logger.warning("获取书籍视角失败: {}", e)
             return {"books": [], "count": 0, "error": str(e)}
 
     @app.get("/api/health")
@@ -375,14 +442,15 @@ def create_app() -> FastAPI:
             logger.exception(f"相关性检查失败: {e}")
             return {"success": False, "message": str(e)[:200]}
 
-    @app.post("/api/halt/reset")
+    @app.post("/api/halt/reset", dependencies=[Depends(_require_admin_auth)])
     async def reset_halt() -> dict[str, Any]:
         """手动解除 L2 熔断（使用 Web 单例 RiskManager）。"""
         risk = _get_web_risk()
-        risk.reset()
+        risk.reset_halt()
+        logger.warning("L2 熔断已通过 Web 接口手动解除")
         return {"success": True, "message": "L2 熔断已手动解除"}
 
-    @app.post("/api/order")
+    @app.post("/api/order", dependencies=[Depends(_require_admin_auth)])
     async def place_order(req: OrderRequest) -> dict[str, Any]:
         """通用模拟盘下单接口（买入/卖出）。
 
@@ -413,7 +481,11 @@ def create_app() -> FastAPI:
         position = portfolio.get(symbol)
         risk_price = req.price or (position.current_price if position else 0.0)
         if risk_price <= 0:
-            return {"status": "error", "symbol": symbol, "message": "缺少有效价格，无法进行风控检查"}
+            return {
+                "status": "error",
+                "symbol": symbol,
+                "message": "缺少有效价格，无法进行风控检查",
+            }
 
         risk_result = risk.check_order(
             symbol,
@@ -448,7 +520,7 @@ def create_app() -> FastAPI:
             logger.exception(f"模拟盘下单失败 {symbol}: {e}")
             return {"status": "error", "message": str(e)[:200]}
 
-    @app.post("/api/stop_loss/{symbol}")
+    @app.post("/api/stop_loss/{symbol}", dependencies=[Depends(_require_admin_auth)])
     async def stop_loss(symbol: str) -> dict[str, Any]:
         """手动触发指定持仓的止损卖出。"""
         broker = _get_web_broker()

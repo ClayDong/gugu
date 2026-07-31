@@ -87,12 +87,12 @@ class MoneyFlowFilter:
             dm = data_manager()
             df = await dm.fetch_stock_flow(symbol)
         except Exception as e:
-            logger.warning(f"资金流数据获取异常 {symbol}: {e}")
+            logger.warning("资金流数据获取异常 {}: {}", symbol, e)
             self._set_cached(symbol, default)
             return default
 
         if df is None or df.empty:
-            logger.warning(f"资金流数据为空 {symbol}")
+            logger.warning("资金流数据为空 {}", symbol)
             self._set_cached(symbol, default)
             return default
 
@@ -107,7 +107,7 @@ class MoneyFlowFilter:
                 main_net_today = float(latest_row.get("main_net", 0) or 0)
                 main_pct_today = float(latest_row.get("main_pct", 0) or 0)
             except (IndexError, ValueError, TypeError) as e:
-                logger.warning(f"提取今日资金流失败 {symbol}: {e}")
+                logger.warning("提取今日资金流失败 {}: {}", symbol, e)
         else:
             # 无 date 列时取最后一行
             try:
@@ -115,7 +115,7 @@ class MoneyFlowFilter:
                 main_net_today = float(latest_row.get("main_net", 0) or 0)
                 main_pct_today = float(latest_row.get("main_pct", 0) or 0)
             except (IndexError, ValueError, TypeError) as e:
-                logger.warning(f"提取今日资金流失败 {symbol}: {e}")
+                logger.warning("提取今日资金流失败 {}: {}", symbol, e)
 
         # 5. 近5日主力净流入合计
         main_net_5d = 0.0
@@ -124,7 +124,7 @@ class MoneyFlowFilter:
             tail = df.tail(5)
             main_net_5d = float(tail["main_net"].sum())
         except Exception as e:
-            logger.warning(f"计算近5日主力净流入失败 {symbol}: {e}")
+            logger.warning("计算近5日主力净流入失败 {}: {}", symbol, e)
 
         # 6. 评分计算
         # score = clamp(main_net_5d / abs(main_net_5d).max() * 0.5 + main_pct_today / 10 * 0.5, 0, 1)

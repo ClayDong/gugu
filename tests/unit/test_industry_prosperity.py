@@ -231,9 +231,9 @@ class TestIndustryProsperityScore:
         result = checker.score("衰退行业")
 
         assert result["score"] is not None
-        assert result["score"] < checker._HARD_FAIL_THRESHOLD, (
-            f"极端衰退行业得分应 < {checker._HARD_FAIL_THRESHOLD}, got {result['score']}"
-        )
+        assert (
+            result["score"] < checker._HARD_FAIL_THRESHOLD
+        ), f"极端衰退行业得分应 < {checker._HARD_FAIL_THRESHOLD}, got {result['score']}"
         assert "极低" in result["reason"]
         assert "行业衰退" in result["reason"]
 
@@ -314,6 +314,6 @@ class TestIndustryProsperityCache:
         checker.score("电子")
 
         # API 只应被调用一次
-        assert mock_board.call_count == 1, (
-            f"缓存命中时 API 应只调用 1 次，实际 {mock_board.call_count} 次"
-        )
+        assert (
+            mock_board.call_count == 1
+        ), f"缓存命中时 API 应只调用 1 次，实际 {mock_board.call_count} 次"

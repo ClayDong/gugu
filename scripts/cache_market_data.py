@@ -14,6 +14,7 @@
     uv run python scripts/cache_market_data.py --max-stocks 100  # 调试
     uv run python scripts/cache_market_data.py --datalen 1000    # 取 1000 根
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,9 +32,9 @@ from gugu.utils.log import get_logger
 logger = get_logger()
 
 # 性能参数
-_CONCURRENCY = 20      # 并发数（新浪接口较稳定，可以高一些）
-_TIMEOUT = 8            # 单股超时秒
-_BATCH_LOG = 50        # 每多少只打印进度
+_CONCURRENCY = 20  # 并发数（新浪接口较稳定，可以高一些）
+_TIMEOUT = 8  # 单股超时秒
+_BATCH_LOG = 50  # 每多少只打印进度
 _SINA_URL = "https://quotes.sina.cn/cn/api/jsonp_v2.php/=/CN_MarketDataService.getKLineData"
 
 
@@ -108,12 +109,13 @@ def _to_sina_symbol(code: str) -> str | None:
 def _fetch_stock_list_from_eastmoney() -> list[tuple[str, str, str]]:
     """东财 push2 批量接口获取股票列表（最后兜底）。"""
     import httpx
+
     # 东财 push2 全市场列表: f12=代码, f14=名称
     # secids 不传，用 fields1=f3,f12,f14
     url = "https://push2.eastmoney.com/api/qt/clist/get"
     params = {
-        "pn": "1",         # 页码
-        "pz": "10000",     # 每页大小
+        "pn": "1",  # 页码
+        "pz": "10000",  # 每页大小
         "po": "1",
         "np": "1",
         "fltt": "2",
@@ -316,7 +318,9 @@ async def main_async(args: argparse.Namespace) -> None:
     # 3. 验证
     files = list(cache_dir.glob(f"_{args.datalen}d.parquet"))
     total_cache = list(cache_dir.glob("*.parquet"))
-    logger.info(f"缓存目录: {len(files)} 个 _{args.datalen}d 文件, 总计 {len(total_cache)} 个 parquet")
+    logger.info(
+        f"缓存目录: {len(files)} 个 _{args.datalen}d 文件, 总计 {len(total_cache)} 个 parquet"
+    )
 
 
 def main() -> None:

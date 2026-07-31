@@ -170,7 +170,7 @@ def compute_regime_weights(
         调整后的权重 {strategy_name: adjusted_weight}
     """
     if regime not in REGIME_MULTIPLIERS:
-        logger.warning(f"未知市场状态 {regime}，返回原始权重")
+        logger.warning("未知市场状态 {}，返回原始权重", regime)
         return base_weights.copy()
 
     multipliers = REGIME_MULTIPLIERS[regime]

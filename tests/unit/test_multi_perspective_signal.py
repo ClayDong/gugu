@@ -151,8 +151,25 @@ def test_router_exception_skips_gracefully(base_signal: dict) -> None:
     assert result["confidence"] == 0.7
 
 
-def test_no_router_passthrough(base_signal: dict) -> None:
+def test_no_router_passthrough(base_signal: dict, monkeypatch: pytest.MonkeyPatch) -> None:
     """未配置 book_router 时直接返回原始信号。"""
+
+    # v0.7.5 P0-3修复：enable_multi_perspective 默认 true，需 mock 为 False
+    class _WisdomCfg:
+        enable_multi_perspective = False
+        skill_names = []
+        skill_dir = ""
+        books_dir = ""
+        max_perspectives = 0
+        fallback_dirs = []
+        llm_timeout = 20.0
+        llm_max_retries = 2
+        llm_retry_delay = 1.0
+
+    class _Cfg:
+        wisdom = _WisdomCfg()
+
+    monkeypatch.setattr("gugu.wisdom.advisor.get_config", lambda: _Cfg())
     advisor = WisdomAdvisor(book_router=None)
 
     result = advisor._inject_perspective_consensus(base_signal.copy())

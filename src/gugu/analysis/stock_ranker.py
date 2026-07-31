@@ -72,9 +72,9 @@ class StockRanker:
                         self._score_one(symbol, hot_sectors), timeout=10.0
                     )
                 except TimeoutError:
-                    logger.debug(f"评分超时 {symbol}")
+                    logger.debug("评分超时 {}", symbol)
                 except Exception as e:
-                    logger.debug(f"评分失败 {symbol}: {e}")
+                    logger.debug("评分失败 {}: {}", symbol, e)
                 return None
 
         tasks = [_score_with_sem(sym) for sym in symbols]

@@ -20,6 +20,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Any
 
 import httpx
 
@@ -74,6 +75,7 @@ class ScreenerRecord:
     screener_date: str  # "YYYY-MM-DD"
     passed: bool
     failed_conditions: list[str]
+    stop_loss_price: float = 0.0  # T 日建议止损价（用于次日止损命中率计算）
 
 
 @dataclass
@@ -85,12 +87,19 @@ class ValidationResult:
     close_price: float  # T 日收盘价
     open_price: float  # T+1 开盘价
     high_price: float  # T+1 最高价
+    low_price: float  # T+1 最低价
+    current_price: float  # T+1 当前价（收盘验证时为收盘价）
     open_premium: float  # 开盘溢价率
     intraday_high_premium: float  # 日内最高溢价率
+    current_premium: float  # 当前价收益（%）
+    close_premium: float  # 收盘价收益（%），盘中验证时与 current_premium 相同
+    intraday_max_drawdown: float  # 盘中最低回撤（从开盘价算，%）
+    stop_loss_hit: bool  # 是否触发止损（最低价 <= 选股止损价）
     screener_date: str
     validation_date: str
     passed: bool
     benchmark_open_change: float  # 沪深300同日开盘涨幅（用于计算超额收益）
+    stop_loss_price: float = 0.0  # T 日选股建议止损价
 
 
 # ── 记录写入 ──────────────────────────────────────────
@@ -112,6 +121,7 @@ def save_screener_records(results: list[ScreenerRecord]) -> None:
                     "screener_date": r.screener_date,
                     "passed": r.passed,
                     "failed_conditions": r.failed_conditions,
+                    "stop_loss_price": r.stop_loss_price,
                     "created_at": datetime.now().isoformat(),
                 },
                 ensure_ascii=False,
@@ -120,8 +130,8 @@ def save_screener_records(results: list[ScreenerRecord]) -> None:
                 f.write(line + "\n")
             count += 1
         except Exception as e:
-            logger.warning(f"保存选股记录失败 {r.symbol}: {e}")
-    logger.info(f"尾盘选股记录已保存: {count} 条")
+            logger.warning("保存选股记录失败 {}: {}", r.symbol, e)
+    logger.info("尾盘选股记录已保存: {} 条", count)
     _rotate_file(_SCREENER_HISTORY_FILE)
 
 
@@ -138,55 +148,78 @@ def _rotate_file(filepath: str) -> None:
             f.writelines(lines[-TRIM_TO:])
         logger.info(f"JSONL 轮转: {os.path.basename(filepath)} {len(lines)}→{TRIM_TO}")
     except Exception as e:
-        logger.debug(f"JSONL 轮转失败: {e}")
+        logger.debug("JSONL 轮转失败: {}", e)
 
 
 # ── 验证执行 ──────────────────────────────────────────
 
 
-async def validate_yesterday_screener() -> list[ValidationResult]:
+async def validate_yesterday_screener(is_eod: bool = False) -> list[ValidationResult]:
     """验证昨日尾盘选股结果（T+1 日调用）。
 
-    读取昨日选股记录，获取今日开盘价/最高价，计算溢价。
+    读取昨日选股记录，获取今日开盘价/最高价/最低价/当前价，计算溢价。
+
+    Args:
+        is_eod: 是否为收盘验证。收盘验证时 current_price 视为收盘价，
+                并用覆盖方式保存当日记录，使 auto_tune 使用真实收盘收益。
     """
     # 修复：用上一交易日而非自然日昨天，周一/节后首日不漏验证
     yesterday_str = last_trading_day().isoformat()
     records = _load_records_by_date(yesterday_str)
     if not records:
-        logger.info(f"尾盘验证: {yesterday_str} 无选股记录")
+        logger.info("尾盘验证: {} 无选股记录", yesterday_str)
         return []
 
     logger.info(f"尾盘验证: 昨日 {len(records)} 只选股记录，开始获取今日行情")
     results = await _fetch_today_prices(records)
+    hs300_open_chg = await _fetch_hs300_open_change()
 
     validated: list[ValidationResult] = []
     for rec, today_data in zip(records, results, strict=True):
         if today_data is None:
             continue
-        open_price, high_price, benchmark_open = today_data
-        open_premium = (
-            (open_price - rec.close_price) / rec.close_price if rec.close_price > 0 else 0.0
-        )
-        high_premium = (
-            (high_price - rec.close_price) / rec.close_price if rec.close_price > 0 else 0.0
-        )
+        open_price, high_price, low_price, current_price = today_data
+
+        def _pct(new: float, old: float) -> float:
+            return (new - old) / old if old > 0 else 0.0
+
+        open_premium = _pct(open_price, rec.close_price)
+        high_premium = _pct(high_price, rec.close_price)
+        current_premium = _pct(current_price, rec.close_price)
+        # 收盘收益：收盘验证时 current_price 即收盘价；盘中验证时先用当前价占位
+        close_premium = current_premium if is_eod else current_premium
+        # 盘中最低回撤：从开盘价到最低价的跌幅（ negative 值）
+        intraday_max_drawdown = _pct(low_price, open_price) * 100
+        # 止损命中：最低价 <= 选股时建议止损价（且止损价有效）
+        stop_loss_hit = rec.stop_loss_price > 0 and low_price <= rec.stop_loss_price
+
         vr = ValidationResult(
             symbol=rec.symbol,
             name=rec.name,
             close_price=rec.close_price,
             open_price=open_price,
             high_price=high_price,
+            low_price=low_price,
+            current_price=current_price,
             open_premium=round(open_premium * 100, 2),  # 转为百分比
             intraday_high_premium=round(high_premium * 100, 2),
+            current_premium=round(current_premium * 100, 2),
+            close_premium=round(close_premium * 100, 2),
+            intraday_max_drawdown=round(intraday_max_drawdown, 2),
+            stop_loss_hit=stop_loss_hit,
             screener_date=yesterday_str,
             validation_date=date.today().isoformat(),
             passed=rec.passed,
-            benchmark_open_change=benchmark_open,
+            benchmark_open_change=hs300_open_chg,
+            stop_loss_price=rec.stop_loss_price,
         )
         validated.append(vr)
 
     # 保存验证结果
-    _save_validation_results(validated)
+    if is_eod:
+        _overwrite_validation_for_date(validated, date.today().isoformat())
+    else:
+        _save_validation_results(validated)
 
     # 输出摘要
     if validated:
@@ -231,23 +264,27 @@ def _load_records_by_date(target_date: str) -> list[ScreenerRecord]:
                             screener_date=d["screener_date"],
                             passed=d.get("passed", False),
                             failed_conditions=d.get("failed_conditions", []),
+                            stop_loss_price=float(d.get("stop_loss_price", 0) or 0),
                         )
                     )
     except Exception as e:
-        logger.warning(f"读取选股记录失败: {e}")
+        logger.warning("读取选股记录失败: {}", e)
     return records
 
 
 async def _fetch_today_prices(
     records: list[ScreenerRecord],
-) -> list[tuple[float, float, float] | None]:
-    """批量获取 T+1 日开盘价/最高价和沪深300开盘涨幅。
+) -> list[tuple[float, float, float, float] | None]:
+    """批量获取 T+1 日开盘价/最高价/最低价/当前价和沪深300开盘涨幅。
 
     P0 修复：改用东财 push2 批量实时行情接口（ulist.np/get），
     而非日K线接口。原因：
     1. 日K线接口在盘中没有当日数据（要收盘后才生成）
     2. 09:35 验证时需要实时开盘价/最高价，只有实时行情接口才有
     3. 批量接口一次获取所有选股记录，避免逐只请求
+
+    P2 扩展：fields 增加 f2=最新价/f16=最低价，支持计算
+    当前收益、盘中最低回撤、止损命中率。
     """
     if not records:
         return []
@@ -262,10 +299,10 @@ async def _fetch_today_prices(
         symbol_to_idx[clean] = i
 
     # 东财 push2 批量实时行情
-    # f2=最新价, f12=代码, f14=名称, f15=最高, f17=今开, f18=昨收
+    # f2=最新价, f12=代码, f14=名称, f15=最高, f16=最低, f17=今开, f18=昨收
     url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
     params = {
-        "fields": "f2,f12,f14,f15,f17,f18",
+        "fields": "f2,f12,f14,f15,f16,f17,f18",
         "secids": ",".join(secids),
     }
     headers = {
@@ -280,39 +317,38 @@ async def _fetch_today_prices(
             data = resp.json()
     except Exception as e:
         logger.warning(f"尾盘验证: 东财批量实时行情获取失败: {e}")
-        return [(None, None, None)] * len(records)
+        return [(None, None, None, None)] * len(records)
 
     # 解析返回数据
     diff_list = data.get("data", {}).get("diff", []) if data.get("data") else []
     if not diff_list:
         logger.warning("尾盘验证: 东财批量接口返回空数据")
-        return [(None, None, None)] * len(records)
+        return [(None, None, None, None)] * len(records)
 
-    # 建立代码 → (今开, 最高, 昨收) 映射
-    price_map: dict[str, tuple[float, float, float]] = {}
+    # 建立代码 → (今开, 最高, 最低, 当前价) 映射
+    price_map: dict[str, tuple[float, float, float, float]] = {}
     for item in diff_list:
         code = str(item.get("f12", ""))
         # 东财返回的价格是原始值÷100（如 2089 → 20.89 元）
         open_raw = item.get("f17")
         high_raw = item.get("f15")
-        prev_close_raw = item.get("f18")
+        low_raw = item.get("f16")
+        current_raw = item.get("f2")
         if open_raw is not None and high_raw is not None:
             price_map[code] = (
                 float(open_raw) / 100,
                 float(high_raw) / 100,
-                float(prev_close_raw) / 100 if prev_close_raw else 0.0,
+                float(low_raw) / 100 if low_raw is not None else 0.0,
+                float(current_raw) / 100 if current_raw is not None else 0.0,
             )
 
-    # 获取沪深300今日开盘涨幅
-    hs300_open_chg = await _fetch_hs300_open_change()
-
     # 按 records 顺序输出结果
-    final: list[tuple[float, float, float] | None] = []
+    final: list[tuple[float, float, float, float] | None] = []
     for rec in records:
         clean = rec.symbol[-6:] if len(rec.symbol) > 6 else rec.symbol
         prices = price_map.get(clean)
         if prices:
-            final.append((prices[0], prices[1], hs300_open_chg))
+            final.append((prices[0], prices[1], prices[2], prices[3]))
         else:
             final.append(None)
 
@@ -352,31 +388,76 @@ async def _fetch_hs300_open_change() -> float:
 
 
 def _save_validation_results(results: list[ValidationResult]) -> None:
-    """保存验证结果到 validation JSONL。"""
+    """保存验证结果到 validation JSONL（追加模式）。"""
+    _write_validation_lines(results, mode="a")
+
+
+def _overwrite_validation_for_date(results: list[ValidationResult], date_str: str) -> None:
+    """覆盖保存指定日期的验证结果（用于收盘验证覆盖盘中验证）。"""
+    _write_validation_lines(results, mode="w", filter_date=date_str)
+
+
+def _validation_result_to_dict(r: ValidationResult) -> dict[str, Any]:
+    """将 ValidationResult 序列化为 dict。"""
+    return {
+        "symbol": r.symbol,
+        "name": r.name,
+        "close_price": r.close_price,
+        "open_price": r.open_price,
+        "high_price": r.high_price,
+        "low_price": r.low_price,
+        "current_price": r.current_price,
+        "open_premium": r.open_premium,
+        "intraday_high_premium": r.intraday_high_premium,
+        "current_premium": r.current_premium,
+        "close_premium": r.close_premium,
+        "intraday_max_drawdown": r.intraday_max_drawdown,
+        "stop_loss_hit": r.stop_loss_hit,
+        "screener_date": r.screener_date,
+        "validation_date": r.validation_date,
+        "benchmark_open_change": r.benchmark_open_change,
+        "stop_loss_price": r.stop_loss_price,
+        "created_at": datetime.now().isoformat(),
+    }
+
+
+def _write_validation_lines(
+    results: list[ValidationResult],
+    mode: str = "a",
+    filter_date: str | None = None,
+) -> None:
+    """底层写入函数：追加或覆盖指定日期的验证记录。"""
     os.makedirs(os.path.dirname(_SCREENER_VALIDATION_FILE), exist_ok=True)
-    count = 0
-    for r in results:
+
+    existing_lines: list[str] = []
+    if filter_date and os.path.exists(_SCREENER_VALIDATION_FILE):
         try:
-            line = json.dumps(
-                {
-                    "symbol": r.symbol,
-                    "name": r.name,
-                    "close_price": r.close_price,
-                    "open_price": r.open_price,
-                    "high_price": r.high_price,
-                    "open_premium": r.open_premium,
-                    "intraday_high_premium": r.intraday_high_premium,
-                    "screener_date": r.screener_date,
-                    "validation_date": r.validation_date,
-                    "benchmark_open_change": r.benchmark_open_change,
-                    "created_at": datetime.now().isoformat(),
-                },
-                ensure_ascii=False,
-            )
-            with open(_SCREENER_VALIDATION_FILE, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
-            count += 1
+            with open(_SCREENER_VALIDATION_FILE, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                        if d.get("validation_date") != filter_date:
+                            existing_lines.append(line)
+                    except json.JSONDecodeError:
+                        continue
         except Exception as e:
-            logger.warning(f"保存验证记录失败 {r.symbol}: {e}")
-    logger.info(f"尾盘验证结果已保存: {count} 条")
+            logger.warning("读取旧验证记录失败: {}", e)
+
+    count = 0
+    try:
+        with open(_SCREENER_VALIDATION_FILE, mode, encoding="utf-8") as f:
+            # 覆盖模式时先写回非当日的旧记录
+            if filter_date and mode == "w" and existing_lines:
+                for line in existing_lines:
+                    f.write(line + "\n")
+            for r in results:
+                line = json.dumps(_validation_result_to_dict(r), ensure_ascii=False)
+                f.write(line + "\n")
+                count += 1
+    except Exception as e:
+        logger.warning("保存验证记录失败: {}", e)
+    logger.info("尾盘验证结果已保存: {} 条", count)
     _rotate_file(_SCREENER_VALIDATION_FILE)

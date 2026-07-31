@@ -14,6 +14,7 @@
     uv run python scripts/backtest_ml_strategy.py --max-stocks 100 --days 500 --report
     uv run python scripts/backtest_ml_strategy.py --max-stocks 300 --output data/ml_backtest_report.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -194,20 +195,18 @@ async def run_ml_backtest(
                 split_idx = int(len(df) * train_ratio)
                 if split_idx < len(df) - 10:
                     split_date = pd.Timestamp(df.iloc[split_idx]["date"])
-                    test_trades = [
-                        t for t in result.trades
-                        if pd.Timestamp(t.date) >= split_date
-                    ]
-                    test_equity = result.equity_curve[
-                        result.equity_curve.index >= split_date
-                    ]
+                    test_trades = [t for t in result.trades if pd.Timestamp(t.date) >= split_date]
+                    test_equity = result.equity_curve[result.equity_curve.index >= split_date]
                     if len(test_equity) > 1:
                         test_metrics = calc_metrics(test_equity, test_trades)
                     else:
                         test_metrics = {
-                            "total_trades": 0, "total_return": 0.0,
-                            "sharpe": 0.0, "max_drawdown": 0.0,
-                            "win_rate": 0.0, "avg_hold_days": 0.0,
+                            "total_trades": 0,
+                            "total_return": 0.0,
+                            "sharpe": 0.0,
+                            "max_drawdown": 0.0,
+                            "win_rate": 0.0,
+                            "avg_hold_days": 0.0,
                         }
                 else:
                     test_metrics = result.metrics
@@ -227,14 +226,16 @@ async def run_ml_backtest(
         r = await coro
         if r:
             all_metrics.append(r["metrics"])
-            per_stock.append({
-                "symbol": r["symbol"],
-                "trades": r["metrics"].get("total_trades", 0),
-                "return": round(r["metrics"].get("total_return", 0), 4),
-                "sharpe": round(r["metrics"].get("sharpe", 0), 4),
-                "max_drawdown": round(r["metrics"].get("max_drawdown", 0), 4),
-                "win_rate": round(r["metrics"].get("win_rate", 0), 4),
-            })
+            per_stock.append(
+                {
+                    "symbol": r["symbol"],
+                    "trades": r["metrics"].get("total_trades", 0),
+                    "return": round(r["metrics"].get("total_return", 0), 4),
+                    "sharpe": round(r["metrics"].get("sharpe", 0), 4),
+                    "max_drawdown": round(r["metrics"].get("max_drawdown", 0), 4),
+                    "win_rate": round(r["metrics"].get("win_rate", 0), 4),
+                }
+            )
         if (i + 1) % 10 == 0:
             elapsed = time.time() - t0
             logger.info(f"回测进度: {i + 1}/{len(tasks)}, 已用 {elapsed:.0f}s")
@@ -383,7 +384,8 @@ async def train_global_model(symbols: list[str], days: int, train_ratio: float =
     combined_labels = combined_labels.iloc[:min_len]
 
     factor_cols = [
-        c for c in combined_factors.columns
+        c
+        for c in combined_factors.columns
         if c not in ("date", "close", "open", "high", "low", "volume", "amount")
         and pd.api.types.is_numeric_dtype(combined_factors[c])
     ]
@@ -440,6 +442,7 @@ async def main_async(
     logger.info("=" * 60)
     # 清除旧模型缓存，确保用新数据训练
     from gugu.analysis.ml_factor import MLFactorModel as _MF
+
     old_model = _MF()
     if old_model.MODEL_PATH.exists():
         old_model.MODEL_PATH.unlink()
@@ -450,7 +453,9 @@ async def main_async(
     logger.info("=" * 60)
     logger.info(f"Step 3: ML 策略全市场回测（仅评估测试期，train_ratio={train_ratio}）")
     logger.info("=" * 60)
-    bt_result = await run_ml_backtest(symbols, days, train_ratio=train_ratio, strategy_params=strategy_params)
+    bt_result = await run_ml_backtest(
+        symbols, days, train_ratio=train_ratio, strategy_params=strategy_params
+    )
 
     # Step 4: 准入门禁评估
     logger.info("=" * 60)
@@ -469,12 +474,36 @@ async def main_async(
         "gate": gate,
     }
 
-    print(json.dumps(result, ensure_ascii=False, indent=2, default=lambda o: int(o) if isinstance(o, np.integer) else float(o) if isinstance(o, np.floating) else str(o)))
+    print(
+        json.dumps(
+            result,
+            ensure_ascii=False,
+            indent=2,
+            default=lambda o: int(o)
+            if isinstance(o, np.integer)
+            else float(o)
+            if isinstance(o, np.floating)
+            else str(o),
+        )
+    )
 
     if output:
         out_path = Path(output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=lambda o: int(o) if isinstance(o, np.integer) else float(o) if isinstance(o, np.floating) else str(o)) + "\n", encoding="utf-8")
+        out_path.write_text(
+            json.dumps(
+                result,
+                ensure_ascii=False,
+                indent=2,
+                default=lambda o: int(o)
+                if isinstance(o, np.integer)
+                else float(o)
+                if isinstance(o, np.floating)
+                else str(o),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         logger.info(f"报告已保存: {out_path}")
 
     if report:
@@ -483,7 +512,9 @@ async def main_async(
         print("=" * 60)
         print(f"股票数: {max_stocks}")
         print(f"回测天数: {days}")
-        print(f"训练比例: {result.get('train_ratio', 0.6):.0%} 训练 / {1 - result.get('train_ratio', 0.6):.0%} 测试")
+        print(
+            f"训练比例: {result.get('train_ratio', 0.6):.0%} 训练 / {1 - result.get('train_ratio', 0.6):.0%} 测试"
+        )
         if bt_result.get("status") == "ok":
             print(f"总交易数: {bt_result['total_trades']}")
             print(f"平均收益: {bt_result['avg_return']:.2%}")
@@ -503,9 +534,18 @@ def main() -> None:
     parser.add_argument("--days", type=int, default=500, help="回测天数（默认 500）")
     parser.add_argument("--output", type=str, default="", help="输出报告 JSON 路径")
     parser.add_argument("--report", action="store_true", help="打印文本报告")
-    parser.add_argument("--train-ratio", type=float, default=0.6, help="训练集比例（默认 0.6，即 60%% 训练 40%% 测试）")
-    parser.add_argument("--buy-threshold", type=float, default=None, help="覆盖买入阈值（默认 0.66）")
-    parser.add_argument("--sell-threshold", type=float, default=None, help="覆盖卖出阈值（默认 0.34）")
+    parser.add_argument(
+        "--train-ratio",
+        type=float,
+        default=0.6,
+        help="训练集比例（默认 0.6，即 60%% 训练 40%% 测试）",
+    )
+    parser.add_argument(
+        "--buy-threshold", type=float, default=None, help="覆盖买入阈值（默认 0.66）"
+    )
+    parser.add_argument(
+        "--sell-threshold", type=float, default=None, help="覆盖卖出阈值（默认 0.34）"
+    )
     parser.add_argument("--cooldown-days", type=int, default=None, help="覆盖冷却期天数（默认 16）")
     args = parser.parse_args()
 
@@ -517,10 +557,16 @@ def main() -> None:
     if args.cooldown_days is not None:
         strategy_params["cooldown_days"] = args.cooldown_days
 
-    asyncio.run(main_async(
-        args.max_stocks, args.days, args.output, args.report,
-        args.train_ratio, strategy_params or None,
-    ))
+    asyncio.run(
+        main_async(
+            args.max_stocks,
+            args.days,
+            args.output,
+            args.report,
+            args.train_ratio,
+            strategy_params or None,
+        )
+    )
 
 
 if __name__ == "__main__":

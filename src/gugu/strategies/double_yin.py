@@ -181,7 +181,7 @@ class DoubleYinMoneyBagStrategy(Strategy):
         # 买入信号：高置信度核心信号 OR 倍量加仓信号
         # ════════════════════════════════════════════════
         # 置信度阈值过滤低质量信号（4条件版本770笔→高置信度子集）
-        min_confidence = float(self.params.get("min_confidence", 0.55))
+        min_confidence = float(self.params.get("min_confidence", 0.0))
         buy_cond = (core_buy_cond & (df["confidence_score"] >= min_confidence)) | add_position_cond
 
         # ════════════════════════════════════════════════
