@@ -19,8 +19,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-import httpx
 import pandas as pd
+import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from gugu.data.collectors.base import BaseCollector
@@ -43,14 +43,13 @@ def _set_df_attrs(df: pd.DataFrame, fetch_timestamp: str | None = None) -> pd.Da
 
 
 # 东方财富 push API
-_EM_STOCK_GET_URL = "https://push2.eastmoney.com/api/qt/stock/get"
-_EM_KLINE_URL = "https://push2.eastmoney.com/api/qt/stock/kline/get"
-_EM_CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
+_EM_STOCK_GET_URL = "https://push2his.eastmoney.com/api/qt/stock/get"
+_EM_KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+_EM_CLIST_URL = "https://push2his.eastmoney.com/api/qt/clist/get"
 
 _EM_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
     "Referer": "https://quote.eastmoney.com/",
-    "Accept": "application/json, text/plain, */*",
 }
 
 # 代码前缀 → 东方财富 secid 前缀
@@ -81,11 +80,12 @@ class EastmoneyCollector(BaseCollector):
     adjust_type = "qfq"  # 前复权
 
     def __init__(self) -> None:
-        self._client: httpx.Client | None = None
+        self._client: requests.Session | None = None
 
-    def _get_client(self) -> httpx.Client:
+    def _get_client(self) -> requests.Session:
         if self._client is None:
-            self._client = httpx.Client(timeout=15.0, headers=_EM_HEADERS)
+            self._client = requests.Session()
+            self._client.headers.update(_EM_HEADERS)
         return self._client
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
@@ -103,11 +103,11 @@ class EastmoneyCollector(BaseCollector):
             "klt": klt,
             "fqt": fqt,
             "end": "20500101",
-            "lmt": str(max(days * 2, 120)),
+            "lmt": str(min(days * 2, 80)),
         }
         try:
             client = self._get_client()
-            resp = client.get(_EM_KLINE_URL, params=params)
+            resp = client.get(_EM_KLINE_URL, params=params, timeout=15.0)
             resp.raise_for_status()
             data = resp.json()
             if not data or not data.get("data") or not data["data"].get("klines"):
@@ -171,7 +171,7 @@ class EastmoneyCollector(BaseCollector):
                 "fields": "f43,f44,f45,f46,f47,f48,f57,f58,f169,f170",
             }
             try:
-                resp = client.get(_EM_STOCK_GET_URL, params=params)
+                resp = client.get(_EM_STOCK_GET_URL, params=params, timeout=10.0)
                 resp.raise_for_status()
                 data = resp.json()
                 if not data or not data.get("data"):
@@ -228,7 +228,7 @@ class EastmoneyCollector(BaseCollector):
         }
         try:
             client = self._get_client()
-            resp = client.get(_EM_CLIST_URL, params=params)
+            resp = client.get(_EM_CLIST_URL, params=params, timeout=15.0)
             resp.raise_for_status()
             data = resp.json()
             if not data or not data.get("data") or not data["data"].get("diff"):
@@ -281,8 +281,9 @@ class EastmoneyCollector(BaseCollector):
         try:
             client = self._get_client()
             resp = client.get(
-                "https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get",
+                "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
                 params=params,
+                timeout=15.0,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -347,7 +348,7 @@ class EastmoneyCollector(BaseCollector):
         }
         try:
             client = self._get_client()
-            resp = client.get(_EM_CLIST_URL, params=params)
+            resp = client.get(_EM_CLIST_URL, params=params, timeout=15.0)
             resp.raise_for_status()
             data = resp.json()
             if not data or not data.get("data") or not data["data"].get("diff"):
