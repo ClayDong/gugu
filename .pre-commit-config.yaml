@@ -34,6 +34,21 @@ repos:
         language: python
         types: [python]
         pass_filenames: false
+      - id: param-audit
+        name: strategy param closed-loop audit (defaults must be read by code)
+        # 2026-08-01 P1 完成：33/33 闭环，升级为 --strict 阻断新增断裂
+        entry: python scripts/verify_strategies.py param-audit --strict
+        language: python
+        types: [yaml]
+        pass_filenames: false
+        additional_dependencies:
+          - pandas
+          - numpy
+          - pyyaml
+          - pydantic
+          - pydantic-settings
+          - loguru
+          - httpx
 
 ci:
   autofix_prs: true

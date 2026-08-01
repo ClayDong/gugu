@@ -161,6 +161,16 @@ def _format_decision_chain(chain: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _format_capability_line(signal: dict) -> str:
+    """格式化能力圈标注（内部包装，无标注返回空串）。"""
+    try:
+        from gugu.strategies.capability import format_capability_line as _fmt
+
+        return _fmt(signal)
+    except Exception:
+        return ""
+
+
 def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     """Format a trade signal into a Feishu card."""
     direction = str(signal.get("direction", "buy")).lower()
@@ -277,6 +287,44 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
             f"**股票**：{name}({symbol})\n**方向**：{action}\n**当前价**：{price_display}\n**信号强度**：{strength}{price_note_line}",
             f"**触发策略**：{strategy}\n**建议仓位**：{position or '未提供'}\n**触发理由**：{reason}",
         ]
+
+    # P1/P2：数据质量戳 + 共振等级 + 能力圈标注（三大师共识：可靠性和自我认知）
+    quality_badges = []
+    dq = signal.get("data_quality")
+    if dq == "fresh":
+        quality_badges.append("🟢 实时数据")
+    elif dq == "degraded":
+        quality_badges.append("🟡 数据降级")
+    elif dq == "stale":
+        quality_badges.append("🔴 非实时价")
+    res_lvl = signal.get("resonance_level")
+    if res_lvl == "strong":
+        quality_badges.append("🔵 多策略共振")
+    elif res_lvl == "single":
+        quality_badges.append("⚪ 单策略触发")
+    if signal.get("signal_conflict"):
+        quality_badges.append("🟠 买卖矛盾")
+    if signal.get("observation_only"):
+        quality_badges.append("👀 仅供观察")
+    if quality_badges:
+        sections.append("**信号质量**：" + " | ".join(quality_badges))
+
+    dq_note = signal.get("data_quality_note")
+    if dq_note:
+        sections.append(f"⚠️ {dq_note}")
+
+    cap_line = _format_capability_line(signal)
+    if cap_line:
+        sections.append(f"**能力圈**：{cap_line}")
+
+    conflict = signal.get("conflict_detail")
+    if conflict:
+        sections.append(
+            "**⚠️ 矛盾信号**\n"
+            f"买入方：{', '.join(conflict.get('buy', [])) or '无'}\n"
+            f"卖出方：{', '.join(conflict.get('sell', [])) or '无'}\n"
+            "建议观望，等待方向明确"
+        )
 
     sl_tp_lines = []
     if stop_loss and stop_loss > 0:

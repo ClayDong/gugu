@@ -102,15 +102,17 @@ async def run_signal_only_cycle(loop_interval_minutes: int = 0) -> None:
 
 
 async def run_qmt_live() -> None:
-    """QMT 实盘模式（阶段四实现）。
+    """QMT 实盘模式（v0.9.0 实时版）。
 
     需要：
     1. xtquant SDK 安装
     2. QMT 客户端运行并登录
     3. .env 配置 QMT_PATH/QMT_ACCOUNT_ID/QMT_PASSWORD
     4. settings.yaml execution.mode=live
+
+    v0.9.0 升级：连接后持续运行，盘中每分钟实时推荐 + 自动执行。
     """
-    logger.info("QMT 实盘模式启动")
+    logger.info("QMT 实盘模式启动（v0.9.0 实时）")
 
     # 检查环境
     broker = QmtBroker()
@@ -126,7 +128,27 @@ async def run_qmt_live() -> None:
 
     logger.info("QMT 连接成功")
     engine = TradingEngine()
-    await engine.run_daily_cycle()
+
+    # 启动交易调度器（含盘中实时推荐 + 定时任务）
+    from gugu.engine.scheduler import TradingScheduler
+
+    scheduler = TradingScheduler()
+    await scheduler.start()
+    logger.info("交易调度器已启动（实时推荐 + 定时任务）")
+
+    # 保持运行
+    try:
+        while True:
+            await asyncio.sleep(60)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        logger.info("收到退出信号，正在关闭...")
+    finally:
+        try:
+            scheduler._scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+        broker.disconnect()
+        logger.info("gugu 实盘已安全退出")
 
 
 def main(mode: str, loop_interval: int) -> int:

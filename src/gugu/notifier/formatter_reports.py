@@ -397,6 +397,35 @@ def build_signal_performance_card(report: dict[str, Any]) -> dict[str, Any]:
             )
         sections.append("\n".join(strategy_lines))
 
+    by_period = report.get("by_period", [])
+    if by_period:
+        period_lines = ["**⏱ 分周期命中率**"]
+        for p in by_period:
+            n = p.get("period", "?")
+            cnt = p.get("count", 0)
+            if p.get("status") == "ok":
+                period_lines.append(
+                    f"- {n}日: 胜率{p.get('win_rate', 0):.0%} | 均收{p.get('avg_return', 0):+.2%} ({cnt}样本)"
+                )
+            else:
+                period_lines.append(f"- {n}日: 样本不足({cnt}<{3})")
+        sections.append("\n".join(period_lines))
+
+    by_regime = report.get("by_regime", {})
+    if by_regime:
+        regime_lines = ["**🐂🐻 牛熊分层（5日口径）**"]
+        regime_names = {"bull": "牛市", "bear": "熊市", "sideways": "震荡", "unknown": "未知"}
+        for regime, st in sorted(by_regime.items()):
+            label = regime_names.get(regime, regime)
+            cnt = st.get("count", 0)
+            if st.get("status") == "ok":
+                regime_lines.append(
+                    f"- {label}: 胜率{st.get('win_rate', 0):.0%} | 均收{st.get('avg_return', 0):+.2%} ({cnt}样本)"
+                )
+            else:
+                regime_lines.append(f"- {label}: 样本不足({cnt}<{3})")
+        sections.append("\n".join(regime_lines))
+
     recent = report.get("recent_signals", [])
     if recent:
         recent_lines = ["**🕒 最近信号追踪**"]

@@ -46,10 +46,12 @@ class MLGradientBoostStrategy(Strategy):
         """加载持久化的模型。"""
         try:
             if MODEL_PATH.exists() and SCALER_PATH.exists():
+                # nosec B301: 模型为本地训练产物（scripts/train_ml_gradient_boost.py），
+                # 非外部不可信输入；能写该文件者已具备任意代码执行能力，安全边界在文件系统权限
                 with open(MODEL_PATH, "rb") as f:
-                    self._model = pickle.load(f)
+                    self._model = pickle.load(f)  # nosec B301
                 with open(SCALER_PATH, "rb") as f:
-                    self._scaler = pickle.load(f)
+                    self._scaler = pickle.load(f)  # nosec B301
                 logger.info("ML GradientBoosting 模型已加载")
         except Exception as e:
             logger.warning(f"模型加载失败: {e}，将在运行时训练")
@@ -178,31 +180,36 @@ class MLGradientBoostStrategy(Strategy):
 
         return feature_df.values
 
-    @staticmethod
-    def train_and_save(data: pd.DataFrame, labels: pd.Series, feature_cols: list[str]):
-        """训练并保存模型（外部调用）。"""
-        from sklearn.ensemble import GradientBoostingRegressor
-        from sklearn.preprocessing import StandardScaler
 
-        MODEL_DIR.mkdir(parents=True, exist_ok=True)
+def train_and_save(data: pd.DataFrame, labels: pd.Series, feature_cols: list[str]):
+    """训练并保存模型（外部调用）。
 
-        scaler = StandardScaler()
-        data_scaled = scaler.fit_transform(data[feature_cols])
+    2026-08-01 修复：原为模块级 @staticmethod（类外无效装饰器），
+    导致 train_and_save 属性不存在、模型永远无法训练（死配置根因之一）。
+    改为普通模块级函数。
+    """
+    from sklearn.ensemble import GradientBoostingRegressor
+    from sklearn.preprocessing import StandardScaler
 
-        model = GradientBoostingRegressor(
-            n_estimators=100,
-            max_depth=4,
-            learning_rate=0.05,
-            subsample=0.8,
-            min_samples_leaf=50,
-            random_state=42,
-        )
-        model.fit(data_scaled, labels)
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-        with open(MODEL_PATH, "wb") as f:
-            pickle.dump(model, f)
-        with open(SCALER_PATH, "wb") as f:
-            pickle.dump(scaler, f)
+    scaler = StandardScaler()
+    data_scaled = scaler.fit_transform(data[feature_cols])
 
-        logger.info("ML模型已保存到 {}", MODEL_DIR)
-        return model, scaler
+    model = GradientBoostingRegressor(
+        n_estimators=100,
+        max_depth=4,
+        learning_rate=0.05,
+        subsample=0.8,
+        min_samples_leaf=50,
+        random_state=42,
+    )
+    model.fit(data_scaled, labels)
+
+    with open(MODEL_PATH, "wb") as f:
+        pickle.dump(model, f)
+    with open(SCALER_PATH, "wb") as f:
+        pickle.dump(scaler, f)
+
+    logger.info("ML模型已保存到 {}", MODEL_DIR)
+    return model, scaler

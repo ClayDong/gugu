@@ -52,9 +52,10 @@ class PerformanceReport:
     sortino: float  # 索提诺比率
 
     # 归因
-    brinson_allocation: float  # 配置效应
-    brinson_selection: float  # 选择效应
-    brinson_interaction: float  # 交互效应
+    brinson_allocation: float = 0.0  # 配置效应
+    brinson_selection: float = 0.0  # 选择效应
+    brinson_interaction: float = 0.0  # 交互效应
+    brinson_enabled: bool = False  # Brinson 归因是否真正计算（False=数据不足，值为占位0）
 
     # 时间序列
     daily_returns: list[float] = field(default_factory=list)
@@ -159,8 +160,9 @@ class PerformanceAnalyzer:
         downside_vol = float(np.std(downside_returns) * np.sqrt(252)) if downside_returns else 0
         sortino = (annual_return - rf) / downside_vol if downside_vol > 0 else 0
 
-        # Brinson归因（简化版）
+        # Brinson归因（简化版：需要 trades 带行业字段；缺数据时明确标注未启用）
         brinson = self._brinson_attribution(trades, benchmark_return)
+        brinson_enabled = bool(brinson.get("enabled", False))
 
         return PerformanceReport(
             total_return=round(total_return, 4),
@@ -186,6 +188,7 @@ class PerformanceAnalyzer:
             brinson_allocation=round(brinson["allocation"], 4),
             brinson_selection=round(brinson["selection"], 4),
             brinson_interaction=round(brinson["interaction"], 4),
+            brinson_enabled=brinson_enabled,
             daily_returns=daily_returns,
             cumulative_returns=cumulative,
             drawdowns=drawdowns,
@@ -268,17 +271,74 @@ class PerformanceAnalyzer:
 
     def _brinson_attribution(
         self, trades: list[dict[str, Any]], benchmark_return: float
-    ) -> dict[str, float]:
-        """Brinson归因（暂未实现真正的 Brinson 模型）。
+    ) -> dict[str, Any]:
+        """Brinson归因（简化版，2026-08-01 从占位0升级为可计算）。
 
-        TODO-P2: 真正的 Brinson 归因需要：
+        真正的 Brinson 模型需要：
         - 基准的行业权重
         - 组合的行业权重
         - 各行业基准收益
         - 各行业组合收益
-        当前返回 0（标记为暂未实现，避免返回无意义数字）。
+
+        gugu 数据源无基准行业权重，因此实现「组合内部分解」的简化版：
+        - 按行业聚合组合收益（trade 需带 industry 字段）
+        - 配置效应：行业权重 × (行业收益 - 组合平均收益) 的加权和
+        - 选择效应：组合总收益 - 基准收益 - 配置效应（残差法）
+        - 交互效应：数据不足归 0
+
+        无 industry 字段时返回占位 0 且 enabled=False（明确标注未启用，
+        不再伪装成真实归因——修复 2026-08-01 前「永远返回 0 但当作真实指标」问题）。
         """
-        return {"allocation": 0.0, "selection": 0.0, "interaction": 0.0}
+        # 检查是否有行业数据
+        industries = [
+            t.get("industry", "") for t in trades if t.get("industry") and t.get("pnl") is not None
+        ]
+        if not industries or not trades:
+            logger.info("Brinson 归因未启用：trades 缺少 industry 字段（组合内部分解不可行）")
+            return {"allocation": 0.0, "selection": 0.0, "interaction": 0.0, "enabled": False}
+
+        # 按行业聚合：权重 = 该行业交易金额占比，收益 = 该行业 pnl/amount 加权
+        sector_stats: dict[str, dict[str, float]] = {}
+        for t in trades:
+            ind = t.get("industry", "")
+            pnl = t.get("pnl", 0)
+            amount = t.get("amount", 0) or 0
+            if not ind or amount <= 0:
+                continue
+            s = sector_stats.setdefault(ind, {"amount": 0.0, "pnl": 0.0})
+            s["amount"] += amount
+            s["pnl"] += pnl
+
+        total_amount = sum(s["amount"] for s in sector_stats.values())
+        if total_amount <= 0:
+            return {"allocation": 0.0, "selection": 0.0, "interaction": 0.0, "enabled": False}
+
+        # 组合平均行业收益（金额加权）
+        avg_sector_return = sum(
+            s["pnl"] / s["amount"] * (s["amount"] / total_amount) for s in sector_stats.values()
+        )
+
+        # 配置效应：行业权重偏离平均权重带来的收益贡献
+        allocation = 0.0
+        n_sectors = len(sector_stats)
+        for s in sector_stats.values():
+            weight = s["amount"] / total_amount
+            sector_return = s["pnl"] / s["amount"]
+            # 与等权基准相比的配置偏离贡献
+            allocation += (weight - 1.0 / n_sectors) * sector_return
+
+        # 选择效应：组合总收益 - 基准收益 - 配置效应（残差）
+        portfolio_return = avg_sector_return
+        selection = portfolio_return - benchmark_return - allocation
+        interaction = 0.0
+
+        return {
+            "allocation": float(allocation),
+            "selection": float(selection),
+            "interaction": float(interaction),
+            "enabled": True,
+            "n_sectors": n_sectors,
+        }
 
     async def _get_benchmark_return(self, start_date: str, end_date: str) -> float:
         """获取沪深300基准收益"""

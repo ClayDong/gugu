@@ -63,30 +63,38 @@ strategy:
       - box_breakout
       - double_yin
       - rsi_reversal
-      - hot_money
-      - ma5_momentum
       - chenxuezhang
       - linjudaye
-      - ml_gradient_boost
       - price_volume_signal
+      - regime_cycle_four      # 四周期模型（2026-08-01 公众号战法，in_review）
+      - death_valley_rebound   # 幻灭期修复反弹（2026-08-01 公众号战法，in_review）
+      - bollinger_oversold_rebound  # 布林下轨超跌反弹（2026-08-01 公众号战法，in_review）
       # rebound_elite 已移除：2026-08-01 Walk-Forward 样本外证伪（验证期10日-5.40%/超额-6.95% p=0.035显著为负）
+      # hot_money 已移除：2026-08-01 事件研究证伪（510信号依赖单股sh688041占36%，剔除后验证期超额-0.77%转负）
+      # ma5_momentum 已移除：2026-08-01 事件研究证伪（63信号全部不显著）
+      # ml_gradient_boost 已移除：2026-08-01 死配置（模型文件缺失，永远0信号）
     # 反弹（2/3条件满足）：核心+实验策略全开
     rally:
       - box_breakout
       - double_yin
       - rsi_reversal
-      - hot_money
-      - ma5_momentum
       - chenxuezhang
       - linjudaye
-      - ml_gradient_boost
       - price_volume_signal
+      - regime_cycle_four
+      - death_valley_rebound
+      - bollinger_oversold_rebound
       # rebound_elite 已移除：2026-08-01 Walk-Forward 样本外证伪
+      # hot_money 已移除：2026-08-01 事件研究证伪（集中股依赖）
+      # ma5_momentum 已移除：2026-08-01 事件研究证伪（信号过稀不显著）
+      # ml_gradient_boost 已移除：2026-08-01 死配置（模型缺失）
     # 震荡（1/3条件满足）：核心策略全开
     sideways:
       - box_breakout
       - double_yin
       - rsi_reversal
+      - death_valley_rebound   # 超跌反弹在震荡市适用
+      - bollinger_oversold_rebound
     # 熊市/暴跌：空仓观察，不启用任何买入策略
     bear: []
     crash: []
@@ -104,13 +112,16 @@ strategy:
     - rsi_reversal      # conditional_pass（Walk-Forward 通过，唯一严格达标者）
   # 实验性策略（仅 paper 模式参与信号融合，signal_only/track_live 仅观察）
   experimental_strategies:
-    - hot_money         # 游资策略，逻辑闭环但需 paper 验证
-    - ma5_momentum      # 新增待验证
-    - chenxuezhang     # 陈学长不吃面规则策略
-    - linjudaye        # 邻居大爷规则策略
-    - ml_gradient_boost # ML GradientBoosting策略（experimental）
+    - chenxuezhang     # 陈学长不吃面规则策略（2026-08-01 事件研究 conditional_pass）
+    - linjudaye        # 邻居大爷规则策略（2026-08-01 事件研究 conditional_pass）
     - price_volume_signal  # 换手率+量比尾盘黄金信号（大样本回测验证通过，等 paper 观察30+信号转正）
+    - regime_cycle_four      # 四周期模型（公众号战法，2026-08-01 落地 in_review，待事件研究验证）
+    - death_valley_rebound   # 幻灭期修复反弹（公众号战法，2026-08-01 落地 in_review）
+    - bollinger_oversold_rebound  # 布林下轨超跌反弹（公众号战法，2026-08-01 落地 in_review）
     # rebound_elite 已移除：2026-08-01 Walk-Forward 样本外证伪（43信号全部年份负超额，验证期p=0.035显著为负）
+    # hot_money 已移除：2026-08-01 事件研究证伪（510信号依赖单股sh688041占36%，剔除后验证期超额-0.77%转负）
+    # ma5_momentum 已移除：2026-08-01 事件研究证伪（63信号全部不显著）
+    # ml_gradient_boost 已移除：2026-08-01 死配置（模型文件缺失）
   # 向后兼容：原 enabled 列表（当 verified_strategies + experimental_strategies 都为空时使用）
   enabled: []
   # v0.7.5 P0-1修复：仅 verified 策略参与权重分配（总和=1.0）
@@ -121,13 +132,15 @@ strategy:
     rsi_reversal: 0.25
   # 实验性策略权重（仅 paper 模式使用）
   experimental_weights:
-    hot_money: 0.25
-    ma5_momentum: 0.20
-    chenxuezhang: 0.20
-    linjudaye: 0.15
-    ml_gradient_boost: 0.10
+    chenxuezhang: 0.30
+    linjudaye: 0.25
     price_volume_signal: 0.10
+    regime_cycle_four: 0.08
+    death_valley_rebound: 0.08
+    bollinger_oversold_rebound: 0.08
     # rebound_elite 权重已移除（样本外证伪）
+    # hot_money 权重已移除（2026-08-01 事件研究证伪，集中股依赖）
+    # ma5_momentum / ml_gradient_boost 权重已移除（证伪 / 模型缺失）
   # 信号融合规则：unanimous（全票通过）/ majority（多数）/ any（任一）/ weighted（策略池加权）
   # v0.4.1：恢复 weighted（多策略共识），any 模式在 A 股高噪声下产生大量假信号
   signal_fusion: weighted
@@ -182,6 +195,13 @@ stock_ranker:
 intraday_monitor:
   enabled: true
   performance_mode: auto    # auto|high|medium|low|off
+  # v0.9.0 实时推荐：盘中策略信号持续扫描（复用 intraday_monitor 的分钟级调度）
+  #   signal_only/paper/track_live: 只推送信号，不下单（默认安全）
+  #   live + confirm_required=true:  只推送，等待人工确认
+  #   live + confirm_required=false: 信号直接委托 QMT 自动交易
+  realtime_recommend: true
+  signal_cooldown_sec: 1800   # 同一(股票,方向)信号最小推送间隔（秒）
+  signal_scan_interval_sec: 300  # 策略全量扫描间隔（秒），单机性能节流
   # 自定义监控范围（可选，留空则按性能模式自动决定）
   # P1-5 优化：扩大监控范围到 19 只股票
   custom_watchlist:
@@ -228,12 +248,14 @@ risk:
 # ========== 执行 ==========
 execution:
   # 模式说明：
-  #   signal_only - 只发信号通知，不下单（监控验证用）
+  #   signal_only - 只发信号通知 + 并行模拟盘验证（不下真实单）
   #   paper       - 模拟下单（纸面交易，不触发真实券商下单）
   #   track_live  - 实盘持仓跟踪（只读用户真实持仓 data/live_positions.json，
   #                 跑止损/止盈提醒，不自动下单；信号以"建议"卡片推送，用户手动执行）
-  #   live        - 实盘交易（需配置券商接口；当前保持禁用边界）
+  #                 ★ v0.9.0 起：实时信号同时并行记入独立模拟盘验证效果
+  #   live        - 实盘交易（需配置券商接口；待模拟盘验证通过后启用）
   # v0.6.1 新增 track_live：用户有真实持仓时使用，系统不自动交易，只监控止损提醒
+  # v0.9.0 推荐路径：保持 track_live（真实持仓保护）→ 信号飞书通知 + 模拟盘验证 → 效果达标后切 live
   mode: track_live
   paper:
     initial_capital: 1000000     # 模拟本金 100 万

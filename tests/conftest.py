@@ -40,6 +40,13 @@ def isolate_project_paths(tmp_path, monkeypatch):
     monkeypatch.setattr("gugu.execution.paper.STATE_FILE", tmp_path / "paper_broker_state.json")
     # 屏蔽 signals_history.jsonl 写入（测试用例无需关心历史记录持久化）
     monkeypatch.setattr("gugu.engine.main.record_signal_history", lambda *a, **kw: None)
+    # L5: signal_pipeline 的告警函数未隔离 → 测试 mock PROJECT_ROOT 为不存在路径时，
+    #     真实 record_signal_history 捕获异常后触发 _alert_signal_history_write_failure
+    #     daemon 线程会真实推送飞书（P0 测试副作用泄漏到生产通知，2026-08-01 事故）
+    monkeypatch.setattr(
+        "gugu.engine.signal_pipeline._alert_signal_history_write_failure",
+        lambda *a, **kw: None,
+    )
     # 通过显式环境变量通知 FeishuNotifier 重定向重试队列（替代 sys.modules 检测）
     monkeypatch.setenv("GUGU_TEST_MODE", "1")
 

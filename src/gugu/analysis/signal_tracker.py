@@ -26,10 +26,17 @@ from gugu.utils.log import get_logger
 
 logger = get_logger()
 
-# 追踪周期（天）
-TRACK_PERIODS = [1, 3, 5, 10]
+# 追踪周期（交易日）
+# 20/60 日为中长期验证：短周期验证信号即时性，长周期验证信号是否具备中期趋势价值
+TRACK_PERIODS = [1, 3, 5, 10, 20, 60]
 # 最小样本数（低于此数不生成报告）
 MIN_SAMPLE_SIZE = 3
+# 各周期独立最小样本数（不足标记 insufficient，不阻塞其他周期）
+PERIOD_MIN_SAMPLE = 3
+# 牛熊分层基准指数（沪深300）
+REGIME_INDEX = "000300"
+# 牛熊判定均线窗口
+REGIME_MA_WINDOW = 60
 
 
 class SignalTracker:
@@ -125,6 +132,12 @@ class SignalTracker:
         # 按策略分组统计
         by_strategy = self._stats_by_strategy(tracked)
 
+        # 按周期独立统计（20/60 日样本少，单独标注 insufficient）
+        by_period = self._stats_by_period(tracked)
+
+        # 按牛熊分层统计（沪深300 相对 MA60）
+        by_regime = await self._stats_by_regime(tracked)
+
         # 最近 5 条信号
         recent = tracked[-5:] if len(tracked) >= 5 else tracked
 
@@ -162,6 +175,8 @@ class SignalTracker:
             "closed_trade_win_rate": round(closed_trade_win_rate, 4),
             "realized_pnl": round(realized_pnl, 2),
             "by_strategy": by_strategy,
+            "by_period": by_period,
+            "by_regime": by_regime,
             "recent_signals": recent,
             "generated_at": datetime.now().isoformat(),
         }
@@ -220,8 +235,9 @@ class SignalTracker:
             return {**sig, "error": "too_recent"}
 
         try:
-            # 拉取信号日到现在的 K 线
-            df = await self._dm.fetch_stock_history(symbol, days=max(days_since + 10, 30))
+            # 拉取信号日到现在的 K 线（需覆盖最长 60 交易日 ≈ 84 自然日 + 信号日距今 + 缓冲）
+            fetch_days = max(days_since + 95, 120)
+            df = await self._dm.fetch_stock_history(symbol, days=fetch_days)
             if df.empty or len(df) < 2:
                 return {**sig, "error": "no_data"}
 
@@ -303,6 +319,128 @@ class SignalTracker:
             )
 
         result.sort(key=lambda x: x["avg_return"], reverse=True)
+        return result
+
+    def _stats_by_period(self, tracked: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """按追踪周期独立统计绩效。
+
+        20/60 日样本天然少于短周期（需要信号发出足够久），
+        样本不足的周期标记 insufficient，不阻塞其他周期统计。
+        """
+        result = []
+        for n in TRACK_PERIODS:
+            field = f"return_{n}d"
+            returns = [t[field] for t in tracked if t.get(field) is not None]
+            entry: dict[str, Any] = {
+                "period": n,
+                "count": len(returns),
+            }
+            if len(returns) < PERIOD_MIN_SAMPLE:
+                entry["status"] = "insufficient"
+                entry["win_rate"] = None
+                entry["avg_return"] = None
+            else:
+                wins = [r for r in returns if r > 0]
+                entry["status"] = "ok"
+                entry["win_rate"] = round(len(wins) / len(returns), 4)
+                entry["avg_return"] = round(sum(returns) / len(returns), 4)
+            result.append(entry)
+        return result
+
+    async def _stats_by_regime(self, tracked: list[dict[str, Any]]) -> dict[str, Any]:
+        """按信号发出时的市场状态（牛/熊/震荡）分层统计。
+
+        用沪深300（000300）历史 K 线判定每个信号日的市场状态：
+        - close > MA60 × (1 + 1%) → bull
+        - close < MA60 × (1 - 1%) → bear
+        - 其余 → sideways
+        指数数据不可用 → 全部标记 unknown，不阻塞报告。
+        """
+        # 收集需要判定的信号日期
+        signal_dates: set[str] = set()
+        for t in tracked:
+            ts = t.get("timestamp", "")
+            try:
+                signal_dates.add(pd.to_datetime(ts).date().isoformat())
+            except Exception:
+                continue
+        if not signal_dates:
+            return {}
+
+        # 拉取沪深300 K 线（覆盖最早信号日往前 REGIME_MA_WINDOW 天 + 缓冲）
+        earliest = min(signal_dates)
+        try:
+            earliest_dt = date.fromisoformat(earliest)
+        except ValueError:
+            earliest_dt = date.today()
+        fetch_days = max((datetime.now().date() - earliest_dt).days + REGIME_MA_WINDOW + 20, 120)
+        try:
+            df = await self._dm.fetch_stock_history(REGIME_INDEX, days=fetch_days)
+        except Exception as e:
+            logger.debug("拉取牛熊基准指数 {} 失败: {}", REGIME_INDEX, e)
+            df = pd.DataFrame()
+
+        if df.empty or len(df) < REGIME_MA_WINDOW:
+            # 指数数据不可用：全部标记 unknown
+            return {"unknown": {"count": len(tracked), "status": "insufficient"}}
+
+        # 计算 MA60
+        df = df.sort_values("date").reset_index(drop=True)
+        df["date"] = pd.to_datetime(df["date"])
+        df["ma60"] = df["close"].rolling(REGIME_MA_WINDOW).mean()
+
+        # 每个信号日 → 最近一个交易日 → 市场状态
+        regime_of_date: dict[str, str] = {}
+        index_dates = df["date"].dt.date.tolist()
+        for d in signal_dates:
+            try:
+                d_date = date.fromisoformat(d)
+            except ValueError:
+                continue
+            # 找 <= d 的最近交易日
+            eligible = [x for x in index_dates if x <= d_date]
+            if not eligible:
+                continue
+            row = df[df["date"].dt.date == max(eligible)].iloc[0]
+            close = float(row["close"])
+            ma60 = float(row["ma60"])
+            if pd.isna(ma60):
+                continue
+            if close > ma60 * 1.01:
+                regime_of_date[d] = "bull"
+            elif close < ma60 * 0.99:
+                regime_of_date[d] = "bear"
+            else:
+                regime_of_date[d] = "sideways"
+
+        # 分层统计（用 return_5d 作为统一比较口径）
+        buckets: dict[str, list[float]] = {}
+        for t in tracked:
+            ret = t.get("return_5d")
+            if ret is None:
+                continue
+            ts = t.get("timestamp", "")
+            try:
+                d = pd.to_datetime(ts).date().isoformat()
+            except Exception:
+                continue
+            regime = regime_of_date.get(d, "unknown")
+            buckets.setdefault(regime, []).append(ret)
+
+        result: dict[str, Any] = {}
+        for regime, returns in buckets.items():
+            entry: dict[str, Any] = {
+                "count": len(returns),
+                "status": "ok" if len(returns) >= PERIOD_MIN_SAMPLE else "insufficient",
+            }
+            if entry["status"] == "ok":
+                wins = [r for r in returns if r > 0]
+                entry["win_rate"] = round(len(wins) / len(returns), 4)
+                entry["avg_return"] = round(sum(returns) / len(returns), 4)
+            else:
+                entry["win_rate"] = None
+                entry["avg_return"] = None
+            result[regime] = entry
         return result
 
     async def generate_daily_validation_report(

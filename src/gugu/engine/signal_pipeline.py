@@ -222,6 +222,15 @@ class SignalPipeline:
                 self._inc_filter("信号路由")
                 return None
 
+            # P2 能力圈标注：注入策略可解释性/验证等级/仓位上限
+            # （巴菲特：知道自己在圈内还是圈外）
+            try:
+                from gugu.strategies.capability import annotate_signal
+
+                signal = annotate_signal(signal)
+            except Exception:
+                pass  # 标注失败不阻塞信号
+
             # 基础信号验证（无持仓卖出、停牌、ST股票）
             if self._validate_signal_basic(signal, symbol, portfolio, meta):
                 return None
@@ -261,11 +270,25 @@ class SignalPipeline:
                 return None
 
             # 初始化数据质量和市场上下文
+            # P1 数据质量戳三级：fresh(绿)/degraded(黄)/stale(红)
+            # - fresh:    实时价 + 数据源正常
+            # - degraded: 数据源降级（部分数据缺失，信号仍推送但标注）
+            # - stale:    非实时价（用收盘价兜底，信号仅供观察）
             if "data_quality" not in signal:
-                signal["data_quality"] = (
-                    "fresh"
-                    if signal.get("price_is_realtime") and not self._dm.is_degraded
-                    else "stale"
+                if signal.get("price_is_realtime") and not self._dm.is_degraded:
+                    signal["data_quality"] = "fresh"
+                elif signal.get("price_is_realtime") or not self._dm.is_degraded:
+                    signal["data_quality"] = "degraded"
+                else:
+                    signal["data_quality"] = "stale"
+            # 降级时"观而不发"标记：数据源降级产生的信号标注 observation_only
+            # （利弗莫尔原则：无信息时唯一正确动作是不做，而非做方向假设）
+            if signal.get("data_quality") in ("degraded", "stale"):
+                signal["observation_only"] = True
+                signal["data_quality_note"] = (
+                    "数据源降级，信号仅供观察，建议人工核实实时行情后再决策"
+                    if signal["data_quality"] == "degraded"
+                    else "使用收盘价兜底（非实时），信号可靠性低，仅作参考"
                 )
             signal["data_timestamp"] = signal.get("data_timestamp", pd.Timestamp.now().isoformat())
             signal["data_sources"] = signal.get(
@@ -1294,3 +1317,50 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
     except Exception as e:
         logger.warning("记录信号历史失败: {}", e)
+        # P0 watchdog：信号历史写入失败是"系统失忆"前兆，必须飞书告警
+        _alert_signal_history_write_failure(signal, e)
+
+
+def _alert_signal_history_write_failure(signal: dict, exc: Exception) -> None:
+    """信号历史写入失败 → 飞书最高优先级告警（P0 静默失效防线）。
+
+    异步触发不阻塞主流程；通过模块级函数隔离，避免循环依赖。
+    飞书未配置/禁用时静默降级（仅日志）。
+
+    测试环境保护：GUGU_TEST_MODE 下不真实外发（防止测试副作用泄漏到生产通知），
+    仅记录 debug 日志——测试环境隔离是 P0 防线，测试本身通过 patch 断言告警触发。
+    """
+    import os
+
+    if os.environ.get("GUGU_TEST_MODE"):
+        logger.debug("测试模式：跳过信号历史写入失败飞书告警（仅记录日志）")
+        return
+    try:
+        import threading
+
+        def _do_alert() -> None:
+            try:
+                import asyncio
+
+                from gugu.notifier.feishu import FeishuNotifier
+
+                notifier = FeishuNotifier()
+                if not notifier._system_error_enabled:
+                    logger.warning("信号历史写入失败但系统错误告警未开启，跳过告警")
+                    return
+                symbol = signal.get("symbol", "?")
+                direction = signal.get("direction", "?")
+                msg = (
+                    f"⚠️ 信号历史写入失败（P0 数据完整性）\n"
+                    f"股票: {symbol} ({direction})\n"
+                    f"错误: {exc}\n"
+                    f"信号未落盘，绩效验证闭环将缺失该记录！"
+                )
+                asyncio.run(notifier.notify_error({"message": msg}))
+            except Exception as e2:
+                logger.warning("信号历史写入失败告警发送失败: {}", e2)
+
+        threading.Thread(target=_do_alert, daemon=True).start()
+    except Exception:
+        # 告警链路本身故障不掩盖原始问题
+        pass

@@ -38,13 +38,16 @@ signal_strategies:
     module: gugu.strategies.hot_money
     class: HotMoneyStrategy
     source: 游资内部交易心法（涨停筛选+缩倍量入场+放倍量离场）
-    enabled: true
-    # experimental: 逻辑闭环但未完成 Walk-Forward 验证，仅在 paper 模式下参与信号融合
+    enabled: false
+    # 2026-08-01 样本外证伪：15股×600日事件研究（510信号）全样本超额+1.00%(p=0.014)，
+    # 但 sh688041 单股占36%信号；剔除后验证期(2025-02~2026-07)超额5d -0.50%/10d -0.77% 转负，
+    # 2025(-0.43%)/2026(-0.85%)逐年恶化。训练期有效验证期失效 = 过拟合特征，集中度超标不可信。
+    # 代码保留，禁止参与信号融合；若加"单股信号占比上限/板块分散约束"后重走 Walk-Forward 方可恢复。
     summary: 三步法：①近7日涨停筛选 → ②缩量至涨停日50%以下入场（筹码锁定） → ③放量至涨停日200%以上离场（主力出货）。进阶：半仓滚动（阴线买/阳线卖）增厚收益。
     params_entry: strategy_defaults.yaml
     # P0-5 修复：修正验证标签不一致（原 validation 写"通过"但 validation_gate.status=pending）
-    # 真实状态：未完成 Walk-Forward 验证，0 笔样本外交易，标记为 pending
-    validation: 待 Walk-Forward 验证 2026-07-26 - 0 笔样本外交易，策略逻辑闭环但未验证
+    # 2026-08-01 升级：15股×600日 Walk-Forward 事件研究 → 集中股依赖+样本外失效，降级 backtest_failed
+    validation: backtest_failed 2026-08-01 - 510信号事件研究：全样本超额显著(+1.00% p=0.014)但依赖单股sh688041(36%)；剔除后验证期超额-0.77%(p=0.140)转负，2025/2026逐年恶化，过拟合特征
     notes: '核心哲学：成交量是唯一无法造假的大资金痕迹。
 
       涨停 = 主力态度最强信号（愿意用涨停价吃货 = 强烈看多）
@@ -59,18 +62,18 @@ signal_strategies:
 
       '
     validation_gate:
-      status: pending
-      sample: 6 只活跃股，500 交易日
+      status: backtest_failed
+      sample: 15 只活跃题材股，600 交易日（事件研究，2024-02~2026-07，510信号）
       metrics:
-        total_trades: 0
-        avg_return: 0.0
+        total_trades: 510
+        avg_return: 0.0085
         avg_sharpe: 0.0
         max_drawdown: 0.0
         profitable_ratio: 0.0
-        param_stability: 1.0
+        param_stability: 0.0
         paper_signals: 0
         paper_return: 0.0
-      next_action: 需在活跃股（涨停频繁）中验证策略有效性
+      next_action: 降级禁用。优化方向：单股信号占比上限(剔除>30%集中股)/板块分散约束/市场环境过滤后重走 Walk-Forward 样本外验证，验证期超额显著为正(p<0.05)方可恢复
   box_breakout:
     name: 达尔文箱体突破
     module: gugu.strategies.breakout
@@ -716,28 +719,30 @@ signal_strategies:
     module: gugu.strategies.ma5_momentum
     class: MA5MomentumStrategy
     source: 用户自研交易心法（放量大阳线启动 + 5日均线趋势跟踪）
-    enabled: true
-    # experimental: 逻辑闭环但未完成 Walk-Forward 验证，仅在 paper 模式下参与信号融合
+    enabled: false
+    # 2026-08-01 事件研究证伪：15股×600日 63信号（train 31/val 32），
+    # 验证期超额 5d +0.01%(p=0.993)/10d -0.33%(p=0.791) 全部不显著，信号过于稀疏无统计力。
+    # 代码保留，禁止参与信号融合；优化信号密度后再重走 Walk-Forward。
     summary: 放量大阳线启动后回踩MA5买入，偏离MA5部分止盈，跌破MA5减仓，连续3日站不回清仓
     params_entry: strategy_defaults.yaml
     # v0.8.1 修复：原参数名与代码不匹配（big_yang_gain_pct 等 8 个参数缺失），
     # 导致策略每次执行抛 KeyError 从未真正生效，7/28 的回测失败结论已失效。
-    # 参数已补齐（strategy_defaults.yaml），状态从 backtest_failed 改为 pending（需重新验证）。
-    validation: v0.8.1 参数修复后待重新 Walk-Forward 验证（原 7/28 失败因参数缺失，结论作废）
+    # 2026-08-01 参数补齐后重跑事件研究：63信号不显著，验证期超额为负，降级 backtest_failed。
+    validation: backtest_failed 2026-08-01 - 15股×600日事件研究63信号：train/val超额全部p>0.4不显著，验证期10d -0.33%，信号过稀无统计力
     notes: '核心规则：1. 没有放量大阳线坚决不碰；2. 放量后回踩5日均线不破是买点；3. 偏离5日线≥5%减仓50%；4. 收盘跌破5日线再减仓50%；5. 连续3日站不回5日线清仓。v0.8.1: 修复参数名不匹配 bug（big_yang_gain_pct/big_yang_vol_ratio/big_yang_lookback/pullback_tolerance/shrink_vol_ratio/profit_deviation_pct/ma5_break_exit_days/vol_ma_window）'
     validation_gate:
-      status: pending
-      sample: 0 只股票，0 个交易日（参数修复后需重跑）
+      status: backtest_failed
+      sample: 15 只活跃题材股，600 交易日（事件研究，2024-02~2026-07，63信号）
       metrics:
-        total_trades: 0
-        avg_return: 0.0
+        total_trades: 63
+        avg_return: 0.0063
         avg_sharpe: 0.0
         max_drawdown: 0.0
         profitable_ratio: 0.0
         param_stability: 0.0
         paper_signals: 0
         paper_return: 0.0
-      next_action: 参数修复后重新执行 Walk-Forward 全市场验证，通过 4 项解锁条件后再评估启用
+      next_action: 降级禁用。优化信号密度（63信号/15股600日过稀）后重走 Walk-Forward，验证期超额显著为正方可恢复
   weekly_combo:
     name: 周线四因子共振选股
     module: gugu.strategies.weekly_combo
@@ -805,21 +810,28 @@ signal_strategies:
     enabled: true
     summary: 假调整+尾盘骗线+涨停中继+趋势回踩+量价背离+突破回踩，6个高胜率规则组合触发
     params_entry: strategy_defaults.yaml
-    validation: v0.7.7 新增博主规则策略，待 Walk-Forward 验证
+    # 2026-08-01 出场端优化（exit_mode=optimized，A/B 验证）：
+    # 根因：R15"尾盘骗线"用日涨幅>2%近似 → 题材股天天触发，持仓中位仅2-3天、
+    # 40-63%交易2天内卖出，砍掉利润（事件研究持有10日 +1.02% 显著为正）。
+    # 修复：R15 改上影线骗线（冲高回落>3%才卖）+ R25 极端缩量(<MA5*0.5)才卖 +
+    #      max_hold_days=10 时间止损。A/B 回测（15股×600日同脚本）：
+    #      legacy 收益+11.22%/夏普+0.151/交易1687 → optimized +19.44%/+0.225/1034。
+    #      持仓中位 2-3日→7-10日，<=2日占比 58-63%→11-15%。
+    validation: conditional_pass 2026-08-01 - 事件研究入场端有效（val 10d +1.02% p=0.000）；引擎级夏普从 legacy -0.15 提升到 optimized +0.225（A/B 同池对比），出场端优化落地
     notes: '核心规则：假调整（R12）缩量回踩均线、尾盘骗线（R15）、涨停中继（R18）、趋势回踩（R22）、量价背离（R25）、突破回踩（R28）。'
     validation_gate:
-      status: pending
-      sample: 0 只股票，0 个交易日
+      status: conditional_pass
+      sample: 15 只活跃题材股，600 交易日（事件研究，2024-02~2026-07，2435信号）
       metrics:
-        total_trades: 0
-        avg_return: 0.0
+        total_trades: 2435
+        avg_return: 0.0128
         avg_sharpe: 0.0
         max_drawdown: 0.0
         profitable_ratio: 0.0
         param_stability: 0.0
         paper_signals: 0
         paper_return: 0.0
-      next_action: 待 Walk-Forward 验证 + 4 项解锁条件通过后再评估
+      next_action: 出场端优化已落地（optimized 模式夏普-0.15→+0.225）。持续 paper 观察 30+ 信号后转 verified；2026 年超额衰减需月度监控
   linjudaye:
     name: 邻居大爷规则策略
     module: gugu.strategies.blogger_rules.linjudaye
@@ -828,44 +840,55 @@ signal_strategies:
     enabled: true
     summary: 地量抄底+黄金分割买入+缩量回踩+量能背离+箱体震荡突破+均线粘合突破+龙抬头+量价齐升
     params_entry: strategy_defaults.yaml
-    validation: v0.7.7 新增博主规则策略，待 Walk-Forward 验证
+    # 2026-08-01 参数校准 + 补时间止损：
+    # 扩池40只事件研究：基线验证期10d +0.20%(p=0.069)不显著、2026年 -0.58%(p=0.017)显著为负。
+    # 全网格108组合校准：golden_level 0.618→0.7 + low_vol_ratio 0.5→0.7 →
+    #   验证期 +0.37%(p=0.001)显著、2026年 -0.11%(p=0.660)不再显著。Top10组合均集中该区间=稳健。
+    # 另发现：策略只有5个买入规则(R01/02/03/05/08)且无卖出信号→引擎回测资金锁死失真，
+    #   已补 max_hold_days=10 时间止损。引擎级A/B：收益 +10.05%→+14.16%、夏普 +0.101→+0.118。
+    validation: conditional_pass 2026-08-01 - 40股事件研究校准后验证期超额+0.37%(p=0.001)显著，2026衰减修复；引擎级(含时间止损)夏普+0.118，收益+14.16%
     notes: '核心规则：地量抄底（R01）、黄金分割买入（R02）、缩量回踩（R03）、量能背离（R04）、箱体震荡突破（R05）、均线粘合突破（R06）、龙抬头（R07）、量价齐升（R08）。'
     validation_gate:
-      status: pending
-      sample: 0 只股票，0 个交易日
+      status: conditional_pass
+      sample: 15 只活跃题材股，600 交易日（事件研究，2024-02~2026-07，2247信号）
       metrics:
-        total_trades: 0
-        avg_return: 0.0
+        total_trades: 2247
+        avg_return: 0.0109
         avg_sharpe: 0.0
         max_drawdown: 0.0
         profitable_ratio: 0.0
         param_stability: 0.0
         paper_signals: 0
         paper_return: 0.0
-      next_action: 待 Walk-Forward 验证 + 4 项解锁条件通过后再评估
+      next_action: 参数校准+时间止损已落地（验证期p=0.001显著，2026衰减修复）。持续 paper 观察 30+ 信号后转 verified；月度监控 2026 超额是否保持非负
   ml_gradient_boost:
     name: ML GradientBoosting 策略
     module: gugu.strategies.ml_gradient_boost
     class: MLGradientBoostStrategy
     source: mulan-quant v11 模型迁移（sklearn GradientBoosting + 83 特征）
-    enabled: true
+    enabled: false
+    # 2026-08-01 复活：修复模块级 @staticmethod bug（train_and_save 不可导入）+ 训练模型
+    # （800日K线，训练截止2025-01-31防前视偏差，6550样本/39特征）。
+    # 事件研究：验证期超额 5d +0.44%(p=0.000)/10d +0.56%(p=0.002) 显著，集中度健康(最大11%)；
+    # 但 2026 年超额归零(5d +0.09% p=0.666) 与 hot_money/rebound_elite 2026 失效模式一致。
+    # 衰减期不启用：保持 disabled，待模型滚动重训+样本外复验后再评估。
     summary: 基于 sklearn GradientBoostingRegressor 的 5 日收益预测策略，需预训练模型才能产生信号
     params_entry: strategy_defaults.yaml
-    validation: v0.7.7 新增 ML 策略，待 Walk-Forward 验证
+    validation: conditional_pass 2026-08-01 - 模型已训练(6550样本/39特征/训练截止2025-01-31防前视)，验证期超额5d +0.44%(p=0.000)显著无集中股；但2026年超额归零，保持disabled待滚动重训复验
     notes: '核心逻辑：训练 GradientBoosting 模型预测未来 5 日收益，正预期时买入。模型文件：data/ml_models/gradient_boost_v1.pkl。'
     validation_gate:
-      status: pending
-      sample: 0 只股票，0 个交易日
+      status: conditional_pass
+      sample: 15 只活跃题材股，600 交易日（事件研究，2024-02~2026-07，3243信号；模型训练截止2025-01-31）
       metrics:
-        total_trades: 0
-        avg_return: 0.0
+        total_trades: 3243
+        avg_return: 0.0137
         avg_sharpe: 0.0
         max_drawdown: 0.0
         profitable_ratio: 0.0
         param_stability: 0.0
         paper_signals: 0
         paper_return: 0.0
-      next_action: 训练模型 + Walk-Forward 验证 + 4 项解锁条件通过后再评估
+      next_action: 模型已训练可用但2026年超额归零，保持disabled。滚动重训（每季度更新训练截止）+ 样本外复验 2026 超额显著为正后再启用；训练脚本 scripts/train_ml_gradient_boost.py
   industry_capital_momentum:
     name: 行业资金强度+动量确认
     module: gugu.strategies.industry_capital_momentum
@@ -1076,6 +1099,58 @@ signal_strategies:
         paper_signals: 0
         paper_return: 0.0
       next_action: paper 模式观察 30+ 真实信号后转 verified
+  regime_cycle_four:
+    name: 四周期模型（银山谷/死亡谷）
+    module: gugu.strategies.regime_cycle
+    class: RegimeCycleFourStrategy
+    source: 公众号《八月，来了~~》（四周期：潜伏/醒悟/狂热/幻灭）
+    enabled: true
+    summary: 站上20日线+银山谷(MA20上穿MA60)+MACD金叉状态 → 潜伏期买入；跌破20日线+死亡谷+MACD死叉状态 → 幻灭期卖出。主升浪必须建立在MACD金叉状态
+    params_entry: strategy_defaults.yaml
+    validation_gate:
+      status: in_review
+      sample: 15股×600日事件研究（66事件，集中度11%，12/15股有信号）
+      metrics:
+        excess_10d: 0.0219
+        p_value_10d: 0.1242
+        val_excess_10d: 0.0115
+        val_p_10d: 0.3050
+      next_action: 方向全正但低频（银山谷年化次数少），扩池积累样本后复验
+  death_valley_rebound:
+    name: 幻灭期修复反弹（超跌企稳）
+    module: gugu.strategies.regime_cycle
+    class: DeathValleyReboundStrategy
+    source: 公众号《八月，来了~~》（幻灭期个股修复反弹）
+    enabled: true
+    summary: 幻灭期(MA5<MA60空头排列)+20日累计跌幅>10%超跌 + 3日不创新低 + KDJ金叉状态 + 站上5日线 → 修复性反弹买入；跌破5日线/持有超限 → 卖出
+    params_entry: strategy_defaults.yaml
+    validation_gate:
+      status: conditional_pass
+      sample: 15股×600日事件研究（88事件，12/15股有信号，集中度19%，剔除最大贡献者后仍显著）
+      metrics:
+        excess_10d: 0.0202
+        p_value_10d: 0.0006
+        val_excess_10d: 0.0302
+        val_p_10d: 0.0012
+        param_stability: 稳健（8-12%阈值均显著，20日窗口甜蜜点；10d太少/30d失效）
+      next_action: paper 观察 30+ 真实信号后转 verified
+  bollinger_oversold_rebound:
+    name: 布林下轨超跌反弹
+    module: gugu.strategies.regime_cycle
+    class: BollingerOversoldReboundStrategy
+    source: 公众号《八月，来了~~》（一路砸盘跌出布林下轨才有报复性反弹）
+    enabled: true
+    summary: 20日累计跌幅>12%超跌 + 收盘跌破布林下轨 → 超跌反弹买入；反弹到中轨（目标位）/持有超限 → 卖出。站不上中轨没拐点
+    params_entry: strategy_defaults.yaml
+    validation_gate:
+      status: conditional_pass
+      sample: 15股×600日事件研究（90事件，集中度13%，剔除最大贡献者后p=0.000仍显著，2024/2025/2026三年全正超额）
+      metrics:
+        excess_10d: 0.0352
+        p_value_10d: 0.0001
+        val_excess_10d: 0.0365
+        val_p_10d: 0.0001
+      next_action: paper 观察 30+ 真实信号后转 verified
 risk_strategies:
   trailing_stop:
     name: 浪谷递进移动止损

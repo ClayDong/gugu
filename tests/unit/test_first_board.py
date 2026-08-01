@@ -291,7 +291,12 @@ class TestFirstBoardMetadata:
         assert strategy.category == "breakout"
 
     def test_default_params_exist(self):
-        """默认参数应包含所有必需参数。"""
+        """默认参数应包含所有必需参数。
+
+        2026-08-01 参数闭环修复：移除 price_min/seal_ratio_min——文档概念
+        但代码从未实现（封单质量用 vol_ratio 替代，无价格下限过滤），
+        defaults 与代码已对齐（代码=权威）。
+        """
         strategy = FirstBoardStrategy()
         # 通过 params 属性获取默认参数
         default_params = strategy.params
@@ -303,12 +308,10 @@ class TestFirstBoardMetadata:
             "market_cap_min",
             "market_cap_max",
             "price_max",
-            "price_min",
             "turnover_min",
             "turnover_max",
             "vol_ratio_min",
             "vol_ratio_max",
-            "seal_ratio_min",
             "stop_loss_pct",
             "take_profit_pct",
             "time_stop_window",

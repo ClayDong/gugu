@@ -981,17 +981,25 @@ class TestRecordSignalHistory:
             sp.gugu_config.PROJECT_ROOT = original_root
 
     def test_record_signal_history_error_handling(self, tmp_path) -> None:
-        """记录失败不抛异常。"""
+        """记录失败不抛异常，且必须触发告警回调（P0 静默失效防线）。
+
+        写入失败时告警链路必须被调用（断言 mock），但不真实外发飞书
+        （源码 GUGU_TEST_MODE 短路 + 此处 patch 双层隔离）。
+        """
         from pathlib import Path
+        from unittest.mock import patch
+
         import gugu.engine.signal_pipeline as sp
 
         original_root = sp.gugu_config.PROJECT_ROOT
         sp.gugu_config.PROJECT_ROOT = Path("/nonexistent/path")
 
         try:
-            # 即使路径不存在也不应抛异常
-            record_signal_history({}, None, None)
-            assert True
+            with patch.object(sp, "_alert_signal_history_write_failure") as mock_alert:
+                # 即使路径不存在也不应抛异常
+                record_signal_history({}, None, None)
+                # P0 静默失效防线：写入失败必须触发告警（隔离环境下不真实外发）
+                mock_alert.assert_called_once()
         finally:
             sp.gugu_config.PROJECT_ROOT = original_root
 

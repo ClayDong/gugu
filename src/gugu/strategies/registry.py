@@ -31,6 +31,11 @@ from gugu.strategies.north_force_long import NorthForceLongStrategy
 from gugu.strategies.price_volume import PriceVolumeSignalStrategy
 from gugu.strategies.pullback_low import PullbackLowStrategy
 from gugu.strategies.rebound_elite import ReboundEliteStrategy
+from gugu.strategies.regime_cycle import (
+    BollingerOversoldReboundStrategy,
+    DeathValleyReboundStrategy,
+    RegimeCycleFourStrategy,
+)
 from gugu.strategies.trend import DualMAStrategy, MACDStrategy, TurtleStrategy
 from gugu.strategies.weekly_combo import WeeklyComboStrategy
 from gugu.strategies.zhen_dahu import ZhenDahuStrategy
@@ -71,6 +76,9 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "linjudaye": LinJuDaYeStrategy,
     "ml_gradient_boost": MLGradientBoostStrategy,
     "price_volume_signal": PriceVolumeSignalStrategy,  # 换手率+量比尾盘黄金信号（选股入场漏斗）
+    "regime_cycle_four": RegimeCycleFourStrategy,  # 四周期模型：银山谷买入/死亡谷卖出（公众号战法）
+    "death_valley_rebound": DeathValleyReboundStrategy,  # 幻灭期修复反弹：3日不创新低+KDJ金叉+5日线
+    "bollinger_oversold_rebound": BollingerOversoldReboundStrategy,  # 布林下轨超跌反弹（抢反弹）
 }
 
 

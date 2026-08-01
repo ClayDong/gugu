@@ -51,6 +51,10 @@ def test_signal_tracker_report_separates_forward_hit_rate() -> None:
         },
     ]
     tracker._track_signals = lambda signals: _tracked_with_forward_returns(signals)
+    # mock 指数数据，避免真实网络请求（by_regime 分层用）
+    tracker._dm.fetch_stock_history = __import__("asyncio").run(
+        _fake_index_fetch(_make_index_df(trend=0.3))
+    )
     report = __import__("asyncio").run(tracker.generate_report())
     assert report["forward_5d_signal_hit_rate"] == pytest.approx(1 / 3, abs=1e-4)
     assert "closed_trade_win_rate" in report
@@ -176,6 +180,201 @@ def test_signal_tracker_weekly_report_aggregates() -> None:
     assert report["avg_return_5d"] == pytest.approx((0.05 - 0.02 + 0.03) / 3, abs=1e-4)
     assert len(report["daily_summary"]) == 2
     assert len(report["by_strategy"]) == 2
+
+
+# ========== 20/60 日周期追踪 + 牛熊分层 ==========
+
+
+def _make_index_df(n: int = 200, trend: float = 0.0) -> pd.DataFrame:
+    """构造合成沪深300 K 线（trend>0 上行 / <0 下行 / 0 震荡）。"""
+    dates = pd.date_range("2025-01-01", periods=n, freq="B")
+    close = 3000.0 * (1 + trend / 100) ** np.arange(n)
+    if trend == 0:
+        close = 3000.0 + np.sin(np.arange(n) / 5) * 20
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": close * 0.99,
+            "high": close * 1.01,
+            "low": close * 0.98,
+            "close": close,
+            "volume": [1_000_000] * n,
+            "amount": close * 1_000_000,
+        }
+    )
+
+
+async def _fake_index_fetch(df: pd.DataFrame):
+    """构造 mock data_manager：fetch_stock_history 返回合成指数。"""
+
+    async def _fetch(symbol: str, days: int = 90) -> pd.DataFrame:
+        return df
+
+    return _fetch
+
+
+def test_signal_tracker_report_has_by_period_and_regime() -> None:
+    """generate_report 输出包含 by_period（6 周期）与 by_regime 分层。"""
+    tracker = SignalTracker()
+    tracker.load_history = lambda days=30: [
+        {
+            "timestamp": "2026-01-01T00:00:00",
+            "symbol": "000001",
+            "direction": "buy",
+            "strategies": ["s"],
+        },
+        {
+            "timestamp": "2026-01-02T00:00:00",
+            "symbol": "000002",
+            "direction": "buy",
+            "strategies": ["s"],
+        },
+        {
+            "timestamp": "2026-01-03T00:00:00",
+            "symbol": "000003",
+            "direction": "buy",
+            "strategies": ["s"],
+        },
+    ]
+
+    async def fake_track(signals):
+        return [
+            {
+                **signals[0],
+                "return_1d": 0.01,
+                "return_3d": 0.02,
+                "return_5d": 0.03,
+                "return_10d": 0.04,
+                "return_20d": 0.05,
+                "return_60d": 0.06,
+            },
+            {
+                **signals[1],
+                "return_1d": -0.01,
+                "return_3d": -0.02,
+                "return_5d": -0.03,
+                "return_10d": -0.04,
+                "return_20d": -0.05,
+                "return_60d": -0.06,
+            },
+            {
+                **signals[2],
+                "return_1d": 0.0,
+                "return_3d": 0.0,
+                "return_5d": 0.0,
+                "return_10d": 0.0,
+                "return_20d": 0.0,
+                "return_60d": 0.0,
+            },
+        ]
+
+    tracker._track_signals = fake_track
+    # mock 指数数据（上行趋势 → bull）
+    tracker._dm.fetch_stock_history = __import__("asyncio").run(
+        _fake_index_fetch(_make_index_df(trend=0.3))
+    )
+
+    report = __import__("asyncio").run(tracker.generate_report())
+    by_period = report["by_period"]
+    assert [p["period"] for p in by_period] == [1, 3, 5, 10, 20, 60]
+    # 3 个样本满足 PERIOD_MIN_SAMPLE=3，全部 ok
+    for p in by_period:
+        assert p["status"] == "ok"
+        assert p["win_rate"] == pytest.approx(1 / 3, abs=1e-4)
+    by_regime = report["by_regime"]
+    assert "bull" in by_regime
+    assert by_regime["bull"]["status"] == "ok"
+    assert by_regime["bull"]["win_rate"] == pytest.approx(1 / 3, abs=1e-4)
+
+
+def test_signal_tracker_by_period_marks_insufficient() -> None:
+    """20/60 日样本不足时标记 insufficient，不阻塞短周期统计。"""
+    tracker = SignalTracker()
+    tracked = [
+        {"timestamp": "2026-01-01T00:00:00", "return_1d": 0.01, "return_5d": 0.02},
+        {"timestamp": "2026-01-02T00:00:00", "return_1d": -0.01, "return_5d": -0.02},
+        {"timestamp": "2026-01-03T00:00:00", "return_1d": 0.0, "return_5d": 0.0},
+    ]
+    result = tracker._stats_by_period(tracked)
+    by_period = {p["period"]: p for p in result}
+    # 短周期有样本 → ok
+    assert by_period[1]["status"] == "ok"
+    assert by_period[5]["status"] == "ok"
+    # 长周期无 return_20d/return_60d → insufficient
+    assert by_period[20]["status"] == "insufficient"
+    assert by_period[60]["status"] == "insufficient"
+    assert by_period[20]["count"] == 0
+
+
+def test_signal_tracker_by_regime_bull_bear_sideways() -> None:
+    """牛熊分层正确区分 bull/bear/sideways。"""
+    tracker = SignalTracker()
+
+    async def fake_fetch(symbol: str, days: int = 90) -> pd.DataFrame:
+        # 上涨趋势 → close 远高于 MA60
+        n = 200
+        dates = pd.date_range("2025-01-01", periods=n, freq="B")
+        close = 3000.0 * 1.004 ** np.arange(n)
+        return pd.DataFrame(
+            {
+                "date": dates,
+                "open": close * 0.99,
+                "high": close * 1.01,
+                "low": close * 0.98,
+                "close": close,
+                "volume": [1_000_000] * n,
+                "amount": close * 1_000_000,
+            }
+        )
+
+    tracker._dm.fetch_stock_history = fake_fetch
+    tracked = [
+        # 信号日（2026-06-30，此时指数已大涨）→ bull
+        {"timestamp": "2026-06-30T10:00:00", "return_5d": 0.05},
+        {"timestamp": "2026-06-30T11:00:00", "return_5d": 0.03},
+        {"timestamp": "2026-06-30T14:00:00", "return_5d": 0.01},
+        # 信号日（2025-01-15，指数刚启动）→ sideways 或 bull（依赖 MA60 计算）
+        {"timestamp": "2025-01-15T10:00:00", "return_5d": -0.02},
+    ]
+    result = __import__("asyncio").run(tracker._stats_by_regime(tracked))
+    assert "bull" in result
+    assert result["bull"]["count"] == 3  # 2025-01-15 时 MA60 为 NaN 被跳过，不进入分层
+    assert result["bull"]["win_rate"] == pytest.approx(1.0, abs=1e-4)  # 3 条正收益
+
+
+def test_signal_tracker_by_regime_unknown_on_index_failure() -> None:
+    """指数数据不可用时全部标记 unknown，不阻塞报告。"""
+    tracker = SignalTracker()
+
+    async def fake_fetch_fail(symbol: str, days: int = 90) -> pd.DataFrame:
+        raise RuntimeError("index unavailable")
+
+    tracker._dm.fetch_stock_history = fake_fetch_fail
+    tracked = [
+        {"timestamp": "2026-06-30T10:00:00", "return_5d": 0.05},
+        {"timestamp": "2026-06-30T11:00:00", "return_5d": 0.03},
+        {"timestamp": "2026-06-30T14:00:00", "return_5d": 0.01},
+    ]
+    result = __import__("asyncio").run(tracker._stats_by_regime(tracked))
+    assert "unknown" in result
+    assert result["unknown"]["status"] == "insufficient"
+
+
+def test_signal_tracker_by_regime_empty_data_unknown() -> None:
+    """指数数据为空时标记 unknown。"""
+    tracker = SignalTracker()
+
+    async def fake_fetch_empty(symbol: str, days: int = 90) -> pd.DataFrame:
+        return pd.DataFrame()
+
+    tracker._dm.fetch_stock_history = fake_fetch_empty
+    tracked = [
+        {"timestamp": "2026-06-30T10:00:00", "return_5d": 0.05},
+        {"timestamp": "2026-06-30T11:00:00", "return_5d": 0.03},
+        {"timestamp": "2026-06-30T14:00:00", "return_5d": 0.01},
+    ]
+    result = __import__("asyncio").run(tracker._stats_by_regime(tracked))
+    assert result == {"unknown": {"count": 3, "status": "insufficient"}}
 
 
 async def _tracked_with_forward_returns(signals):
@@ -859,6 +1058,61 @@ class TestPerformanceAnalyzer:
         assert report.win_rate == 0
         # profit_factor = 0 / |-3000| = 0
         assert report.profit_factor == 0
+
+    @pytest.mark.asyncio
+    async def test_brinson_disabled_without_industry(self) -> None:
+        """trades 无 industry 字段 → Brinson 归因明确标记未启用（不伪装成真实归因）。"""
+        trades = [
+            {"pnl": 5000, "hold_days": 10, "symbol": "000001", "side": "buy", "amount": 100000},
+            {"pnl": 3000, "hold_days": 8, "symbol": "000002", "side": "buy", "amount": 80000},
+        ]
+        equity = [1_000_000, 1_020_000, 1_030_000]
+        analyzer = _make_performance_analyzer_with_data()
+        report = await analyzer.analyze(trades=trades, daily_equity=equity)
+
+        assert report.brinson_enabled is False, "无行业数据时不得伪装成已启用"
+        assert report.brinson_allocation == 0.0
+        assert report.brinson_selection == 0.0
+        assert report.brinson_interaction == 0.0
+
+    @pytest.mark.asyncio
+    async def test_brinson_enabled_with_industry(self) -> None:
+        """trades 带 industry 字段 → 计算简化版 Brinson 归因并标记已启用。"""
+        trades = [
+            {
+                "pnl": 5000,
+                "hold_days": 10,
+                "symbol": "000001",
+                "side": "buy",
+                "amount": 100000,
+                "industry": "银行",
+            },
+            {
+                "pnl": 3000,
+                "hold_days": 8,
+                "symbol": "000002",
+                "side": "buy",
+                "amount": 80000,
+                "industry": "银行",
+            },
+            {
+                "pnl": -1000,
+                "hold_days": 5,
+                "symbol": "000003",
+                "side": "buy",
+                "amount": 50000,
+                "industry": "医药",
+            },
+        ]
+        equity = [1_000_000, 1_020_000, 1_030_000, 1_000_000, 1_050_000]
+        analyzer = _make_performance_analyzer_with_data()
+        report = await analyzer.analyze(trades=trades, daily_equity=equity)
+
+        assert report.brinson_enabled is True, "有行业数据时应启用归因"
+        # 配置效应：银行权重(18/23)偏离等权(1/2) × 银行收益(8000/180000=8/180)
+        #          + 医药权重(5/23)偏离等权(1/2) × 医药收益(-1000/50000=-1/50)
+        expected_allocation = (18 / 23 - 1 / 2) * (8 / 180) + (5 / 23 - 1 / 2) * (-1 / 50)
+        assert report.brinson_allocation == pytest.approx(expected_allocation, abs=1e-4)
 
 
 # =========================================================================

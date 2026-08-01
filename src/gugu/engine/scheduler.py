@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -61,6 +62,33 @@ class TradingScheduler(SchedulerJobsMixin):
         self._scheduler = AsyncIOScheduler(timezone=tz)
         self._engine = TradingEngine()
         self._intraday_monitor = self._build_intraday_monitor()
+        self._realtime_scanner = self._build_realtime_scanner()
+
+    def _build_realtime_scanner(self):
+        """构建 RealtimeSignalScanner 单例（v0.9.0 实时推荐）。
+
+        依赖盘中盯盘开关：intraday_monitor 关闭时实时推荐也关闭。
+        """
+        try:
+            from gugu.engine.realtime_scanner import RealtimeSignalScanner
+
+            cfg = get_config()
+            im_cfg = getattr(cfg, "intraday_monitor", None)
+            enabled = getattr(im_cfg, "enabled", True) if im_cfg else True
+            recommend = getattr(im_cfg, "realtime_recommend", True) if im_cfg else True
+            cooldown = getattr(im_cfg, "signal_cooldown_sec", 1800) if im_cfg else 1800
+            scan_interval = getattr(im_cfg, "signal_scan_interval_sec", 300) if im_cfg else 300
+            if not enabled or not recommend or not self._task_enabled("intraday_monitor"):
+                logger.info(
+                    "实时推荐: 未启用（enabled={} recommend={}），跳过构建", enabled, recommend
+                )
+                return None
+            return RealtimeSignalScanner(
+                engine=self._engine, cooldown_sec=cooldown, scan_interval_sec=scan_interval
+            )
+        except Exception as e:
+            logger.warning("RealtimeSignalScanner 构建失败，实时推荐禁用: {}", e)
+            return None
 
     def _build_intraday_monitor(self):
         """构建 IntradayMonitor 单例（启动时构建一次，后续复用）。"""
@@ -388,7 +416,7 @@ class TradingScheduler(SchedulerJobsMixin):
                 logger.error("交易循环异常通知发送失败: {}", ne)
 
     async def _safe_intraday_monitor(self) -> None:
-        """盘中实时资金流异动监控（仅交易日盘中时段运行）。"""
+        """盘中实时盯盘（资金流异动 + 策略信号实时推荐，仅交易日盘中时段运行）。"""
         if self._intraday_monitor is None:
             return
 
@@ -406,6 +434,15 @@ class TradingScheduler(SchedulerJobsMixin):
             alerts = await self._intraday_monitor.run_cycle()
             if alerts:
                 await self._engine._notifier.notify_intraday_alert(alerts)
+
+            # v0.9.0 实时推荐：盘中策略信号持续扫描（分钟级）
+            if self._realtime_scanner is not None:
+                try:
+                    pushed = await self._realtime_scanner.run_cycle()
+                    if pushed:
+                        logger.info("实时推荐: 推送 {} 条新信号", len(pushed))
+                except Exception as e:
+                    logger.warning("实时推荐扫描异常: {}", e)
         except Exception as e:
             logger.exception("盘中盯盘异常: {}", e)
 
@@ -450,6 +487,7 @@ class TradingScheduler(SchedulerJobsMixin):
         """启动调度器。"""
         self.setup()
         self._scheduler.start()
+        self._record_boot()
         logger.info("调度器已启动，按 Ctrl+C 退出")
 
         if is_trading_day() and is_trading_time():
@@ -483,6 +521,49 @@ class TradingScheduler(SchedulerJobsMixin):
             with contextlib.suppress(asyncio.CancelledError):
                 await hb_task
             raise
+
+    def _record_boot(self) -> None:
+        """记录调度器启动（P0 watchdog 用）。
+
+        写入 data/scheduler_boot.json：
+        - boot_time: 本次启动时间
+        - pid: 本次进程 PID
+        - history: 最近 20 次启动历史（watchdog 用它检测重启风暴）
+        """
+        try:
+            from gugu.config import PROJECT_ROOT
+
+            boot_path = PROJECT_ROOT / "data" / "scheduler_boot.json"
+            boot_path.parent.mkdir(exist_ok=True)
+            now_iso = datetime.now().isoformat()
+            pid = os.getpid()
+
+            history: list[dict] = []
+            try:
+                if boot_path.exists():
+                    import json as _json
+
+                    data = _json.loads(boot_path.read_text(encoding="utf-8"))
+                    history = data.get("history", [])
+            except (OSError, ValueError):
+                history = []
+
+            history.append({"boot_time": now_iso, "pid": pid})
+            history = history[-20:]  # 只保留最近 20 次
+
+            import json as _json
+
+            boot_path.write_text(
+                _json.dumps(
+                    {"boot_time": now_iso, "pid": pid, "history": history},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            logger.info("调度器启动记录已写入: {}", boot_path)
+        except Exception as e:
+            logger.warning("调度器启动记录写入失败: {}", e)
 
     async def shutdown(self) -> None:
         """停止调度器并释放资源。"""

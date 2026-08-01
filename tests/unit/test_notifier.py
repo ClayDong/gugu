@@ -403,6 +403,19 @@ def test_build_signal_performance_card_distinguishes_forward_and_closed():
             "avg_return_5d": 0.031,
             "closed_trade_win_rate": 0.5,
             "realized_pnl": 120.0,
+            "by_period": [
+                {"period": 5, "count": 3, "status": "ok", "win_rate": 0.667, "avg_return": 0.031},
+                {
+                    "period": 20,
+                    "count": 0,
+                    "status": "insufficient",
+                    "win_rate": None,
+                    "avg_return": None,
+                },
+            ],
+            "by_regime": {
+                "bull": {"count": 3, "status": "ok", "win_rate": 0.667, "avg_return": 0.031},
+            },
         }
     )
     content = str(card)
@@ -410,6 +423,12 @@ def test_build_signal_performance_card_distinguishes_forward_and_closed():
     assert "已平仓交易胜率" in content
     assert "66.7%" in content
     assert "0.667" not in content
+    # 分周期 + 牛熊分层展示
+    assert "分周期命中率" in content
+    assert "5日: 胜率67%" in content
+    assert "20日: 样本不足" in content
+    assert "牛熊分层" in content
+    assert "牛市: 胜率67%" in content
 
 
 def test_format_signal_blocked_decision_is_observe_and_not_trade():
@@ -656,8 +675,20 @@ def test_format_daily_report_with_source_health():
         "source_health": {
             "date": "2026-07-31",
             "sources": {
-                "sina": {"success": 100, "failure": 2, "fallback_used": 0, "degraded": 1, "recovered": 1},
-                "akshare": {"success": 20, "failure": 0, "fallback_used": 5, "degraded": 0, "recovered": 0},
+                "sina": {
+                    "success": 100,
+                    "failure": 2,
+                    "fallback_used": 0,
+                    "degraded": 1,
+                    "recovered": 1,
+                },
+                "akshare": {
+                    "success": 20,
+                    "failure": 0,
+                    "fallback_used": 5,
+                    "degraded": 0,
+                    "recovered": 0,
+                },
             },
             "total_requests": 120,
             "failure_rate": 0.02,

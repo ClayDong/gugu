@@ -292,6 +292,26 @@ class SignalRouter:
             "strategies": triggered,
             "reason": f"策略 {','.join(triggered)} 触发 {direction} 信号",
         }
+        # P1 共振等级：多策略共振过滤（利弗莫尔：关键点需要确认，不依赖单一信号）
+        # - resonance >= 2：多策略共振 → 强信号（推送）
+        # - resonance == 1：单策略触发 → 弱信号（推送但标注；趋势类单策略仍有效）
+        # - conflict：买卖方向同时触发 → 矛盾信号（单独标注，拒绝机械转达）
+        n_triggered = len(set(triggered))
+        result["resonance"] = n_triggered
+        if n_triggered >= 2:
+            result["resonance_level"] = "strong"
+            result["reason"] += f"（{n_triggered} 策略共振）"
+        else:
+            result["resonance_level"] = "single"
+        if buy_votes and sell_votes:
+            result["signal_conflict"] = True
+            conflict_buy = [n for n, _ in buy_votes]
+            conflict_sell = [n for n, _ in sell_votes]
+            result["conflict_detail"] = {
+                "buy": conflict_buy,
+                "sell": conflict_sell,
+            }
+            result["reason"] += f" ⚠️ 矛盾信号：{len(conflict_buy)}买 vs {len(conflict_sell)}卖"
         if volume_factor < 1.0:
             result["volume_confirmed"] = False
             result["reason"] += "（缩量，置信度打折）"

@@ -84,7 +84,6 @@ class StrategyConfig(BaseModel):
     # 权重会在 StrategyPool 中根据近期表现动态调整
     weights: dict[str, float] = Field(
         default_factory=lambda: {
-            "hot_money": 0.30,
             "box_breakout": 0.30,
             "double_yin": 0.25,
             "rsi_reversal": 0.15,
@@ -499,6 +498,15 @@ class IntradayMonitorConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="是否启用盘中实时盯盘")
     performance_mode: str = Field(default="auto", description="性能模式: auto|high|medium|low|off")
+    realtime_recommend: bool = Field(
+        default=True, description="v0.9.0 盘中实时推荐（策略信号持续扫描）"
+    )
+    signal_cooldown_sec: int = Field(
+        default=1800, ge=60, description="v0.9.0 同一(股票,方向)信号最小推送间隔（秒）"
+    )
+    signal_scan_interval_sec: int = Field(
+        default=300, ge=60, description="v0.9.0 策略全量扫描间隔（秒），单机性能节流"
+    )
     custom_watchlist: list[str] = Field(
         default_factory=list, description="自定义监控范围（留空则按性能模式自动决定）"
     )
@@ -722,6 +730,9 @@ def flatten_config(app_config: AppConfig) -> dict[str, Any]:
         "intraday_monitor": {
             "enabled": app_config.intraday_monitor.enabled,
             "performance_mode": app_config.intraday_monitor.performance_mode,
+            "realtime_recommend": app_config.intraday_monitor.realtime_recommend,
+            "signal_cooldown_sec": app_config.intraday_monitor.signal_cooldown_sec,
+            "signal_scan_interval_sec": app_config.intraday_monitor.signal_scan_interval_sec,
             "custom_watchlist": list(app_config.intraday_monitor.custom_watchlist),
             "alert_thresholds": dict(app_config.intraday_monitor.alert_thresholds),
         },
