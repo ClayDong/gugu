@@ -607,6 +607,30 @@ entry_score = (
 2. 或完全重构入场逻辑，增加更多有效因子
 3. 待市场环境变化后再验证
 
+### 3.12 实时扫描 / 健康守护 / 能力画像（v0.9.x）
+
+**RealtimeSignalScanner**（`src/gugu/engine/realtime_scanner.py`）：
+- 盘中每 5 分钟轮询自选股池，实时行情（sina 主源）驱动信号生成
+- 独立于 scheduler 定时扫描，两路互补；信号进入同一标准管道
+- 扫描频率/池子由 `config/settings.yaml` 的 `realtime_scanner` 段控制
+
+**健康守护 watchdog**（`src/gugu/health/watchdog.py` + `scripts/health_watchdog.py`）：
+- `--check`：退出码 0/1（供 cron/CI 判断）；`--quiet`：静默模式（健康零输出，异常输出 + 推送飞书）
+- 检测项：心跳新鲜度、信号历史失忆（>2 天未写入）、重启风暴（启动记录 `data/scheduler_boot.json` 最近 20 次）
+- 部署：`gugu-health-watchdog` cron（no_agent，每 5 分钟）
+
+**策略能力画像**（`src/gugu/strategies/capability.py`）：
+- 策略 → 能力维度映射（市场状态适配 / 持有周期 / 风险偏好）
+- 供 `StrategyPool` 动态权重与市场状态分流做第二层过滤
+
+**ML 模型持久化**（`src/gugu/data/ml_models/`）：`gradient_boost_v1.pkl` + `gradient_boost_scaler_v1.pkl`，由 `scripts/train_ml_gradient_boost.py` 训练产出；加载时 `exists()` 检查，缺失自动降级（不报错）。
+
+**事件研究脚本族**（`scripts/`）：`generic_event_study.py`（通用事件研究框架）、`event_study_40.py`、`regime_cycle_event_study.py`、`hotmoney_event_study.py`、`chenxuezhang`/`linjudaye` A/B 与校准脚本——策略验证的标准流程：事件定义 → 超额收益（vs 沪深300）→ bootstrap p 值 → 集中度/年份分桶对抗性审查。
+
+**P0 告警防线**（`src/gugu/engine/signal_pipeline.py`）：
+- `record_signal_history` 写入失败 → `_alert_signal_history_write_failure` 异步飞书告警（daemon 线程，不阻塞主流程）
+- `GUGU_TEST_MODE` 下自动短路（测试环境不泄漏到生产通知）——三层防御：源码短路 + 测试断言 + conftest autouse mock
+
 ## 四、配置体系
 
 ### 4.1 配置分层

@@ -97,6 +97,7 @@ gugu/
 │       │   ├── manager.py       # DataManager（统一数据入口）
 │       │   ├── quality.py       # 数据质量校验
 │       │   ├── cache.py         # 本地缓存
+│       │   ├── ml_models/       # ML 模型持久化（gradient_boost_v1.pkl + scaler）
 │       │   └── collectors/      # 采集器
 │       │       ├── base.py      # BaseCollector 抽象
 │       │       ├── fallback.py  # 主源（新浪，设置中 primary）
@@ -125,6 +126,8 @@ gugu/
 │       │   ├── mean_revert.py   # 均值回归（RSI/KDJ/布林带）
 │       │   ├── breakout.py      # 突破（箱体/Dual Thrust/支撑阻力）
 │       │   ├── generator.py     # LLM 自然语言策略生成器
+│       │   ├── regime_cycle.py  # 四周期/幻灭期反弹/布林超跌（公众号战法，v0.9.5）
+│       │   ├── capability.py    # 策略能力画像（市场状态/周期/风险偏好匹配）
 │       │   ├── registry.py      # 策略注册表
 │       │   └── manifest.py      # 策略注册中心（统一清单加载器）
 │       ├── backtest/            # 回测引擎
@@ -174,7 +177,10 @@ gugu/
 │       │   ├── scheduler.py     # TradingScheduler（SchedulerJobsMixin 混入）
 │       │   ├── scheduler_jobs.py # 各定时任务安全执行方法
 │       │   ├── signal_router.py # 多策略信号融合
-│       │   └── signal_pipeline.py # 信号过滤/处理管道
+│       │   ├── signal_pipeline.py # 信号过滤/处理管道
+│       │   └── realtime_scanner.py # 盘中 5 分钟实时信号扫描（v0.9.x）
+│       ├── health/               # 健康守护（watchdog，P0 静默失效检测）
+│       │   └── watchdog.py       # 心跳新鲜度/信号历史失忆/重启风暴检测
 │       ├── web/                 # Web 仪表盘
 │       │   ├── app.py           # FastAPI 应用
 │       │   └── static/index.html # 单页仪表盘

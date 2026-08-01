@@ -19,12 +19,13 @@
 - **多周期趋势确认** — 周线/日线趋势一致性检查，防止逆势操作
 
 ### 📊 策略体系
-- **多策略信号融合** — 16 个注册策略（趋势/均值回归/突破/主力行为/ML 多因子），支持 weighted/majority/any 融合模式
-- **当前启用策略** — `box_breakout`（箱体突破）+ `double_yin`（双阴钱袋子），按市场状态分流启用
+- **多策略信号融合** — 36 个注册策略（趋势/均值回归/突破/主力行为/ML 多因子/公众号战法），支持 weighted/majority/any 融合模式
+- **当前启用策略** — `box_breakout`（箱体突破）+ `double_yin`（双阴钱袋子）+ `rsi_reversal`（RSI 反转），按市场状态分流启用
+- **公众号战法策略**（v0.9.5）— `regime_cycle_four`（四周期模型）/ `death_valley_rebound`（幻灭期修复反弹）/ `bollinger_oversold_rebound`（布林下轨超跌反弹），15 股 600 日事件研究验证显著（10日超额 +2.4%~+3.7%，p<0.01）
 - **ML 多因子策略** — `ml_factor`：LightGBM + PCA 正交化（窗口内拟合消除前视偏差），Walk-Forward 训练，用 26 个 Alpha 因子预测涨跌方向
 - **因子 IC 分析** — `FactorICAnalyzer` 计算因子时序 IC/IR，筛选 |IC|>0.03 且 |IR|>0.3 的有效因子
 - **策略准入门禁** — `scripts/validate_strategy_gate.py` 统一 9 项门槛（交易数/收益/夏普/回撤/盈利比/参数稳定性/paper 信号/paper 收益），结构化判断是否可启用，`--notify` 推送飞书验证报告
-- **策略注册中心** — 26 个策略统一登记到 `strategy_manifest.yaml`，启用策略必须包含 `validation_gate` 结构化验证记录
+- **策略注册中心** — 36 个策略统一登记到 `strategy_manifest.yaml`，启用策略必须包含 `validation_gate` 结构化验证记录
 - **市场状态自适应** — 4 类策略分类（趋势/均值回归/突破/主力行为），5 种市场状态动态调整权重乘数
 - **Walk-Forward 参数优化** — 滚动窗口网格搜索 + 多股聚合训练，4 项解锁条件门控自动写回
 - **自优化调度闭环** — 周日 03:00 自动跑多股聚合 Walk-Forward，6 只行业代表股，失败不污染生产参数
@@ -66,6 +67,9 @@
 - **小白学堂** — 50 个核心概念，每日 20:00 飞书推送
 
 ### 🔧 技术优化
+- **盘中实时信号扫描**（v0.9.x）— `RealtimeSignalScanner` 盘中每 5 分钟实时行情驱动扫描，独立于定时任务，信号进入同一治理管道
+- **健康守护 watchdog**（v0.9.x）— 检测"调度器在跑但输出停止"的静默失效：心跳新鲜度/信号历史失忆/重启风暴，cron 每 5 分钟静默守护，异常才推送飞书
+- **P0 静默失效防线** — 信号历史写入失败异步飞书告警（数据完整性守护），测试环境自动短路防泄漏
 - **并发预取** — 批量预取股票历史数据使用 `asyncio.gather` 并发，大幅缩短扫描时间
 - **StockRanker 并发评分** — 多只股票评分使用 Semaphore 限制并发，避免串行 I/O 阻塞
 - **技术指标统一计算** — `technical.py` 集中提供 ATR/RSI/MACD/布林带/OBV，消除重复实现
@@ -150,11 +154,12 @@ python scripts/validate_strategy_gate.py                        # 查看当前�
 |------|------|------|
 | 配置 | `config/` | 强类型 Pydantic 配置 + YAML |
 | 数据 | `data/` | 多源采集、三层缓存、数据质量校验 |
-| 策略 | `strategies/` | 15 个注册策略 + LLM 生成器 + 策略注册中心 |
+| 策略 | `strategies/` | 36 个注册策略 + LLM 生成器 + 策略注册中心 + 能力画像 |
 | 回测 | `backtest/` | 含认知引擎/Walk-Forward 优化的回测引擎 |
 | 风控 | `risk/` | 三级风控、组合相关性监控、回撤熔断 |
 | 执行 | `execution/` | 模拟盘 + QMT 实盘骨架 |
-| 引擎 | `engine/` | 主循环、信号流水线、事件驱动 |
+| 引擎 | `engine/` | 主循环、信号流水线、实时扫描、事件驱动 |
+| 健康 | `health/` | 健康守护 watchdog（心跳/失忆/重启风暴检测） |
 | 过滤 | `filters/` | 基本面、资金流、行业约束、市场状态 |
 | 分析 | `analysis/` | 移动止损、动态止盈、四阶段、危险信号、归因分析 |
 | 决策 | `wisdom/` | 28本书视角、KB Agent、冲突裁决器、LLM/fallback 决策 |
@@ -198,7 +203,7 @@ python scripts/build_kb_index.py --force
 
 ## 测试
 
-**1537 测试通过，5 跳过，69% 覆盖率**（当前本机 Python 3.14 验证结果）。
+**2121 单元测试通过 + 44 集成测试通过**（当前本机 Python 3.14 验证结果，`--timeout=20` 防挂起）。
 
 ```bash
 # 运行全部测试

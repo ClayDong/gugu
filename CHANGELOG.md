@@ -1,5 +1,158 @@
 # Changelog
 
+## v0.9.6 (2026-08-01) — P0 修复：测试副作用泄漏到生产飞书告警
+
+### 事故
+用户收到"⚠️ 信号历史写入失败（P0 数据完整性）股票: ? (?) 错误: [Errno 2] No such file or directory: '/nonexistent/path/data'"告警。
+
+### 根因
+`test_record_signal_history_error_handling` 将 `gugu_config.PROJECT_ROOT` mock 为 `/nonexistent/path` 调用真实 `record_signal_history`，捕获异常后触发 `_alert_signal_history_write_failure`——该函数在 **daemon 线程中构造真实 FeishuNotifier**（读到生产配置，`_system_error_enabled=True`）→ `notify_error` 真实推送飞书。conftest 的 autouse fixture 只 mock 了 `gugu.engine.main.record_signal_history`，**漏了 `signal_pipeline` 模块**；且 GUGU_TEST_MODE 只重定向通知队列文件路径，**不阻止 HTTP 发送**。
+
+### 修复（三层防御）
+- **源码层（治本）**：`_alert_signal_history_write_failure` 开头检查 `GUGU_TEST_MODE` → 短路仅记录 debug 日志，任何测试触发都不外发
+- **测试层**：`test_record_signal_history_error_handling` patch 告警函数并断言 `assert_called_once`（验证 P0 防线链路触发，隔离环境下不真实外发）
+- **conftest 纵深防御**：autouse fixture 补 mock `gugu.engine.signal_pipeline._alert_signal_history_write_failure`（L5，防未来其他测试触发）
+
+### 验证
+- `tests/unit/test_signal_pipeline.py` 35 passed
+- 全量回归 tests/unit 全绿（`--timeout=20` 防挂起）
+- 生产 `data/signals_history.jsonl` 正常（最新 2026-08-01 19:04 落盘），生产无此问题
+
+## v0.9.5 (2026-08-01) — 公众号战法落地（四周期 + 幻灭期修复反弹 + 布林超跌）
+
+### 背景
+用户提供公众号《八月，来了~~》战法文章（四周期模型 + MACD 金叉铁律 + 幻灭期修复反弹 + 布林下轨抢反弹），要求落地验证。
+
+### 新增（3 个策略，`src/gugu/strategies/regime_cycle.py`）
+- **regime_cycle_four**（四周期模型）：站上20日线+银山谷(MA20上穿MA60)+MACD金叉状态 → 潜伏期买入；跌破20日线+死亡谷+MACD死叉状态 → 幻灭期卖出。主升浪必须建立在MACD金叉状态（原文铁律）
+- **death_valley_rebound**（幻灭期修复反弹）：幻灭期(MA5<MA60空头排列) + 20日累计跌幅>10%超跌 + 3日不创新低 + KDJ金叉 + 站上5日线 → 买入；跌破5日线卖出
+- **bollinger_oversold_rebound**（布林下轨超跌反弹）：收盘跌破布林下轨 → 买入；反弹到中轨（目标位）卖出
+
+### 关键校准（对抗性审查发现的原文语义缺失）
+- 初版 death_valley 漏了"**处于幻灭期**"前提 → 15股600日 2615 信号泛滥（每股每天触发），3日超额 -0.17% 为负
+- 补上幻灭期（空头排列）+ 超跌（20日跌>10%）两个前置过滤后 → 75 信号，10日超额 +2.41% (p=0.0004)、验证期 +3.02% (p=0.0012) **显著**
+- 参数稳健性：超跌阈值 8-12% 均显著；窗口 20 日甜蜜点（10d 样本太少 / 30d 失效）
+- KDJ"金叉"实现为状态（k>d）而非交叉事件——交叉事件在暴跌末段已发生但当时不满足企稳条件
+
+### 优化（第二轮，bollinger 校准）
+- **bollinger_oversold_rebound 加超跌过滤**：验证期 p=0.116 未显著 → 加"20日累计跌幅>12%"前提（参考 death_valley 成功经验）→ 验证期 +3.65% (p=0.0001) **显著**
+- 超跌阈值网格：不过滤 p=0.116 / 8% p=0.032 / **12% p=0.0001（最优）** / 16% 更猛但信号少
+- 集中度复核：13%（sz300059），剔除后 p=0.000 仍显著；2024/2025/2026 三年全正超额（+4.11%/+3.48%/+3.88%）
+- **卖出模式参数化**（exit_mode: mid/hold）——事件研究验证卖出模式需引擎级回测（事件研究只看入场信号后N日收益，与卖出无关）
+- 布林带固有特性：急跌时 std 扩大 → 下轨自动下移 → 价格追不上下轨，需深跌（-35%）才破位（测试数据必须足够陡）
+
+### 验证
+- 16 个新单测（三策略信号/置信度/边界/超跌过滤）
+- 事件研究：15股×600日，death_valley 88 事件、集中度19%（剔除最大贡献者后 p=0.005 仍显著）、2024/2025 两年正超额
+- **两个策略 conditional_pass**（death_valley + bollinger）；regime_cycle_four → in_review（方向对样本不足，低频周期策略）
+- param-audit 36 闭环 0 断裂
+
+## v0.9.4 (2026-08-01) — 绩效纵深（20/60日追踪 + 牛熊分层 + 告警去重 + Brinson诚实化）
+
+### 背景
+v0.9.3 遗留三项优化建议（20/60 日收益追踪、按牛熊分层胜率、watchdog 告警去重）+ 全项目彻底检查中发现 Brinson 归因是"假实现"（永远返回 0 却当作真实指标展示，违反"降级掩盖残缺"铁律）。
+
+### 新增
+- **20/60 日收益追踪**（`signal_tracker`）：`TRACK_PERIODS` 扩展为 `[1,3,5,10,20,60]`；`_stats_by_period` 各周期独立统计，长周期样本不足标记 `insufficient` 不阻塞短周期；K 线拉取天数覆盖 60 交易日
+- **牛熊分层胜率**（`signal_tracker._stats_by_regime`）：沪深300 + MA60 判定信号日市场状态（bull/bear/sideways，±1% 缓冲带）；指数数据不可用标记 `unknown` 不阻塞报告
+- **watchdog 告警去重**（`health/watchdog.dedupe_alerts`）：按问题类别指纹去重（失忆/心跳缺失/心跳超时/重启风暴独立），默认 120 分钟抑制窗口；状态文件 `watchdog_alert_state.json`；恢复健康自动清除状态，下次故障立即重新告警；`--check` 模式保持纯净
+- **绩效卡片增强**（`formatter_reports`）：新增 ⏱ 分周期命中率 + 🐂🐻 牛熊分层区块
+
+### 修复
+- **Brinson 归因诚实化**（`analysis/performance`）：从"永远返回 0 当作真实指标"修复为——有行业数据时计算简化版归因（组合内部分解：配置/选择/交互效应），无数据时 `brinson_enabled=False` 明确标注未启用
+- **代码清理**：5 处未使用导入/变量（ruff F401/F841）、2 处风格问题（SIM103/SIM105）、4 处 except-pass 确认有 fallback 语义（加日志）
+
+### 验证
+- 16 个新单测（signal_tracker 周期/分层 5 + 去重 9 + Brinson 2）
+- 全量单元 2105 passed（+16）；集成 44 passed
+- ruff 全绿（src/scripts/tests）
+- param-audit --strict：33 闭环 0 断裂
+- check-debug-code：无调试残留
+
+## v0.9.3 (2026-08-01) — 信号质量增强（数据质量戳 + 共振过滤 + 能力圈标注）
+
+### 背景
+多专家评审 P1/P2 共识（利弗莫尔：关键点需确认；巴菲特：知道圈内圈外；芒格：降级掩盖残缺）。
+
+### 新增
+- **数据质量戳三级**（`signal_pipeline`）：fresh(🟢实时)/degraded(🟡降级)/stale(🔴非实时)；降级/非实时信号标注 `observation_only` + 说明（利弗莫尔原则：无信息时不作方向假设）
+- **多策略共振标注**（`signal_router`）：`resonance`(触发策略数) + `resonance_level`(strong≥2/single=1)；买卖同时触发时 `signal_conflict` + `conflict_detail`（拒绝机械转达矛盾）
+- **能力圈标注**（新模块 `src/gugu/strategies/capability.py`）：30 个策略画像表（可解释性 fundamental/technical/rule/ml + 验证等级 + 仓位上限）；多策略取最保守画像；ML 策略标"黑箱+试验仓(5%)"
+- **信号卡片增强**（`formatter`）：信号质量徽章行 + 数据降级说明 + 能力圈行 + 矛盾信号区块
+
+### 验证
+- 18 个新单测（能力圈 9 + 信号增强 9）
+- 全量 2089 passed（+18）
+- 实测：双策略共振→strong、单策略→single、买卖矛盾→正确标注冲突详情
+- pre-commit param-audit：Passed
+
+## v0.9.2 (2026-08-01) — P0 静默失效防线（健康看门狗）
+
+### 背景
+多专家视角评审（芒格/巴菲特/利弗莫尔）共识：系统最大敌人是**静默失效**——7/16~7/31 真实事故中调度器在跑、日志在写，但信号历史 11 天零写入无人察觉（"系统活着但失忆了"）。
+
+### 新增
+- **健康看门狗模块** `src/gugu/health/watchdog.py`：
+  - `check_scheduler_health`：心跳新鲜度（>15min 未更新告警）+ 重启风暴（单日 >3 次告警）
+  - `check_signal_history_freshness`：调度器在跑但信号历史 >2 天未写入 → "信号历史失忆"告警
+  - 无启动记录/首次安装不误报（避免安装即报警）
+- **调度器启动记录**：`_record_boot()` 写 `data/scheduler_boot.json`（boot_time + pid + 最近 20 次 history，重启风暴检测数据源）
+- **信号历史写入失败告警**：`record_signal_history` 异常时异步飞书告警（P0 数据完整性），不再静默 warn
+- **watchdog 脚本** `scripts/health_watchdog.py`：`--check`（退出码 0/1）/ `--quiet`（cron 静默模式：健康零输出、告警输出+推飞书）
+- **cron 部署**：`gugu-health-watchdog`（no_agent，每 5 分钟，静默守护）
+
+### 验证
+- 9 个新单测（信号历史新鲜度/心跳/重启风暴/无启动不误报）
+- 全量 2071 passed（+9）
+- 实测：失忆场景正确告警（5 天未写入 → 告警文本 + 飞书推送）、恢复后回到健康、退出码正确（告警 1/健康 0）
+- pre-commit param-audit：Passed
+
+## v0.9.1 (2026-08-01) — 参数闭环全量修复（P0+P1，16 断裂 → 0）
+
+### 概述
+GA/PSO 动态调优写回 `strategy_defaults.yaml` 的参数 16/27 策略代码根本不读（"调了等于没调"）。全部对齐：defaults 参数名与代码 `self.params.get/[]` 读取名完全一致（代码=权威），动态调优链路打通。
+
+### 修复
+- **P0 完全错位**（defaults 参数代码一个都不读）：double_yin 13 个对齐、zhen_dahu 19 个对齐
+- **P1 部分错位**（16 个策略）：breakout_rebound 7 组语义映射迁移调优值（limit_up_window→limit_up_lookback 等）、north_force_long 4 组、dragon_tiger_short/ma20_trend/industry_capital_momentum 各 3-4 组；删 30+ 死参数（文档概念但代码未实现：first_board price_min/seal_ratio_min、turtle risk_per_trade/max_units 等）；ml_gradient_boost 3 个训练超参移除（train_and_save 硬编码）
+- **chenxuezhang 参数化**：7 个阈值从硬编码接入 self.params（默认值=原硬编码值，行为零漂移，7/7 单测通过）
+- **审计工具 bug**：module 为包名时误读 `__init__.py` 导致 ml_gradient_boost 假断裂 → 优先同名 .py + 通配扫描
+- **param-audit --strict 全绿**（33/33 闭环），pre-commit hook 升级 strict 模式阻断新增断裂
+
+### 验证
+- `param-audit --strict`：33 闭环 0 断裂
+- 全量单测：2062 passed（含 chenxuezhang 7/7、first_board 18/18、linjudaye/double_yin/zhen_dahu 相关 95/95）
+- pre-commit param-audit hook：Passed
+
+## v0.9.0 (2026-08-01) — 实时推荐 + 实盘交易（阶段四/五落地）
+
+### 概述
+响应用户核心需求「实时推荐、实时交易」：把 gugu 从「离线定时扫描」升级为「盘中实时推荐 + QMT 实盘执行」。完整实现 QmtBroker（xtquant 真实接入）、新增 RealtimeSignalScanner（盘中分钟级策略信号扫描+飞书推送+可选自动下单），打通阶段四（实盘）主链路。
+
+### 新增
+- **QmtBroker 完整实现**（`src/gugu/execution/qmt.py`）：connect/order/撤单/持仓同步/账户查询/一键平仓/应急限价买入/历史订单查询，全部真实接入 xtquant；代码格式自动转换（sh600000 ↔ 600000.SH）；连接心跳+自动重连；未配置时安全拒绝下单（防裸奔）；CLI 自检 `python -m gugu.execution.qmt`
+- **RealtimeSignalScanner**（`src/gugu/engine/realtime_scanner.py`）：盘中策略信号持续扫描（复用引擎 `_scan_signals` 管线），新信号立即推送飞书；信号去重（同一 symbol+direction 冷却期内不重复）；live 模式支持自动执行（confirm_required=False 时直接委托 QMT）
+- **配置项**：`intraday_monitor.realtime_recommend` / `signal_cooldown_sec`（settings.yaml + 强类型模型 + flatten）
+- **run_live.py 升级**：实盘模式启动 TradingScheduler 持续运行（盘中实时推荐+定时任务），安全退出清理
+
+### 安全机制
+- 默认 `signal_only`/`track_live`：飞书推送 + **并行记入独立模拟盘**（真实持仓保护不变，信号效果用模拟盘验证）
+- `paper` 模式：信号走引擎完整管线（风控 + PaperBroker 模拟下单 + 通知）
+- `live + confirm_required=true`：只推送，等待人工确认（默认安全）
+- `live + confirm_required=false`：信号直接委托 QMT（需显式配置）
+- QMT 未连接时拒绝一切下单
+
+### 模拟盘验证（用户确认的落地路径）
+- **track_live 模式下的真实持仓保护不变**（止损/止盈提醒照常）
+- **信号效果用独立 PaperBroker 并行验证**：实时信号 → 飞书通知 + 模拟盘下单（`data/paper_broker_state.json`）
+- 信号历史绩效验证（1/3/5/10 日收益）在 `_process_signal` 中持续记录
+- 验证路径：效果达标后再切 live 模式上实盘
+
+### 测试
+- `tests/unit/test_realtime_scanner.py` 新增 24 个测试（代码转换/安全拒绝/去重/模式分层/sidecar 模拟盘/自动执行）
+
+---
+
 ## v0.7.1 (2026-07-15) — 多专家视角深度审查（第二轮）与全面修复
 
 ### 概述
