@@ -558,30 +558,44 @@ class SchedulerJobsMixin:
             for s_name in enabled:
                 stocks = get_strategy_stock_pool(s_name)
                 cmd = [
-                    "uv", "run", "python", str(script),
-                    "--strategy", s_name,
-                    "--multi-stock", stocks,
-                    "--days", "500",
-                    "--algorithm", algorithm,
-                    "--population", "30",
-                    "--generations", "20",
+                    "uv",
+                    "run",
+                    "python",
+                    str(script),
+                    "--strategy",
+                    s_name,
+                    "--multi-stock",
+                    stocks,
+                    "--days",
+                    "500",
+                    "--algorithm",
+                    algorithm,
+                    "--population",
+                    "30",
+                    "--generations",
+                    "20",
                 ]
                 logger.info("启发式优化 {}: strategy={}, stocks={}", algorithm, s_name, stocks)
 
                 try:
                     result = subprocess.run(
-                        cmd, cwd=str(PROJECT_ROOT),
-                        capture_output=True, text=True, timeout=900,
+                        cmd,
+                        cwd=str(PROJECT_ROOT),
+                        capture_output=True,
+                        text=True,
+                        timeout=900,
                     )
                     if result.returncode == 0:
                         logger.info(
                             "启发式优化 {} 完成: stdout={}",
-                            s_name, result.stdout[-300:] if result.stdout else "",
+                            s_name,
+                            result.stdout[-300:] if result.stdout else "",
                         )
                     else:
                         logger.error(
                             "启发式优化 {} 失败 rc={}: stderr={}",
-                            s_name, result.returncode,
+                            s_name,
+                            result.returncode,
                             result.stderr[-300:] if result.stderr else "",
                         )
                 except subprocess.TimeoutExpired:
@@ -718,7 +732,7 @@ class SchedulerJobsMixin:
 
             passed_count = sum(1 for r in results if r.passed)
             logger.info(
-                "十大视角日报推送完成: 分析 {} 只, " "通过 {} 只，已推送 {} 张卡片",
+                "十大视角日报推送完成: 分析 {} 只, 通过 {} 只，已推送 {} 张卡片",
                 len(results),
                 passed_count,
                 len(results) + 1,
@@ -800,6 +814,71 @@ class SchedulerJobsMixin:
                 )
             except Exception as ne:
                 logger.error("信号绩效验证异常通知发送失败: {}", ne)
+
+    async def _safe_signal_daily_validation(self) -> None:
+        """信号 T+1 次日验证推送（15:25，非交易日跳过）。
+
+        验证上一交易日买入信号的次日真实可执行收益、盘中回撤、止损命中率。
+        """
+        if not is_trading_day():
+            return
+        try:
+            from gugu.analysis.signal_tracker import SignalTracker
+
+            tracker = SignalTracker()
+            report = await tracker.generate_daily_validation_report()
+            await self._engine._notifier.notify_signal_daily_validation(report)
+
+            total = report.get("total_signals", 0)
+            valid = report.get("valid_count", 0)
+            win_rate = report.get("win_rate", 0)
+            logger.info(
+                "信号次日验证推送完成: {} 条买入信号, 可追踪 {}, T+1 胜率 {:.1%}",
+                total,
+                valid,
+                win_rate,
+            )
+        except Exception as e:
+            logger.exception("信号次日验证推送异常: {}", e)
+            try:
+                await self._engine._notifier.notify_error(
+                    {
+                        "message": f"信号次日验证异常: {e}",
+                        "level": "error",
+                        "source": "scheduler._safe_signal_daily_validation",
+                    }
+                )
+            except Exception as ne:
+                logger.error("信号次日验证异常通知发送失败: {}", ne)
+
+    async def _safe_signal_weekly(self) -> None:
+        """信号绩效周报推送（周日 20:30）。"""
+        try:
+            from gugu.analysis.signal_tracker import SignalTracker
+
+            tracker = SignalTracker()
+            report = await tracker.generate_weekly_report()
+            await self._engine._notifier.notify_signal_weekly(report)
+
+            total = report.get("total_signals", 0)
+            win_rate = report.get("win_rate", 0)
+            logger.info(
+                "信号绩效周报推送完成: {} 条买入信号, 5日胜率 {:.1%}",
+                total,
+                win_rate,
+            )
+        except Exception as e:
+            logger.exception("信号绩效周报推送异常: {}", e)
+            try:
+                await self._engine._notifier.notify_error(
+                    {
+                        "message": f"信号绩效周报异常: {e}",
+                        "level": "error",
+                        "source": "scheduler._safe_signal_weekly",
+                    }
+                )
+            except Exception as ne:
+                logger.error("信号绩效周报异常通知发送失败: {}", ne)
 
     async def _run_market_temp_subprocess(self) -> dict | None:
         """在子进程中执行市场温度计计算，返回飞书卡片 dict。"""

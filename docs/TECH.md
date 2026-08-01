@@ -10,7 +10,7 @@
 |----|------|------|
 | 语言 | Python 3.12+ | venv 推荐 3.12+，当前已验证 3.14 |
 | 依赖管理 | uv | pyproject.toml + uv.lock |
-| 数据源 | sina（主）+ akshare（降级） | 免费，使用不同底层 API 确保冗余 |
+| 数据源 | sina（主）+ eastmoney（降级）+ akshare（兜底）+ tencent（终极兜底） | 免费，四级冗余确保高可用 |
 | 数据处理 | pandas / numpy / pyarrow | |
 | 调度 | APScheduler | CronTrigger |
 | 通知 | 飞书开放平台 API | 卡片消息（interactive card） |
@@ -42,11 +42,13 @@ gugu/
 │   │   ├── manager.py           # DataManager（统一入口，async + 并发降级）
 │   │   ├── quality.py           # 链式校验（6 个 ValidationRule 类）
 │   │   ├── cache.py             # 内存缓存（2 分钟 TTL）
+│   │   ├── source_health.py     # 数据源健康监控（事件驱动，持久化健康摘要）
 │   │   └── collectors/
 │   │       ├── base.py          # BaseCollector 抽象
-│   │       ├── akshare_collector.py  # 降级源（东方财富 akshare 库）
-│   │       ├── eastmoney_collector.py # 兜底源（东方财富 push2 直连 HTTP）
-│   │       └── fallback.py      # 主源（新浪/网易 直连 HTTP）
+│   │       ├── akshare_collector.py  # 兜底源（东方财富 akshare 库）
+│   │       ├── eastmoney_collector.py # 降级源（东方财富 push2 直连 HTTP）
+│   │       ├── fallback.py      # 主源（新浪/网易 直连 HTTP）
+│   │       └── tencent_collector.py  # 终极兜底源（腾讯 ifzq.gtimg.cn 直连，qfq 日 K）
 │   ├── models/
 │   │   ├── position.py          # Position 统一模型
 │   │   └── signal.py            # Signal 强类型数据类 + OrderResult
@@ -105,6 +107,7 @@ gugu/
 │   │   ├── param_optimizer.py  # 参数优化
 │   │   ├── heuristic_optimizer.py # 启发式参数优化器（GA/PSO）
 │   │   ├── optimization_pools.py  # 策略专用优化股票池（按策略类型匹配）
+│   │   ├── signal_tracker.py      # 信号绩效追踪器（前瞻追踪 T+1/3/5/10 收益）
 │   │   ├── execution_optimizer.py # 执行优化
 │   │   ├── stage_detector.py   # P0 四阶段判断器（牛皮/升势/疯狂/最后）
 │   │   ├── trailing_stop.py    # P0 浪谷递进移动止损引擎
@@ -297,10 +300,28 @@ gugu/
 `DataManager`（[data/manager.py](src/gugu/data/manager.py)）：
 
 - 主源 `SinaCollector`：新浪 API
-- 降级源 `AkshareCollector`：东方财富 API
+- 降级源 `EastmoneyCollector`：东方财富 push2 直连
+- 兜底源 `AkshareCollector`：东方财富 akshare 库
+- 终极兜底 `TencentCollector`：腾讯财经 ifzq.gtimg.cn（仅 qfq 日 K，不依赖第三方库）
 - 连续失败 3 次 → 降级，冷却 5 分钟后切回
 - **并发降级**：主源失败后 `asyncio.wait(FIRST_COMPLETED)` 并发尝试所有降级源
 - 所有源共享数据质量校验（DataValidator 链）
+
+### 3.5.1 数据源健康监控（v0.8.1）
+
+`DataSourceHealthMonitor`（[data/source_health.py](src/gugu/data/source_health.py)）事件驱动记录各数据源健康状态：
+
+| 事件 | 触发时机 | 记录内容 |
+|------|----------|----------|
+| `success` | 某源请求成功 | source / latency_ms / symbol |
+| `failure` | 某源请求失败 | source / error_type / error_msg |
+| `degraded` | 从主源降级到备用源 | from_source → to_source / symbol |
+| `recovered` | 冷却后切回主源成功 | source / downtime_seconds |
+
+- **持久化**：`data/source_health_events.jsonl`（按日期滚动，最多 5000 行）
+- **每日摘要**：`get_daily_summary()` 汇总各 source 的健康指标（成功率 / 平均延迟 / 降级次数 / 恢复次数）
+- **静默优先**：降级/恢复事件只记录不主动推送，仅在收盘日报（15:10）附带健康摘要
+- **线程安全**：`threading.Lock` 保护 JSONL 追加写入
 
 ### 3.6 数据质量校验链
 

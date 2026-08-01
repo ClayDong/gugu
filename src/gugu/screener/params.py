@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -99,9 +98,12 @@ class ScreenerParams:
     def effective_max_candidates(self, regime: str) -> int:
         """根据市场状态计算实际最大候选数。
 
-        bear/crash 等 modifier 为 0 的 regime 返回 0，与 should_skip 保持一致。
+        bear/crash 等 skip_regimes 返回 0，与 should_skip 保持一致。
+        sideways 默认修正系数为 0.6。
         """
-        modifier = self.candidate_modifier.get(regime, self.candidate_modifier.get("sideways", 0.6))
+        if regime in self.skip_regimes:
+            return 0
+        modifier = self.candidate_modifier.get(regime, 0.6)
         if modifier <= 0:
             return 0
         return max(1, round(self.max_candidates * modifier))
@@ -160,5 +162,5 @@ class ScreenerParams:
     def save(self, path: Path | str | None = None) -> None:
         """原子写入参数文件。"""
         file_path = Path(path) if path else _PARAMS_FILE
-        os.makedirs(file_path.parent, exist_ok=True)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(file_path, json.dumps(self.to_dict(), ensure_ascii=False, indent=2))

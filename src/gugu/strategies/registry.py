@@ -18,7 +18,6 @@ from gugu.strategies.first_board import FirstBoardStrategy
 from gugu.strategies.hot_money import HotMoneyStrategy
 from gugu.strategies.huamulan_crash_layout import HuamulanCrashLayoutStrategy
 from gugu.strategies.huamulan_fake_dip import HuamulanFakeDipStrategy
-from gugu.strategies.huamulan_ghost_breakout import HuamulanGhostBreakoutStrategy
 from gugu.strategies.huamulan_tail_pick import HuamulanTailPickStrategy
 from gugu.strategies.industry_capital_momentum import IndustryCapitalMomentumStrategy
 from gugu.strategies.leopard_three_factors import LeopardThreeFactorsStrategy
@@ -29,7 +28,9 @@ from gugu.strategies.ml_factor import MLFactorStrategy
 from gugu.strategies.ml_gradient_boost import MLGradientBoostStrategy
 from gugu.strategies.money_flow_follow import MoneyFlowFollowStrategy
 from gugu.strategies.north_force_long import NorthForceLongStrategy
+from gugu.strategies.price_volume import PriceVolumeSignalStrategy
 from gugu.strategies.pullback_low import PullbackLowStrategy
+from gugu.strategies.rebound_elite import ReboundEliteStrategy
 from gugu.strategies.trend import DualMAStrategy, MACDStrategy, TurtleStrategy
 from gugu.strategies.weekly_combo import WeeklyComboStrategy
 from gugu.strategies.zhen_dahu import ZhenDahuStrategy
@@ -51,6 +52,7 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "pullback_low": PullbackLowStrategy,  # 震荡市专用低吸回踩策略
     "double_yin": DoubleYinMoneyBagStrategy,  # 双阴钱袋子策略（主力洗盘拐点）
     "breakout_rebound": BreakoutReboundStrategy,  # 断板反包策略（短线主力行为）
+    "rebound_elite": ReboundEliteStrategy,  # 断板反包·精英追涨（高活跃妖股+反包追涨，验证有效形态）
     "capital_flow_alert": CapitalFlowAlertStrategy,  # 资金流异动监控
     "ml_factor": MLFactorStrategy,  # LightGBM 多因子策略
     "north_force_long": NorthForceLongStrategy,  # 长线主力吸筹跟随
@@ -65,10 +67,10 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "huamulan_tail_pick": HuamulanTailPickStrategy,  # 花木兰尾盘选股六步法（小资金复利首选）
     "huamulan_crash_layout": HuamulanCrashLayoutStrategy,  # 花木兰空仓等暴跌布局法（大资金稳健复利）
     "huamulan_fake_dip": HuamulanFakeDipStrategy,  # 花木兰早盘假摔低吸战法（捕捉主力洗盘）
-    "huamulan_ghost_breakout": HuamulanGhostBreakoutStrategy,
     "chenxuezhang": ChenXueZhangStrategy,
     "linjudaye": LinJuDaYeStrategy,
     "ml_gradient_boost": MLGradientBoostStrategy,
+    "price_volume_signal": PriceVolumeSignalStrategy,  # 换手率+量比尾盘黄金信号（选股入场漏斗）
 }
 
 

@@ -181,7 +181,6 @@ class DangerSignalDetector:
     def _check_two_day_reversal(self, df: pd.DataFrame) -> bool:
         """检测两天转头。"""
         close = df["close"].astype(float)
-        high = df["high"].astype(float) if "high" in df.columns else close
         low = df["low"].astype(float) if "low" in df.columns else close
 
         if len(close) < self.HIGH_LOOKBACK + 2:

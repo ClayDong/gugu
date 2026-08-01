@@ -14,10 +14,11 @@ class TestScreenerParamsDefaults:
 
     def test_default_values(self):
         p = ScreenerParams()
-        assert p.min_chg_pct == -2.0
-        assert p.max_chg_pct == 1.0
-        assert p.max_vol_ratio == 1.0
-        assert p.min_turnover == 3.0
+        # v0.7.9 优化后的默认阈值
+        assert p.min_chg_pct == -1.5
+        assert p.max_chg_pct == 2.0
+        assert p.max_vol_ratio == 1.2
+        assert p.min_turnover == 2.0
         assert p.max_turnover == 15.0
         assert p.max_candidates == 10
         assert p.auto_tune_enabled is True
@@ -97,7 +98,7 @@ class TestScreenerParamsLoadSave:
     def test_load_returns_defaults_when_file_missing(self, tmp_path):
         file_path = tmp_path / "not_exists.json"
         loaded = ScreenerParams.load(file_path)
-        assert loaded.max_vol_ratio == pytest.approx(1.0)
+        assert loaded.max_vol_ratio == pytest.approx(1.2)
 
     def test_load_ignores_invalid_fields(self, tmp_path):
         file_path = tmp_path / "screener_params.json"
@@ -116,4 +117,4 @@ class TestScreenerParamsLoadSave:
         file_path = tmp_path / "corrupt.json"
         file_path.write_text("not json", encoding="utf-8")
         loaded = ScreenerParams.load(file_path)
-        assert loaded.max_vol_ratio == pytest.approx(1.0)
+        assert loaded.max_vol_ratio == pytest.approx(1.2)

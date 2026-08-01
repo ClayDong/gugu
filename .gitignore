@@ -57,3 +57,18 @@ desktop.ini
 
 # Trae skills（用户安装，不提交）
 .trae/skills/
+
+# 实验性回测脚本与临时输出（不提交，除非显式要求）
+scripts/backtest_*.py
+scripts/backtest_*.csv
+scripts/bootstrap_*.py
+scripts/diag_*.py
+scripts/fakedip_*.py
+scripts/optimize_*.py
+scripts/probe_*.py
+scripts/rebound_*.py
+scripts/replicate_*.py
+scripts/scan_*.py
+scripts/verify_price_volume.py
+scripts/*.csv
+docs/validation/

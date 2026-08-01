@@ -165,11 +165,7 @@ class PaperBroker(BaseBroker):
         if direction == "buy" and change_pct >= limit_pct * 0.95:
             return False
 
-        # 跌停附近（<= -limit_pct * 0.95）— 卖出硬阻断
-        if direction == "sell" and change_pct <= -limit_pct * 0.95:
-            return False
-
-        return True
+        return not (direction == "sell" and change_pct <= -limit_pct * 0.95)
 
     @staticmethod
     def _get_limit_pct(symbol: str) -> float:

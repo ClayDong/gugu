@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,7 @@ import pandas as pd
 
 from gugu.config import PROJECT_ROOT
 from gugu.data import data_manager
+from gugu.utils.calendar import last_trading_day
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -301,5 +302,280 @@ class SignalTracker:
                 }
             )
 
+        result.sort(key=lambda x: x["avg_return"], reverse=True)
+        return result
+
+    async def generate_daily_validation_report(
+        self, target_date: date | str | None = None
+    ) -> dict[str, Any]:
+        """生成信号 T+1 次日验证报告。
+
+        对上一交易日（或指定日期）发出的买入信号，计算次日真实可执行收益：
+        - T+1 收盘价收益（相对信号入场价）
+        - 盘中最低回撤（从开盘价到最低价）
+        - 止损命中率（最低价触及信号止损价）
+
+        Args:
+            target_date: 指定信号日期，默认上一交易日。
+
+        Returns:
+            报告字典，含 overall / by_strategy / signals 三个维度。
+        """
+        if target_date is None:
+            target_date = last_trading_day()
+        if isinstance(target_date, str):
+            target_date = date.fromisoformat(target_date)
+
+        target_str = target_date.isoformat()
+        records = self._load_signals_by_date(target_date)
+        buy_signals = [r for r in records if r.get("direction") == "buy"]
+
+        if len(buy_signals) < MIN_SAMPLE_SIZE:
+            return {
+                "date": target_str,
+                "total_signals": len(buy_signals),
+                "message": f"{target_str} 买入信号不足（{len(buy_signals)}<{MIN_SAMPLE_SIZE}），无法生成次日验证",
+            }
+
+        validated = await self._validate_t1_signals(buy_signals)
+        valid = [v for v in validated if not v.get("error")]
+
+        if len(valid) < MIN_SAMPLE_SIZE:
+            return {
+                "date": target_str,
+                "total_signals": len(buy_signals),
+                "valid_count": len(valid),
+                "message": f"{target_str} 可追踪信号不足（{len(valid)}<{MIN_SAMPLE_SIZE}）",
+            }
+
+        close_returns = [v["close_return"] for v in valid]
+        drawdowns = [v["max_drawdown"] for v in valid]
+        stop_hits = [v["stop_loss_hit"] for v in valid if v.get("stop_loss_price", 0) > 0]
+
+        win_count = sum(1 for r in close_returns if r > 0)
+        avg_return = sum(close_returns) / len(close_returns)
+        avg_drawdown = sum(drawdowns) / len(drawdowns) if drawdowns else 0
+        stop_hit_rate = sum(stop_hits) / len(stop_hits) if stop_hits else 0
+
+        by_strategy = self._stats_by_strategy_for_t1(valid)
+
+        return {
+            "date": target_str,
+            "total_signals": len(buy_signals),
+            "valid_count": len(valid),
+            "win_rate": round(win_count / len(valid), 4),
+            "avg_close_return": round(avg_return, 4),
+            "avg_max_drawdown": round(avg_drawdown, 4),
+            "stop_hit_rate": round(stop_hit_rate, 4),
+            "by_strategy": by_strategy,
+            "signals": valid,
+            "generated_at": datetime.now().isoformat(),
+        }
+
+    async def generate_weekly_report(self) -> dict[str, Any]:
+        """生成最近 7 日信号绩效周报。
+
+        聚合近 7 日所有买入信号的前瞻收益、胜率、策略贡献，
+        并分日统计信号密度，帮助用户感知策略系统运行状态。
+        """
+        records = self.load_history(days=7)
+        buy_signals = self._dedupe([r for r in records if r.get("direction") == "buy"])
+
+        if len(buy_signals) < MIN_SAMPLE_SIZE:
+            return {
+                "period": "近7日",
+                "total_signals": len(buy_signals),
+                "message": f"近7日买入信号不足（{len(buy_signals)}<{MIN_SAMPLE_SIZE}），暂无周报",
+            }
+
+        tracked = await self._track_signals(buy_signals)
+        valid = [t for t in tracked if t.get("return_5d") is not None]
+
+        if len(valid) < MIN_SAMPLE_SIZE:
+            return {
+                "period": "近7日",
+                "total_signals": len(buy_signals),
+                "valid_count": len(valid),
+                "message": f"近7日可追踪信号不足（{len(valid)}<{MIN_SAMPLE_SIZE}），暂无周报",
+            }
+
+        returns = [t["return_5d"] for t in valid]
+        wins = [r for r in returns if r > 0]
+        by_strategy = self._stats_by_strategy(valid)
+
+        # 分日统计
+        daily_stats: dict[str, dict[str, Any]] = {}
+        for t in valid:
+            ts = t.get("timestamp", "")
+            try:
+                d = pd.to_datetime(ts).date().isoformat()
+            except Exception:
+                continue
+            if d not in daily_stats:
+                daily_stats[d] = {"count": 0, "wins": 0, "returns": []}
+            daily_stats[d]["count"] += 1
+            ret = t["return_5d"]
+            daily_stats[d]["returns"].append(ret)
+            if ret > 0:
+                daily_stats[d]["wins"] += 1
+
+        daily_summary = []
+        for d, s in sorted(daily_stats.items()):
+            rets = s["returns"]
+            daily_summary.append(
+                {
+                    "date": d,
+                    "count": s["count"],
+                    "win_rate": round(s["wins"] / len(rets), 4) if rets else 0,
+                    "avg_return": round(sum(rets) / len(rets), 4) if rets else 0,
+                }
+            )
+
+        return {
+            "period": "近7日",
+            "start_date": (date.today() - timedelta(days=6)).isoformat(),
+            "end_date": date.today().isoformat(),
+            "total_signals": len(buy_signals),
+            "valid_count": len(valid),
+            "win_rate": round(len(wins) / len(valid), 4),
+            "avg_return_5d": round(sum(returns) / len(returns), 4),
+            "best_return": round(max(returns), 4),
+            "worst_return": round(min(returns), 4),
+            "by_strategy": by_strategy,
+            "daily_summary": daily_summary,
+            "generated_at": datetime.now().isoformat(),
+        }
+
+    def _load_signals_by_date(self, target_date: date) -> list[dict[str, Any]]:
+        """加载指定日期的所有信号。"""
+        if not self._history_path.exists():
+            return []
+        target_str = target_date.isoformat()
+        records: list[dict[str, Any]] = []
+        try:
+            with self._history_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        ts = rec.get("timestamp", "")
+                        if ts.startswith(target_str):
+                            records.append(rec)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+        except Exception as e:
+            logger.error("读取信号历史失败: {}", e)
+        return records
+
+    async def _validate_t1_signals(self, signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """批量计算信号的 T+1 次日验证指标。"""
+        results: list[dict[str, Any]] = []
+        sem = asyncio.Semaphore(5)
+
+        async def validate_one(sig: dict[str, Any]) -> dict[str, Any]:
+            async with sem:
+                return await self._validate_t1_one(sig)
+
+        done = await asyncio.gather(*[validate_one(s) for s in signals], return_exceptions=True)
+        for r in done:
+            if isinstance(r, dict):
+                results.append(r)
+            elif isinstance(r, Exception):
+                logger.debug("T+1 验证失败: {}", r)
+        return results
+
+    async def _validate_t1_one(self, sig: dict[str, Any]) -> dict[str, Any]:
+        """计算单条信号的 T+1 指标。"""
+        symbol = sig.get("symbol", "")
+        ts = sig.get("timestamp", "")
+        try:
+            signal_date = pd.to_datetime(ts)
+        except Exception:
+            return {**sig, "error": "invalid_timestamp"}
+
+        try:
+            # 拉取包含信号日及之后若干交易日的 K 线
+            df = await self._dm.fetch_stock_history(symbol, days=30)
+            if df.empty or len(df) < 2:
+                return {**sig, "error": "no_data"}
+
+            df["date"] = pd.to_datetime(df["date"])
+            signal_date_norm = pd.Timestamp(signal_date.date())
+            mask = df["date"] == signal_date_norm
+            if not mask.any():
+                # 信号日期可能非交易日，找最近的前一交易日
+                mask = df["date"] <= signal_date_norm
+                if not mask.any():
+                    return {**sig, "error": "date_not_found"}
+
+            idx = df[mask].index[-1]
+            next_idx = idx + 1
+            if next_idx >= len(df):
+                return {**sig, "error": "no_next_day"}
+
+            entry_price = self._resolve_entry_price(sig, df, idx)
+            next_row = df.iloc[next_idx]
+            next_open = float(next_row["open"])
+            next_high = float(next_row["high"])
+            next_low = float(next_row["low"])
+            next_close = float(next_row["close"])
+
+            stop_loss = float(sig.get("stop_loss_price", 0) or 0)
+            stop_hit = stop_loss > 0 and next_low <= stop_loss
+
+            return {
+                **sig,
+                "entry_price": round(entry_price, 3),
+                "next_date": next_row["date"].strftime("%Y-%m-%d"),
+                "open_return": round((next_open - entry_price) / entry_price, 4),
+                "high_return": round((next_high - entry_price) / entry_price, 4),
+                "close_return": round((next_close - entry_price) / entry_price, 4),
+                "max_drawdown": round((next_low - next_open) / next_open, 4),
+                "stop_loss_price": stop_loss,
+                "stop_loss_hit": stop_hit,
+            }
+        except Exception as e:
+            logger.debug("T+1 验证 {} 失败: {}", symbol, e)
+            return {**sig, "error": str(e)}
+
+    def _resolve_entry_price(self, sig: dict[str, Any], df: pd.DataFrame, idx: int) -> float:
+        """优先使用实际成交价，否则使用信号日收盘价。"""
+        order_result = sig.get("order_result")
+        if order_result and order_result.get("success"):
+            return float(order_result["price"])
+        return float(df.loc[idx, "close"])
+
+    def _stats_by_strategy_for_t1(self, validated: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """按策略分组统计 T+1 验证结果。"""
+        strategy_stats: dict[str, list[float]] = {}
+        for v in validated:
+            strategies = v.get("strategies", [])
+            if isinstance(strategies, str):
+                strategies = [strategies]
+            ret = v.get("close_return")
+            if ret is None:
+                continue
+            for s in strategies:
+                if s not in strategy_stats:
+                    strategy_stats[s] = []
+                strategy_stats[s].append(ret)
+
+        result = []
+        for s, returns in strategy_stats.items():
+            if not returns:
+                continue
+            wins = [r for r in returns if r > 0]
+            result.append(
+                {
+                    "strategy": s,
+                    "count": len(returns),
+                    "win_rate": round(len(wins) / len(returns), 4),
+                    "avg_return": round(sum(returns) / len(returns), 4),
+                    "best_return": round(max(returns), 4),
+                    "worst_return": round(min(returns), 4),
+                }
+            )
         result.sort(key=lambda x: x["avg_return"], reverse=True)
         return result

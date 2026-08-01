@@ -163,7 +163,7 @@ class EngineOpsMixin:
             extra_symbols = []
         elif not market_status["bullish"]:
             logger.info(
-                "大市过滤: {} 非 bull，" "但市场择时={} 允许买入，保留自动选股候选",
+                "大市过滤: {} 非 bull，但市场择时={} 允许买入，保留自动选股候选",
                 market_status["regime"],
                 current_regime,
             )
@@ -295,7 +295,7 @@ class EngineOpsMixin:
                         and regime.get("sell_signal_required")
                     ):
                         logger.info(
-                            "{} 市场状态 {} 建议减仓，" "仓位上限已由 budget 限制为 {:.2%}",
+                            "{} 市场状态 {} 建议减仓，仓位上限已由 budget 限制为 {:.2%}",
                             symbol,
                             regime["regime"],
                             signal["suggested_position_ratio"],

@@ -208,7 +208,8 @@ class TerminalScreener:
                 if index_df.iloc[-1]["ma5"] < index_df.iloc[-1]["ma10"]:
                     logger.info(
                         "尾盘选股: 大盘MA5({:.2f})<MA10({:.2f})，下跌趋势跳过选股",
-                        index_df.iloc[-1]["ma5"], index_df.iloc[-1]["ma10"],
+                        index_df.iloc[-1]["ma5"],
+                        index_df.iloc[-1]["ma10"],
                     )
                     return []
         except Exception as e:

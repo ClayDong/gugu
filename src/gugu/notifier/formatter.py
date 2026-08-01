@@ -453,7 +453,9 @@ def _format_mentor_perspectives(perspectives: list[dict[str, Any]]) -> str:
 
 # Re-export from submodules for backward compatibility
 from gugu.notifier.formatter_reports import (  # noqa: E402
+    build_signal_daily_validation_card,
     build_signal_performance_card,
+    build_signal_weekly_card,
     format_backtest_report,
     format_daily_report,
     format_performance,
@@ -481,7 +483,9 @@ __all__ = [
     "_resolve_name",
     "_sanitize_message",
     "_strategy_names",
+    "build_signal_daily_validation_card",
     "build_signal_performance_card",
+    "build_signal_weekly_card",
     "format_backtest_report",
     "format_cloud_trend_signal",
     "format_concept_card",

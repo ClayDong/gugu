@@ -17,14 +17,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from gugu.wisdom.advisor import (
+from gugu.wisdom.advisor import FALLBACK_STOP_LOSS_PCT, WisdomAdvisor
+from gugu.wisdom.fallback import (
     FALLBACK_ADD_RATIO,
     FALLBACK_ENTRY_MIN_CONFIDENCE,
-    FALLBACK_STOP_LOSS_PCT,
     FALLBACK_TRIAL_RATIO,
-    WisdomAdvisor,
+    _is_profitable_signal,
+    _max_single_position,
 )
-from gugu.wisdom.fallback import _is_profitable_signal, _max_single_position
 
 
 # ========== Fallback 模式测试（LLM 不可用） ==========

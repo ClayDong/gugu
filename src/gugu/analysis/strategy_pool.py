@@ -23,8 +23,8 @@ from gugu.utils.log import get_logger
 logger = get_logger()
 
 # 权重调整参数
-MIN_WEIGHT = 0.01  # 策略最低权重，防止被完全忽略
-MAX_WEIGHT_RATIO = 2.0  # 相对初始权重的最大倍数
+MIN_WEIGHT = 0.05  # 策略最低权重（v0.8.1 修复：原 0.01 过低，导致单策略可垄断 94% 权重）
+MAX_WEIGHT = 0.40  # v0.8.1 新增：单策略权重上限，防止动态调整塌缩（mean_revert 曾占 94.5%）
 WIN_RATE_BOOST = 1.2  # 高胜率权重提升
 WIN_RATE_CUT = 0.7  # 低胜率权重降低
 DEGRADE_FACTOR = 0.05  # 连续亏损时的降级因子
@@ -137,13 +137,17 @@ class StrategyPool:
         self._normalize_weights()
 
     def _normalize_weights(self) -> None:
-        """归一化权重，并保证下限。"""
+        """归一化权重，并保证下限与上限（v0.8.1 修复权重塌缩）。"""
         total = sum(v.weight for v in self._weights.values())
         if total <= 0:
             return
+        # 先归一化到总和 1.0
         for v in self._weights.values():
             v.weight = max(v.weight / total, MIN_WEIGHT)
-        # 二次归一化（因下限可能导致总和变化）
+        # 钳制单策略上限（防止 94% 塌缩）
+        for v in self._weights.values():
+            v.weight = min(v.weight, MAX_WEIGHT)
+        # 二次归一化（因下限/上限可能导致总和变化）
         total = sum(v.weight for v in self._weights.values())
         if total > 0:
             for v in self._weights.values():
@@ -268,10 +272,10 @@ class StrategyPool:
             win_rate = sum(1 for r in recent if r > 0) / len(recent) if recent else 0
 
             if win_rate > 0.6:
-                w.weight *= WIN_RATE_BOOST
+                w.weight = min(w.weight * WIN_RATE_BOOST, MAX_WEIGHT)  # v0.8.1: 钳制上限
                 logger.info("策略 {} 胜率 {:.0%}，权重提升至 {:.3f}", name, win_rate, w.weight)
             elif win_rate < 0.3:
-                w.weight *= WIN_RATE_CUT
+                w.weight = max(w.weight * WIN_RATE_CUT, MIN_WEIGHT)  # v0.8.1: 钳制下限
                 logger.info("策略 {} 胜率 {:.0%}，权重降低至 {:.3f}", name, win_rate, w.weight)
 
             # 连续亏损检查：大幅降权但不禁用
@@ -303,7 +307,9 @@ class StrategyPool:
                     break
             if consecutive_wins >= CONSECUTIVE_WIN_THRESHOLD:
                 old_weight = w.weight
-                upper = max(w.initial_weight * MAX_WEIGHT_RATIO, w.initial_weight)
+                upper = min(
+                    w.initial_weight * 2.0, MAX_WEIGHT
+                )  # v0.8.1: 恢复上限受 MAX_WEIGHT 约束
                 w.weight = min(w.weight * RECOVER_FACTOR, upper)
                 logger.info(
                     "策略 {} 连续盈利{}次，权重恢复（{:.3f} → {:.3f}）",

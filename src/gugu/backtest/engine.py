@@ -119,7 +119,11 @@ class BacktestEngine:
             position_ratio = get_config().risk.max_position_ratio
         self.position_ratio = max(0.0, min(1.0, position_ratio))
         # P1-m 修复：回测接入 L3 风控（涨跌停检查），与模拟盘行为一致
-        self._risk = RiskManager()
+        # v0.8.0 P0 修复：使用 scope="backtest" 隔离回测与生产风控状态
+        self._risk = RiskManager(scope="backtest")
+        # 回测开始前重置组合峰值，防止跨股/跨批次污染
+        self._risk._portfolio_peak = 0.0
+        self._risk._halted = False
         self._logger = get_logger()
         # P0 修复：strict_confirmation 不再影响信号生成阶段的 is_backtest，
         # 回测始终使用 is_backtest=True 以避免未来函数。该参数保留仅用于

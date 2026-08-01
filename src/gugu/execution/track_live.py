@@ -228,6 +228,31 @@ class LivePositionTracker(BaseBroker):
             for sym, price in prices.items():
                 self.update_price(sym, price)
 
+    def persist_prices(self) -> bool:
+        """将内存中最新现价持久化到 live_positions.json（每日收盘/定时调用）。
+
+        解决 v0.8.1 数据陈旧问题：原设计 update_price 只更新内存不落盘，
+        导致文件中的 current_price 停留在用户手动填写的旧值（偏差 15-34%），
+        止损决策和持仓市值展示失真。此方法在扫描循环结束后调用一次，
+        把实时行情写回文件，同时保留用户手动维护的 avg_cost/quantity 等字段。
+
+        Returns:
+            True 表示有价格更新已持久化；False 表示无持仓或无需写入。
+        """
+        with self._lock:
+            if not self._positions:
+                return False
+            # 仅当存在 current_price > 0 的持仓时才值得写入（防止用 0 覆盖）
+            if not any(p.current_price > 0 for p in self._positions.values()):
+                logger.warning("[实盘跟踪] 所有持仓现价均为 0，跳过持久化（可能行情源异常）")
+                return False
+            self._save_state()
+            logger.info(
+                "[实盘跟踪] 持仓现价已持久化: {}",
+                {sym: round(p.current_price, 3) for sym, p in self._positions.items()},
+            )
+            return True
+
     def update_stop_loss(self, symbol: str, stop_loss_price: float) -> None:
         """更新止损价并持久化（移动止损触发时调用）。
 

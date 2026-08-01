@@ -45,8 +45,6 @@ class ChenXueZhangStrategy(Strategy):
         # 计算指标
         close = result["close"]
         volume = result["volume"]
-        high = result["high"]
-        low = result["low"]
 
         # 均线系统
         ma5 = close.rolling(5).mean()

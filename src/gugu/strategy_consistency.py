@@ -124,13 +124,17 @@ def validate_strategy_consistency() -> list[str]:
 
 
 # v0.7.5 P0-9修复：策略验证状态检查（experimental → verified 升级建议）
-
-# 4 项 Walk-Forward 解锁条件（全部满足才能升级）
+# v0.8.1 升级：5 项解锁条件（新增交易次数下限，防止小样本过拟合）
+# 依据：pullback_low 教训——30股小样本通过→1710股大样本失败（过拟合）；
+# box_breakout 教训——样本外 Sharpe 勉强>0 但实盘无信号。
+# 门槛说明：Sharpe>0 太弱（box_breakout 实测 -1.43），但为保持兼容保留 0 阈值；
+# 真正的防线是 min_total_trades ≥ 30（样本量不足直接不通过）。
 _UNLOCK_CONDITIONS = {
     "out_of_sample_sharpe": {"threshold": 0.0, "description": "样本外 Sharpe > 0"},
-    "param_stability": {"threshold": 0.50, "description": "参数稳定性 ≥ 50%"},
+    "param_stability": {"threshold": 0.80, "description": "参数稳定性 ≥ 80%（v0.8.1 从 50% 上调）"},
     "max_drawdown": {"threshold": 0.25, "description": "最大回撤 < 25%"},
     "avg_return": {"threshold": 0.0, "description": "平均收益 ≥ 0"},
+    "min_total_trades": {"threshold": 30, "description": "样本外交易次数 ≥ 30（v0.8.1 新增）"},
 }
 
 
@@ -147,6 +151,7 @@ def check_strategy_upgrade_eligibility(
             - param_stability: 参数稳定性（0-1）
             - max_drawdown: 最大回撤（正数，如 0.15 表示 15%）
             - avg_return: 平均收益
+            - min_total_trades: 样本外总交易次数（v0.8.1 新增，缺省视为 0）
 
     Returns:
         (可升级, 未通过的条件列表)
@@ -155,9 +160,13 @@ def check_strategy_upgrade_eligibility(
         walk_forward_results = {}
 
     failed: list[str] = []
+    # v0.8.1：交易次数缺失时从 total_trades 字段兼容读取
+    results = dict(walk_forward_results)
+    if "min_total_trades" not in results and "total_trades" in results:
+        results["min_total_trades"] = float(results.get("total_trades", 0) or 0)
 
     for condition, cfg in _UNLOCK_CONDITIONS.items():
-        value = walk_forward_results.get(condition)
+        value = results.get(condition)
         if value is None:
             failed.append(f"{condition}: 无数据")
             continue

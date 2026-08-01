@@ -157,7 +157,7 @@ def _collect_market_flow_akshare() -> dict[str, Any] | None:
                 "small_inflow": _yuan_to_yi(_safe_float(latest.get("小单净流入-净额"))),
             }
             logger.info(
-                "大盘资金流(akshare): 日期={}, " "主力净流入={:.2f}亿",
+                "大盘资金流(akshare): 日期={}, 主力净流入={:.2f}亿",
                 result["market"]["date"],
                 result["market"]["main_net_inflow"],
             )
@@ -247,7 +247,7 @@ def _collect_market_flow_http() -> dict[str, Any] | None:
                     "super_large_inflow": _yuan_to_yi(_safe_float(kline[5])),
                 }
                 logger.info(
-                    "大盘资金流(HTTP): 日期={}, " "主力净流入={:.2f}亿",
+                    "大盘资金流(HTTP): 日期={}, 主力净流入={:.2f}亿",
                     result["market"]["date"],
                     result["market"]["main_net_inflow"],
                 )

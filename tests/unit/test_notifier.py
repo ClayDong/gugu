@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
 from unittest import mock
 
 import httpx
 import pytest
 
 from gugu.notifier.formatter import (
+    build_signal_daily_validation_card,
     build_signal_performance_card,
+    build_signal_weekly_card,
     format_backtest_report,
     format_daily_report,
     format_risk_alert,
@@ -16,6 +20,24 @@ from gugu.notifier.formatter import (
 )
 from gugu.notifier.perspective_report import build_batch_summary_card
 from gugu.analysis.perspectives.data_types import PerspectiveAnalysisResult
+
+
+@pytest.fixture(autouse=True)
+def clear_notified_signals(monkeypatch):
+    """v0.7.6 P0-13修复：清除持久化去重状态，避免测试间相互污染。"""
+    # 强制测试模式使用临时文件
+    monkeypatch.setenv("GUGU_TEST_MODE", "1")
+    # 删除可能残留的生产状态文件
+    prod_path = Path(__file__).parent.parent.parent / "data" / "notified_signals.json"
+    if prod_path.exists():
+        prod_path.unlink()
+
+    yield
+
+    # 测试后清理临时状态文件
+    test_path = Path(tempfile.gettempdir()) / "gugu_test_notified_signals.json"
+    if test_path.exists():
+        test_path.unlink()
 
 
 def test_format_signal_buy():
@@ -623,3 +645,93 @@ def test_format_daily_report_close_enhanced():
     assert "移动止损" in content
     assert "600519" in content
     assert "宕" not in content  # 不应看到熔断
+
+
+def test_format_daily_report_with_source_health():
+    """v0.7.10: 收盘日报附带数据源健康摘要。"""
+    data = {
+        "market_summary": {"total_value": 1_000_000, "cash": 500_000, "positions_count": 0},
+        "signals": [],
+        "portfolio_summary": {},
+        "source_health": {
+            "date": "2026-07-31",
+            "sources": {
+                "sina": {"success": 100, "failure": 2, "fallback_used": 0, "degraded": 1, "recovered": 1},
+                "akshare": {"success": 20, "failure": 0, "fallback_used": 5, "degraded": 0, "recovered": 0},
+            },
+            "total_requests": 120,
+            "failure_rate": 0.02,
+            "degraded_minutes": 5.5,
+            "primary_source": "sina",
+        },
+    }
+    card = format_daily_report("close", data)
+    content = str(card)
+    assert "数据源健康" in content
+    assert "sina" in content
+    assert "akshare" in content
+    assert "失败率" in content
+
+
+def test_build_signal_daily_validation_card():
+    """T+1 次日验证卡片。"""
+    report = {
+        "date": "2026-07-30",
+        "total_signals": 5,
+        "valid_count": 4,
+        "win_rate": 0.5,
+        "avg_close_return": 0.012,
+        "avg_max_drawdown": -0.008,
+        "stop_hit_rate": 0.25,
+        "by_strategy": [
+            {"strategy": "turtle", "count": 2, "win_rate": 1.0, "avg_return": 0.02},
+        ],
+        "signals": [
+            {
+                "symbol": "600519",
+                "entry_price": 1500.0,
+                "close_return": 0.01,
+                "max_drawdown": -0.005,
+                "stop_loss_hit": False,
+            },
+        ],
+    }
+    card = build_signal_daily_validation_card(report)
+    content = str(card)
+    assert "T+1 收盘胜率" in content
+    assert "T+1 平均收盘收益" in content
+    assert "止损命中率" in content
+    assert "600519" in content
+
+
+def test_build_signal_daily_validation_card_insufficient():
+    """样本不足时返回灰色提示卡片。"""
+    report = {"total_signals": 1, "message": "样本不足"}
+    card = build_signal_daily_validation_card(report)
+    assert card["card"]["header"]["template"] == "grey"
+
+
+def test_build_signal_weekly_card():
+    """信号绩效周报卡片。"""
+    report = {
+        "start_date": "2026-07-25",
+        "end_date": "2026-07-31",
+        "total_signals": 10,
+        "valid_count": 8,
+        "win_rate": 0.5,
+        "avg_return_5d": 0.02,
+        "best_return": 0.08,
+        "worst_return": -0.03,
+        "daily_summary": [
+            {"date": "2026-07-25", "count": 2, "win_rate": 1.0, "avg_return": 0.03},
+        ],
+        "by_strategy": [
+            {"strategy": "rsi_reversal", "count": 4, "win_rate": 0.5, "avg_return": 0.01},
+        ],
+    }
+    card = build_signal_weekly_card(report)
+    content = str(card)
+    assert "信号绩效周报" in content
+    assert "分日信号密度" in content
+    assert "策略贡献" in content
+    assert "rsi_reversal" in content

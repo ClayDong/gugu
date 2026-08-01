@@ -188,7 +188,7 @@ class GAOptimizer(BaseHeuristicOptimizer):
 
             if verbose and (gen + 1) % 5 == 0:
                 logger.info(
-                    f"GA 第{gen + 1}代: 最优得分={gen_best_score:.4f}, " f"参数={gen_best_params}"
+                    f"GA 第{gen + 1}代: 最优得分={gen_best_score:.4f}, 参数={gen_best_params}"
                 )
 
             # P2-4: Early Stopping

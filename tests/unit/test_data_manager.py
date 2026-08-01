@@ -15,6 +15,7 @@ from gugu.data.cache import cache
 from gugu.data.collectors.akshare_collector import AkshareCollector
 from gugu.data.collectors.fallback import SinaCollector
 from gugu.data.manager import DataManager
+from gugu.data.source_health import DataSourceHealthMonitor
 
 
 def _make_basic_df(n: int = 60) -> pd.DataFrame:
@@ -51,6 +52,7 @@ def _fresh_dm() -> DataManager:
     dm._degraded_until = 0.0
     dm._parquet_cache = mock.MagicMock()
     dm._parquet_cache.get.return_value = pd.DataFrame()
+    dm._health = DataSourceHealthMonitor()
     return dm
 
 

@@ -440,7 +440,7 @@ def advise_fallback(
             signal["take_profit"] = tp
             decision["take_profit"] = tp
             logger.info(
-                "[wisdom-fallback] {} 止损预设: {:.2f} (-{:.0%})" " | 止盈目标: +{:.0%}/+{:.0%}",
+                "[wisdom-fallback] {} 止损预设: {:.2f} (-{:.0%}) | 止盈目标: +{:.0%}/+{:.0%}",
                 signal.get("symbol", ""),
                 stop_price,
                 FALLBACK_STOP_LOSS_PCT,

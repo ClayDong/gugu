@@ -378,6 +378,7 @@ class FundamentalFilter:
                 "revenue_growth": None,
                 "industry": "ETF/LOF",
                 "industry_prosperity": {},
+                "data_completeness": 1.0,  # ETF 不适用，标记完整
                 "reasons": ["ETF/LOF 不适用个股基本面过滤，直接放行"],
             }
             self._cache.set(symbol, result)
@@ -480,6 +481,28 @@ class FundamentalFilter:
                 code,
             )
 
+        # P0-4 修复：收紧 fall-open 漏洞
+        # 原逻辑：只要任一指标可用且在范围内就放行，导致仅 PE 可用就通过的"宽松放行"
+        # 新逻辑：统计关键指标（PE/PB/ROE）失败数，2/3 失败即拒绝（数据完整度不足）
+        # 仅 1/3 失败时放行但标注低数据完整度（供下游决策参考）
+        key_indicators = {"pe": pe, "pb": pb, "roe": roe}
+        failed_key_count = sum(1 for v in key_indicators.values() if v is None)
+        total_key_count = len(key_indicators)
+        data_completeness = (total_key_count - failed_key_count) / total_key_count
+
+        if failed_key_count >= 2 and passed:
+            passed = False
+            reasons.append(
+                f"关键指标缺失过多（PE/PB/ROE 中 {failed_key_count}/{total_key_count} 失败），"
+                f"数据完整度 {data_completeness:.0%}，拒绝放行"
+            )
+            logger.warning(
+                "基本面过滤：{} 关键指标缺失过多（{}/{} 失败），拒绝放行",
+                code,
+                failed_key_count,
+                total_key_count,
+            )
+
         # P1-6：行业景气度评分（仅在基本面通过时评估，避免双重拦截）
         prosperity: dict[str, Any] = {}
         if passed and industry:
@@ -491,7 +514,7 @@ class FundamentalFilter:
                 if score < self._prosperity_checker._HARD_FAIL_THRESHOLD:
                     passed = False
                     logger.warning(
-                        "基本面过滤：{} 行业「{}」景气度极低（{}/100），" "行业衰退，拒绝放行",
+                        "基本面过滤：{} 行业「{}」景气度极低（{}/100），行业衰退，拒绝放行",
                         code,
                         industry,
                         score,
@@ -506,6 +529,7 @@ class FundamentalFilter:
             "debt_ratio": debt_ratio,  # P1-1新增
             "industry": industry,
             "industry_prosperity": prosperity,
+            "data_completeness": data_completeness,  # P0-4 新增：数据完整度（0-1）
             "reasons": reasons,
         }
 
@@ -519,7 +543,18 @@ class FundamentalFilter:
         return result
 
     def _fetch_pe_pb(self, code: str) -> tuple[float | None, float | None]:
-        """从实时行情快照获取 PE/PB（akshare 主源 + 东方财富兜底，P0 修复）。"""
+        """从实时行情快照获取 PE/PB（akshare 主源 + 东方财富兜底 + 腾讯兜底，v0.8.1）。
+
+        数据源优先级（按稳定性）：
+        1. 腾讯 qt.gtimg.cn（字段 39=PE-TTM，字段 46=PB，本机最稳定）
+        2. akshare 全市场快照（可能被限流）
+        3. 东方财富 push2 单股直连（可能被限流）
+        """
+        # v0.8.1 新增：腾讯源优先（本机实测最稳定，支持 A股/港股通）
+        pe_tx, pb_tx = self._fetch_pe_pb_tencent(code)
+        if pe_tx is not None or pb_tx is not None:
+            return pe_tx, pb_tx
+
         pe, pb = self._fetch_pe_pb_akshare(code)
         if pe is None and pb is None:
             # akshare 全失败 → 东方财富兜底
@@ -528,7 +563,49 @@ class FundamentalFilter:
                 pe = pe_em
             if pb_em is not None:
                 pb = pb_em
+            if pe is not None or pb is not None:
+                return pe, pb
         return pe, pb
+
+    def _fetch_pe_pb_tencent(self, code: str) -> tuple[float | None, float | None]:
+        """腾讯 qt.gtimg.cn 获取 PE-TTM / PB（v0.8.1 新增兜底源）。
+
+        腾讯行情字段：~分隔，字段 39=市盈率(TTM)，字段 46=市净率。
+        腾讯源是本机最稳定的免费行情源（历史K线/实时均支持），
+        解决 akshare/eastmoney 被限流时基本面过滤全部跳过的问题。
+        """
+        try:
+            if code.startswith(("5", "1")):  # ETF/基金无 PE/PB 概念
+                return None, None
+            # 归一化为腾讯代码格式
+            if code.startswith("6"):
+                tx_code = f"sh{code}"
+            elif code.startswith(("0", "3")):
+                tx_code = f"sz{code}"
+            else:
+                return None, None
+            import urllib.request
+
+            url = f"https://qt.gtimg.cn/q={tx_code}"
+            req = urllib.request.Request(
+                url, headers={"Referer": "https://gu.qq.com/", "User-Agent": "Mozilla/5.0"}
+            )
+            with urllib.request.urlopen(req, timeout=8.0) as resp:
+                raw = resp.read().decode("gbk", errors="ignore")
+            if "=" not in raw or '"' not in raw:
+                return None, None
+            payload = raw.split('"')[1]
+            fields = payload.split("~")
+            if len(fields) < 47:
+                return None, None
+            pe = _safe_float(fields[39]) if len(fields) > 39 else None
+            pb = _safe_float(fields[46]) if len(fields) > 46 else None
+            if pe is not None or pb is not None:
+                logger.info("基本面过滤：{} 腾讯源成功 PE={} PB={}", code, pe, pb)
+            return pe, pb
+        except Exception as e:
+            logger.debug("基本面过滤：{} 腾讯源 PE/PB 失败: {}", code, e)
+            return None, None
 
     def _fetch_pe_pb_akshare(self, code: str) -> tuple[float | None, float | None]:
         """akshare 主源获取 PE/PB（带全量快照缓存）。"""

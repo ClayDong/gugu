@@ -68,7 +68,9 @@ def test_consecutive_loss_degrades_but_keeps_weight(
 
     weights = pool.get_weights()
     assert weights["box_breakout"] >= MIN_WEIGHT
-    assert weights["box_breakout"] < 0.10
+    # v0.8.1：断言更新——新约束（MIN_WEIGHT=0.05 保底 + 归一化）下降级后权重约 0.10-0.13，
+    # 语义验证"显著低于初始 0.40"而非脆弱边界 0.10
+    assert weights["box_breakout"] < 0.20
     # 策略仍被保留
     assert "box_breakout" in pool.get_enabled_names()
 
@@ -124,7 +126,8 @@ def test_weight_persistence(mock_strategy_config, tmp_path, monkeypatch):
         mock_cfg.return_value.strategy = mock_strategy_config
         pool2 = StrategyPool()
 
-    assert pool2.get_weights()["box_breakout"] < 0.10
+    # v0.8.1：断言更新——重启后权重从持久化恢复，显著低于初始 0.40（降级生效）
+    assert pool2.get_weights()["box_breakout"] < 0.20
 
 
 def test_weighted_fusion_ignores_unknown_strategy(mock_strategy_config, tmp_path, monkeypatch):

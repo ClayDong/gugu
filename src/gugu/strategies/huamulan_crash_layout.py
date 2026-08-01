@@ -80,12 +80,27 @@ class HuamulanCrashLayoutStrategy(Strategy):
         df["vol_ma5"] = df["volume"].rolling(5).mean().shift(1)
         df["vol_ratio"] = df["volume"] / df["vol_ma5"].replace(0, np.nan)
 
-        # ── 计算流通市值（近似） ────────────────────
-        df["market_cap"] = df["close"] * 1e8  # 简化，实盘需用真实流通股本
+        # ── 计算流通市值 ────────────────────────────
+        # v0.8.0 修复：优先使用数据层注入的真实流通市值列（腾讯实时行情）
+        if "market_cap" in df.columns:
+            mc_col = df["market_cap"]
+            if isinstance(mc_col, pd.Series) and bool(mc_col.notna().any()):
+                df["market_cap"] = mc_col.astype(float)
+            else:
+                df["market_cap"] = float("nan")  # 无真实数据时市值条件自动放行
+        else:
+            df["market_cap"] = float("nan")
 
-        # ── 计算PE（近似，回测中简化） ──────────────
-        # 实盘需用真实PE数据，回测中用 close / (close / PE) 近似
-        df["pe"] = 25.0  # 默认值，实盘需替换
+        # ── 计算PE ──────────────────────────────
+        # v0.8.0 修复：优先使用数据层注入的真实 PE-TTM 列（腾讯实时行情）
+        if "pe" in df.columns:
+            pe_col = df["pe"]
+            if isinstance(pe_col, pd.Series) and bool(pe_col.notna().any()):
+                df["pe"] = pe_col.astype(float)
+            else:
+                df["pe"] = float("nan")  # 无真实数据时估值条件自动放行
+        else:
+            df["pe"] = float("nan")
 
         # ════════════════════════════════════════════════
         # 买入条件（暴跌布局法）
@@ -97,17 +112,30 @@ class HuamulanCrashLayoutStrategy(Strategy):
             # 无指数数据时，用个股跌幅 >= 5% 近似（个股暴跌）
             cond_crash = df["daily_return"] <= -0.05
 
-        # 条件2：个股为行业龙头（市值前20%，这里简化为市值 > 200亿）
-        cond_large_cap = df["market_cap"] >= market_cap_min
+        # 条件2：个股为行业龙头（市值前20%，这里简化为市值 > 200亿；无真实数据时放行）
+        mc = df["market_cap"]
+        cond_large_cap = mc.isna() | (mc >= market_cap_min)
 
-        # 条件3：个股跌幅 > 指数跌幅（被错杀）
+        # 条件3：个股跌幅 > 指数跌幅（被错杀）—— v0.8.0 修复：
+        # 错杀判断应在暴跌日（而非买入日）。买入日是企稳反弹日，当日涨幅为正，
+        # 不可能满足"个股跌得比指数多"。改为：最近 recovery_days 内存在被错杀的暴跌日。
         if "index_return" in df.columns:
-            cond_killed_more = df["daily_return"] < df["index_return"]
+            killed_crash_day = (df["index_return"] <= crash_threshold) & (
+                df["daily_return"] < df["index_return"]
+            )
         else:
-            cond_killed_more = df["daily_return"] < crash_threshold
+            killed_crash_day = df["daily_return"] < crash_threshold
+        cond_killed_more = (
+            killed_crash_day.rolling(recovery_days + 1, min_periods=1)
+            .max()
+            .shift(1)
+            .fillna(False)
+            .astype(bool)
+        )
 
-        # 条件4：估值合理（PE < 30，回测中简化）
-        cond_valuation = df["pe"] < pe_max
+        # 条件4：估值合理（PE < 30；无真实数据时放行）
+        pe_col = df["pe"]
+        cond_valuation = pe_col.isna() | (pe_col < pe_max)
 
         # 条件5：企稳信号：连续N日不再创新低
         df["low_3d"] = df["low"].rolling(recovery_days).min()
@@ -119,24 +147,28 @@ class HuamulanCrashLayoutStrategy(Strategy):
         # ════════════════════════════════════════════════
         # 卖出条件
         # ════════════════════════════════════════════════
-        # 1. 止损：跌破入场价8%
-        df["stop_loss_price"] = df["close"] * (1 - stop_loss_pct)
+        # 1. 止损：跌破入场价8%（用信号日低点为基准，v0.8.0 修复——
+        #    旧版 `close × (1-8%)` 用当日 close 算自己永远不成立，形同虚设）
+        signal_low = df["low"].where(buy_cond).ffill()
+        df["stop_loss_price"] = signal_low * (1 - stop_loss_pct)
         cond_stop_loss = df["close"] < df["stop_loss_price"]
 
-        # 2. 止盈：目标收益15%-20%即走
-        df["take_profit_price"] = df["close"] * (1 + target_gain)
+        # 2. 止盈：目标收益15%-20%即走（用信号日低点为基准）
+        df["take_profit_price"] = signal_low * (1 + target_gain)
         cond_take_profit = df["close"] >= df["take_profit_price"]
 
-        # 3. 时间止损：持仓10日无进展
-        time_stop_window = int(self.params.get("time_stop_window", 10))
-        time_stop_threshold = float(self.params.get("time_stop_threshold", 0.03))
-        df["return_10d"] = df["close"].pct_change(periods=time_stop_window)
-        cond_time_stop = df["return_10d"] < time_stop_threshold
-
-        # 信号赋值（卖出优先于买入）
+        # 信号赋值（卖出优先于买入；信号日当天不卖出；无持仓时卖出信号不生效）
         df["signal"] = 0
         df.loc[buy_cond, "signal"] = 1
-        df.loc[cond_stop_loss | cond_take_profit | cond_time_stop, "signal"] = -1
+        has_entry = buy_cond.cumsum() > 0
+        sell_cond = (cond_stop_loss | cond_take_profit) & ~buy_cond & has_entry
+        df.loc[sell_cond, "signal"] = -1
+
+        # v0.8.0 修复：时间止损改为 max_hold 机制（持仓 N 日强制平仓），
+        # 替代旧版全局 `return_10d < 3%`——该条件在暴跌日必然触发，
+        # 导致买入信号被同日卖出覆盖（策略永远买不进去）。
+        time_stop_window = int(self.params.get("time_stop_window", 10))
+        df = self._apply_max_hold_exit(df, max_hold_days=time_stop_window)
 
         # ── 置信度计算 ────────────────────────────────
         # 基于：错杀程度 + 市值规模 + 估值安全边际

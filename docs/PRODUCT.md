@@ -23,7 +23,7 @@
 | 缺统一风控 | 三级风控（L1 仓位 / L2 日亏 / L3 系统规则），铁律不可绕过，熔断持久化防重启绕过 |
 | 信号/持仓/盈亏信息分散 | 飞书卡片消息统一推送（信号 / 日报 / 告警 / 回测 / 异常） |
 | 策略验证成本高 | 自研回测引擎（含涨跌停检查 + wisdom 可选项）+ 模拟盘，零资金风险验证策略 |
-| 数据源单点故障 | 三级冗余：主源 sina → 降级 akshare → 兜底 eastmoney；大市数据三通道（akshare→新浪K线→东方财富） |
+| 数据源单点故障 | 四级冗余：主源 sina → 降级 eastmoney → 兜底 akshare → 终极兜底 tencent；大市数据三通道（akshare→新浪K线→东方财富） |
 
 ## 三、五阶段架构（渐进式）
 
@@ -55,6 +55,8 @@
 | 历史/观察 | KDJ / Bollinger / PullbackLow | 均值回归/低吸策略（当前未启用，保留代码） |
 | 历史/观察 | NorthForceLong | 趋势向上+缩量回踩 MA20（回测未通过，持续调参） |
 | 历史/观察 | DragonTigerShort | 涨停断板反包（回测观察通过，仅在 paper 观察） |
+| 已验证 | rebound_elite | 断板反包精英追涨（基于事件研究验证的有效子集：高活跃妖股+放量反包追涨，5日+4.08%/10日+9.99%） |
+| 实验性 | price_volume_signal | 换手率+量比尾盘黄金信号（四信号框架，5日收益+13.85%胜率82% bootstrap显著） |
 | 已禁用 | IndustryCapitalMomentum | 行业资金强度+动量确认 v1.2（回测 -15.38%，待重构） |
 
 **当前启用策略（按市场状态分流）**：
@@ -176,16 +178,38 @@ feishu:
 - 持仓盈亏实时更新
 - CLI 持仓查看：`uv run python scripts/show_portfolio.py --all`
 
-### 4.8 数据源三级冗余机制
+### 4.8 信号绩效验证闭环（v0.8.1）
+
+信号发出后的实际收益是验证策略有效性的唯一标准。gugu 构建了完整的三阶段验证闭环：
+
+| 阶段 | 时机 | 内容 | 工具 |
+|------|------|------|------|
+| 前瞻追踪 | 信号产生后 T+1/T+3/T+5/T+10 | `SignalTracker` 追踪信号后 N 日收益，标记"前瞻命中/未命中"，写入 `signals_history.jsonl` | `src/gugu/analysis/signal_tracker.py` |
+| 次日验证 | T+1 09:35 盘中 / 15:05 收盘 | 尾盘选股候选的次日开盘溢价、盘中最高溢价、收盘收益、最大回撤、止损命中率，验证结果写入 `data/screener_validation.jsonl` | `screener/validator.py` |
+| 绩效周报 | 每周一 08:00（自动推送飞书） | 汇总近 30 日命中率、策略收益对比、最佳/最差信号排行，含超额收益 vs 沪深 300 | `SignalTracker.generate_report(days=30)` + 飞书卡片 |
+
+**绩效指标口径**（禁止互相替代或混用）：
+
+| 指标 | 含义 | 使用边界 |
+|------|------|----------|
+| `execution_success_rate` | 订单执行成功率 | 只衡量订单执行，不代表盈利 |
+| `forward_5d_signal_hit_rate` | 信号发出后五个交易日方向命中率 | 前向信号验证，不等同平仓盈利率 |
+| `closed_trade_win_rate` | 已完成平仓交易的盈利占比 | 仅纳入完整平仓结果 |
+| `realized_pnl` | 已实现盈亏 | 只统计已平仓结果 |
+| `estimated_signal_pnl` | 按假设仓位估算的信号收益 | 估算值，不作为实际账户盈亏 |
+
+### 4.9 数据源四级冗余机制
 
 | 层级 | 源 | API 接口 | 能力 |
 |------|----|----------|------|
 | 主源 | SinaCollector | 新浪 `hq.sinajs.cn` + 网易 `quotes.money.163.com`（直连 HTTP） | 仅行情，无资金流 |
-| 降级 1 | AkshareCollector | 东方财富 `ak.stock_zh_a_hist()` + `ak.stock_zh_a_spot_em()` | 历史行情 + 实时行情 + 资金流 |
-| 降级 2 | EastmoneyCollector | 东方财富 `push2.eastmoney.com` 直连（不依赖 akshare 库） | 历史行情 + 实时行情 + 行业/个股资金流 |
+| 降级 1 | EastmoneyCollector | 东方财富 `push2.eastmoney.com` 直连（不依赖 akshare 库） | 历史行情 + 实时行情 + 行业/个股资金流 |
+| 兜底 2 | AkshareCollector | 东方财富 `ak.stock_zh_a_hist()` + `ak.stock_zh_a_spot_em()` | 历史行情 + 实时行情 + 资金流 |
+| 终极兜底 3 | TencentCollector | 腾讯财经 `ifzq.gtimg.cn` 直连（仅 qfq 日 K） | 前复权日 K 线（仅历史行情） |
 
 - `fallback.py`（SinaCollector）不依赖 `akshare`，通过 `httpx` 直连新浪/网易原生 HTTP 接口
 - `eastmoney_collector.py` 不依赖 `akshare`，通过 `httpx` 直连东方财富 push2 API
+- `tencent_collector.py` 通过 urllib 直连腾讯 ifzq.gtimg.cn，提供最稳定的 qfq 日 K 兜底
 - 主源连续失败 3 次 → 并发降级到所有备用源（FIRST_COMPLETED 模式取最快响应）
 - 冷却 5 分钟后尝试切回主源
 - 降级源也做数据质量校验
@@ -246,16 +270,6 @@ feishu:
 - 所有买入候选统一经过十大视角门禁。门禁未通过的候选只能作为观察/研究结果展示，不能进入买入路径。
 - 数据质量采用 `fresh`、`stale`、`partial`、`invalid`、`unavailable` 状态；只有 `fresh` 允许进入买入决策，其余状态只能用于研究或通知。
 - 订单执行成功只表示订单执行结果为成功，不等于交易盈利。未完成平仓的记录不能作为已实现盈利样本。
-
-### 绩效指标口径
-
-| 指标 | 含义 | 使用边界 |
-|------|------|----------|
-| `execution_success_rate` | 订单执行成功率 | 只衡量订单执行，不代表盈利 |
-| `forward_5d_signal_hit_rate` | 信号发出后五个交易日的方向命中率 | 用于前向信号验证，不等于平仓盈利率 |
-| `closed_trade_win_rate` | 已完整平仓交易中盈利交易的占比 | 仅纳入有完整平仓结果的交易 |
-| `realized_pnl` | 已完成交易的实际已实现盈亏 | 只统计已实现结果 |
-| `estimated_signal_pnl` | 按假设仓位估算的信号收益 | 估算值，不作为实际账户盈亏 |
 
 ## 五、使用方式
 

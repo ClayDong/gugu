@@ -97,7 +97,8 @@ class TestGAOptimizer:
         assert abs(result.best_params["x"] - 2.5) < 0.5
         assert result.generations == 30
         assert result.population_size == 20
-        assert len(result.history) == 30
+        # P2-4 Early Stopping：实际迭代数可能因提前收敛而小于配置值
+        assert 0 < len(result.history) <= result.generations
 
     def test_ga_history_monotonic_improvement(self) -> None:
         """GA 最优得分应单调不减。"""
@@ -194,7 +195,8 @@ class TestPSOOptimizer:
         assert abs(result.best_params["x"] - 1.5) < 0.5
         assert result.generations == 30
         assert result.population_size == 20
-        assert len(result.history) == 30
+        # P2-4 Early Stopping：实际迭代数可能因提前收敛而小于配置值
+        assert 0 < len(result.history) <= result.generations
 
     def test_pso_history_monotonic_improvement(self) -> None:
         """PSO 最优得分应单调不减。"""

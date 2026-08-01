@@ -325,7 +325,10 @@ class SchedulerTasksConfig(BaseModel):
     portfolio_report: bool = Field(default=True, description="15:35 持仓认知分析报告")
     sentiment_daily: bool = Field(default=True, description="20:30 舆情日报")
     weekly_optimize: bool = Field(default=True, description="周日 03:00 周参数优化")
-    heuristic_optimize: bool = Field(default=False, description="每月1/15日 04:00 启发式优化（GA/PSO交替，默认关闭由settings.yaml控制）")
+    heuristic_optimize: bool = Field(
+        default=False,
+        description="每月1/15日 04:00 启发式优化（GA/PSO交替，默认关闭由settings.yaml控制）",
+    )
     weekly_review: bool = Field(default=True, description="周日 20:00 周复盘")
     intraday_monitor: bool = Field(default=True, description="每分钟 盘中实时盯盘")
     perspective_afternoon: bool = Field(

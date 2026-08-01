@@ -106,6 +106,12 @@ max-class-lines = 300
 min-test-coverage = 70
 min-assertions-per-test = 1
 
+[tool.bandit]
+# B310: urllib.urlopen (used for data source HTTP fetch, intentional)
+# B323: _create_unverified_context (for tencent finance SSL, intentional)
+# B324: MD5 hash (used for card dedup fingerprint, not security-sensitive)
+skips = ["B310", "B323", "B324"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",

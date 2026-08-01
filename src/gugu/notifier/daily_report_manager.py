@@ -67,6 +67,16 @@ class DailyReportManager:
             risk_info = self._get_risk_info(account)
             trailing_stop_info = self._get_trailing_stop_info()
 
+        # v0.7.10 新增：数据源健康摘要仅在收盘日报附带
+        source_health = None
+        if period == "close":
+            try:
+                from gugu.data.source_health import get_source_health_monitor
+
+                source_health = get_source_health_monitor().save_daily_summary()
+            except Exception as e:
+                logger.debug("获取数据源健康摘要失败: {}", e)
+
         data = {
             "market_summary": {
                 "total_value": account.total_value,
@@ -89,6 +99,7 @@ class DailyReportManager:
             "risk": risk_info,
             "trailing_stops": trailing_stop_info,
             "filtered_signals": filtered_signals or [],
+            "source_health": source_health,
         }
 
         await self._fill_portfolio_names(data)

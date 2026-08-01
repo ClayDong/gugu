@@ -42,9 +42,7 @@ class LinJuDaYeStrategy(Strategy):
 
         # 均线系统
         ma5 = close.rolling(5).mean()
-        ma10 = close.rolling(10).mean()
         ma20 = close.rolling(20).mean()
-        ma60 = close.rolling(60).mean()
 
         # 量能
         vol_ma5 = volume.rolling(5).mean()

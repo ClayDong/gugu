@@ -42,6 +42,7 @@ import json
 import threading
 import time
 from collections import defaultdict
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -239,7 +240,7 @@ class SignalPipeline:
                         )
                         signal["golden_ratio"] = gr.to_dict()
                         logger.info(
-                            "{} GR军规破位: {}, " "回调{:.1f}%，拦截买入",
+                            "{} GR军规破位: {}, 回调{:.1f}%，拦截买入",
                             symbol,
                             gr.action_zone,
                             gr.current_callback_pct,
@@ -301,7 +302,7 @@ class SignalPipeline:
             await self._run_wisdom_decision(signal, symbol, perspective_result)
 
             logger.info(
-                "信号: {} {} " "置信度 {} 策略 {}",
+                "信号: {} {} 置信度 {} 策略 {}",
                 signal["symbol"],
                 signal["direction"],
                 signal["confidence"],
@@ -405,10 +406,8 @@ class SignalPipeline:
             # P2-10: 记录被拒绝的信号到历史
             signal["rejected"] = True
             signal["reject_reason"] = f"价格异常 price={price}"
-            try:
+            with suppress(Exception):
                 record_signal_history(signal, None, None)
-            except Exception:
-                pass
             return True
         if confidence is None or confidence <= 0.0:
             self._inc_filter("confidence_zero")
@@ -416,10 +415,8 @@ class SignalPipeline:
             # P2-10: 记录被拒绝的信号到历史
             signal["rejected"] = True
             signal["reject_reason"] = f"置信度无效 confidence={confidence}"
-            try:
+            with suppress(Exception):
                 record_signal_history(signal, None, None)
-            except Exception:
-                pass
             return True
 
         if symbol in portfolio and account.total_value > 0:
@@ -524,8 +521,7 @@ class SignalPipeline:
                     signal["weekly_misaligned"] = True
                     if not signal.get("filter_reason"):
                         signal["filter_reason"] = (
-                            f"周线趋势 {weekly_trend.get('weekly_trend', '?')}"
-                            f"与买入信号方向不一致"
+                            f"周线趋势 {weekly_trend.get('weekly_trend', '?')}与买入信号方向不一致"
                         )
             except Exception as e:
                 logger.debug("多周期趋势判断失败: {}", e)

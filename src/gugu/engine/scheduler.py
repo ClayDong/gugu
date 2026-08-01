@@ -13,8 +13,10 @@
 - 15:10  收盘信号汇总（股层面）
 - 15:15  收盘宏观全球概览（含 A 股指数 + 资金流日报 + 大师兄解读，错开 5 分钟）
 - 15:20  信号绩效验证（追踪信号实际收益，推送命中率/策略对比报告）
+- 15:25  信号次日验证（T+1 收盘收益/盘中回撤/止损命中率）
 - 15:35  基金监控推送
 - 20:00  情感日报（个股新闻情感分析 + 操作建议）
+- 周日 20:30 信号绩效周报（近7日胜率/策略贡献/分日密度）
 - 07:00  Parquet 缓存定期清理（删除 >7天 过期文件）
 - 每 10 分钟重试失败的通知队列
 
@@ -304,6 +306,24 @@ class TradingScheduler(SchedulerJobsMixin):
                 CronTrigger(hour=15, minute=20, day_of_week="mon-fri"),
                 id="signal_performance_1520",
                 name="信号绩效验证-15:20",
+            )
+
+        # 信号 T+1 次日验证：15:25
+        if self._task_enabled("signal_daily_validation"):
+            self._scheduler.add_job(
+                self._safe_signal_daily_validation,
+                CronTrigger(hour=15, minute=25, day_of_week="mon-fri"),
+                id="signal_daily_validation_1525",
+                name="信号次日验证-15:25",
+            )
+
+        # 信号绩效周报：周日 20:30
+        if self._task_enabled("signal_weekly"):
+            self._scheduler.add_job(
+                self._safe_signal_weekly,
+                CronTrigger(hour=20, minute=30, day_of_week="sun"),
+                id="signal_weekly_2030",
+                name="信号绩效周报-周日20:30",
             )
 
         # v0.5.0 盘中实时盯盘

@@ -73,8 +73,8 @@ class HuamulanTailPickStrategy(Strategy):
         market_cap_min = float(self.params.get("market_cap_min", 50e8))
         market_cap_max = float(self.params.get("market_cap_max", 200e8))
         stop_loss_pct = float(self.params.get("stop_loss_pct", 0.05))
+        take_profit_pct = float(self.params.get("take_profit_pct", 0.10))
         time_stop_window = int(self.params.get("time_stop_window", 3))
-        time_stop_threshold = float(self.params.get("time_stop_threshold", 0.02))
         vol_expand_days = int(self.params.get("vol_expand_days", 3))
 
         # ── 计算均线系统 ──────────────────────────────
@@ -102,14 +102,39 @@ class HuamulanTailPickStrategy(Strategy):
                     vol_expand_list.append(is_expand)
             df["vol_expand"] = vol_expand_list
 
-        # ── 计算换手率（近似） ──────────────────────
-        # 换手率 ≈ amount / (close * 流通股本)，回测中简化为 amount / close / 1e8
-        df["turnover_rate"] = df["amount"] / df["close"] / 1e8 if "amount" in df.columns else 0.0
+        # ── 计算换手率 ──────────────────────────────
+        # v0.8.0 修复：优先使用数据层注入的真实换手率列（腾讯实时行情），
+        # 回退到 amount 近似（amount 为真实成交额时 ≈ 换手额/流通市值）
+        if "turnover_rate" in df.columns:
+            tr_col = df["turnover_rate"]
+            if isinstance(tr_col, pd.Series) and bool(tr_col.notna().any()):
+                df["turnover_rate"] = tr_col.astype(float)
+            else:
+                df["turnover_rate"] = 0.0
+        elif "amount" in df.columns:
+            # 真实流通市值注入时：换手率 = amount / market_cap
+            if "market_cap" in df.columns:
+                mc_col = df["market_cap"]
+                if isinstance(mc_col, pd.Series) and bool(mc_col.notna().any()):
+                    df["turnover_rate"] = df["amount"] / mc_col.replace(0, np.nan)
+                else:
+                    df["turnover_rate"] = 0.0
+            else:
+                # 兜底近似（数据层未注入时）——不再用 close*1e8 假市值
+                df["turnover_rate"] = 0.0
+        else:
+            df["turnover_rate"] = 0.0
 
-        # ── 计算流通市值（近似） ────────────────────
-        # 流通市值 ≈ close * 流通股本，回测中简化为 close / close * 1e8（需外部数据校准）
-        # 这里用 amount / turnover_rate 反推，但回测中无法精确，仅做近似
-        df["market_cap"] = df["close"] * 1e8  # 简化，实盘需用真实流通股本
+        # ── 计算流通市值 ────────────────────────────
+        # v0.8.0 修复：优先使用数据层注入的真实流通市值列（腾讯实时行情）
+        if "market_cap" in df.columns:
+            mc_col = df["market_cap"]
+            if isinstance(mc_col, pd.Series) and bool(mc_col.notna().any()):
+                df["market_cap"] = mc_col.astype(float)
+            else:
+                df["market_cap"] = float("nan")  # 无真实数据时市值条件自动放行
+        else:
+            df["market_cap"] = float("nan")
 
         # ── 计算当日涨幅 ──────────────────────────────
         df["daily_return"] = df["close"].pct_change()
@@ -131,10 +156,9 @@ class HuamulanTailPickStrategy(Strategy):
             df["turnover_rate"] <= turnover_max_pct
         )
 
-        # 条件4：流通市值 50亿-200亿（回测中近似）
-        cond_market_cap = (df["market_cap"] >= market_cap_min) & (
-            df["market_cap"] <= market_cap_max
-        )
+        # 条件4：流通市值 50亿-200亿（无真实市值数据时自动放行）
+        mc = df["market_cap"]
+        cond_market_cap = mc.isna() | ((mc >= market_cap_min) & (mc <= market_cap_max))
 
         # 条件5：均线多头排列（MA5 > MA10 > MA20）
         cond_ma_align = (df["ma5"] > df["ma10"]) & (df["ma10"] > df["ma20"])
@@ -155,21 +179,30 @@ class HuamulanTailPickStrategy(Strategy):
         # ════════════════════════════════════════════════
         # 卖出条件
         # ════════════════════════════════════════════════
-        # 1. 止损：跌破入场价5%
-        df["stop_loss_price"] = df["close"] * (1 - stop_loss_pct)
+        # 1. 止损：跌破入场价5%（用信号日低点为基准，v0.8.0 修复——
+        #    旧版 `close × (1-5%)` 用当日 close 算自己永远不成立，形同虚设）
+        signal_low = df["low"].where(buy_cond).ffill()
+        df["stop_loss_price"] = signal_low * (1 - stop_loss_pct)
         cond_stop_loss = df["close"] < df["stop_loss_price"]
 
-        # 2. 止盈：涨幅达10%或反弹至前高
-        cond_take_profit = df["close"] >= df["recent_high"]
+        # 2. 止盈：涨幅达10%（用信号日低点为基准）或滞涨（上影线>5%）
+        df["take_profit_price"] = signal_low * (1 + take_profit_pct)
+        df["upper_shadow"] = (df["high"] - df[["open", "close"]].max(axis=1)) / df["open"].replace(
+            0, np.nan
+        )
+        cond_take_profit = (df["close"] >= df["take_profit_price"]) | (df["upper_shadow"] > 0.05)
 
-        # 3. 时间止损：持仓3日涨幅 < 2%（无进展）
-        df["return_3d"] = df["close"].pct_change(periods=time_stop_window)
-        cond_time_stop = df["return_3d"] < time_stop_threshold
-
-        # 信号赋值（卖出优先于买入）
+        # 信号赋值（卖出优先于买入；信号日当天不卖出；无持仓时卖出信号不生效）
         df["signal"] = 0
         df.loc[buy_cond, "signal"] = 1
-        df.loc[cond_stop_loss | cond_take_profit | cond_time_stop, "signal"] = -1
+        has_entry = buy_cond.cumsum() > 0
+        sell_cond = (cond_stop_loss | cond_take_profit) & ~buy_cond & has_entry
+        df.loc[sell_cond, "signal"] = -1
+
+        # v0.8.0 修复：时间止损改为 max_hold 机制（持仓 N 日强制平仓），
+        # 替代旧版全局 `return_3d < 2%`（该条件在任何回调日都触发，
+        # 买入信号易被同日卖出覆盖）。
+        df = self._apply_max_hold_exit(df, max_hold_days=time_stop_window)
 
         # ── 置信度计算 ────────────────────────────────
         # 基于：涨幅适中 + 量比强度 + 换手适中 + 趋势强度

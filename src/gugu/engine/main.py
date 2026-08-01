@@ -262,7 +262,9 @@ class TradingEngine(EngineOpsMixin):
         self._notified_signals_file = PROJECT_ROOT / "data" / "notified_signals.json"
         self._notified_signals: dict[str, str] = self._load_notified_signals()
 
-        self._alert_history_file = alert_history_file or PROJECT_ROOT / "data" / "alert_history.json"
+        self._alert_history_file = (
+            alert_history_file or PROJECT_ROOT / "data" / "alert_history.json"
+        )
         self._daily_alerts: dict[str, str] = self._load_daily_alerts()
 
         if watchlist is not None:
@@ -385,6 +387,11 @@ class TradingEngine(EngineOpsMixin):
                 last_date = self._last_cycle_date.isoformat() if self._last_cycle_date else ""
             if last_date != today.isoformat():
                 self._broker.settle_t_plus_1()
+                # v0.8.1 修复（信号中断根因）：必须先刷新实时价格，再设置日初净值。
+                # 原顺序导致 daily_start_value 基于 live_positions.json 的陈旧手动价格，
+                # 实时价更新后 total_value 骤降 → 虚假 daily loss 超阈值 → 误触发 L2 熔断
+                # → 跳过信号扫描 → 策略信号长期零产出。
+                await self._update_prices()
                 self._broker.reset_daily_start_value()
                 self._risk.reset_halt()
                 self._last_cycle_date = today
@@ -460,6 +467,15 @@ class TradingEngine(EngineOpsMixin):
                         logger.exception(
                             "处理信号 {} 失败，跳过: {}", signal.get("symbol"), sig_err
                         )
+
+                # v0.8.1 修复：扫描结束后将实时持仓现价持久化回 live_positions.json，
+                # 解决文件 current_price 陈旧（偏差 15-34%）导致止损/市值失真问题。
+                try:
+                    persist = getattr(self._broker, "persist_prices", None)
+                    if callable(persist):
+                        persist()
+                except Exception as persist_err:
+                    logger.warning("持久化持仓现价失败: {}", persist_err)
 
                 await self._check_daily_loss()
                 if self._risk.is_halted:

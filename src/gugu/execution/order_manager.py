@@ -6,7 +6,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from gugu.engine.event_engine import EventEngine
@@ -192,7 +193,7 @@ class OrderManager:
                 logger.info("{} 试仓比例过小，使用最低1手保底: 100股", symbol)
             else:
                 logger.warning(
-                    "{} 1手金额 {:.0f} 超过单股上限 {:.0%}，" "不保底（避免绕过 wisdom 仓位意图）",
+                    "{} 1手金额 {:.0f} 超过单股上限 {:.0%}，不保底（避免绕过 wisdom 仓位意图）",
                     symbol,
                     one_lot_value,
                     max_ratio,

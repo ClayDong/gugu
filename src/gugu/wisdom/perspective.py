@@ -109,7 +109,7 @@ def inject_perspective_consensus(book_router: Any, signal: dict[str, Any]) -> di
             current_conf = float(signal.get("confidence", 0.5))
             signal["confidence"] = min(1.0, current_conf + 0.1)
             logger.info(
-                "[wisdom-perspective] 高共识({:.0%}买入)增强置信度: " "{:.2f} → {:.2f}",
+                "[wisdom-perspective] 高共识({:.0%}买入)增强置信度: {:.2f} → {:.2f}",
                 buy_pct,
                 current_conf,
                 signal["confidence"],
@@ -119,7 +119,7 @@ def inject_perspective_consensus(book_router: Any, signal: dict[str, Any]) -> di
             current_conf = float(signal.get("confidence", 0.5))
             signal["confidence"] = max(0.1, current_conf - 0.1)
             logger.info(
-                "[wisdom-perspective] 低共识({:.0%}买入)降低置信度: " "{:.2f} → {:.2f}",
+                "[wisdom-perspective] 低共识({:.0%}买入)降低置信度: {:.2f} → {:.2f}",
                 buy_pct,
                 current_conf,
                 signal["confidence"],

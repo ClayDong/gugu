@@ -42,24 +42,24 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     """
     scheduler.setup()
     jobs = scheduler._scheduler.get_jobs()
-    # 4 scan + 1 screener + 1 screener_validate + 1 screener_validate_eod
-    # + 1 screener_auto_tune + 2 range_watchlist + 2 report + 1 retry + 4 macro
-    # + 1 cache_cleanup + 1 weekly_optimize + 1 weekly_review
-    # + 1 intraday_monitor + 1 config_hot_reload
-    # + 1 portfolio_report = 24
+    # 4 scan + 1 rsi_scan + 1 screener + 1 screener_validate + 1 screener_validate_eod
+    # + 1 screener_auto_tune + 2 range_watchlist + 1 report_close + 1 retry + 4 macro
+    # + 1 cache_cleanup + 1 weekly_optimize + 1 heuristic_optimize + 1 weekly_review
+    # + 1 market_temp + 1 intraday_monitor + 1 config_hot_reload
+    # + 1 portfolio_report + 1 signal_daily_validation + 1 signal_weekly = 27
     # flow_morning/flow_close/afternoon_flow 已合并到宏观卡片或禁用，不再单独注册
-    assert len(jobs) == 24
+    assert len(jobs) == 27
     job_ids = {j.id for j in jobs}
     assert "intraday_monitor" in job_ids
     assert "scan_1" in job_ids
     assert "scan_2" in job_ids
     assert "scan_3" in job_ids
     assert "scan_4" in job_ids
+    assert "rsi_scan_1330" in job_ids
     assert "screener_1430" in job_ids
     assert "screener_validate_0935" in job_ids
     assert "screener_validate_1505" in job_ids
     assert "screener_auto_tune_1510" in job_ids
-    assert "report_morning" in job_ids
     assert "report_close" in job_ids
     assert "retry_notify" in job_ids
     assert "macro_early" in job_ids
@@ -68,10 +68,19 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     assert "macro_close" in job_ids
     # P1-7: weekly_optimize_0300 周参数优化任务
     assert "weekly_optimize_0300" in job_ids
+    # 启发式优化任务（每月 1/15 日 04:00）
+    assert "heuristic_optimize_0400" in job_ids
     # P2-8: weekly_review_2000 周复盘推送任务
     assert "weekly_review_2000" in job_ids
     # 持仓认知分析任务（15:35 收盘后推送）
     assert "portfolio_report_1535" in job_ids
+    # 缓存清理任务
+    assert "cache_cleanup_0700" in job_ids
+    # 市场温度计任务
+    assert "market_temp_0825" in job_ids
+    # 信号绩效反馈任务
+    assert "signal_daily_validation_1525" in job_ids
+    assert "signal_weekly_2030" in job_ids
     # 配置热加载检测
     assert "config_hot_reload" in job_ids
     # flow jobs should NOT exist (merged into macro or disabled)
@@ -82,6 +91,7 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     assert "altalpha_fetch_1800" not in job_ids  # altalpha_fetch: false
     assert "perspective_report_0830" not in job_ids  # perspective_daily: false
     assert "sentiment_daily_2030" not in job_ids  # sentiment_daily: false
+    assert "signal_performance_1520" not in job_ids  # signal_performance: false
 
 
 @pytest.mark.asyncio

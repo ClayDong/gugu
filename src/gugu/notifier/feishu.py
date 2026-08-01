@@ -329,10 +329,7 @@ class FeishuNotifier:
             return True
 
         # 包含收益/盈亏模式：收益 +5.2%、盈亏 -3.1%
-        if re.search(r"(收益|盈亏|盈利|亏损)[：:]?\s*[+-]?\d+\.?\d*", content):
-            return True
-
-        return False
+        return bool(re.search(r"(收益|盈亏|盈利|亏损)[：:]?\s*[+-]?\d+\.?\d*", content))
 
     def _record_card_fingerprint(self, fingerprint: str) -> None:
         """记录卡片指纹，用于近期去重。
@@ -1201,6 +1198,32 @@ class FeishuNotifier:
             return await self.send_card(card)
         except Exception as e:
             logger.warning("发送持仓认知报告失败: {}", e)
+            return False
+
+    async def notify_signal_daily_validation(self, report: dict[str, Any]) -> bool:
+        """发送信号 T+1 次日验证报告卡片。"""
+        if not self._signal_enabled:
+            return False
+        try:
+            from gugu.notifier.formatter import build_signal_daily_validation_card
+
+            card = build_signal_daily_validation_card(report)
+            return await self.send_card(card)
+        except Exception as e:
+            logger.warning("发送信号次日验证报告失败: {}", e)
+            return False
+
+    async def notify_signal_weekly(self, report: dict[str, Any]) -> bool:
+        """发送信号绩效周报卡片。"""
+        if not self._signal_enabled:
+            return False
+        try:
+            from gugu.notifier.formatter import build_signal_weekly_card
+
+            card = build_signal_weekly_card(report)
+            return await self.send_card(card)
+        except Exception as e:
+            logger.warning("发送信号绩效周报失败: {}", e)
             return False
 
     async def close(self) -> None:

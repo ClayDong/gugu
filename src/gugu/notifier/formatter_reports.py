@@ -71,6 +71,33 @@ def _format_filtered_signals(filtered: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _format_source_health(health: dict[str, Any] | None) -> str:
+    """格式化数据源健康摘要。"""
+    if not health:
+        return ""
+    sources = health.get("sources", {})
+    if not sources:
+        return ""
+    lines = ["**数据源健康**"]
+    total = health.get("total_requests", 0)
+    failure_rate = health.get("failure_rate", 0.0)
+    degraded_min = health.get("degraded_minutes", 0.0)
+    lines.append(
+        f"- 今日请求: {total} 次 | 失败率: {failure_rate:.1%} | 降级时长: {degraded_min:.1f} 分钟"
+    )
+    for src, stats in sorted(sources.items()):
+        succ = stats.get("success", 0)
+        fail = stats.get("failure", 0)
+        fb = stats.get("fallback_used", 0)
+        deg = stats.get("degraded", 0)
+        rec = stats.get("recovered", 0)
+        if succ + fail + fb == 0:
+            continue
+        status = "✅" if fail == 0 and deg == 0 else "⚠️"
+        lines.append(f"- {status} {src}: 成功{succ} 失败{fail} 降级{deg} 恢复{rec} 兜底{fb}")
+    return "\n".join(lines)
+
+
 def format_daily_report(period: str, data: dict[str, Any]) -> dict[str, Any]:
     """Format a daily report into a Feishu card."""
     period_map = {
@@ -88,6 +115,7 @@ def format_daily_report(period: str, data: dict[str, Any]) -> dict[str, Any]:
     risk = data.get("risk")
     trailing_stops = data.get("trailing_stops")
     filtered_signals = data.get("filtered_signals", [])
+    source_health = data.get("source_health")
 
     sections: list[str] = []
     if market_summary:
@@ -131,6 +159,12 @@ def format_daily_report(period: str, data: dict[str, Any]) -> dict[str, Any]:
         filtered_text = _format_filtered_signals(filtered_signals)
         if filtered_text:
             sections.append(filtered_text)
+
+    # v0.7.10 新增：收盘日报附带数据源健康摘要
+    if period == "close":
+        health_text = _format_source_health(source_health)
+        if health_text:
+            sections.append(health_text)
 
     if not sections:
         sections.append("暂无数据")
@@ -387,4 +421,139 @@ def build_signal_performance_card(report: dict[str, Any]) -> dict[str, Any]:
         sections=sections,
         note=note,
         subtitle=f"前瞻命中率 {forward_hit_rate:.1%} | 已平仓胜率 {closed_trade_win_rate:.1%} | 样本 {tracked}",
+    )
+
+
+def build_signal_daily_validation_card(report: dict[str, Any]) -> dict[str, Any]:
+    """Build a T+1 signal daily validation report card."""
+    total = report.get("total_signals", 0)
+    if total < 3 or "message" in report:
+        msg = report.get("message", f"样本数不足（{total}），暂无次日验证")
+        return _card(
+            title="📊 信号次日验证",
+            template="grey",
+            sections=[msg],
+            note="gugu · 信号次日验证",
+        )
+
+    valid = report.get("valid_count", 0)
+    win_rate = report.get("win_rate", 0)
+    avg_close_return = report.get("avg_close_return", 0)
+    avg_drawdown = report.get("avg_max_drawdown", 0)
+    stop_hit_rate = report.get("stop_hit_rate", 0)
+    target_date = report.get("date", "")
+
+    template = "green" if win_rate >= 0.5 else "red"
+
+    overview_lines = [
+        f"**信号日期**：{target_date}",
+        f"**买入信号数**：{total}（可追踪 {valid}）",
+        f"**T+1 收盘胜率**：{win_rate:.1%}",
+        f"**T+1 平均收盘收益**：{avg_close_return:+.2%}",
+        f"**T+1 平均盘中回撤**：{avg_drawdown:+.2%}",
+        f"**止损命中率**：{stop_hit_rate:.1%}",
+    ]
+    sections = ["\n".join(overview_lines)]
+
+    by_strategy = report.get("by_strategy", [])
+    if by_strategy:
+        strategy_lines = ["**📊 策略 T+1 表现**"]
+        for s in by_strategy[:8]:
+            strategy_lines.append(
+                f"- {s.get('strategy', '?')}: "
+                f"{s.get('count', 0)}次 | "
+                f"胜率{s.get('win_rate', 0):.0%} | "
+                f"均收{s.get('avg_return', 0):+.2%}"
+            )
+        sections.append("\n".join(strategy_lines))
+
+    signals = report.get("signals", [])
+    if signals:
+        detail_lines = ["**🕒 信号明细**"]
+        for sig in signals[:5]:
+            symbol = sig.get("symbol", "")
+            name = lookup_stock_name(symbol) or sig.get("name", "") or symbol
+            entry = sig.get("entry_price", "?")
+            close_ret = sig.get("close_return")
+            dd = sig.get("max_drawdown")
+            stop_hit = "🛑" if sig.get("stop_loss_hit") else ""
+            ret_str = f"{close_ret:+.2%}" if isinstance(close_ret, int | float) else "N/A"
+            dd_str = f"{dd:+.2%}" if isinstance(dd, int | float) else "N/A"
+            detail_lines.append(
+                f"- {name}({symbol}): 入场{entry} → 收盘{ret_str} | 回撤{dd_str} {stop_hit}"
+            )
+        sections.append("\n".join(detail_lines))
+
+    generated_at = report.get("generated_at", "")
+    return _card(
+        title="📊 信号次日验证",
+        template=template,
+        sections=sections,
+        note=f"gugu · 信号次日验证 | {generated_at}",
+        subtitle=f"T+1 胜率 {win_rate:.1%} | 样本 {valid}",
+    )
+
+
+def build_signal_weekly_card(report: dict[str, Any]) -> dict[str, Any]:
+    """Build a weekly signal performance summary card."""
+    total = report.get("total_signals", 0)
+    if total < 3 or "message" in report:
+        msg = report.get("message", f"样本数不足（{total}），暂无周报")
+        return _card(
+            title="📈 信号绩效周报",
+            template="grey",
+            sections=[msg],
+            note="gugu · 信号绩效周报",
+        )
+
+    valid = report.get("valid_count", 0)
+    win_rate = report.get("win_rate", 0)
+    avg_return = report.get("avg_return_5d", 0)
+    best = report.get("best_return", 0)
+    worst = report.get("worst_return", 0)
+    start_date = report.get("start_date", "")
+    end_date = report.get("end_date", "")
+
+    template = "green" if win_rate >= 0.5 else "red"
+
+    overview_lines = [
+        f"**统计区间**：{start_date} ~ {end_date}",
+        f"**买入信号数**：{total}（可追踪 {valid}）",
+        f"**5日胜率**：{win_rate:.1%}",
+        f"**5日平均收益**：{avg_return:+.2%}",
+        f"**最佳/最差**：{best:+.2%} / {worst:+.2%}",
+    ]
+    sections = ["\n".join(overview_lines)]
+
+    daily_summary = report.get("daily_summary", [])
+    if daily_summary:
+        daily_lines = ["**📅 分日信号密度**"]
+        for d in daily_summary:
+            daily_lines.append(
+                f"- {d.get('date', '?')}: "
+                f"{d.get('count', 0)}条 | "
+                f"胜率{d.get('win_rate', 0):.0%} | "
+                f"均收{d.get('avg_return', 0):+.2%}"
+            )
+        sections.append("\n".join(daily_lines))
+
+    by_strategy = report.get("by_strategy", [])
+    if by_strategy:
+        strategy_lines = ["**📊 策略贡献**"]
+        for s in by_strategy[:6]:
+            strategy_lines.append(
+                f"- {s.get('strategy', '?')}: "
+                f"{s.get('count', 0)}次 | "
+                f"胜率{s.get('win_rate', 0):.0%} | "
+                f"均收{s.get('avg_return', 0):+.2%}"
+            )
+        sections.append("\n".join(strategy_lines))
+
+    generated_at = report.get("generated_at", "")
+    return _card(
+        title="📈 信号绩效周报",
+        template=template,
+        sections=sections,
+        note=f"gugu · 信号绩效周报 | {generated_at}",
+        subtitle=f"5日胜率 {win_rate:.1%} | 样本 {valid}",
     )

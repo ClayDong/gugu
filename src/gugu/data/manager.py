@@ -23,17 +23,21 @@ from gugu.data.collectors.akshare_collector import AkshareCollector
 from gugu.data.collectors.base import BaseCollector
 from gugu.data.collectors.eastmoney_collector import EastmoneyCollector
 from gugu.data.collectors.fallback import SinaCollector
+from gugu.data.collectors.tencent_collector import TencentCollector
 from gugu.data.quality import validate_sector_flow, validate_stock_flow, validate_stock_history
+from gugu.data.source_health import DataSourceHealthMonitor
 from gugu.data.stock_names import lookup_stock_name
 from gugu.utils.log import get_logger
 
 logger = get_logger()
 
 # 采集器注册表：配置名 → 采集器类
+# P0-3 修复：新增 tencent 作为第四备用源（本机最稳定的 qfq 日 K 源）
 _COLLECTOR_REGISTRY: dict[str, type[BaseCollector]] = {
     "akshare": AkshareCollector,
     "sina": SinaCollector,
     "eastmoney": EastmoneyCollector,
+    "tencent": TencentCollector,
 }
 
 
@@ -99,6 +103,8 @@ class DataManager:
         self._fallback_semaphore = asyncio.Semaphore(len(self._fallbacks))
         # Parquet 持久化缓存
         self._parquet_cache = persistent_cache()
+        # 数据源健康监控（单例）
+        self._health = DataSourceHealthMonitor()
 
     @property
     def is_degraded(self) -> bool:
@@ -128,23 +134,31 @@ class DataManager:
             self._fail_count = 0
         return self._primary
 
-    async def _on_success_locked(self) -> None:
+    async def _on_success_locked(self, method: str = "") -> None:
         """主源成功：重置失败计数与降级状态（在锁内调用，DA-05 修复）。"""
-        if self._fail_count > 0:
-            logger.info("主源恢复，切回 akshare")
+        was_degraded = self._degraded_until > 0
+        if was_degraded:
+            logger.info("主源恢复，切回 {}", self._primary.source)
+            self._health.record_recovered(self._primary.source, method)
+        self._health.record_success(self._primary.source, method)
         self._fail_count = 0
         self._degraded_until = 0.0
 
     async def _on_failure_locked(self, method: str) -> None:
         """主源失败：递增失败计数，达到阈值则降级（在锁内调用，DA-05 修复）。"""
         self._fail_count += 1
+        self._health.record_failure(
+            self._primary.source, method, detail=f"{self._fail_count}/{self._fail_threshold}"
+        )
         logger.warning("主源 {} 失败 ({}/{})", method, self._fail_count, self._fail_threshold)
         if self._fail_count >= self._fail_threshold:
             self._degraded_until = time.time() + self._fail_cooldown
+            fallback_source = self._fallbacks[0].source if self._fallbacks else "unknown"
+            self._health.record_degraded(self._primary.source, fallback_source, method)
             logger.warning(
                 "主源连续失败 {} 次，降级到 {}，冷却 {} 秒",
                 self._fail_count,
-                self._fallbacks[0].source,
+                fallback_source,
                 self._fail_cooldown,
             )
 
@@ -212,7 +226,7 @@ class DataManager:
                 _fn = partial(getattr(self._primary, method), *args, **kwargs)
                 df = await asyncio.wait_for(asyncio.to_thread(_fn), timeout=20.0)
                 async with self._lock:
-                    await self._on_success_locked()
+                    await self._on_success_locked(method)
                 df = self._validate(method, df, args)
                 # P0 修复：空结果不缓存，避免 120s 内持续返回空且不触发降级
                 if not df.empty:
@@ -246,6 +260,7 @@ class DataManager:
                 df = t.result()
                 if df is not None and not df.empty:
                     success_fb = next(fb for fb, task in tasks.items() if task is t)
+                    self._health.record_fallback_used(success_fb.source, method)
                     logger.info("降级源 {} 成功获取 {}", success_fb.source, method)
                     df = self._validate(method, df, args)
                     cache().set(cache_key, df)
@@ -266,6 +281,7 @@ class DataManager:
                     df = t.result()
                     if df is not None and not df.empty:
                         success_fb = next(fb for fb, task in tasks.items() if task is t)
+                        self._health.record_fallback_used(success_fb.source, method)
                         logger.info("降级源 {} 成功获取 {}", success_fb.source, method)
                         df = self._validate(method, df, args)
                         cache().set(cache_key, df)
@@ -278,6 +294,7 @@ class DataManager:
                     continue
 
         logger.warning("所有数据源 {} 均失败，尝试缓存兜底", method)
+        self._health.record_failure("all", method, detail="all_sources_failed")
         # 自恢复：返回过期缓存兜底（即使TTL过期也比空df好，保证业务不中断）
         stale_cached = cache().get(cache_key, ignore_ttl=True)
         if stale_cached is not None and not stale_cached.empty:

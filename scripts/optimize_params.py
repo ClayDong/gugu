@@ -719,7 +719,7 @@ def _check_unlock_conditions(
     if not sharpe_passed:
         failed.append("样本外 Sharpe ≤ 0")
 
-    # 检查2：参数稳定性 — 同一参数在 ≥50% 窗口被选中
+    # 检查2：参数稳定性 — 同一参数在 ≥80% 窗口被选中（v0.8.1 从 50% 上调）
     stability_passed = True
     stability_details: list[str] = []
     n_windows = len(results)
@@ -728,20 +728,20 @@ def _check_unlock_conditions(
             continue
         max_votes = max(votes.values())
         stability_ratio = max_votes / n_windows if n_windows > 0 else 0
-        if stability_ratio < 0.5:
+        if stability_ratio < 0.8:
             stability_passed = False
             stability_details.append(f"{param_name} 一致性 {stability_ratio:.0%}")
     checks.append(
         {
-            "name": "参数稳定性 ≥50%",
+            "name": "参数稳定性 ≥80%",
             "passed": stability_passed,
             "detail": (
-                f"全部参数一致性 ≥50% ({'通过' if stability_passed else '失败: ' + ', '.join(stability_details)})"
+                f"全部参数一致性 ≥80% ({'通过' if stability_passed else '失败: ' + ', '.join(stability_details)})"
             ),
         }
     )
     if not stability_passed:
-        failed.append("参数稳定性 <50%")
+        failed.append("参数稳定性 <80%")
 
     # 检查3：最大回撤可控（avg_max_dd < 25%）
     dd_threshold = 0.25
@@ -767,6 +767,29 @@ def _check_unlock_conditions(
     )
     if not return_passed:
         failed.append("平均样本外收益 < 0")
+
+    # 检查5（v0.8.1 新增）：样本外交易次数 ≥ 30，防止小样本过拟合
+    # 从 results 中统计：优先读取 test_trades 字段，否则尝试从窗口 trades 长度派生
+    total_test_trades = 0
+    for r in results:
+        tt = r.get("test_trades")
+        if tt is None:
+            trades = r.get("trades")
+            tt = len(trades) if isinstance(trades, (list, tuple)) else 0
+        try:
+            total_test_trades += int(tt or 0)
+        except (TypeError, ValueError):
+            total_test_trades += 0
+    trades_passed = total_test_trades >= 30
+    checks.append(
+        {
+            "name": "样本外交易次数 ≥ 30",
+            "passed": trades_passed,
+            "detail": f"total_test_trades={total_test_trades} ({'通过' if trades_passed else '失败：样本不足，存在过拟合风险'})",
+        }
+    )
+    if not trades_passed:
+        failed.append("样本外交易次数 < 30")
 
     return {
         "unlocked": len(failed) == 0,

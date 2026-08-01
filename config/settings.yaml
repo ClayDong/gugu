@@ -33,15 +33,17 @@ watchlist:
 
 
 # ========== 数据源 ==========
-# 三级冗余：sina 主源 → akshare 降级 → eastmoney 兜底
+# 四级冗余：sina 主源 → eastmoney 降级 → akshare 兜底 → tencent 终极兜底
 # sina: 新浪财经直连（稳定、不限流），适合实时行情和历史K线
 # akshare: 东方财富封装（功能全，但部分网络环境被限流）
 # eastmoney: 东方财富直连 HTTP（兜底，单股查询，避免全市场快照限流）
+# tencent: 腾讯财经 ifzq.gtimg.cn（本机最稳定的 qfq 日 K 源，仅支持历史K线）
 data:
   primary_source: sina           # 主源：新浪（直连 HTTP，稳定性最好）
   fallback_sources:              # 降级源（按顺序尝试）
     - eastmoney                  # 第一备用：东方财富直连 HTTP（全市场快照稳定）
     - akshare                    # 第二备用：akshare（东方财富后端，全市场快照可能被限流）
+    - tencent                    # 第三备用：腾讯财经（本机最稳定的 qfq 日 K 源）
   fetch_interval_seconds: 120    # 实时采集间隔（秒）
   fail_threshold: 3              # 连续失败 N 次降级
   fail_cooldown_seconds: 300     # 降级冷却时间
@@ -66,6 +68,8 @@ strategy:
       - chenxuezhang
       - linjudaye
       - ml_gradient_boost
+      - price_volume_signal
+      # rebound_elite 已移除：2026-08-01 Walk-Forward 样本外证伪（验证期10日-5.40%/超额-6.95% p=0.035显著为负）
     # 反弹（2/3条件满足）：核心+实验策略全开
     rally:
       - box_breakout
@@ -76,6 +80,8 @@ strategy:
       - chenxuezhang
       - linjudaye
       - ml_gradient_boost
+      - price_volume_signal
+      # rebound_elite 已移除：2026-08-01 Walk-Forward 样本外证伪
     # 震荡（1/3条件满足）：核心策略全开
     sideways:
       - box_breakout
@@ -85,11 +91,17 @@ strategy:
     bear: []
     crash: []
   # v0.5.0 P0-1修复：策略分组管理
-  # 验证通过的策略（无条件启用，参与信号融合）
+  # v0.8.1 修复：验证标签统一（此前 manifest 标"未通过"但此处标"通过"，自相矛盾）
+  # 真实状态（依据 2026-07-26 Walk-Forward 报告 + 全市场回测）：
+  #   - box_breakout: conditional_pass —— Walk-Forward 未通过(oos_sharpe=-1.43)，但 300股全市场回测
+  #     150 笔夏普 0.15/胜率 55%/回撤 18%，有条件启用，需 paper 验证
+  #   - double_yin:   conditional_pass —— Walk-Forward 未通过，100股回测夏普 -0.02/胜率 48%，观察中
+  #   - rsi_reversal: conditional_pass —— Walk-Forward 通过，震荡市专用，回测最优
+  # 三个策略均为"有条件通过"，无一达到严格上线标准，权重分配已按证据强度调整
   verified_strategies:
-    - box_breakout      # Walk-Forward 条件通过（样本外表现最稳）
-    - double_yin        # Walk-Forward 条件通过（收益稳定为正）
-    - rsi_reversal      # Walk-Forward 条件通过（震荡市专用）
+    - box_breakout      # conditional_pass（回测证据支持，Walk-Forward 未完全达标）
+    - double_yin        # conditional_pass（收益弱正，需 paper 验证）
+    - rsi_reversal      # conditional_pass（Walk-Forward 通过，唯一严格达标者）
   # 实验性策略（仅 paper 模式参与信号融合，signal_only/track_live 仅观察）
   experimental_strategies:
     - hot_money         # 游资策略，逻辑闭环但需 paper 验证
@@ -97,6 +109,8 @@ strategy:
     - chenxuezhang     # 陈学长不吃面规则策略
     - linjudaye        # 邻居大爷规则策略
     - ml_gradient_boost # ML GradientBoosting策略（experimental）
+    - price_volume_signal  # 换手率+量比尾盘黄金信号（大样本回测验证通过，等 paper 观察30+信号转正）
+    # rebound_elite 已移除：2026-08-01 Walk-Forward 样本外证伪（43信号全部年份负超额，验证期p=0.035显著为负）
   # 向后兼容：原 enabled 列表（当 verified_strategies + experimental_strategies 都为空时使用）
   enabled: []
   # v0.7.5 P0-1修复：仅 verified 策略参与权重分配（总和=1.0）
@@ -112,6 +126,8 @@ strategy:
     chenxuezhang: 0.20
     linjudaye: 0.15
     ml_gradient_boost: 0.10
+    price_volume_signal: 0.10
+    # rebound_elite 权重已移除（样本外证伪）
   # 信号融合规则：unanimous（全票通过）/ majority（多数）/ any（任一）/ weighted（策略池加权）
   # v0.4.1：恢复 weighted（多策略共识），any 模式在 A 股高噪声下产生大量假信号
   signal_fusion: weighted
@@ -275,6 +291,8 @@ scheduler:
     signal_close: true         # 15:10 收盘信号汇总（保留-收盘看一眼）
     macro_close: false          # 15:15 收盘宏观概览（关闭）
     signal_performance: false   # 15:20 信号绩效验证（关闭）
+    signal_daily_validation: true # 15:25 信号次日验证（开启-提供T+1真实收益反馈）
+    signal_weekly: true         # 周日 20:30 信号绩效周报（开启-感知策略运行状态）
     concept_daily: false       # 20:00 每日概念（关闭）
     altalpha_fetch: false      # 18:00 另类因子盘后采集（关闭）
     alpha_summary: false       # 18:05 因子综合评分报告（关闭）

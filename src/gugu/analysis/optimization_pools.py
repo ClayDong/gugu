@@ -123,7 +123,6 @@ STRATEGY_STOCK_POOLS: dict[str, str] = {
     "huamulan_tail_pick": "002472,300033,002230,603501",
     "huamulan_crash_layout": "600519,000858,600276,300760,601318",
     "huamulan_fake_dip": "300750,601012,600438,603259,002594",
-    "huamulan_ghost_breakout": "002472,300033,002230,603501",
     # 周线：多行业趋势股
     "weekly_combo": "600519,300750,002594,300760,002371",
     # 默认兜底

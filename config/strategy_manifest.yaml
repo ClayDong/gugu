@@ -42,7 +42,9 @@ signal_strategies:
     # experimental: 逻辑闭环但未完成 Walk-Forward 验证，仅在 paper 模式下参与信号融合
     summary: 三步法：①近7日涨停筛选 → ②缩量至涨停日50%以下入场（筹码锁定） → ③放量至涨停日200%以上离场（主力出货）。进阶：半仓滚动（阴线买/阳线卖）增厚收益。
     params_entry: strategy_defaults.yaml
-    validation: Walk-Forward 通过 2026-07-26
+    # P0-5 修复：修正验证标签不一致（原 validation 写"通过"但 validation_gate.status=pending）
+    # 真实状态：未完成 Walk-Forward 验证，0 笔样本外交易，标记为 pending
+    validation: 待 Walk-Forward 验证 2026-07-26 - 0 笔样本外交易，策略逻辑闭环但未验证
     notes: '核心哲学：成交量是唯一无法造假的大资金痕迹。
 
       涨停 = 主力态度最强信号（愿意用涨停价吃货 = 强烈看多）
@@ -77,8 +79,7 @@ signal_strategies:
     enabled: true
     summary: 识别箱体上下沿，突破上沿买入、跌破下沿卖出，配合成交量确认
     params_entry: strategy_defaults.yaml
-    validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0; 参数稳定性 <50%; 平均样本外收益
-      < 0
+    validation: conditional_pass 2026-07-26 - Walk-Forward 样本外 Sharpe≤0(-1.43)，但 300股全市场回测 150 笔夏普 0.15/胜率 55%；有条件启用需 paper 验证
     notes: confirm_days=1 防假突破
     validation_gate:
       status: conditional_pass
@@ -449,7 +450,11 @@ signal_strategies:
     enabled: false
     summary: 主力完整周期（吸筹→异动首板→洗盘大阴线→护盘缩量横盘→反包再介入）的短线信号系统
     params_entry: strategy_defaults.yaml
-    validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0
+    validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0；2026-07-31 事件研究证实整体负期望
+    # v0.8.1 策略清洗：本策略（完整版战法）已被 rebound_elite（验证有效子集）替代。
+    # 事件研究结论：整体形态负期望（5日超额-1.5%），护盘低吸买点显著为负（胜率38%），
+    # 仅「高活跃妖股+放量反包追涨」子集有效 → 见 rebound_elite。保留本策略仅供历史参考，禁止重新启用。
+    notes: 已废弃。请勿启用。有效用法见 rebound_elite。陈学长三套定位：breakout_rebound(完整版,废弃) / rebound_elite(验证子集,启用) / chenxuezhang(6独立规则,启用)
     validation_gate:
       status: backtest_failed
       sample: 待补充
@@ -484,6 +489,29 @@ signal_strategies:
       \  5. 新增买点3：有效放量后回踩（前几日有放量，今日缩量回踩）\n  6. 新增卖点2：MACD顶背离（价创新高、MACD不创新高）\n  7.\
       \ 新增卖点3：量价背离（价格创新高但量能萎缩）\n  8. 新增卖点5：不及预期（连续2日下跌>2%）\n  9. 新增MACD指标计算（用于背离判断）\n\
       \  10. 新增MA5/MA10均线系统（更精细的支撑判断）\n遵循硬约束：策略未通过回测验证，保持禁用直到调优后重新通过4项解锁条件。\n"
+  rebound_elite:
+    name: 断板反包·精英追涨（高活跃妖股+反包追涨）
+    module: gugu.strategies.rebound_elite
+    class: ReboundEliteStrategy
+    source: 陈学长不吃面 226 条视频转写 + 2026-07-31 事件研究验证（67股/152事件）
+    enabled: false  # 2026-08-01 Walk-Forward 样本外证伪，已从 settings 移除
+    summary: ❌ 样本外证伪（2026-08-01）：43信号全部年份负超额，验证期10日-5.40%/超额-6.95% p=0.035显著为负。当初"高活跃+反包追涨+9.99%"是16个小样本+2024牛市beta，非真alpha
+    params_entry: strategy_defaults.yaml
+    validation: 2026-07-31 事件研究 高活跃子集10日+9.99%/盈亏比2.76（小样本16）→ 2026-08-01 Walk-Forward 证伪
+    validation_gate:
+      status: backtest_failed
+      sample: 67只主板活跃题材股, 2024-02~2026-07, 43信号
+      metrics:
+        total_trades: 43
+        avg_return: -0.054
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.333
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 证伪策略，不入信号融合；除非重新设计（如加入弱市保护+严格止损）并样本外验证通过
+    notes: "验证核心结论（2026-07-31 事件研究）：\\n断板反包形态整体期望为负（5日超额-1.5%, p=0.04显著逆基准），不能作独立策略。\\n但有三条被验证有效的规律：\\n  1. 只做高活跃老妖（历史涨停≥20）方向正确：低活跃股-5.6% → 高活跃股打平\\n  2. 唯一正收益格子 = 高活跃妖股+放量反包追涨（5日+4.08%/10日+9.99%/盈亏比2.76，样本16不显著）\\n  3. 最爱的护盘回踩低吸买点统计显著为负（胜率38%），已废弃\\n因此本策略只做反包追涨、只在高活跃股触发、只在牛/反弹市启用。\\n\\n设计参数：\\n  - 活跃度过滤：过去120日涨停≥8次（历史高活跃/妖股特征）\\n  - 反包确认：收盘突破洗盘日最高 + 放量(量比≥1.2) + 收阳\\n  - 护盘支撑：洗盘后不破首板开盘价×(1-3%)（主力成本底线）\\n  - 止损：跌破首板开盘价×(1-8%) + 10日时间止损\\n定位：作为牛市环境下的高赔率彩票（承认胜率不高，用活跃度+择时放大赔率）。\\n"
   ml_factor:
     name: LightGBM 多因子策略
     module: gugu.strategies.ml_factor
@@ -692,11 +720,14 @@ signal_strategies:
     # experimental: 逻辑闭环但未完成 Walk-Forward 验证，仅在 paper 模式下参与信号融合
     summary: 放量大阳线启动后回踩MA5买入，偏离MA5部分止盈，跌破MA5减仓，连续3日站不回清仓
     params_entry: strategy_defaults.yaml
-    validation: Walk-Forward 未通过 2026-07-28 - 样本外 Sharpe ≤ 0; 参数稳定性 <50%
-    notes: '核心规则：1. 没有放量大阳线坚决不碰；2. 放量后回踩5日均线不破是买点；3. 偏离5日线≥5%减仓50%；4. 收盘跌破5日线再减仓50%；5. 连续3日站不回5日线清仓。'
+    # v0.8.1 修复：原参数名与代码不匹配（big_yang_gain_pct 等 8 个参数缺失），
+    # 导致策略每次执行抛 KeyError 从未真正生效，7/28 的回测失败结论已失效。
+    # 参数已补齐（strategy_defaults.yaml），状态从 backtest_failed 改为 pending（需重新验证）。
+    validation: v0.8.1 参数修复后待重新 Walk-Forward 验证（原 7/28 失败因参数缺失，结论作废）
+    notes: '核心规则：1. 没有放量大阳线坚决不碰；2. 放量后回踩5日均线不破是买点；3. 偏离5日线≥5%减仓50%；4. 收盘跌破5日线再减仓50%；5. 连续3日站不回5日线清仓。v0.8.1: 修复参数名不匹配 bug（big_yang_gain_pct/big_yang_vol_ratio/big_yang_lookback/pullback_tolerance/shrink_vol_ratio/profit_deviation_pct/ma5_break_exit_days/vol_ma_window）'
     validation_gate:
       status: pending
-      sample: 0 只股票，0 个交易日
+      sample: 0 只股票，0 个交易日（参数修复后需重跑）
       metrics:
         total_trades: 0
         avg_return: 0.0
@@ -706,7 +737,7 @@ signal_strategies:
         param_stability: 0.0
         paper_signals: 0
         paper_return: 0.0
-      next_action: 待全市场回测验证 + 4 项解锁条件通过后再评估启用
+      next_action: 参数修复后重新执行 Walk-Forward 全市场验证，通过 4 项解锁条件后再评估启用
   weekly_combo:
     name: 周线四因子共振选股
     module: gugu.strategies.weekly_combo
@@ -958,88 +989,93 @@ signal_strategies:
     name: 花木兰早盘假摔低吸战法
     module: gugu.strategies.huamulan_fake_dip
     class: HuamulanFakeDipStrategy
-    source: 战神花木兰系列文档整理（早盘假摔低吸战法）
+    source: 战神花木兰系列文档整理（视频16，2026-07-04《记住这个信号，不亏！》早盘假摔低吸战法）
     enabled: false  # P0-1: 0回测数据，待Walk-Forward验证通过后再启用
-    summary: 开盘假摔+缩量收回=主力洗盘：长下影线（>3%）+ 阳线 + 缩量 + 不破前低 + 趋势向上 → 低吸介入
+    summary: 假摔识别（长下影线>2%+收红+缩量<0.8×5日均量）→ 低吸介入；跌破买入基准5%离场（v0.8.0参数校准：40只×600日 p=0.015）
     params_entry: strategy_defaults.yaml
-    validation: v0.7.7 新增策略，待回测验证
+    validation: v0.8.0 重构+参数校准（下影2%+缩量0.8×+10日，事件研究383事件 p=0.015），待Walk-Forward验证
     notes: '核心逻辑：缩量跌是真洗盘，放量跌是真出货。
 
-      买入条件（5 AND）：
-      1. 长下影线（>3%，盘中跌幅超3%后收回）
-      2. 当天收阳线（close > open，10:30前收回跌幅）
-      3. 缩量（成交量 < 前5日均量，缩量跌是洗盘）
-      4. 不破前低（股价回踩支撑位，不破前5日最低）
-      5. 趋势向上（MA5 > MA10 > MA20）
+      买入条件（3 AND，忠实视频16原文）：
+      1. 长下影线（>2%，开盘半小时下杀超2%后收回 → 日线近似；v0.8.0校准自3%）
+      2. 当天收阳线（close > open，当天最终收红）
+      3. 缩量（成交量 < 0.8×前5日均量；v0.8.0校准自1.0×，越严格越好）
 
-      卖出：跌破入场价5%止损 + 涨幅达6%止盈 + 持仓5日无进展时间止损
+      卖出（原文纪律 + 校准）：
+      - 跌破信号日最低点 → 无条件离场（原文：第二天大阴线跌破前低必须走）
+      - 跌破信号日收盘价5%止损（"百分之五射直损"，视频15纪律）
+      - 时间止损10日（v0.8.0校准：10日持有显著，5日不显著）
 
       与现有策略差异：
       - breakout_rebound：涨停后断板反包（短线主力行为）
       - huamulan_fake_dip：开盘假摔+缩量收回（洗盘识别）
 
-      适用市场状态：个股上升趋势中的正常回调
+      适用市场状态：个股上升趋势中的正常回调（必须 bull/rally，弱市不交易）
 
-      回测说明：日K线近似（长下影线+阳线+缩量），实盘需分钟级数据精确判断
+      v0.8.0 参数校准证据（40只活跃中小盘×600日，事件研究）：
+      - 原参数(下影3%+缩量1.0×)：235事件，5日-0.80% 不显著 → 方向对数值错
+      - 校准参数(下影2%+缩量0.8×)：383事件，5日+1.17%(p=0.024) / 10日+1.89%(p=0.015)
+      - 加市场过滤(沪深300>20日线)：198事件，10日+2.85%(p=0.015)，2026弱市转正
+      - 等权5仓模拟：114笔 +99.6% 胜率57.9%（含0.4%成本，有简化偏差）
+      - 教训：网络战法数值(3%/1.0×/5日)是经验假设，须用数据校准
+
+      诚实局限：日线近似（长下影线+缩量），实盘需分钟级数据精确判断10:30前收回
 
       '
     validation_gate:
       status: pending
-      sample: 0 只股票，0 个交易日
+      sample: 40 只股票，600 个交易日（事件研究，非Walk-Forward）
       metrics:
-        total_trades: 0
-        avg_return: 0.0
+        total_trades: 383
+        avg_return: 0.0117
         avg_sharpe: 0.0
         max_drawdown: 0.0
-        profitable_ratio: 0.0
+        profitable_ratio: 0.527
         param_stability: 0.0
         paper_signals: 0
         paper_return: 0.0
-      next_action: 待全市场回测验证 + 4 项解锁条件通过后再启用
-  huamulan_ghost_breakout:
-    name: 花木兰烂板成妖打板战法
-    module: gugu.strategies.huamulan_ghost_breakout
-    class: HuamulanGhostBreakoutStrategy
-    source: 战神花木兰系列文档整理（烂板成妖打板战法）
-    enabled: false  # P0-1: 0回测数据，待Walk-Forward验证通过后再启用
-    summary: 炸板是主力洗盘，回封是筹码锁定：前日涨停 + 当日高开放量 + 收阳 + 盘中冲高 + 突破横盘 → 博取连板溢价
+      next_action: Walk-Forward 样本外验证（2024训练/2025-2026验证）+ 4 项解锁条件通过后再启用
+  price_volume_signal:
+    name: 换手率+量比尾盘黄金信号
+    module: gugu.strategies.price_volume
+    class: PriceVolumeSignalStrategy
+    source: 短视频《尾盘半小时的黄金信号：换手率与量比实战指南》+ gugu-strategy-backtest 大样本回测
+    enabled: true
+    summary: 高换手(>5%)+温和放量(量比2-5)或低位放量吸筹 → 5日裸持有短线动量；高位放量派发出场。捕捉A股短期动量
     params_entry: strategy_defaults.yaml
-    validation: v0.7.7 新增策略，待回测验证
-    notes: '核心逻辑：小资金靠龙头和连板，死在龙头上也别死在杂毛里。
+    validation: 已完成大样本回测验证（27股+71股两轮）+ 2026-08-01 样本外检验：验证期10日超额+6.06%(p=0.020)但依赖单股sh688068(16/57信号)，去掉后p=0.193不显著；5只触发股全为科创板，样本偏差大 → 证据不足，保持 experimental 观察
+    notes: '核心逻辑：识别主力动向的关键不是复杂技术指标，而是换手率(筹码交换频率) + 量比(新鲜资金进场)。
 
-      买入条件（6 AND）：
-      1. 前日涨停（启动位置：突破箱体或前高）
-      2. 当日高开2%以上（炸板洗盘：高开放量冲高回落）
-      3. 当日成交量放大1.5倍（炸板洗盘：放量交换筹码）
-      4. 当日收阳（回封有力：未破前日涨停价）
-      5. 当日最高价 > 前日收盘价 + 3%（盘中冲高，炸板）
-      6. 长期横盘后突破（启动位置）
+      四信号框架：
+      1. 启动: 换手>5%, 量比2~3 → 主力布局，进场
+      2. 加速: 换手5-10%, 量比3~5 → 行情加速，果断跟上
+      3. 高位/低位: 换手>10%, 量比>5 → 低位吸筹(跟进)/高位派发(离场)
+      4. 虚假繁荣: 换手>5%, 量比<2 → 无新资金，离场
 
-      卖出：跌破入场价5%止损 + 涨幅达10%止盈 + 持仓5日无进展时间止损
+      回测验证（腾讯源 600日 + 71股跨行业 80+信号 + bootstrap）：
+      - 入场最优: 换手>5% 且(量比2~5 或 低位放量吸筹)，5日均收益+13.85%、胜率82%
+      - 最优持有5-10日；bootstrap 95%CI下限>0，超额alpha +7.57~13.23%，统计显著非随机
+      - 反直觉: 裸持有5-10日 > 主动止盈/止损（提前止盈砍掉大盈利，止损割掉洗盘）
+      - 蓝筹负对照(茅台/四大行等)几乎不触发 → 适用边界=活跃题材/中小盘(换手中位>1.5%)
+      - 定位: 选股入场漏斗(稀有事件)，非全自动交易系统
 
-      与现有策略差异：
-      - hot_money：涨停后缩量入场（游资策略）
-      - breakout_rebound：涨停后断板反包（陈学长战法）
-      - huamulan_ghost_breakout：烂板成妖（炸板洗盘再回封）
-
-      适用市场状态：情绪高涨期，捕捉龙头主升浪
-
-      回测说明：日K线近似（前日涨停+当日高开放量收阳），实盘需分钟级数据精确判断
-
+      工程注意：
+      - 换手率用 amount/(close×float_shares)，float_shares 需按股票配置（腾讯实时流通市值）
+      - 依赖 tencent_collector 的 amount 单位修正（科创板×1/主板×100）
       '
     validation_gate:
-      status: pending
-      sample: 0 只股票，0 个交易日
+      status: in_review
+      sample: 71 只跨行业股票 + 蓝筹负对照，600 交易日
       metrics:
-        total_trades: 0
-        avg_return: 0.0
+        total_trades: 84
+        avg_return: 0.083
         avg_sharpe: 0.0
         max_drawdown: 0.0
-        profitable_ratio: 0.0
-        param_stability: 0.0
+        profitable_ratio: 0.73
+        param_stability: 0.8
         paper_signals: 0
         paper_return: 0.0
-      next_action: 待全市场回测验证 + 4 项解锁条件通过后再启用
+      next_action: paper 模式观察 30+ 真实信号后转 verified
 risk_strategies:
   trailing_stop:
     name: 浪谷递进移动止损
