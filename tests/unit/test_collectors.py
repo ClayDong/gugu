@@ -123,6 +123,7 @@ class TestAkshareCollectorSource:
 class TestAkshareCollectorFlowBreaker:
     """资金流接口熔断（2026-08-07：东财限流 RemoteDisconnected 全天刷 1705 次 ERROR）。
 
+    熔断逻辑在 BaseCollector（akshare/eastmoney 同源东财共享）。
     连续失败达阈值 → 熔断冷却期（默认 30 分钟）→ 冷却期内静默返回空 DataFrame
     （不调 API 不打 ERROR）→ 到期自动恢复。成功即重置计数。
     """
@@ -140,7 +141,7 @@ class TestAkshareCollectorFlowBreaker:
     def test_flow_breaker_activates_after_threshold(self, monkeypatch):
         collector = self._collector(monkeypatch)
         # 连续失败 3 次（阈值）→ 熔断
-        for _ in range(AkshareCollector._FLOW_BREAKER_THRESHOLD):
+        for _ in range(BaseCollector._FLOW_BREAKER_THRESHOLD):
             collector._flow_record_failure()
         assert collector._flow_breaker_active() is True
 
@@ -163,6 +164,18 @@ class TestAkshareCollectorFlowBreaker:
         collector = self._collector(monkeypatch)
         collector._flow_breaker_until = 500.0  # time.time()=1000 已过期
         assert collector._flow_breaker_active() is False
+
+    def test_eastmoney_inherits_breaker_guard(self, monkeypatch):
+        """eastmoney 同源东财，熔断期间两个资金流接口都静默返回空。"""
+        import time
+
+        em = EastmoneyCollector()
+        em._flow_fail_count = 0
+        em._flow_breaker_until = 9999.0
+        monkeypatch.setattr(time, "time", lambda: 1000.0)
+        df = em.fetch_stock_flow("600519")
+        assert df.empty
+        assert em._flow_breaker_active() is True
 
 
 class TestAkshareCollectorHistory:

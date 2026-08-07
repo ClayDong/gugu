@@ -64,7 +64,17 @@ _EM_SECID_PREFIX: dict[str, str] = {
 
 
 def _to_secid(code: str) -> str:
-    """股票代码 → 东方财富 secid 格式（如 1.600519）。"""
+    """股票代码 → 东方财富 secid 格式（如 1.600519）。
+
+    v0.9.7 P0：指数代码自动识别交易所（000300 沪深300 → 1.000300）。
+    """
+    # 显式 sh/sz 前缀（调用方指定交易所，最高优先级）
+    if code[:2].lower() in ("sh", "sz", "bj") and code[2:].isdigit():
+        return ("1" if code[:2].lower() == "sh" else "0") + "." + code[2:]
+    if code in BaseCollector.SH_INDEX_CODES:
+        return f"1.{code}"
+    if code in BaseCollector.SZ_INDEX_CODES:
+        return f"0.{code}"
     prefix = _EM_SECID_PREFIX.get(code[0], "0")
     return f"{prefix}.{code}"
 
@@ -215,6 +225,8 @@ class EastmoneyCollector(BaseCollector):
 
     def fetch_sector_flow(self) -> pd.DataFrame:
         """获取行业资金流排名（东方财富 clist 接口）。"""
+        if self._flow_breaker_active():
+            return self._flow_breaker_guard("行业资金流")
         params = {
             "fid": "f62",
             "po": "1",
@@ -262,13 +274,17 @@ class EastmoneyCollector(BaseCollector):
                     continue
 
             df = pd.DataFrame(rows)
+            self._flow_record_success()
             return df if not df.empty else pd.DataFrame()
         except Exception as e:
             logger.error(f"东方财富行业资金流失败: {e}")
+            self._flow_record_failure()
             return pd.DataFrame()
 
     def fetch_stock_flow(self, symbol: str) -> pd.DataFrame:
         """获取个股资金流明细（东方财富日K资金流接口）。"""
+        if self._flow_breaker_active():
+            return self._flow_breaker_guard(f"个股资金流 {symbol}")
         code = self.normalize_symbol(symbol)
         secid = _to_secid(code)
         params = {
@@ -308,7 +324,7 @@ class EastmoneyCollector(BaseCollector):
                         {
                             "date": parts[0],
                             "main_net": round(main_net, 2),
-                            "main_pct": 0.0,
+                            "main_pct": float("nan"),
                             "super_large_net": round(super_large, 2),
                             "large_net": round(large, 2),
                             "medium_net": round(medium, 2),
@@ -321,9 +337,11 @@ class EastmoneyCollector(BaseCollector):
             df = pd.DataFrame(rows)
             df["date"] = pd.to_datetime(df["date"], errors="coerce")
             df = df.dropna(subset=["date"])
+            self._flow_record_success()
             return df.tail(5).reset_index(drop=True) if not df.empty else df
         except Exception as e:
             logger.error(f"东方财富个股资金流 {code} 失败: {e}")
+            self._flow_record_failure()
             return pd.DataFrame()
 
     def _fetch_market_snapshot(self) -> pd.DataFrame:
