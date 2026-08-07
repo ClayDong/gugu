@@ -13,7 +13,17 @@ import pytest
 
 from gugu.analysis.perspectives.integrators import build_context_from_signal
 from gugu.analysis.position_controller import PositionBudget
+from gugu.engine.engine_mixin import EngineOpsMixin
 from gugu.engine.signal_pipeline import SignalPipeline, record_signal_history
+
+
+def test_signal_scan_status_includes_data_health_fields(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("gugu.engine.engine_mixin.PROJECT_ROOT", tmp_path)
+    EngineOpsMixin()._write_signal_scan_status(2, 10)
+    payload = (tmp_path / "data" / "signal_scan.json").read_text(encoding="utf-8")
+    assert '"data_health"' in payload
+    assert '"data_errors"' in payload
+    assert '"flow_data_available"' in payload
 
 
 @pytest.fixture
@@ -106,6 +116,11 @@ def pipeline() -> SignalPipeline:
         "房地产": "周期",
     }
     pl._hot_sectors_cache = None
+    # 测试隔离：屏蔽真实采集器（配置 enabled=true 时 __init__ 会实例化
+    # HolderConcentrationFilter/AltAlphaFilter，check() 懒加载触发全市场
+    # akshare 批量采集（292只×~0.4s≈2min），导致测试超时失败）
+    pl._holder_concentration_filter = None
+    pl._altalpha_filter = None
     return pl
 
 
@@ -934,6 +949,7 @@ class TestRecordSignalHistory:
     def test_record_signal_history(self, tmp_path) -> None:
         """记录信号历史到 JSONL 文件。"""
         import json
+        from types import SimpleNamespace
         from pathlib import Path
         from gugu.config import PROJECT_ROOT
         import gugu.engine.signal_pipeline as sp
@@ -953,15 +969,17 @@ class TestRecordSignalHistory:
                 "wisdom_decision": {"source": "fallback"},
                 "suggested_position_ratio": 0.15,
             }
-            risk_result = MagicMock()
-            risk_result.allowed = True
-            risk_result.message = "approved"
-
-            order_result = MagicMock()
-            order_result.success = True
-            order_result.quantity = 100
-            order_result.price = 1500.0
-            order_result.commission = 3.75
+            risk_result = SimpleNamespace(allowed=True, message="approved")
+            order_result = SimpleNamespace(
+                success=True,
+                quantity=100,
+                price=1500.0,
+                commission=3.75,
+                status="filled",
+                filled_quantity=100,
+                filled_price=1500.0,
+                avg_price=1500.0,
+            )
 
             record_signal_history(signal, risk_result, order_result)
 
@@ -977,6 +995,67 @@ class TestRecordSignalHistory:
             assert record["execution_status"] == "filled"
             assert record["outcome_status"] == "open"
             assert "realized_pnl" not in record
+        finally:
+            sp.gugu_config.PROJECT_ROOT = original_root
+
+    def test_record_signal_history_perspective_none_scores(self, tmp_path) -> None:
+        """回归：perspective_check 的 composite_score/min_score 为 None 时不再崩溃（2026-08-07）。
+
+        根因：视角分析失败时（signal_pipeline:728-733）写入 composite_score=None，
+        旧代码 `.get('composite_score', 0)` 在 key 存在值为 None 时返回 None，
+        `f\"{None:.1f}\"` 抛 TypeError → record_signal_history 整体异常短路 →
+        append_jsonl 永不执行 → signals_history 从 7/1 起零写入（信号历史黑洞）。
+        """
+        import json
+        from types import SimpleNamespace
+
+        import gugu.engine.signal_pipeline as sp
+
+        original_root = sp.gugu_config.PROJECT_ROOT
+        sp.gugu_config.PROJECT_ROOT = tmp_path
+
+        try:
+            signal = {
+                "symbol": "600519",
+                "direction": "buy",
+                "price": 1500.0,
+                "confidence": 0.8,
+                "strategies": ["double_yin"],
+                "wisdom_filtered": False,
+                "wisdom_decision": {"source": "fallback"},
+                "perspective_check": {
+                    "composite_score": None,  # 视角分析失败路径的 None
+                    "min_score": None,
+                    "passed": None,
+                    "fatal_count": 0,
+                    "verdict": "分析失败（signal_only 模式不拦截）",
+                },
+            }
+            risk_result = SimpleNamespace(allowed=True, message="approved")
+            order_result = SimpleNamespace(
+                success=True,
+                quantity=100,
+                price=1500.0,
+                commission=3.75,
+                status="filled",
+                filled_quantity=100,
+                filled_price=1500.0,
+                avg_price=1500.0,
+            )
+
+            # 不抛异常且成功写入
+            record_signal_history(signal, risk_result, order_result)
+
+            history_file = tmp_path / "data" / "signals_history.jsonl"
+            assert history_file.exists()
+            lines = history_file.read_text().strip().split("\n")
+            assert len(lines) == 1
+            record = json.loads(lines[0])
+            chain = record["decision_chain"]
+            step_36 = next(s for s in chain if s["step"] == 3.6)
+            assert "综合0.0" in step_36["result"]
+            assert step_36["composite_score"] == 0
+            assert record["symbol"] == "600519"
         finally:
             sp.gugu_config.PROJECT_ROOT = original_root
 
@@ -996,9 +1075,7 @@ class TestRecordSignalHistory:
 
         try:
             with patch.object(sp, "_alert_signal_history_write_failure") as mock_alert:
-                # 即使路径不存在也不应抛异常
                 record_signal_history({}, None, None)
-                # P0 静默失效防线：写入失败必须触发告警（隔离环境下不真实外发）
                 mock_alert.assert_called_once()
         finally:
             sp.gugu_config.PROJECT_ROOT = original_root
@@ -1041,6 +1118,7 @@ class TestSignalOnlyMode:
         pl._sector_rotation = MagicMock()
         pl._wisdom = MagicMock()
         pl._holder_concentration_filter = None
+        pl._altalpha_filter = None
 
         pl._router.route = MagicMock(
             return_value={
@@ -1122,6 +1200,7 @@ class TestSignalOnlyMode:
         pl._sector_rotation = MagicMock()
         pl._wisdom = MagicMock()
         pl._holder_concentration_filter = None
+        pl._altalpha_filter = None
 
         pl._router.route = MagicMock(
             return_value={

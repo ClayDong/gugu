@@ -21,6 +21,7 @@ from gugu.analysis.dynamic_take_profit import DynamicTakeProfitEngine
 from gugu.analysis.trailing_stop import TrailingStopEngine, TrailingStopSignal
 from gugu.data.stock_names import lookup_stock_name
 from gugu.models import Position
+from gugu.risk.rules import RiskAction
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -151,6 +152,33 @@ class StopLossManager:
                 except Exception as e:
                     logger.warning("{} 移动止损更新失败: {}", symbol, e)
 
+            # P0 修复（v0.8.2）：持仓时间检查 — 防止阴跌套牢
+            # 放在固定止损前，确保不会因 stop_loss_price 未设置而跳过
+            entry_date = getattr(pos, "entry_date", None) or ""
+            if entry_date and pos.avg_cost > 0 and pos.current_price > 0:
+                try:
+                    current_pnl = (pos.current_price - pos.avg_cost) / pos.avg_cost
+                    hd_result = risk.check_holding_duration(symbol, str(entry_date), current_pnl)
+                    if hd_result.action == RiskAction.HALT:
+                        stop_list.append((symbol, pos.current_price, float(pos.available), pos))
+                        logger.warning(
+                            "持仓时间超限（HALT）: {} entry={} pnl={:.2%} — {}",
+                            symbol,
+                            entry_date,
+                            current_pnl,
+                            hd_result.message,
+                        )
+                    elif hd_result.action == RiskAction.WARN:
+                        logger.warning(
+                            "持仓时间超限（WARN）: {} entry={} pnl={:.2%} — {}",
+                            symbol,
+                            entry_date,
+                            current_pnl,
+                            hd_result.message,
+                        )
+                except Exception as e:
+                    logger.debug("持仓时间检查失败 {}: {}", symbol, e)
+
             # 固定止损检查
             stop_price = getattr(pos, "stop_loss_price", None)
             if stop_price is None or stop_price <= 0:
@@ -161,7 +189,7 @@ class StopLossManager:
         # 执行止损卖出
         sold_count = 0
         for symbol, price, available, pos in stop_list:
-            logger.warning(
+            logger.info(
                 "止损触发: {} 现价 {} <= 止损价 {}，执行卖出", symbol, price, pos.stop_loss_price
             )
             event_engine.put(
@@ -216,25 +244,28 @@ class StopLossManager:
                     # v0.6.1: track_live 模式拒绝下单时，推送止损提醒卡片（用户手动执行）
                     # LivePositionTracker.order() 返回 message 含 "track_live"
                     if "track_live" in (result.message or "").lower():
-                        logger.warning(
-                            "[track_live] 止损提醒: {} 现价 {} ≤ 止损价 {}，请手动在券商APP卖出 {}股",
-                            symbol,
-                            price,
-                            pos.stop_loss_price,
-                            int(available),
-                        )
                         alert_key = f"stop_loss_manual:{symbol}"
                         if self._should_alert is None or self._should_alert(alert_key):
+                            logger.warning(
+                                "[track_live] 止损提醒: {} 现价 {} ≤ 止损价 {}，请手动在券商APP卖出 {}股",
+                                symbol,
+                                price,
+                                pos.stop_loss_price,
+                                int(available),
+                            )
+                            name = lookup_stock_name(symbol) or symbol
+                            pnl = (price - pos.avg_cost) * int(available)
                             notify_ok = await notifier.notify_risk_alert(
                                 {
                                     "level": "halt",
                                     "message": (
-                                        f"止损提醒（需手动执行）: {symbol} 现价 {price} "
-                                        f"≤ 止损价 {pos.stop_loss_price}"
+                                        f"止损提醒（需手动执行）: {name}({symbol}) 现价 ￥{price:.2f} "
+                                        f"≤ 止损价 ￥{pos.stop_loss_price:.2f}，"
+                                        f"持仓盈亏约 ￥{pnl:+,.2f}"
                                     ),
                                     "suggestion": (
-                                        f"track_live 模式不自动下单，请手动在券商APP卖出 "
-                                        f"{int(available)}股"
+                                        f"track_live 模式不自动下单，请手动在券商APP以 ￥{price:.2f} 附近挂单，"
+                                        f"卖出 {int(available)}股"
                                     ),
                                 }
                             )
@@ -344,16 +375,19 @@ class StopLossManager:
                     alert_key = f"take_profit_manual:{symbol}:{tp_signal.trigger_step}"
                     should_alert_fn = should_alert or self._should_alert
                     if should_alert_fn is None or should_alert_fn(alert_key):
+                        name = lookup_stock_name(symbol) or symbol
+                        pnl = (pos.current_price - pos.avg_cost) * reduce_qty
                         notify_ok = await notifier.notify_risk_alert(
                             {
                                 "level": "warn",
                                 "message": (
-                                    f"止盈减仓提醒（需手动执行）: {symbol} 触发 "
-                                    f"{tp_signal.trigger_step} - {tp_signal.reason}"
+                                    f"止盈减仓提醒（需手动执行）: {name}({symbol}) 当前价 ￥{pos.current_price:.2f}，"
+                                    f"触发第{tp_signal.trigger_step}步 - {tp_signal.reason}，"
+                                    f"本次盈亏约 ￥{pnl:+,.2f}"
                                 ),
                                 "suggestion": (
-                                    f"track_live 模式不自动下单，请手动在券商APP卖出 "
-                                    f"{reduce_qty}股（减仓比例 {tp_signal.reduce_ratio:.0%}）"
+                                    f"track_live 模式不自动下单，请手动在券商APP以 ￥{pos.current_price:.2f} 附近挂单，"
+                                    f"卖出 {reduce_qty}股（减仓比例 {tp_signal.reduce_ratio:.0%}）"
                                 ),
                             }
                         )

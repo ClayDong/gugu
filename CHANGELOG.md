@@ -1,4 +1,111 @@
+## 2026-08-07 — v0.9.9 信号历史黑洞修复（perspective None 崩溃）+ 止损日志降噪 + 资金流熔断
+
+### 根因确认（信号历史 7/1 起零写入）
+`record_signal_history` 被 `perspective_check.composite_score=None` 一票打死：
+视角分析失败路径（signal_pipeline:728-733）写入 `composite_score=None`，旧代码
+`.get('composite_score', 0)` 在 key 存在值为 None 时返回 None（dict.get 默认值只在 key 缺失时生效），
+`f"{None:.1f}"` 抛 `TypeError: unsupported format string passed to NoneType.__format__` →
+整个 record_signal_history try 块异常短路 → append_jsonl 永不执行。
+叠加去重机制放大：600519 首个信号崩溃但通知成功 → 此后同信号被"已通知过"拦截在记录点之前 →
+永不重试 → signals_history.jsonl 从 7/1 起 0 新增（35 天信号历史黑洞）。
+
+### P0：perspective None 防御（信号历史恢复写入）
+- `signal_pipeline.py` record_signal_history：`composite_score/min_score/fatal_count` 全部改 `or 0` 防御
+- 回归测试 `test_record_signal_history_perspective_none_scores`：None 输入不崩溃且正确写入
+
+### P1：止损提醒日志降噪
+- `stop_loss_manager.py`：WARNING 移到 `_should_alert` 去重判断之后（只在真正推送时打），
+  触发日志 WARNING→INFO。此前破位持仓每 5 分钟刷 2 条 WARNING（去重已拦通知但日志照打）
+
+### P1：akshare 资金流熔断（东财限流防刷屏）
+- `akshare_collector.py`：连续失败 3 次 → 熔断 1800 秒 → 冷却期内静默返回空（不调 API 不打 ERROR）→ 到期自动恢复
+- 触发背景：东财 RemoteDisconnected 限流，修复前单日 1705 次 ERROR 刷屏
+- 测试：`TestAkshareCollectorFlowBreaker` 4 用例（阈值触发/熔断静默/成功重置/到期恢复）
+
+### 验证
+- 新增 5 个测试全过；test_risk.py 21 passed / test_p0_p1_repairs.py 26 passed 无回归
+- 生产重启（PID 74384）：熔断 10:24:03 触发 ✅ / 重启后资金流 ERROR 仅 3 次（熔断前）✅
+- 止损去重正常：`[track_live] 止损提醒 510500/512480 已去重，跳过通知` ✅
+- 信号历史恢复：需等新信号（去重机制下 600519 旧信号不再重写，属预期）
+
+## 2026-08-05 — v0.9.8 第二批 P0 修复（信号黑洞根因 + 实时止损接入 + 模拟盘隔离 + 可观测性）
+
+### 根因确认
+**信号黑洞的真正根因 = 120 日 K 线缓存陈旧**（当日数据缺失 → 策略无法产出当日信号 → 加权融合无输入 → 信号被静默吞掉）。
+
+### P0-1：120 日 K 线缓存陈旧修复（信号黑洞根因）
+- 缓存新鲜度判定修复：盘后（含当日 bar）与盘中（< 当日 bar）语义分离
+- 盘中 5 分钟轮询的陈旧缓存主动驱逐 + 重拉；E2E 验证修复后真实扫描产出信号
+- 证据：修复前 17:15 扫描 18 只 → 通过 0 个；修复后 17:32 扫描 18 只 → 通过 2 个
+- 真实信号恢复：603501 buy 0.408 / 300760 buy 0.45
+
+### P0-2：信号路由可观测性（消除静默过滤）
+- signal_router 三态日志：`所有策略无信号`（策略未触发）/ `加权融合无方向`（未达融合门槛）/ `当日最新信号`（历史 vs 当日语义分离）
+- 每只股票信号链路完全透明，不再有"无声无息被过滤"
+
+### P0-3：止损检查接入实时循环
+- RealtimeSignalScanner 每 5 分钟执行止损检查 + 升级检查（此前仅每日 4 轮）
+- track_live 模式止损提醒是用户唯一执行信号，破位后 5 分钟内升级告警
+
+### P1：模拟盘隔离 / 日志口径 / auto_tune 判定
+- `updated_at` 字段 + GUGU_TEST_MODE uuid 隔离（防测试污染共享模拟盘）
+- 600519 幽灵成交清理（现金恢复 99.99 万）
+- box_breakout 日志标注 `[120天窗口]` + 当日信号语义（不再误导）
+- auto_tune AND 判定修复：负 alpha 或低胜率 → 收紧（不再被 AND 卡死）
+
+### 验证
+- 新增 11 个测试（`tests/unit/test_p0_second_batch_fix.py`），全量回归 **2264 passed**
+- 生产重启加载：`[track_live] 止损告警升级器已启用` ✅，26 个任务注册正常
+- 飞书双通道验证：系统卡片 → Hermes 对话 ✅ / 业务卡片 → 开悟之路群 ✅
+- 止损状态：510500（-0.3%）🔴 / 512480（-5.2%）🔴 破位提醒已推送（去重生效）
+
+---
+
 # Changelog
+
+## 2026-08-05 — v0.9.8 第一批 P0 防护（单实例锁 + 测试 HTTP 硬隔离 + 健康告警升级 + E2E 验证）
+
+### 背景
+深度复盘 8/5 全天 11 个问题（幽灵策略/双 scheduler/测试泄漏/磁盘满 886 次写失败/30 天 0 信号），
+根因：**系统对自身状态无可验证不变量 + 所有故障静默发生，用户是最后的检测器**。
+
+### 防护一：单实例锁（杜绝双 scheduler 并行）
+- 新增 `src/gugu/utils/single_instance.py`：锁文件 `data/scheduler.lock`（PID+启动时间+命令行）
+- 获取锁时验证 PID 存活 + 命令行匹配 gugu 特征（防 PID 复用误判）；残留锁自动接管；退出自动释放
+- 接入三入口：`scripts/run_scheduler.py` / `gugu.engine.scheduler._main()` / `scripts/run_live.py`
+- GUGU_TEST_MODE 跳过（测试进程可并发）
+- 验证：生产重启后第二实例启动被拒绝（PID 13770 持有锁），原实例不受影响
+
+### 防护二：测试 HTTP 硬隔离（结构性杜绝测试泄漏到生产飞书）
+- `FeishuNotifier._test_mode_blocks_http()`：GUGU_TEST_MODE + 真实网络 client → 禁止外发
+- 短路点：`send_card` 入口 + `_get_tenant_token` + `_post_card` + `_post_webhook`
+- **关键设计**：测试显式替换 `_client = MockTransport(...)` 的用例放行（不破坏现有 2207 个测试断言）；
+  只有真实网络 client + 测试模式才短路——daemon 线程/后台测试进程结构上不可能外发
+- 修复过程发现并修正：新方法插入位置导致 `@retry` 装饰器错挂（重试从 6 次变 2 次）——装饰器归属已修正
+
+### 防护三：健康告警升级（把静默失败变成主动通知）
+watchdog 新增三项检查（`src/gugu/health/watchdog.py`）：
+1. `check_disk_health`：磁盘剩余 < 1GB → P0 告警（8/5 磁盘满 886 次写失败事故）
+2. `check_data_source_health`：读 `source_health_events.jsonl` 当日失败率 > 50% 或降级 ≥10 次 → P0 告警（8/4 全市场快照为空静默事故）
+3. `check_zero_signal_streak`：交易时段连续 3 轮扫描 0 信号 → P0 告警（30 天 0 信号事故）
+- `run_all_checks` 从 2 项扩展为 5 项；`_alert_fingerprint` 增加三类新指纹去重
+- 验证：生产 watchdog 实测 5 项检查全部运行正常（磁盘 16.6GB / 数据源失败率 2.6% / 0 信号 streak 正常）
+
+### 防护四：E2E 验证脚本
+- 新增 `scripts/e2e_verify.py`：单实例锁 + 心跳 + 磁盘/数据源 + 真实扫描 + 双通道通知链路
+- `--check` 只读 / `--no-scan` / `--no-notify` 模式；默认发送测试卡片验证系统/业务双通道
+- 验证：8 项全部通过，测试卡片系统（Hermes 对话）业务（开悟之路群）双通道均 True
+
+### 测试
+- 新增 `tests/unit/test_p0_first_batch_guard.py`：15 个针对性测试（锁 4 场景/隔离 3 场景/健康检查 7 场景/组合检查）
+- 全量回归：**2207 passed**（88.5s，--timeout=30）
+- 生产验证：scheduler 重启（PID 13770）+ 心跳正常 + 锁拒绝第二实例 + E2E 全绿
+
+## 2026-08-03 — 资金流 0 结果根因修复
+
+- 统一行业资金流 validator 的 `symbol` 调用契约，保留 DataFrame attrs。
+- 为资金流全源失败增加 `data_available`、`data_error`、`all_sources_failed` 状态，过滤器与尾盘报告区分数据异常和正常无结果。
+- signal scan 状态增加资金流健康字段，paper/live 缺失资金流时拒绝买入，signal_only 保持观察模式。
 
 ## v0.9.6 (2026-08-01) — P0 修复：测试副作用泄漏到生产飞书告警
 

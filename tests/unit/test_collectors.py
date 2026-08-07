@@ -11,7 +11,29 @@ import pytest
 
 from gugu.data.collectors.akshare_collector import AkshareCollector
 from gugu.data.collectors.base import BaseCollector
+from gugu.data.collectors.eastmoney_collector import EastmoneyCollector
 from gugu.data.collectors.fallback import SinaCollector
+from gugu.data.collectors.tencent_collector import TencentCollector
+
+
+def test_eastmoney_stock_flow_main_pct_is_unavailable_when_not_provided(monkeypatch):
+    collector = EastmoneyCollector()
+    payload = {"data": {"klines": ["2026-08-03,100000000,1,2,3,4"]}}
+
+    class MockResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return payload
+
+    class MockClient:
+        def get(self, *args, **kwargs):
+            return MockResponse()
+
+    monkeypatch.setattr(collector, "_get_client", lambda: MockClient())
+    df = collector.fetch_stock_flow("600519")
+    assert pd.isna(df.iloc[0]["main_pct"])
 
 
 # ========== Fixture 数据 ==========
@@ -76,6 +98,71 @@ class TestAkshareCollectorSource:
         assert BaseCollector.symbol_with_prefix("600519") == "sh600519"
         assert BaseCollector.symbol_with_prefix("000858") == "sz000858"
         assert BaseCollector.symbol_with_prefix("430047") == "bj430047"
+
+    def test_symbol_with_prefix_index(self):
+        """v0.9.7 P0：沪深300(000300) 自动识别为 sh；深证成指(399001) 为 sz。"""
+        assert BaseCollector.symbol_with_prefix("000300") == "sh000300"
+        assert BaseCollector.symbol_with_prefix("399001") == "sz399001"
+        assert BaseCollector.symbol_with_prefix("399006") == "sz399006"
+
+    def test_symbol_with_prefix_explicit_prefix_wins(self):
+        """显式 sh/sz 前缀优先于白名单（000688 国城矿业 是深市股票）。"""
+        assert BaseCollector.symbol_with_prefix("sh000688") == "sh000688"
+        assert BaseCollector.symbol_with_prefix("sz000688") == "sz000688"
+        # 000688 不在指数白名单（国城矿业=深市股票），默认 sz
+        assert BaseCollector.symbol_with_prefix("000688") == "sz000688"
+
+    def test_is_index_code(self):
+        assert BaseCollector.is_index_code("000300") is True
+        assert BaseCollector.is_index_code("399001") is True
+        assert BaseCollector.is_index_code("600519") is False
+        # 000001 平安银行（深市股票）不在白名单
+        assert BaseCollector.is_index_code("000001") is False
+
+
+class TestAkshareCollectorFlowBreaker:
+    """资金流接口熔断（2026-08-07：东财限流 RemoteDisconnected 全天刷 1705 次 ERROR）。
+
+    连续失败达阈值 → 熔断冷却期（默认 30 分钟）→ 冷却期内静默返回空 DataFrame
+    （不调 API 不打 ERROR）→ 到期自动恢复。成功即重置计数。
+    """
+
+    def _collector(self, monkeypatch):
+        import time
+
+        collector = AkshareCollector()
+        # 重置熔断状态（类级变量，防止测试间污染）
+        collector._flow_fail_count = 0
+        collector._flow_breaker_until = 0.0
+        monkeypatch.setattr(time, "time", lambda: 1000.0)
+        return collector
+
+    def test_flow_breaker_activates_after_threshold(self, monkeypatch):
+        collector = self._collector(monkeypatch)
+        # 连续失败 3 次（阈值）→ 熔断
+        for _ in range(AkshareCollector._FLOW_BREAKER_THRESHOLD):
+            collector._flow_record_failure()
+        assert collector._flow_breaker_active() is True
+
+    def test_flow_breaker_guard_returns_empty_without_calling_api(self, monkeypatch):
+        collector = self._collector(monkeypatch)
+        # 手动进入熔断状态
+        collector._flow_breaker_until = 9999.0
+        df = collector.fetch_stock_flow("600519")
+        assert df.empty
+        assert collector._flow_breaker_active() is True
+
+    def test_flow_success_resets_counter(self, monkeypatch):
+        collector = self._collector(monkeypatch)
+        collector._flow_fail_count = 2
+        collector._flow_record_success()
+        assert collector._flow_fail_count == 0
+        assert collector._flow_breaker_until == 0.0
+
+    def test_flow_breaker_expires_after_cooldown(self, monkeypatch):
+        collector = self._collector(monkeypatch)
+        collector._flow_breaker_until = 500.0  # time.time()=1000 已过期
+        assert collector._flow_breaker_active() is False
 
 
 class TestAkshareCollectorHistory:
@@ -226,6 +313,39 @@ class TestSinaCollectorRealtime:
         assert "name" in df.columns
         assert df.iloc[0]["name"] == "贵州茅台"
 
+    def test_realtime_attrs_are_consistent(self, monkeypatch):
+        fields = [
+            "贵州茅台",
+            "1734.00",
+            "1732.00",
+            "1735.00",
+            "1728.00",
+            "1730.00",
+            "1726.00",
+            "1000000",
+            "50000000",
+        ] + [""] * 24
+        mock_text = 'var hq_str_sh600519="' + ",".join(fields) + '";\n'
+
+        class MockResponse:
+            text = mock_text
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+        class MockClient:
+            def get(self, url, **kwargs):
+                return MockResponse()
+
+        monkeypatch.setattr(
+            "gugu.data.collectors.fallback.SinaCollector._get_client", lambda self: MockClient()
+        )
+        df = SinaCollector().fetch_stock_realtime(["600519"])
+        assert df.attrs["data_source"] == "sina"
+        assert df.attrs["adjust_type"] == "none"
+        assert "fetch_timestamp" in df.attrs
+
     def test_fetch_stock_realtime_empty_symbols(self):
         """空 symbols 列表应返回空 DataFrame。"""
         collector = SinaCollector()
@@ -247,6 +367,34 @@ class TestSinaCollectorRealtime:
         collector = SinaCollector()
         df = collector.fetch_stock_realtime(["600519"])
         assert df.empty
+
+
+class TestTencentCollectorHistory:
+    def test_bj_volume_factor(self, monkeypatch):
+        payload = {
+            "data": {"bj430047": {"qfqday": [["2026-08-03", "10", "12", "13", "9", "1000"]]}}
+        }
+
+        class MockResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def read(self):
+                import json
+
+                return json.dumps(payload).encode()
+
+        monkeypatch.setattr(
+            "gugu.data.collectors.tencent_collector.urllib.request.urlopen",
+            lambda *args, **kwargs: MockResponse(),
+        )
+        df = TencentCollector().fetch_stock_history("430047", days=1)
+        assert df.iloc[0]["amount"] == 12000.0
+        assert df.attrs["data_source"] == "tencent"
+        assert df.attrs["adjust_type"] == "qfq"
 
 
 class TestSinaCollectorUnsupported:

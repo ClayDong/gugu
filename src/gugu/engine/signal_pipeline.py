@@ -38,7 +38,6 @@ P0 优化：资金流数据缺失时默认放行。
 from __future__ import annotations
 
 import asyncio
-import json
 import threading
 import time
 from collections import defaultdict
@@ -71,6 +70,7 @@ from gugu.filters.holder_concentration import HolderConcentrationFilter
 from gugu.filters.industry_constraint import IndustryConstraint
 from gugu.filters.money_flow import MoneyFlowFilter
 from gugu.models.decision import evaluate_entry_gate
+from gugu.utils.atomic import append_jsonl
 from gugu.utils.log import get_logger
 from gugu.wisdom import WisdomAdvisor
 
@@ -305,8 +305,13 @@ class SignalPipeline:
 
             perspective_result = None
 
-            # signal_only 模式：跳过 LLM 异步调用（降低 cost 和阻塞），但仍执行 Wisdom 硬编码 fallback
-            if self._exec_mode == "signal_only":
+            # signal_only / track_live 模式：跳过 LLM 异步调用（降低 cost 和阻塞），
+            # 但仍执行 Wisdom 硬编码 fallback。track_live 与 signal_only 同属"提醒"
+            # 语义（只读跟踪、不自动交易）——2026-08-05 修复：track_live 此前走
+            # paper/live 链被 evaluate_entry_gate 拦截（数据降级 data_quality!=fresh
+            # + 持仓满 5 只预算 0%），导致"行情好但 0 买入信号"；持仓已满时用户
+            # 仍应看到建议信号（决定是否调仓），而不是被静默过滤。
+            if self._exec_mode in ("signal_only", "track_live"):
                 return await self._run_signal_only_chain(
                     signal, symbol, portfolio, perspective_result
                 )
@@ -813,13 +818,10 @@ class SignalPipeline:
             flow_result = await self._money_flow_filter.check(symbol)
             signal["money_flow"] = flow_result
             if not flow_result["pass"]:
-                if flow_result.get("data_missing"):
-                    logger.debug("{} 资金流数据缺失，默认放行（实盘交易优先）", symbol)
-                else:
-                    logger.info("{} 资金流过滤: {}", symbol, ", ".join(flow_result["reasons"]))
-                    self._inc_filter("money_flow")
-                    signal["wisdom_filtered"] = True
-                    signal["filter_reason"] = f"资金流: {', '.join(flow_result['reasons'])}"
+                logger.info("{} 资金流过滤: {}", symbol, ", ".join(flow_result["reasons"]))
+                self._inc_filter("money_flow")
+                signal["wisdom_filtered"] = True
+                signal["filter_reason"] = f"资金流: {', '.join(flow_result['reasons'])}"
 
         # 2.2 板块轮动感知（仅附加数据，不过滤信号）
         if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
@@ -1134,8 +1136,6 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
             hb_dir = gugu_config.PROJECT_ROOT / "data"
             hb_dir.mkdir(exist_ok=True)
             path = hb_dir / "signals_history.jsonl"
-            _rotate_jsonl(path)
-
             decision_chain: list[dict] = []
 
             stage_info = signal.get("stage", {})
@@ -1246,11 +1246,11 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                     {
                         "step": 3.6,
                         "name": "十大视角质量门禁",
-                        "result": f"综合{persp_info.get('composite_score', 0):.1f} "
-                        f"最低{persp_info.get('min_score', 0):.1f}",
-                        "composite_score": persp_info.get("composite_score", 0),
-                        "min_score": persp_info.get("min_score", 0),
-                        "fatal_count": persp_info.get("fatal_count", 0),
+                        "result": f"综合{persp_info.get('composite_score') or 0:.1f} "
+                        f"最低{persp_info.get('min_score') or 0:.1f}",
+                        "composite_score": persp_info.get("composite_score") or 0,
+                        "min_score": persp_info.get("min_score") or 0,
+                        "fatal_count": persp_info.get("fatal_count") or 0,
                         "verdict": persp_info.get("verdict", ""),
                         "passed": persp_info.get("passed", True),
                     }
@@ -1313,8 +1313,7 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "order_stamp_tax": getattr(order_result, "stamp_tax", 0),
                 "order_transfer_fee": getattr(order_result, "transfer_fee", 0),
             }
-            with path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+            append_jsonl(path, record, max_lines=_SIGNAL_HISTORY_MAX_LINES)
     except Exception as e:
         logger.warning("记录信号历史失败: {}", e)
         # P0 watchdog：信号历史写入失败是"系统失忆"前兆，必须飞书告警

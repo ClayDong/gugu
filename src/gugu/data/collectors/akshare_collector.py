@@ -7,6 +7,7 @@ akshare 封装东方财富数据，通过 settings.yaml 中 fallback_sources 配
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta
 
 import akshare as ak
@@ -29,6 +30,36 @@ class AkshareCollector(BaseCollector):
 
     source = "akshare"
     adjust_type = "qfq"  # 前复权
+
+    # 资金流接口熔断（2026-08-07：东财限流 RemoteDisconnected 全天刷 1705 次 ERROR）
+    # 连续失败阈值 → 熔断冷却期，冷却期内静默返回空（不调 API 不打 ERROR），到期自动恢复
+    _FLOW_BREAKER_THRESHOLD = 3
+    _FLOW_BREAKER_COOLDOWN = 1800  # 30 分钟
+    _flow_fail_count = 0
+    _flow_breaker_until = 0.0
+
+    def _flow_breaker_active(self) -> bool:
+        return time.time() < self._flow_breaker_until
+
+    def _flow_record_failure(self) -> None:
+        self._flow_fail_count += 1
+        if self._flow_fail_count >= self._FLOW_BREAKER_THRESHOLD:
+            self._flow_breaker_until = time.time() + self._FLOW_BREAKER_COOLDOWN
+            self._flow_fail_count = 0
+            logger.warning(
+                "akshare 资金流连续失败 {} 次，熔断 {} 秒（东财限流/封禁时防刷屏，到期自动恢复）",
+                self._FLOW_BREAKER_THRESHOLD,
+                self._FLOW_BREAKER_COOLDOWN,
+            )
+
+    def _flow_record_success(self) -> None:
+        self._flow_fail_count = 0
+        self._flow_breaker_until = 0.0
+
+    def _flow_breaker_guard(self, what: str) -> pd.DataFrame:
+        """熔断期内直接返回空 DataFrame（静默降级，不调 API）。"""
+        logger.debug("akshare 资金流熔断冷却中，跳过 {}（{}）", what, self._flow_breaker_until)
+        return pd.DataFrame()
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
     def fetch_stock_history(self, symbol: str, days: int = 90) -> pd.DataFrame:
@@ -96,11 +127,15 @@ class AkshareCollector(BaseCollector):
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
     def fetch_sector_flow(self) -> pd.DataFrame:
         """获取行业资金流排名（东方财富）。"""
+        if self._flow_breaker_active():
+            return self._flow_breaker_guard("行业资金流")
         try:
             df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流")
         except Exception as e:
             logger.error(f"akshare 行业资金流失败: {e}")
+            self._flow_record_failure()
             raise
+        self._flow_record_success()
 
         if df.empty:
             return df
@@ -124,12 +159,16 @@ class AkshareCollector(BaseCollector):
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
     def fetch_stock_flow(self, symbol: str) -> pd.DataFrame:
         """获取个股资金流明细（近 60 日）。"""
+        if self._flow_breaker_active():
+            return self._flow_breaker_guard(f"个股资金流 {symbol}")
         code = self.normalize_symbol(symbol)
         try:
             df = ak.stock_individual_fund_flow(stock=code, market=_market(code))
         except Exception as e:
             logger.error(f"akshare 个股资金流 {code} 失败: {e}")
+            self._flow_record_failure()
             raise
+        self._flow_record_success()
 
         if df.empty:
             return df
