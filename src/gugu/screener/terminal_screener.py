@@ -128,6 +128,9 @@ class ScreenerScanResult:
     skip_reason: str = ""
     market_regime: str = ""
     total_scanned: int = 0
+    data_quality: str = "unknown"
+    status: str = ""
+    data_errors: list[str] = field(default_factory=list)
 
     def __len__(self) -> int:
         """P1-1 修复：支持 len() 操作（生产环境 7月22日触发 TypeError）。"""
@@ -166,7 +169,12 @@ class TerminalScreener:
             reason = f"市场状态为 {regime}，根据配置跳过正式选股（保护性空仓）"
             logger.info("尾盘选股: {}", reason)
             return ScreenerScanResult(
-                results=[], skipped=True, skip_reason=reason, market_regime=regime
+                results=[],
+                skipped=True,
+                skip_reason=reason,
+                market_regime=regime,
+                data_quality="unknown",
+                status="skipped",
             )
 
         try:
@@ -175,7 +183,12 @@ class TerminalScreener:
                 timeout=_TOTAL_TIMEOUT_SEC,
             )
             return ScreenerScanResult(
-                results=results, skipped=False, market_regime=regime, total_scanned=len(results)
+                results=results,
+                skipped=False,
+                market_regime=regime,
+                total_scanned=len(results),
+                data_quality="ok",
+                status="completed",
             )
         except TimeoutError:
             elapsed = time.time() - start_time
@@ -183,7 +196,13 @@ class TerminalScreener:
                 f"尾盘选股: 总超时 {_TOTAL_TIMEOUT_SEC}s 触发，已运行 {elapsed:.0f}s，"
                 f"返回空结果（内部已尽可能提前返回部分结果）"
             )
-            return ScreenerScanResult(results=[], market_regime=regime)
+            return ScreenerScanResult(
+                results=[],
+                market_regime=regime,
+                data_quality="unavailable",
+                status="timeout",
+                data_errors=["screener_timeout"],
+            )
 
     async def _scan_internal(self, start_time: float, regime: str) -> list[ScreeningResult]:
         """实际扫描逻辑（带快照硬过滤 + 并发 K 线获取 + 失败熔断 + 市场状态适配）。"""
@@ -195,9 +214,11 @@ class TerminalScreener:
 
         logger.info("尾盘选股: 全市场 {} 只股票", len(spot))
 
-        # 1.5 大盘趋势过滤：大盘MA5<MA10（下跌趋势）时跳过选股
+        # 1.5 大盘趋势过滤：弱势市场跳过选股（v0.9.7 P1 强化）
+        # 依据：screener_validation 95 条样本——大盘开盘跌>0.5%时选股开盘溢价 -1.22%
+        # （胜率 17%），大盘正常时仅 +0.01%（无 alpha）。弱势环境选股是负期望，
+        # 任何 MA5<MA10 死叉即跳过，不做无效劳动。
         try:
-            # 获取最近20日大盘数据用于趋势判断
             index_df = await asyncio.wait_for(
                 asyncio.to_thread(ak.stock_zh_index_daily, symbol="sh000001"),
                 timeout=15.0,
@@ -205,11 +226,20 @@ class TerminalScreener:
             if index_df is not None and len(index_df) > 15:
                 index_df["ma5"] = index_df["close"].rolling(5).mean()
                 index_df["ma10"] = index_df["close"].rolling(10).mean()
-                if index_df.iloc[-1]["ma5"] < index_df.iloc[-1]["ma10"]:
+                recent_high = index_df["close"].rolling(20).max().iloc[-1]
+                current_close = index_df.iloc[-1]["close"]
+                ma5 = index_df.iloc[-1]["ma5"]
+                ma10 = index_df.iloc[-1]["ma10"]
+                gap_ratio = (ma10 - ma5) / ma10 if ma10 > 0 else 0
+                pos_ratio = (current_close - recent_high) / recent_high if recent_high > 0 else 0
+                if ma5 < ma10:
                     logger.info(
-                        "尾盘选股: 大盘MA5({:.2f})<MA10({:.2f})，下跌趋势跳过选股",
-                        index_df.iloc[-1]["ma5"],
-                        index_df.iloc[-1]["ma10"],
+                        "尾盘选股: 大盘MA5({:.2f})<MA10({:.2f})（gap={:.2f}% 近20日高位回落{:.1f}%），"
+                        "弱势市场跳过选股",
+                        ma5,
+                        ma10,
+                        gap_ratio * 100,
+                        pos_ratio * 100,
                     )
                     return []
         except Exception as e:
@@ -436,6 +466,9 @@ class TerminalScreener:
                             "price": "最新价",
                             "change_pct": "涨跌幅",
                             "volume": "成交量",
+                            "amount": "成交额",
+                            "turnoverratio": "换手率",
+                            "circ_mv": "流通市值",
                         }
                     )
                     return spot

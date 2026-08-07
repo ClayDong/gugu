@@ -44,12 +44,24 @@ _SINA_PREFIX_MAP: dict[str, str] = {
 
 
 def _to_sina_code(code: str) -> str:
+    # v0.9.7 P0：支持显式 sh/sz 前缀 + 指数白名单（000300 沪深300 等）
+    if code[:2].lower() in ("sh", "sz", "bj") and code[2:].isdigit():
+        return code
+    if code in BaseCollector.SH_INDEX_CODES:
+        return f"sh{code}"
+    if code in BaseCollector.SZ_INDEX_CODES:
+        return f"sz{code}"
     prefix = _SINA_PREFIX_MAP.get(code[0], "0")
     exchange = "sh" if prefix == "1" else "sz"
     return f"{exchange}{code}"
 
 
 def _to_sina_csv_code(code: str) -> str:
+    # v0.9.7 P0：指数代码走沪市（1=sh），其余按映射
+    if code in BaseCollector.SH_INDEX_CODES:
+        return f"1{code}"
+    if code in BaseCollector.SZ_INDEX_CODES:
+        return f"0{code}"
     prefix = _SINA_PREFIX_MAP.get(code[0], "0")
     return f"{prefix}{code}"
 
@@ -210,8 +222,10 @@ class SinaCollector(BaseCollector):
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=4))
     def fetch_stock_realtime(self, symbols: list[str]) -> pd.DataFrame:
+        # v0.9.10 修复：空列表 = 全市场快照（新浪 Market_Center 分页接口）。
+        # 东财全市场快照被限流后（8/3 起 RemoteDisconnected），这是尾盘选股/自动选股的保底源。
         if not symbols:
-            return pd.DataFrame()
+            return self._fetch_full_market_snapshot()
 
         codes = [self.normalize_symbol(s) for s in symbols]
         sina_codes = ",".join(_to_sina_code(c) for c in codes)
@@ -265,7 +279,72 @@ class SinaCollector(BaseCollector):
                 }
             )
 
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
+        return self._set_attrs(pd.DataFrame(rows) if rows else pd.DataFrame())
+
+    # ── 全市场快照（v0.9.10：东财限流保底源）──
+    _SINA_MARKET_URL = (
+        "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+        "Market_Center.getHQNodeData?page={page}&num=100&sort=symbol&asc=1"
+        "&node=hs_a&symbol=&_s_r_a=init"
+    )
+    _SINA_MARKET_PAGE_SIZE = 100
+    _SINA_MARKET_MAX_PAGES = 80  # 5000+ 只股票，100/页
+
+    def _fetch_full_market_snapshot(self) -> pd.DataFrame:
+        """全市场快照（新浪 Market_Center 分页接口）。
+
+        东财 clist 快照被限流（RemoteDisconnected）时，新浪是唯一可用保底源。
+        字段：code/name/trade(现价)/changepercent/volume/amount/turnoverratio(换手率)/
+        nmc(流通市值,元)/mktcap(总市值,元)/pb/per。兼容尾盘选股列映射。
+        """
+        rows: list[dict] = []
+        client = self._get_client()
+        pages_fetched = 0
+        for page in range(1, self._SINA_MARKET_MAX_PAGES + 1):
+            pages_fetched = page
+            try:
+                resp = client.get(
+                    self._SINA_MARKET_URL.format(page=page),
+                    headers={
+                        "Referer": "https://finance.sina.com.cn",
+                        "User-Agent": "Mozilla/5.0",
+                    },
+                    timeout=15.0,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as e:
+                logger.warning("新浪全市场快照第 {} 页失败: {}", page, e)
+                break
+            if not data:
+                break
+            for item in data:
+                try:
+                    rows.append(
+                        {
+                            # 列名对齐 DataManager 实时行情约定：symbol/name/price/change_pct
+                            # （selector 用 price，screener 方式3 rename 用 symbol/price/change_pct）
+                            "symbol": str(item.get("code", "")),
+                            "name": str(item.get("name", "")),
+                            "price": float(item.get("trade", 0) or 0),
+                            "change_pct": float(item.get("changepercent", 0) or 0),
+                            "volume": float(item.get("volume", 0) or 0),
+                            "amount": float(item.get("amount", 0) or 0),
+                            "turnoverratio": float(item.get("turnoverratio", 0) or 0),
+                            # 新浪 nmc/mktcap 单位=万元，选股器按元比较（min_mcap/1e8 转亿）→ ×1e4 转元
+                            "circ_mv": float(item.get("nmc", 0) or 0) * 1e4,
+                            "mktcap": float(item.get("mktcap", 0) or 0) * 1e4,
+                            "pb": float(item.get("pb", 0) or 0) if item.get("pb") else None,
+                            "per": float(item.get("per", 0) or 0) if item.get("per") else None,
+                        }
+                    )
+                except (TypeError, ValueError):
+                    continue
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        logger.info("新浪全市场快照: {} 只股票（分页 {} 页）", len(df), pages_fetched)
+        return self._set_attrs(df)
 
     def fetch_sector_flow(self) -> pd.DataFrame:
         """新浪源不支持行业资金流，抛异常触发 DataManager 降级到 akshare。"""

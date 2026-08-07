@@ -1,3 +1,21 @@
+## 2026-08-07 — v0.9.10 尾盘选股断供修复（东财快照限流 → 新浪全市场保底源）
+
+### 根因确认
+尾盘选股/自动选股"一直没数"（8/3 起 4 个交易日 screener_history 零新增）= 两个叠加原因：
+1. **数据源**：全市场快照 100% 依赖东财 clist 接口（sina 主源 `fetch_stock_realtime([])` 原返回空 → DataManager 跳过主源走降级），东财 8/3 起持续限流 RemoteDisconnected（8/5 仅残缺 80 只）→ 快照为空 → 选股零产出
+2. **市场保护**：即使数据可用（8/4 新浪源 5535 只），沪深300 MA20(4659)<MA60(4802) 判定 bear → `skip_regimes=[bear,crash]` 保护性空仓跳过（设计行为非 bug）
+
+### 修复
+- `SinaCollector.fetch_stock_realtime([])` 空列表 = 全市场快照（新浪 Market_Center 分页接口，100/页 × ~57 页，5538 只，15s）
+- 字段对齐 DataManager 约定：symbol/name/price/change_pct/volume/amount/turnoverratio/circ_mv(万元→元×1e4)
+- `DataManager._call_with_fallback` 移除 `fetch_stock_realtime([])` 跳过主源逻辑（sina 现已支持）
+- `TerminalScreener` 方式3 rename 补全 amount/turnoverratio/circ_mv → 硬过滤条件完整生效
+
+### 验证
+- 新增 4 测试（分页/空/HTTP失败/空列表语义变更），65 passed 无回归
+- 真实链路：DataManager 全市场快照 5538 只 ✅ / 尾盘选股扫描跑通（bear 市保护性跳过，符合策略）
+- 8/5 残缺 80 只快照问题一并消除（新浪源稳定 5500+）
+
 ## 2026-08-07 — v0.9.9 信号历史黑洞修复（perspective None 崩溃）+ 止损日志降噪 + 资金流熔断
 
 ### 根因确认（信号历史 7/1 起零写入）

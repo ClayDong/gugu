@@ -326,6 +326,107 @@ class TestSinaCollectorRealtime:
         assert "name" in df.columns
         assert df.iloc[0]["name"] == "贵州茅台"
 
+
+class TestSinaCollectorFullMarketSnapshot:
+    """新浪全市场快照（v0.9.10：东财限流保底源）。"""
+
+    def _mock_client(self, monkeypatch, pages):
+        """mock Market_Center 分页接口，返回 pages 个页面（每页 2 条）。"""
+
+        class MockResponse:
+            def __init__(self, data):
+                self._data = data
+                self.status_code = 200
+
+            def json(self):
+                return self._data
+
+            def raise_for_status(self):
+                pass
+
+        class MockClient:
+            def __init__(self, pages):
+                self._pages = pages
+
+            def get(self, url, **kwargs):
+                page = int(url.split("page=")[1].split("&")[0])
+                data = self._pages.get(page, [])
+                return MockResponse(data)
+
+        monkeypatch.setattr(
+            "gugu.data.collectors.fallback.SinaCollector._get_client",
+            lambda self: MockClient(pages),
+        )
+
+    def _sample_item(self, code, name, nmc_wan):
+        return {
+            "code": code,
+            "name": name,
+            "trade": "10.5",
+            "changepercent": "1.2",
+            "volume": "100000",
+            "amount": "1000000",
+            "turnoverratio": "5.5",
+            "nmc": str(nmc_wan),  # 万元
+            "mktcap": str(nmc_wan * 2),
+            "pb": "2.0",
+            "per": "15.0",
+        }
+
+    def test_full_market_snapshot_pagination(self, monkeypatch):
+        """分页拉取全市场，字段映射正确。"""
+        pages = {
+            1: [self._sample_item("600519", "贵州茅台", 2000000)],
+            2: [self._sample_item("000001", "平安银行", 3000000)],
+            3: [],  # 结束页
+        }
+        self._mock_client(monkeypatch, pages)
+
+        collector = SinaCollector()
+        df = collector.fetch_stock_realtime([])
+
+        assert not df.empty
+        assert len(df) == 2
+        assert df.iloc[0]["symbol"] == "600519"
+        assert df.iloc[0]["name"] == "贵州茅台"
+        # 单位转换：新浪 nmc 万元 → 元（×1e4）
+        assert df.iloc[0]["circ_mv"] == 2000000 * 1e4
+        assert df.iloc[0]["mktcap"] == 4000000 * 1e4
+        assert "price" in df.columns
+        assert "change_pct" in df.columns
+        assert "turnoverratio" in df.columns
+
+    def test_full_market_snapshot_empty(self, monkeypatch):
+        """无数据时返回空 DataFrame。"""
+        self._mock_client(monkeypatch, {1: [], 2: []})
+
+        collector = SinaCollector()
+        df = collector.fetch_stock_realtime([])
+        assert df.empty
+
+    def test_full_market_snapshot_http_error_stops_pagination(self, monkeypatch):
+        """某页失败即停止分页（避免无限重试），返回已拉取数据。"""
+
+        class MockResponse:
+            def json(self):
+                return [{"code": "600519", "name": "贵州茅台", "trade": "10.5"}]
+
+            def raise_for_status(self):
+                raise Exception("connection aborted")
+
+        class MockClient:
+            def get(self, url, **kwargs):
+                return MockResponse()
+
+        monkeypatch.setattr(
+            "gugu.data.collectors.fallback.SinaCollector._get_client",
+            lambda self: MockClient(),
+        )
+
+        collector = SinaCollector()
+        df = collector.fetch_stock_realtime([])
+        assert df.empty  # 首页失败 → 无数据（不崩溃）
+
     def test_realtime_attrs_are_consistent(self, monkeypatch):
         fields = [
             "贵州茅台",
@@ -359,8 +460,25 @@ class TestSinaCollectorRealtime:
         assert df.attrs["adjust_type"] == "none"
         assert "fetch_timestamp" in df.attrs
 
-    def test_fetch_stock_realtime_empty_symbols(self):
-        """空 symbols 列表应返回空 DataFrame。"""
+    def test_fetch_stock_realtime_empty_symbols(self, monkeypatch):
+        """空 symbols = 全市场快照；数据源无数据时返回空 DataFrame（v0.9.10 语义变更）。"""
+
+        class MockResponse:
+            def json(self):
+                return []
+
+            def raise_for_status(self):
+                pass
+
+        class MockClient:
+            def get(self, url, **kwargs):
+                return MockResponse()
+
+        monkeypatch.setattr(
+            "gugu.data.collectors.fallback.SinaCollector._get_client",
+            lambda self: MockClient(),
+        )
+
         collector = SinaCollector()
         df = collector.fetch_stock_realtime([])
         assert df.empty

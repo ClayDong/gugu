@@ -31,6 +31,8 @@ from gugu.utils.log import get_logger
 
 logger = get_logger()
 
+_COLLECTOR_TIMEOUT_SECONDS = 45.0
+
 # 采集器注册表：配置名 → 采集器类
 # P0-3 修复：新增 tencent 作为第四备用源（本机最稳定的 qfq 日 K 源）
 _COLLECTOR_REGISTRY: dict[str, type[BaseCollector]] = {
@@ -41,7 +43,7 @@ _COLLECTOR_REGISTRY: dict[str, type[BaseCollector]] = {
 }
 
 
-def _stable_cache_key(method: str, *args: Any) -> str:
+def _stable_cache_key(method: str, *args: Any, **kwargs: Any) -> str:
     """生成稳定的缓存键。
 
     对于列表参数，排序后转为稳定字符串表示，确保相同数据无论顺序生成相同键。
@@ -56,12 +58,13 @@ def _stable_cache_key(method: str, *args: Any) -> str:
     key_parts = [method]
     for a in args:
         if isinstance(a, list):
-            # 列表参数排序后转为稳定表示
             key_parts.append("[" + ",".join(sorted(str(x) for x in a)) + "]")
         elif isinstance(a, dict):
             key_parts.append("{" + ",".join(f"{k}:{v}" for k, v in sorted(a.items())) + "}")
         else:
             key_parts.append(str(a))
+    for key, value in sorted(kwargs.items()):
+        key_parts.append(f"{key}={value}")
     return "|".join(key_parts)
 
 
@@ -69,7 +72,7 @@ class DataManager:
     """数据管理器：封装多源切换逻辑。"""
 
     def __init__(self) -> None:
-        self._lock = asyncio.Lock()
+        self._lock: asyncio.Lock | None = None
         from gugu.config import get_config
 
         cfg = get_config()
@@ -100,11 +103,21 @@ class DataManager:
         self._fail_count = 0
         self._degraded_until = 0.0  # 降级截止时间戳
         # P2 修复：降级源并发信号量，限制同时运行的 fallback 任务数
-        self._fallback_semaphore = asyncio.Semaphore(len(self._fallbacks))
+        self._fallback_semaphore: asyncio.Semaphore | None = None
         # Parquet 持久化缓存
         self._parquet_cache = persistent_cache()
         # 数据源健康监控（单例）
         self._health = DataSourceHealthMonitor()
+
+    def _get_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
+    def _get_fallback_semaphore(self) -> asyncio.Semaphore:
+        if self._fallback_semaphore is None:
+            self._fallback_semaphore = asyncio.Semaphore(len(self._fallbacks))
+        return self._fallback_semaphore
 
     @property
     def is_degraded(self) -> bool:
@@ -190,66 +203,80 @@ class DataManager:
         特殊处理：fetch_stock_realtime([]) 空列表请求是全市场快照，
         sina 源不支持（返回空），需跳过主源直接用降级源。
         """
-        # 稳定缓存键（列表参数排序处理）
-        cache_key = _stable_cache_key(method, *args)
+        collector = self._get_collector()
+        adjust_type = getattr(collector, "adjust_type", "none")
+        cache_key = _stable_cache_key(
+            method, *args, source=collector.source, adjust_type=adjust_type
+        )
 
-        # 直接跳过主源的场景：sina不支持的方法直接走降级源，避免无效失败计数
-        skip_primary = (
-            method == "fetch_stock_realtime"
-            and len(args) >= 1
-            and isinstance(args[0], list)
-            and len(args[0]) == 0
-        ) or method in self._UNSUPPORTED_BY_PRIMARY
+        def _cache_key_for(source_collector: BaseCollector) -> str:
+            return _stable_cache_key(
+                method,
+                *args,
+                source=source_collector.source,
+                adjust_type=getattr(source_collector, "adjust_type", "none"),
+            )
+
+        # 直接跳过主源的场景：sina不支持的方法直接走降级源，避免无效失败计数。
+        # v0.9.10：fetch_stock_realtime([]) 全市场快照不再跳过 sina——
+        # SinaCollector 已实现新浪 Market_Center 分页快照（东财限流保底源）。
+        skip_primary = method in self._UNSUPPORTED_BY_PRIMARY
 
         # 1. 持久化缓存：仅对历史数据请求
         if method == "fetch_stock_history" and len(args) >= 1:
             symbol = str(args[0])
             days = int(args[1]) if len(args) > 1 else 60
-            parquet_df = self._parquet_cache.get(symbol, days)
+            parquet_df = self._parquet_cache.get(symbol, days, adjust_type)
             if parquet_df is not None and not parquet_df.empty:
-                # 持久化缓存命中后，也放入内存缓存加速
+                self._set_attrs(parquet_df, collector)
+                parquet_df.attrs["data_available"] = True
                 cache().set(cache_key, parquet_df)
                 return parquet_df
 
         # 2. 内存缓存
         cached = cache().get(cache_key)
         if cached is not None:
+            cached.attrs.setdefault("data_available", not cached.empty)
             return cached
 
         # 3. 实时请求
-        async with self._lock:
+        async with self._get_lock():
             is_degraded = await self._is_degraded_locked()
 
         if not is_degraded and not skip_primary:
             # 非全市场快照请求，正常走主源
             try:
                 _fn = partial(getattr(self._primary, method), *args, **kwargs)
-                df = await asyncio.wait_for(asyncio.to_thread(_fn), timeout=20.0)
-                async with self._lock:
+                df = await asyncio.wait_for(
+                    asyncio.to_thread(_fn), timeout=_COLLECTOR_TIMEOUT_SECONDS
+                )
+                async with self._get_lock():
                     await self._on_success_locked(method)
                 df = self._validate(method, df, args)
+                self._set_attrs(df, self._primary)
+                df.attrs["data_available"] = not df.empty
                 # P0 修复：空结果不缓存，避免 120s 内持续返回空且不触发降级
                 if not df.empty:
                     cache().set(cache_key, df)
                     # 持久化缓存：仅对历史数据
                     if method == "fetch_stock_history" and len(args) >= 1:
                         self._parquet_cache.set(
-                            str(args[0]), int(args[1]) if len(args) > 1 else 60, df
+                            str(args[0]), int(args[1]) if len(args) > 1 else 60, df, adjust_type
                         )
                 return df
             except Exception as e:
                 logger.error("主源 {} 异常: {}", method, e)
-                async with self._lock:
+                async with self._get_lock():
                     await self._on_failure_locked(method)
 
         # 降级源：并发尝试所有 fallback，FIRST_COMPLETED 模式
         # 信号量保护整个 fallback 请求 + 等待过程，防止并发降级请求过多
-        async with self._fallback_semaphore:
+        async with self._get_fallback_semaphore():
             tasks: dict[BaseCollector, asyncio.Task] = {
                 fb: asyncio.create_task(
                     asyncio.wait_for(
                         asyncio.to_thread(lambda fb=fb: getattr(fb, method)(*args, **kwargs)),
-                        timeout=45.0,
+                        timeout=_COLLECTOR_TIMEOUT_SECONDS,
                     )
                 )
                 for fb in self._fallbacks
@@ -263,11 +290,13 @@ class DataManager:
                     self._health.record_fallback_used(success_fb.source, method)
                     logger.info("降级源 {} 成功获取 {}", success_fb.source, method)
                     df = self._validate(method, df, args)
-                    cache().set(cache_key, df)
+                    self._set_attrs(df, success_fb)
+                    df.attrs["data_available"] = not df.empty
+                    cache().set(_cache_key_for(success_fb), df)
                     # 持久化缓存
                     if method == "fetch_stock_history" and len(args) >= 1 and not df.empty:
                         self._parquet_cache.set(
-                            str(args[0]), int(args[1]) if len(args) > 1 else 60, df
+                            str(args[0]), int(args[1]) if len(args) > 1 else 60, df, adjust_type
                         )
                     for pt in pending:
                         pt.cancel()
@@ -275,7 +304,7 @@ class DataManager:
             except Exception as e:
                 logger.warning("降级源完成结果异常: {}", e)
         if pending:
-            all_done, _ = await asyncio.wait(pending, timeout=45.0)
+            all_done, _ = await asyncio.wait(pending, timeout=_COLLECTOR_TIMEOUT_SECONDS)
             for t in all_done:
                 try:
                     df = t.result()
@@ -284,10 +313,15 @@ class DataManager:
                         self._health.record_fallback_used(success_fb.source, method)
                         logger.info("降级源 {} 成功获取 {}", success_fb.source, method)
                         df = self._validate(method, df, args)
-                        cache().set(cache_key, df)
+                        self._set_attrs(df, success_fb)
+                        df.attrs["data_available"] = not df.empty
+                        cache().set(_cache_key_for(success_fb), df)
                         if method == "fetch_stock_history" and len(args) >= 1 and not df.empty:
                             self._parquet_cache.set(
-                                str(args[0]), int(args[1]) if len(args) > 1 else 60, df
+                                str(args[0]),
+                                int(args[1]) if len(args) > 1 else 60,
+                                df,
+                                getattr(success_fb, "adjust_type", "none"),
                             )
                         return df
                 except Exception:
@@ -295,15 +329,29 @@ class DataManager:
 
         logger.warning("所有数据源 {} 均失败，尝试缓存兜底", method)
         self._health.record_failure("all", method, detail="all_sources_failed")
-        # 自恢复：返回过期缓存兜底（即使TTL过期也比空df好，保证业务不中断）
         stale_cached = cache().get(cache_key, ignore_ttl=True)
         if stale_cached is not None and not stale_cached.empty:
+            stale_cached.attrs["data_available"] = True
+            stale_cached.attrs["data_stale"] = True
+            stale_cached.attrs["data_error"] = "all_sources_failed"
             logger.info("{} 使用过期缓存兜底，下次请求自动重试", method)
             return stale_cached
-        # 修复：只清理当前失败key的缓存，不全局清空（避免缓存雪崩）
         with contextlib.suppress(Exception):
             cache().store.pop(cache_key, None)
-        return pd.DataFrame()
+        unavailable = pd.DataFrame()
+        unavailable.attrs.update(
+            data_available=False,
+            data_error="all_sources_failed",
+            all_sources_failed=True,
+        )
+        return unavailable
+
+    @staticmethod
+    def _set_attrs(df: pd.DataFrame, collector: BaseCollector) -> pd.DataFrame:
+        df.attrs["data_source"] = collector.source
+        df.attrs["adjust_type"] = getattr(collector, "adjust_type", "none")
+        df.attrs.setdefault("fetch_timestamp", pd.Timestamp.now().isoformat())
+        return df
 
     def _validate(self, method: str, df: pd.DataFrame, args: tuple) -> pd.DataFrame:
         """对采集结果做数据质量校验。"""
@@ -313,6 +361,7 @@ class DataManager:
         symbol = str(args[0]) if args else ""
         try:
             validated = validator(df, symbol)
+            validated.attrs.update(df.attrs)
             # 若原始数据非空但校验后全部被剔除，视为数据质量问题
             if not df.empty and validated.empty:
                 logger.warning("{} {} 数据质量校验后全部被剔除，返回空 DataFrame", method, symbol)
@@ -410,7 +459,7 @@ class DataManager:
             if not hist.empty and len(hist) >= 2:
                 meta["prev_close"] = float(hist.iloc[-2]["close"])
             elif not hist.empty:
-                meta["prev_close"] = float(hist.iloc[-1]["close"])
+                meta["prev_close"] = 0.0
         except Exception as e:
             logger.warning("获取 {} 前收盘价失败: {}", code, e)
 
