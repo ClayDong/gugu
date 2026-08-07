@@ -55,13 +55,17 @@ class ScreenerParams:
     max_candidates: int = 10
 
     # 市场状态过滤：这些 regime 下跳过正式选股
-    skip_regimes: list[str] = field(default_factory=lambda: ["bear", "crash"])
+    # v0.9.10：bear 不再跳过（用户要求熊市也出选股）——改为降级候选数量（见 candidate_modifier），
+    # crash 保留保护性空仓（系统性崩盘日不接飞刀）
+    skip_regimes: list[str] = field(default_factory=lambda: ["crash"])
 
     # 不同 regime 下的候选数量修正系数
+    # v0.9.10：bear 从"跳过"改为候选数 ×0.4（熊市只给少量低吸机会，控制仓位风险）
     candidate_modifier: dict[str, float] = field(
         default_factory=lambda: {
             "bull": 1.0,
             "rally": 1.0,
+            "bear": 0.4,
         }
     )
 

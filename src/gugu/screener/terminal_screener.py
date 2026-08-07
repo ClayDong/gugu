@@ -214,10 +214,14 @@ class TerminalScreener:
 
         logger.info("尾盘选股: 全市场 {} 只股票", len(spot))
 
-        # 1.5 大盘趋势过滤：弱势市场跳过选股（v0.9.7 P1 强化）
+        # v0.9.10：MA5<MA10 弱势标记（默认 False，趋势判断失败时按正常市场处理）
+        weak_market = False
+
+        # 1.5 大盘趋势过滤：弱势市场降级选股（v0.9.7 P1 强化 → v0.9.10 放宽）
         # 依据：screener_validation 95 条样本——大盘开盘跌>0.5%时选股开盘溢价 -1.22%
-        # （胜率 17%），大盘正常时仅 +0.01%（无 alpha）。弱势环境选股是负期望，
-        # 任何 MA5<MA10 死叉即跳过，不做无效劳动。
+        # （胜率 17%），大盘正常时仅 +0.01%（无 alpha）。弱势环境选股是负期望。
+        # v0.9.10 用户要求"熊市也出选股"：MA5<MA10 死叉从"跳过"改为"候选数减半"，
+        # 保留风险意识但不再完全空仓。crash 级保护仍由 skip_regimes 兜底。
         try:
             index_df = await asyncio.wait_for(
                 asyncio.to_thread(ak.stock_zh_index_daily, symbol="sh000001"),
@@ -233,15 +237,15 @@ class TerminalScreener:
                 gap_ratio = (ma10 - ma5) / ma10 if ma10 > 0 else 0
                 pos_ratio = (current_close - recent_high) / recent_high if recent_high > 0 else 0
                 if ma5 < ma10:
+                    weak_market = True
                     logger.info(
                         "尾盘选股: 大盘MA5({:.2f})<MA10({:.2f})（gap={:.2f}% 近20日高位回落{:.1f}%），"
-                        "弱势市场跳过选股",
+                        "弱势市场候选数减半（v0.9.10 放宽，不再完全跳过）",
                         ma5,
                         ma10,
                         gap_ratio * 100,
                         pos_ratio * 100,
                     )
-                    return []
         except Exception as e:
             logger.warning("尾盘选股: 大盘趋势判断失败，降级继续: {}", e)
 
@@ -268,6 +272,9 @@ class TerminalScreener:
         passed.sort(key=lambda r: (-r.perspective_score, r.change_pct))
 
         max_candidates = self.params.effective_max_candidates(regime)
+        # v0.9.10：MA5<MA10 弱势市场候选数减半（不跳过，但压缩风险敞口）
+        if weak_market:
+            max_candidates = max(1, round(max_candidates * 0.5))
         top = (passed + partial)[:max_candidates]
         elapsed = time.time() - start_time
         logger.info(

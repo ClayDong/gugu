@@ -1,3 +1,33 @@
+## 2026-08-07 — v0.9.11 防 bug 体系落地（4 层防线）+ 熊市出选股
+
+### 需求变更：熊市也出选股
+- `skip_regimes` 从 `[bear, crash]` 改为 `[crash]`（bear 不再完全跳过）
+- bear 市候选数 ×0.4（`candidate_modifier`），MA5<MA10 弱势市候选数再减半
+- 同步更新 `data/screener_params.json`（自动调优持久化参数覆盖代码默认值——教训：改参数必须同步两个文件）
+- crash 保留保护性空仓（系统性崩盘日不接飞刀）
+
+### 防线1：数据入口统一清洗层（消灭"脏数据类"bug）
+- `quality.py` 新增 `sanitize_dataframe()`：None/NaN→0、字符串列 None→""、全 NaN 行剔除
+- `sanitize_scalar()`：信号字典等非 DataFrame 场景
+- 接入 `DataManager._validate` 入口：所有外部数据进系统先清洗，消费点不再各自防御
+- 覆盖 v0.9.9 信号黑洞同款场景：`f"{None:.1f}"` 不再崩溃
+
+### 防线2：策略注册表一致性自检（消灭"幽灵策略"bug）
+- `registry.py` 新增 `verify_registry_consistency()` → (fatal, warning) 二元组
+  - fatal：配置启用但代码未注册 → scheduler 拒绝启动（fail-fast）
+  - warning：代码注册但配置未引用 → 死代码残留记日志（hot_money 教训）
+- scheduler 启动时执行自检
+- **实测抓到 27 项死代码残留**（turtle/dual_ma/macd 等历史策略注册未启用）——验证了自检价值
+
+### 防线3：真实脏数据 fixture 进回归（消灭"mock全绿上线挂"）
+- `tests/conftest.py` 新增 5 个真实脏数据 fixture：dirty_history_df / dirty_snapshot_df / empty_df / none_fields_signal / truncated_snapshot_df
+- 全部来自生产实战 bug 场景（东财限流空表/字段漂移 None/北交所 502/残缺 80 只快照/v0.9.9 视角失败）
+- 新增回归测试 `test_dirty_data_regression.py`：历史写入不崩溃、清洗净化、快照过滤安全
+
+### 验证
+- 新增 21 测试（清洗 8 + 脏数据回归 5 + 一致性 4 + 熊市相关），相关模块 143 passed 无回归
+- 生产重启加载自检 ✅
+
 ## 2026-08-07 — v0.9.10 尾盘选股断供修复（东财快照限流 → 新浪全市场保底源）
 
 ### 根因确认

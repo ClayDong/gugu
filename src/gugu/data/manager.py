@@ -24,7 +24,12 @@ from gugu.data.collectors.base import BaseCollector
 from gugu.data.collectors.eastmoney_collector import EastmoneyCollector
 from gugu.data.collectors.fallback import SinaCollector
 from gugu.data.collectors.tencent_collector import TencentCollector
-from gugu.data.quality import validate_sector_flow, validate_stock_flow, validate_stock_history
+from gugu.data.quality import (
+    sanitize_dataframe,
+    validate_sector_flow,
+    validate_stock_flow,
+    validate_stock_history,
+)
 from gugu.data.source_health import DataSourceHealthMonitor
 from gugu.data.stock_names import lookup_stock_name
 from gugu.utils.log import get_logger
@@ -357,10 +362,12 @@ class DataManager:
         """对采集结果做数据质量校验。"""
         validator = self._VALIDATORS.get(method)
         if validator is None:
-            return df
+            # v0.9.11 防线1：无专用校验器的方法（如 fetch_stock_realtime 快照）也统一清洗，
+            # 消灭消费点各自防御 None/NaN 的重复修补
+            return sanitize_dataframe(df)
         symbol = str(args[0]) if args else ""
         try:
-            validated = validator(df, symbol)
+            validated = validator(sanitize_dataframe(df), symbol)
             validated.attrs.update(df.attrs)
             # 若原始数据非空但校验后全部被剔除，视为数据质量问题
             if not df.empty and validated.empty:

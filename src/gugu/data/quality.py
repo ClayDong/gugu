@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import date, timedelta
+from typing import Any
 
 import pandas as pd
 
@@ -155,12 +156,11 @@ class PlausiblePriceRule(ValidationRule):
             return min(3.0, self._max_deviation)
 
     def check(self, df: pd.DataFrame, symbol: str = "") -> tuple:
-        if self._price_column not in df.columns or len(df) < self._ma_window:
+        if self._price_column not in df.columns or len(df) <= self._ma_window:
             return True, "insufficient data, skip plausibility check"
         prices = df[self._price_column].values.astype(float)
         latest = prices[-1]
-        # 历史 MA（使用前 ma_window 行，避免最新价拉高 MA 导致误判）
-        ma = float(prices[-self._ma_window :].mean())
+        ma = float(prices[-self._ma_window - 1 : -1].mean())
 
         if ma <= 0 or latest <= 0:
             return True, "zero or negative price/MA, skip plausibility check"
@@ -444,11 +444,72 @@ def validate_stock_history(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
     return STOCK_HISTORY_VALIDATOR.validate(df, symbol)
 
 
-def validate_sector_flow(df: pd.DataFrame) -> pd.DataFrame:
+def validate_sector_flow(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
     """校验行业资金流数据。"""
-    return SECTOR_FLOW_VALIDATOR.validate(df)
+    return SECTOR_FLOW_VALIDATOR.validate(df, symbol)
 
 
 def validate_stock_flow(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
     """校验个股资金流数据。"""
     return STOCK_FLOW_VALIDATOR.validate(df, symbol)
+
+
+# ──────────────────────────────────────────────
+# 6. 数据入口统一清洗层（v0.9.11 防线1）
+# ──────────────────────────────────────────────
+# 目标：消灭"脏数据类"bug 的重复修补。
+# 原则：所有外部数据在进入系统时清洗一次（DataManager._validate 入口），
+#       消费点不再各自防御 None/NaN/类型/空值。
+# 本层只做"净化"不做"丢弃"——空表仍由上层校验器/调用方决定是否可用。
+
+_NUMERIC_FILL: dict[str, float] = {}
+
+
+def sanitize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """统一清洗外部数据 DataFrame。
+
+    处理（全部 inplace 语义，返回新对象）：
+    1. 数值列 None/NaN → 0.0（NaN 用 0 填充，保持列 dtype 数值化）
+    2. 字符串列 None/NaN → ""（避免 .str 操作崩溃）
+    3. 全 NaN 行剔除（无信息行）
+    4. 保留原始列结构，不增删业务列
+
+    Args:
+        df: 原始外部数据（可能含 None/NaN/混合类型）。
+
+    Returns:
+        清洗后的 DataFrame。输入为 None/空时原样返回（调用方自行处理空表）。
+    """
+    if df is None or len(df) == 0:
+        return df
+
+    cleaned = df.copy()
+
+    # 先记录全 NaN/None 行（在填充前判定，填充后 NaN 已不可见）
+    all_missing = cleaned.isna().all(axis=1) | cleaned.isnull().all(axis=1)
+
+    for col in cleaned.columns:
+        if pd.api.types.is_numeric_dtype(cleaned[col]):
+            # 数值列：None/NaN → 0，避免下游 f"{x:.1f}" 或算术崩溃
+            cleaned[col] = pd.to_numeric(cleaned[col], errors="coerce").fillna(0.0)
+        elif pd.api.types.is_object_dtype(cleaned[col]) or pd.api.types.is_string_dtype(
+            cleaned[col]
+        ):
+            # 对象/字符串列：None/NaN → ""，避免 .str.contains 等崩溃
+            cleaned[col] = cleaned[col].fillna("").astype(str)
+
+    # 剔除全 NaN 行（原始即无信息，填充前已判定）
+    if all_missing.any():
+        cleaned = cleaned[~all_missing]
+    return cleaned
+
+
+def sanitize_scalar(value: Any) -> Any:
+    """清洗单个标量值（信号字典字段等非 DataFrame 场景）。
+
+    - None → 0（数值语义）或 ""（字符串语义由调用方决定）
+    - 非数值字符串 → 原样
+    """
+    if value is None:
+        return 0
+    return value

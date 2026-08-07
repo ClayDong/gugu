@@ -74,3 +74,103 @@ def ohlcv_df() -> pd.DataFrame:
             "amount": amount,
         }
     )
+
+
+# ══════════════════════════════════════════════════════════════
+# v0.9.11 防线3：真实世界脏数据样本（固化生产实战 bug 场景）
+# 来源：2026-08-07 前 gugu 生产实际触发过 bug 的脏数据形态。
+# 任何"数据输入"类测试应优先从这些样本取数——mock 全绿 ≠ 生产无 bug。
+# ══════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def dirty_history_df() -> pd.DataFrame:
+    """历史行情含 None/NaN/零值（真实：数据源字段漂移时的形态）。
+
+    触发过的 bug：f-string 格式化 None 崩溃（v0.9.9 信号黑洞）。
+    """
+    return pd.DataFrame(
+        {
+            "date": pd.to_datetime(
+                ["2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04", "2026-08-05"]
+            ),
+            "open": [10.0, None, 10.5, float("nan"), 11.0],
+            "high": [10.5, 10.8, None, 11.2, 11.5],
+            "low": [9.8, None, 10.0, 10.5, None],
+            "close": [10.2, 10.4, 10.6, None, 11.2],
+            "volume": [1000, None, 1200, 800, float("nan")],
+            "amount": [10000.0, 10400.0, 12720.0, None, 12320.0],
+        }
+    )
+
+
+@pytest.fixture
+def dirty_snapshot_df() -> pd.DataFrame:
+    """全市场快照含 None 市值/换手率（真实：新浪/东财字段缺失）。
+
+    触发过的 bug：市值单位不统一（万元 vs 元）、换手率 None 导致过滤误判。
+    """
+    return pd.DataFrame(
+        {
+            "symbol": ["600519", "000001", "300750", "920000"],
+            "name": ["贵州茅台", "平安银行", "宁德时代", "安徽凤凰"],
+            "price": [1500.0, 11.5, 250.0, 14.1],
+            "change_pct": [1.2, -0.5, None, 3.4],
+            "volume": [100000, 200000, None, 50000],
+            "amount": [1e9, 2e8, 3e9, 7e7],
+            "turnoverratio": [0.5, 2.0, None, 5.5],
+            "circ_mv": [2e12, 3e11, 1.2e12, None],  # 元
+        }
+    )
+
+
+@pytest.fixture
+def empty_df() -> pd.DataFrame:
+    """空 DataFrame（真实：东财限流 RemoteDisconnected 后的返回值）。"""
+    return pd.DataFrame()
+
+
+@pytest.fixture
+def none_fields_signal() -> dict:
+    """信号 dict 含 None 字段（真实：v0.9.9 视角分析失败路径）。
+
+    触发过的 bug：record_signal_history 的 .get('composite_score', 0) 在值为
+    None 时返回 None → f"{None:.1f}" 抛 TypeError → 信号历史 35 天零写入。
+    """
+    return {
+        "symbol": "600519",
+        "direction": "buy",
+        "price": 1500.0,
+        "confidence": 0.425,
+        "strategies": ["double_yin"],
+        "perspective_check": {
+            "composite_score": None,
+            "min_score": None,
+            "passed": None,
+            "fatal_count": 0,
+            "verdict": "分析失败（signal_only 模式不拦截）",
+        },
+        "wisdom_decision": {"source": "fallback"},
+    }
+
+
+@pytest.fixture
+def truncated_snapshot_df() -> pd.DataFrame:
+    """残缺快照（真实：8/5 东财限流只返回 80 只 vs 正常 5000+）。
+
+    触发过的 bug：候选数骤减导致选股零产出，但系统无告警。
+    """
+    rows = [
+        {
+            "symbol": f"600{str(i).zfill(3)}",
+            "name": f"测试股{i}",
+            "price": 10.0 + i,
+            "change_pct": 0.5,
+            "volume": 100000,
+            "amount": 1e7,
+            "turnoverratio": 5.0,
+            "circ_mv": 1e10,
+        }
+        for i in range(80)
+    ]
+    return pd.DataFrame(rows)

@@ -15,7 +15,6 @@ from gugu.strategies.cloud_trend import CloudTrendStrategy
 from gugu.strategies.double_yin import DoubleYinMoneyBagStrategy
 from gugu.strategies.dragon_tiger_short import DragonTigerShortStrategy
 from gugu.strategies.first_board import FirstBoardStrategy
-from gugu.strategies.hot_money import HotMoneyStrategy
 from gugu.strategies.huamulan_crash_layout import HuamulanCrashLayoutStrategy
 from gugu.strategies.huamulan_fake_dip import HuamulanFakeDipStrategy
 from gugu.strategies.huamulan_tail_pick import HuamulanTailPickStrategy
@@ -63,7 +62,7 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "north_force_long": NorthForceLongStrategy,  # 长线主力吸筹跟随
     "dragon_tiger_short": DragonTigerShortStrategy,  # 短线龙虎榜反包跟随
     "cloud_trend": CloudTrendStrategy,  # 云策略：三维趋势+两类入场+分层仓位
-    "hot_money": HotMoneyStrategy,  # 游资策略：三数交易法（涨停筛选+缩量入场+放量离场）
+    # hot_money 已移除（2026-08-01 样本外证伪：集中度超标不可信，见 strategy_manifest.yaml）
     "industry_capital_momentum": IndustryCapitalMomentumStrategy,  # 行业资金强度+动量确认
     "first_board": FirstBoardStrategy,  # 首板战法（北京炒家）：首板套利+极致风控+机械执行
     "ma20_trend": MA20TrendStrategy,  # 20日均线趋势跟随战法（趋势为王+回踩低吸+放量突破）
@@ -123,13 +122,24 @@ def get_enabled_strategies() -> list[Strategy]:
     """获取配置中启用的策略实例列表（带缓存，全局共享同一批实例）。
 
     v0.5.6 优化1：优先使用 enabled_by_regime 的并集（向后兼容 enabled）
+    v0.9.7 P0 修复：必须按 execution_mode 过滤 experimental 策略——
+    原实现用 get_all_enabled_unique()（所有 regime 并集），会把 experimental
+    策略（chenxuezhang/linjudaye 等）泄漏进 track_live/signal_only 模式，
+    与 get_enabled_strategies_for_regime() 的行为不一致，导致自动选股路径
+    跑"不应启用"的策略。现统一委托 get_enabled_for_regime(None, mode)。
     注：按 regime 过滤由 get_enabled_strategies_for_regime() 实现
     """
     from gugu.config import get_config
 
-    cfg = get_config().strategy
-    # v0.5.6: 优先使用 enabled_by_regime 的并集
-    enabled = cfg.get_all_enabled_unique() if cfg.enabled_by_regime else cfg.enabled
+    cfg = get_config()
+    strategy_cfg = cfg.strategy
+    # v0.9.7: 统一按 execution_mode 过滤（track_live/signal_only/live 排除 experimental）
+    if strategy_cfg.verified_strategies:
+        enabled = strategy_cfg.get_enabled_for_regime(None, cfg.execution.mode)
+    elif strategy_cfg.enabled_by_regime:
+        enabled = strategy_cfg.get_all_enabled_unique()
+    else:
+        enabled = strategy_cfg.enabled
     return [get_strategy(name) for name in enabled if name in _REGISTRY]
 
 
@@ -149,8 +159,9 @@ def get_enabled_strategies_for_regime(regime: str | None) -> list[Strategy]:
     """
     from gugu.config import get_config
 
-    cfg = get_config().strategy
-    enabled = cfg.get_enabled_for_regime(regime)
+    app_cfg = get_config()
+    cfg = app_cfg.strategy
+    enabled = cfg.get_enabled_for_regime(regime, app_cfg.execution.mode)
     return [get_strategy(name) for name in enabled if name in _REGISTRY]
 
 
@@ -164,3 +175,40 @@ def reload_strategies() -> None:
     from gugu.utils.log import get_logger
 
     get_logger().info("策略缓存已清除，下次调用将重新读取配置")
+
+
+def verify_registry_consistency() -> tuple[list[str], list[str]]:
+    """启动自检（v0.9.11 防线2）：注册表 vs 配置一致性检查。
+
+    两级结果（返回 (fatal, warning) 二元组）：
+    - fatal：配置启用但代码未注册 → get_strategy 会 KeyError，必须拒绝启动
+    - warning：代码注册但配置未引用 → 死代码残留（不会发信号，但应清理；
+      hot_money 2026-08-01 证伪后 5 处注册点残留的教训——残留越少，幽灵风险越低）
+
+    Usage:
+        fatal, warning = verify_registry_consistency()
+        if fatal:
+            raise SystemExit(1)
+        for w in warning:
+            logger.warning(w)
+    """
+    from gugu.config import get_config
+
+    fatal: list[str] = []
+    warning: list[str] = []
+    cfg = get_config()
+    strategy_cfg = cfg.strategy
+
+    # 1. 配置启用但未注册（fail-fast：get_strategy 会 KeyError，提前暴露）
+    configured = strategy_cfg.get_all_enabled_unique()
+    for name in configured:
+        if name not in _REGISTRY:
+            fatal.append(f"配置启用但代码未注册: {name}")
+
+    # 2. 代码注册但配置完全不引用（死代码残留，warning 不阻塞）
+    all_configured = set(configured) | set(strategy_cfg.experimental_strategies)
+    for name in _REGISTRY:
+        if name not in all_configured:
+            warning.append(f"代码注册但配置未启用/未标记: {name}（死代码残留，建议清理）")
+
+    return fatal, warning

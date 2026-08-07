@@ -30,6 +30,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import signal
 from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -39,10 +40,18 @@ from apscheduler.triggers.interval import IntervalTrigger
 from gugu.config import get_config
 from gugu.engine.main import TradingEngine
 from gugu.engine.scheduler_jobs import SchedulerJobsMixin
+from gugu.utils.atomic import atomic_write_json
 from gugu.utils.calendar import is_trading_day, is_trading_time
 from gugu.utils.log import get_logger
 
 logger = get_logger()
+
+
+class _ConfiguredAsyncIOScheduler(AsyncIOScheduler):
+    def add_job(self, func, trigger=None, *args, **kwargs):
+        kwargs.update(max_instances=1, misfire_grace_time=120, coalesce=True)
+        return super().add_job(func, trigger, *args, **kwargs)
+
 
 # 盘中扫描时刻（hour, minute）
 SCAN_TIMES = [
@@ -59,7 +68,9 @@ class TradingScheduler(SchedulerJobsMixin):
     def __init__(self) -> None:
         cfg = get_config()
         tz = cfg.scheduler.timezone
-        self._scheduler = AsyncIOScheduler(timezone=tz)
+        self._scheduler = _ConfiguredAsyncIOScheduler(timezone=tz)
+        self._shutdown_requested = False
+        self._install_signal_handlers()
         self._engine = TradingEngine()
         self._intraday_monitor = self._build_intraday_monitor()
         self._realtime_scanner = self._build_realtime_scanner()
@@ -454,6 +465,16 @@ class TradingScheduler(SchedulerJobsMixin):
             await self._engine.send_daily_report(period)
         except Exception as e:
             logger.exception("信号汇总推送异常: {}", e)
+            try:
+                await self._engine._notifier.notify_error(
+                    {
+                        "message": f"信号汇总推送异常: {e}",
+                        "level": "error",
+                        "source": "scheduler._safe_report",
+                    }
+                )
+            except Exception as notify_err:
+                logger.error("信号汇总异常通知发送失败: {}", notify_err)
 
     async def _safe_retry_notify(self) -> None:
         """重试失败的通知队列。"""
@@ -477,14 +498,51 @@ class TradingScheduler(SchedulerJobsMixin):
                 logger.info("检测到 settings.yaml 已修改，执行配置热加载...")
                 new_cfg = refresh_config()
                 logger.info(
-                    f"配置热加载完成: 策略={new_cfg.strategies.enabled}, "
+                    f"配置热加载完成: 策略={new_cfg.strategy.enabled}, "
                     f"模式={new_cfg.execution.mode}"
                 )
         except Exception as e:
             logger.debug("配置热加载检测异常: {}", e)
 
+    def _install_signal_handlers(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(signum, lambda: asyncio.create_task(self.shutdown()))
+            except (NotImplementedError, RuntimeError, ValueError):
+                logger.warning("无法注册信号处理器: {}", signum)
+
     async def start(self) -> None:
         """启动调度器。"""
+        # v0.9.11 防线2：策略注册表 vs 配置一致性自检（幽灵策略 fail-fast）
+        # fatal（配置启用但未注册）→ 拒绝启动；warning（死代码残留）→ 记日志
+        try:
+            from gugu.strategies.registry import list_strategies, verify_registry_consistency
+
+            fatal, warning = verify_registry_consistency()
+            if fatal:
+                for issue in fatal:
+                    logger.error("策略注册表一致性: {}", issue)
+                raise RuntimeError(
+                    f"策略注册表一致性检查失败（{len(fatal)} 项致命），拒绝启动。"
+                    "请修正 settings.yaml 与 registry.py 后重启。"
+                )
+            for w in warning:
+                logger.warning("策略注册表一致性: {}", w)
+            logger.info(
+                "策略注册表一致性检查通过（{} 策略，{} 项死代码残留待清理）",
+                len(list_strategies()),
+                len(warning),
+            )
+        except RuntimeError:
+            raise
+        except Exception as e:
+            logger.warning("策略注册表一致性检查跳过（非致命）: {}", e)
+
+        self._install_signal_handlers()
         self.setup()
         self._scheduler.start()
         self._record_boot()
@@ -553,13 +611,11 @@ class TradingScheduler(SchedulerJobsMixin):
 
             import json as _json
 
-            boot_path.write_text(
-                _json.dumps(
-                    {"boot_time": now_iso, "pid": pid, "history": history},
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
+            atomic_write_json(
+                boot_path,
+                {"boot_time": now_iso, "pid": pid, "history": history},
+                ensure_ascii=False,
+                indent=2,
             )
             logger.info("调度器启动记录已写入: {}", boot_path)
         except Exception as e:
@@ -567,7 +623,10 @@ class TradingScheduler(SchedulerJobsMixin):
 
     async def shutdown(self) -> None:
         """停止调度器并释放资源。"""
-        self._scheduler.shutdown()
+        if self._shutdown_requested:
+            return
+        self._shutdown_requested = True
+        self._scheduler.shutdown(wait=False)
         await self._engine.shutdown()
         logger.info("调度器已停止")
 
@@ -575,6 +634,11 @@ class TradingScheduler(SchedulerJobsMixin):
 def _main() -> None:
     """命令行入口：启动交易调度器守护进程。"""
     logging.basicConfig(level=logging.INFO)
+    # P0 防护：单实例锁，防止与 launchd/手动启动的实例并行运行
+    from gugu.utils.single_instance import acquire_single_instance_lock
+
+    if not acquire_single_instance_lock():
+        return
     scheduler = TradingScheduler()
     with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(scheduler.start())
