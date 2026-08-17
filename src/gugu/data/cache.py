@@ -7,6 +7,7 @@ import os
 import threading
 import time
 from collections import OrderedDict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -95,29 +96,39 @@ class ParquetPersistentCache:
         self._lock = threading.RLock()
         logger.info("Parquet 持久化缓存目录: {}", self._cache_dir)
 
-    def _key(self, symbol: str, days: int) -> str:
+    def _key(self, symbol: str, days: int, adjust_type: str = "none") -> str:
         """生成缓存文件名。"""
-        # 标准化 symbol：去除前缀 0 和后缀差异
         sym = str(symbol).strip().zfill(6)
-        return f"{sym}_{days}d.parquet"
+        return f"{sym}_{days}d_{adjust_type}.parquet"
 
-    def get(self, symbol: str, days: int) -> pd.DataFrame | None:
+    def get(
+        self,
+        symbol: str,
+        days: int,
+        adjust_type: str = "none",
+        now: datetime | None = None,
+    ) -> pd.DataFrame | None:
         """从持久化缓存读取历史数据。
 
         检查条件：
         1. 文件存在
-        2. 数据的最后日期不早于昨天（够新）
+        2. 数据的新鲜度（交易日盘中必须含当日 bar；非盘中容忍 7 天老化）
 
         Args:
             symbol: 股票代码
             days: 回看天数
+            adjust_type: 复权类型
+            now: 参考时间（测试注入用，默认当前时间）
 
         Returns:
-            DataFrame（含当日前数据）或 None
+            DataFrame（满足新鲜度要求）或 None
         """
-        path = self._cache_dir / self._key(symbol, days)
+        path = self._cache_dir / self._key(symbol, days, adjust_type)
         if not path.exists():
             return None
+
+        # 参考时间（测试注入用，默认当前时间）——新鲜度判定与质量校验共用同一基准
+        ref_time = now or datetime.now()
 
         try:
             df = pd.read_parquet(path)
@@ -127,28 +138,52 @@ class ParquetPersistentCache:
             # 检查 freshness：最后一条数据日期
             if "date" in df.columns:
                 last_date = pd.to_datetime(df["date"].iloc[-1])
-                from datetime import datetime
+                calendar_days = (ref_time - last_date.to_pydatetime()).days
+                # 盘中（交易日 9:30-15:00）必须包含当日 bar：策略信号基于最新 K线
+                # 计算，陈旧缓存会导致突破/均线/动量信号失真（2026-08-05 实测
+                # 120d 缓存停在 8/4，盘中扫描仍直接命中，信号全错）。
+                # 非盘中容忍最多 7 天老化（覆盖长假场景如春节/国庆 5 个交易日）
+                from gugu.utils.calendar import is_trading_day
 
-                calendar_days = (datetime.now() - last_date.to_pydatetime()).days
-                # 允许最长 7 天的缓存老化（覆盖长假场景如春节/国庆 5 个交易日）
-                max_stale_days = 7
+                now_min = ref_time.hour * 60 + ref_time.minute
+                is_intraday = is_trading_day(ref_time.date()) and 9 * 60 + 30 <= now_min <= 15 * 60
+                # P0 修复（2026-08-05 信号黑洞根因）：
+                # 缓存陈旧判定的正确语义——「当前时段数据源可得的最新日期」：
+                #   - 交易日盘后（>15:00）：当日 K线已生成，缓存必须含当日 bar
+                #     （calendar_days==0）。原实现盘后容忍 7 天 → 盘中 14:47
+                #     写入的 8/4 缓存在 16:57 盘后仍命中 → 收盘验证/绩效用错数据
+                #   - 交易日盘中/盘前（<=15:00）：日K线源无当日 bar，
+                #     最新可得 = 昨日收盘 → 允许 calendar_days<=1。
+                #     不能要求当日（否则缓存永远 miss + 重拉仍是昨日 → 性能灾难）
+                #   - 非交易日：容忍 7 天老化（长假场景）
+                if is_intraday:
+                    # 盘中：数据源最新可达昨日（当日 K线未生成）
+                    max_stale_days = 1
+                elif is_trading_day(ref_time.date()):
+                    # 盘后：当日 K线已生成，必须含当日 bar
+                    max_stale_days = 0
+                else:
+                    max_stale_days = 7
                 if calendar_days > max_stale_days:
                     logger.debug(
-                        "Parquet 缓存过期: {} {}d, 最后日期={}, 距今 {} 天",
+                        "Parquet 缓存过期: {} {}d, 最后日期={}, 距今 {} 天, 盘中={}",
                         symbol,
                         days,
                         last_date.date(),
                         calendar_days,
+                        is_intraday,
                     )
                     path.unlink(missing_ok=True)
                     return None
 
             # BUG-03 修复：缓存读取后重新做数据质量校验
             # 防止缓存了坏数据（如数据源返回错误价格后写入缓存）
+            # 2026-08-12：透传 ref_time → 质量校验新鲜度与缓存新鲜度同一时间基准
+            # （此前 validate 用真实 date.today()，缓存注入 now 测试随时间漂移变红）
             try:
                 from gugu.data.quality import validate_stock_history
 
-                validated = validate_stock_history(df, symbol)
+                validated = validate_stock_history(df, symbol, now=ref_time.date())
                 if validated.empty:
                     logger.warning("Parquet 缓存数据 {} {}d 校验失败，删除缓存", symbol, days)
                     path.unlink(missing_ok=True)
@@ -166,7 +201,7 @@ class ParquetPersistentCache:
             path.unlink(missing_ok=True)
             return None
 
-    def set(self, symbol: str, days: int, df: pd.DataFrame) -> None:
+    def set(self, symbol: str, days: int, df: pd.DataFrame, adjust_type: str = "none") -> None:
         """写入持久化缓存。
 
         Args:
@@ -176,7 +211,7 @@ class ParquetPersistentCache:
         """
         if df is None or df.empty:
             return
-        path = self._cache_dir / self._key(symbol, days)
+        path = self._cache_dir / self._key(symbol, days, adjust_type)
         try:
             with self._lock:
                 # P0 修复：原子写入，先写临时文件再 rename，避免并发读取到半写文件

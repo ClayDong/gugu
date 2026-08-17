@@ -57,20 +57,50 @@ def test_signal_history_stale_no_boot_alert(tmp_path: Path):
 
 
 def test_signal_history_stale_with_boot_alerts(tmp_path: Path):
-    """调度器已启动（有 boot 记录）但信号历史 3 天未写入 → 告警。"""
+    """调度器已启动（有 boot 记录）但扫描活动也已停止 → 告警。"""
     hist = tmp_path / "signals_history.jsonl"
     hist.write_text(
         json.dumps({"timestamp": (datetime.now() - timedelta(days=3)).isoformat()}) + "\n",
+        encoding="utf-8",
+    )
+    scan = tmp_path / "signal_scan.json"
+    scan.write_text(
+        json.dumps({"last_scan_at": (datetime.now() - timedelta(days=3)).isoformat()}),
         encoding="utf-8",
     )
     boot = tmp_path / "scheduler_boot.json"
     boot.write_text(
         json.dumps({"boot_time": datetime.now().isoformat(), "pid": 123}), encoding="utf-8"
     )
-    res = check_signal_history_freshness(history_path=hist, boot_path=boot, data_dir=tmp_path)
+    res = check_signal_history_freshness(
+        history_path=hist, boot_path=boot, scan_path=scan, data_dir=tmp_path
+    )
     assert res.ok is False
-    assert "信号历史" in res.message
+    assert "信号扫描" in res.message
     assert res.severity == "high"
+
+
+def test_signal_history_stale_but_recent_scan_is_healthy(tmp_path: Path):
+    """信号历史很旧但最近扫描完成且无有效信号 → 不应误报失忆。"""
+    hist = tmp_path / "signals_history.jsonl"
+    hist.write_text(
+        json.dumps({"timestamp": (datetime.now() - timedelta(days=32)).isoformat()}) + "\n",
+        encoding="utf-8",
+    )
+    scan = tmp_path / "signal_scan.json"
+    scan.write_text(
+        json.dumps({"last_scan_at": datetime.now().isoformat(), "signals_count": 0}),
+        encoding="utf-8",
+    )
+    boot = tmp_path / "scheduler_boot.json"
+    boot.write_text(
+        json.dumps({"boot_time": datetime.now().isoformat(), "pid": 123}), encoding="utf-8"
+    )
+    res = check_signal_history_freshness(
+        history_path=hist, boot_path=boot, scan_path=scan, data_dir=tmp_path
+    )
+    assert res.ok is True
+    assert "扫描正常" in res.message
 
 
 # ========== 调度器心跳 ==========
@@ -125,8 +155,7 @@ def test_heartbeat_missing_alerts(tmp_path: Path):
 
 def test_restart_boom_alerts(tmp_path: Path):
     """单日重启 >3 次 → 告警。"""
-    now = datetime.now()
-    # 心跳新鲜（避免先触发心跳告警）
+    now = datetime.now().replace(microsecond=0)
     hb = tmp_path / "heartbeat.json"
     hb.write_text(
         json.dumps({"last_cycle_at": now.isoformat(), "status": "alive"}),
@@ -134,8 +163,8 @@ def test_restart_boom_alerts(tmp_path: Path):
     )
     boot = tmp_path / "scheduler_boot.json"
     boots = [
-        {"boot_time": (now - timedelta(hours=h)).isoformat(), "pid": 100 + i}
-        for i, h in enumerate([1, 2, 3, 5, 8])
+        {"boot_time": (now - timedelta(minutes=m)).isoformat(), "pid": 100 + i}
+        for i, m in enumerate([1, 2, 3, 5, 8])
     ]
     boot.write_text(json.dumps({"history": boots}), encoding="utf-8")
     res = check_scheduler_health(
@@ -146,6 +175,21 @@ def test_restart_boom_alerts(tmp_path: Path):
     )
     assert res.ok is False
     assert "重启" in res.message
+
+
+def test_group_alerts_exclude_restart_storm():
+    from scripts.health_watchdog import group_alert_messages
+
+    results = [
+        SchedulerHealthResult(
+            ok=False, severity="high", message="⚠️ 调度器重启风暴：今日已重启 4 次"
+        ),
+        SchedulerHealthResult(ok=False, severity="high", message="⚠️ 调度器心跳超时：30 分钟未更新"),
+    ]
+
+    messages = group_alert_messages(results)
+
+    assert messages == ["⚠️ 调度器心跳超时：30 分钟未更新"]
 
 
 def test_restart_within_limit_no_alert(tmp_path: Path):
@@ -179,6 +223,39 @@ def test_missing_files_no_boot_no_alert(tmp_path: Path):
         data_dir=tmp_path,
     )
     assert res.ok is True, "无任何运行痕迹时不应误报"
+
+
+def test_restart_count_no_double_count_top_level(tmp_path: Path):
+    """顶层 boot_time 与 history 最后一条相同（_record_boot 双写）→ 不重复计数。
+
+    2026-08-11 回归：_record_boot() 把本次启动同时写入顶层 boot_time 与
+    history，原检查两处都计 → 3 次真实启动显示 4 次 → 误报重启风暴全天重发。
+    """
+    now = datetime.now()
+    hb = tmp_path / "heartbeat.json"
+    hb.write_text(
+        json.dumps({"last_cycle_at": now.isoformat(), "status": "alive"}),
+        encoding="utf-8",
+    )
+    boot = tmp_path / "scheduler_boot.json"
+    # 3 次启动：10:35 / 10:46 / 11:19，顶层 boot_time 与 history 最后一条相同
+    boots = [
+        {"boot_time": (now - timedelta(minutes=m)).isoformat(), "pid": 100 + i}
+        for i, m in enumerate([1, 2, 3])
+    ]
+    top_level = boots[-1]["boot_time"]
+    boot.write_text(
+        json.dumps({"boot_time": top_level, "pid": 103, "history": boots}),
+        encoding="utf-8",
+    )
+    res = check_scheduler_health(
+        heartbeat_path=hb,
+        boot_path=boot,
+        data_dir=tmp_path,
+        max_restarts_per_day=3,
+    )
+    assert res.restarts_today == 3, f"应计 3 次而非 4 次，实际 {res.restarts_today}"
+    assert res.ok is True, "3 次真实启动（含当前进程）不应误报重启风暴"
 
 
 # ========== 告警去重（防 cron 刷屏） ==========

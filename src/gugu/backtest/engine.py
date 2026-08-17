@@ -24,6 +24,7 @@ import pandas as pd
 
 from gugu.config import get_config
 from gugu.risk import RiskManager
+from gugu.risk.rules import RiskAction
 from gugu.strategies.base import Strategy
 from gugu.utils.log import get_logger
 
@@ -177,6 +178,7 @@ class BacktestEngine:
         df: pd.DataFrame,
         symbol: str,
         index_df: pd.DataFrame | None = None,
+        market_filter: Any = None,
     ) -> BacktestResult:
         """Run backtest for a single symbol.
 
@@ -190,8 +192,13 @@ class BacktestEngine:
             symbol: Stock code.
             index_df: HS300 (or other index) OHLCV data for per-bar market filter.
                       If provided, buy signals will be rejected when the market
-                      regime is not "bull" (三重验证: MA200 + trend + liquidity).
+                      regime is not bullish (graduated: 3/3=bull, 2/3=rally, 1/3=sideways).
                       Must have columns: date, close, high, low, volume.
+            market_filter: Optional MarketFilter instance to use instead of static
+                           ``_check_market_regime``. When provided, uses the same
+                           graduated logic as production (min_conditions not hardcoded).
+                           When None, uses ``_check_market_regime`` with default
+                           graduated behavior matching production.
 
         Returns:
             BacktestResult with trades, equity curve, and metrics.
@@ -206,6 +213,13 @@ class BacktestEngine:
                 equity_curve=empty_curve,
                 metrics=calc_metrics(empty_curve, []),
             )
+
+        # P0 修复（2026-08-16）：run 是"独立回测"语义，每次 run 前必须重置风控状态。
+        # 复用同一 engine 实例跑多只股票时，上一只的 _halted / _portfolio_peak 会残留，
+        # 导致后续股票被上一只的熔断状态错误拦截。
+        # （backtest_audit_strategies.py 曾复用 engine 导致审计结果失真，Sharpe -0.24 不可信）
+        self._risk._portfolio_peak = 0.0
+        self._risk._halted = False
 
         cash = self.initial_capital
         position_qty = 0
@@ -274,14 +288,31 @@ class BacktestEngine:
             # P0-5 修复：从信号 DataFrame 读取真实置信度，而非硬编码 1.0
             confidence = float(confidence_arr[i]) if confidence_arr is not None else 1.0
 
+            # P0（2026-08-15）：回撤熔断检查放循环开头，确保熔断时跳过买入
+            if signal == 1:
+                equity = cash + position_qty * close
+                self._risk.update_portfolio_peak(equity, persist=False)
+                dd_result = self._risk.check_portfolio_drawdown(equity, persist=False)
+                if dd_result.action == RiskAction.HALT and position_qty == 0:
+                    signal = 0
+
             # Market Filter: 非空仓的买入信号前检查大市状态
-            # 基于指数 HS300 数据判断当前 bar 的市场 regime，
-            # range/非趋势状态下强制阻止买入（与生产环境 MarketFilter 行为一致）
+            # 基于指数 HS300 数据判断当前 bar 的市场 regime。
+            # 使用 graduated 逻辑（与生产 MarketFilter._analyze 一致）：
+            #   bear → 禁止买入
+            #   bull/rally/sideways → 允许买入
+            # P0（v0.8.2）：支持传入 MarketFilter 实例使回测与生产行为完全一致
             if index_df is not None and signal == 1 and position_qty == 0:
                 idx_win = index_df.iloc[: i + 1]
                 if len(idx_win) >= 60:
-                    regime = self._check_market_regime(idx_win)
-                    if regime != "bull":
+                    if market_filter is not None:
+                        result = market_filter._analyze(idx_win)
+                        regime = result["regime"]
+                        is_bullish = result["bullish"]
+                    else:
+                        regime = self._check_market_regime(idx_win)
+                        is_bullish = regime != "bear"
+                    if not is_bullish:
                         self._logger.debug(
                             f"MARKET_FILTER BLOCK BUY {symbol} @ {current_date}: "
                             f"regime={regime}（非牛市跳过买入）"
@@ -569,10 +600,10 @@ class BacktestEngine:
                     _portfolio_positions.pop(symbol, None)
                     trailing_state = None  # 清除移动止损状态
 
-            # 盘中价格更新后立即更新组合峰值和回撤检查（与生产环境 RiskManager 行为一致）
+            # 净值记录（熔断检查已在循环开头，此处只记录不阻断）
             equity = cash + position_qty * close
             self._risk.update_portfolio_peak(equity, persist=False)
-            self._risk.check_portfolio_drawdown(equity)
+            dd_result = self._risk.check_portfolio_drawdown(equity, persist=False)
             equity_values.append(equity)
             dates.append(pd.Timestamp(current_date))
 
@@ -666,26 +697,26 @@ class BacktestEngine:
     def _check_market_regime(
         index_df: pd.DataFrame,
         ma_window: int = 200,
-        min_conditions: int = 2,
     ) -> str:
-        """基于 HS300 指数数据判断市场状态。
+        """基于 HS300 指数数据判断市场状态（graduated 逻辑，与生产 MarketFilter 一致）。
 
         三重验证：
-        1. 收盘价 > N 日均线（默认 MA200，可配置 MA120）
+        1. 收盘价 > N 日均线（默认 MA200）
         2. 近 40 日低点抬高 + 高点抬高
         3. 近 20 日均量 > 近 252 日均量
 
-        min_conditions 控制严格程度：
-        - 3 = 全部满足才 bull（生产环境 MarketFilter 严格标准）
-        - 2（默认）= 任 2 条满足即 bull（更宽松，让震荡市也能产生信号）
+        Returns graduated regime matching production MarketFilter._analyze:
+        - 3/3 satisfied → bull（强势市场）
+        - 2/3 satisfied → rally（偏强震荡）
+        - 1/3 satisfied → sideways（偏弱震荡）
+        - 0/3 satisfied → bear（禁止买入）
 
         Args:
             index_df: HS300 OHLCV 数据，含 date, close, high, low, volume。
-            ma_window: 均线窗口（200=严格，120=宽松）。
-            min_conditions: bull 判定所需条件数（2 或 3）。
+            ma_window: 均线窗口（默认 200）。
 
         Returns:
-            "bull" / "bear" / "range"
+            "bull" / "rally" / "sideways" / "bear"
         """
         _ma = ma_window
         _trend_window = 40
@@ -697,7 +728,7 @@ class BacktestEngine:
         volume = df["volume"]
 
         if len(df) < _ma:
-            return "range"
+            return "sideways"
 
         ma = float(close.rolling(_ma).mean().iloc[-1])
         cond_above_ma = float(close.iloc[-1]) > ma
@@ -723,11 +754,7 @@ class BacktestEngine:
             cond_liquidity = vol_short > vol_long
 
         satisfied = sum([cond_above_ma, cond_trend_up, cond_liquidity])
-        if satisfied >= min_conditions:
-            return "bull"
-        elif satisfied == 0:
-            return "bear"
-        return "range"
+        return {3: "bull", 2: "rally", 1: "sideways"}.get(satisfied, "bear")
 
     @staticmethod
     def _calc_transfer_fee(symbol: str, trade_value: float) -> float:

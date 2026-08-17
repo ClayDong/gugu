@@ -84,6 +84,8 @@ ignore = [
 "src/gugu/strategies/registry.py" = ["F821"]
 "src/gugu/web/app.py" = ["E402"]
 "src/gugu/analysis/ml_factor.py" = ["N806"]
+"src/gugu/strategies/fanbao/rules.py" = ["F841", "B018", "SIM102"]
+"src/gugu/strategies/rebound/rules.py" = ["SIM102"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 12

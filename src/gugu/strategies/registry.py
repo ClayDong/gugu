@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Any
 
+from gugu.strategies.asset_combo import AssetComboStrategy
 from gugu.strategies.base import Strategy
 from gugu.strategies.blogger_rules import ChenXueZhangStrategy, LinJuDaYeStrategy
 from gugu.strategies.breakout import BoxBreakoutStrategy, DualThrustStrategy
@@ -14,6 +15,7 @@ from gugu.strategies.chen_jiangting import ChenJiangtingStrategy
 from gugu.strategies.cloud_trend import CloudTrendStrategy
 from gugu.strategies.double_yin import DoubleYinMoneyBagStrategy
 from gugu.strategies.dragon_tiger_short import DragonTigerShortStrategy
+from gugu.strategies.fanbao_strategy import FanbaoStrategy
 from gugu.strategies.first_board import FirstBoardStrategy
 from gugu.strategies.huamulan_crash_layout import HuamulanCrashLayoutStrategy
 from gugu.strategies.huamulan_fake_dip import HuamulanFakeDipStrategy
@@ -30,6 +32,7 @@ from gugu.strategies.north_force_long import NorthForceLongStrategy
 from gugu.strategies.price_volume import PriceVolumeSignalStrategy
 from gugu.strategies.pullback_low import PullbackLowStrategy
 from gugu.strategies.rebound_elite import ReboundEliteStrategy
+from gugu.strategies.rebound_system import ReboundSystemStrategy
 from gugu.strategies.regime_cycle import (
     BollingerOversoldReboundStrategy,
     DeathValleyReboundStrategy,
@@ -57,6 +60,7 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "double_yin": DoubleYinMoneyBagStrategy,  # 双阴钱袋子策略（主力洗盘拐点）
     "breakout_rebound": BreakoutReboundStrategy,  # 断板反包策略（短线主力行为）
     "rebound_elite": ReboundEliteStrategy,  # 断板反包·精英追涨（高活跃妖股+反包追涨，验证有效形态）
+    "rebound_system": ReboundSystemStrategy,  # 断板反包·陈学长实战体系完整版（手册量化：四阶段/三买点/六卖出/成交额体系）
     "capital_flow_alert": CapitalFlowAlertStrategy,  # 资金流异动监控
     "ml_factor": MLFactorStrategy,  # LightGBM 多因子策略
     "north_force_long": NorthForceLongStrategy,  # 长线主力吸筹跟随
@@ -78,6 +82,8 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "regime_cycle_four": RegimeCycleFourStrategy,  # 四周期模型：银山谷买入/死亡谷卖出（公众号战法）
     "death_valley_rebound": DeathValleyReboundStrategy,  # 幻灭期修复反弹：3日不创新低+KDJ金叉+5日线
     "bollinger_oversold_rebound": BollingerOversoldReboundStrategy,  # 布林下轨超跌反弹（抢反弹）
+    "fanbao": FanbaoStrategy,  # 小圈圈儿《反包策略》：炸板反包+高位跌停反包
+    "asset_combo": AssetComboStrategy,  # 认知资产组合验证策略，conditional_pass（2026-08-15: 512只主板500d，WF 5d +0.82%/p=0.36，但持仓Sharpe全负；非独立盈利策略，gap+regime弱势可作为风控工具）
 }
 
 

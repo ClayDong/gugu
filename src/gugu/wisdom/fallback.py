@@ -188,7 +188,19 @@ def build_data_driven_advice(
 
     # 市场分析数据（从 signal_pipeline 注入）
     stage = signal.get("stage", "")
+    if isinstance(stage, dict):
+        # signal_pipeline:486 注入的是 dict（stage/confidence/description/suggestion），
+        # 本函数只消费阶段名（stage_map.get / in 元组判断），dict 不可哈希会抛
+        # TypeError: unhashable type: 'dict'（2026-08-10 实测：首个真实信号必现，
+        # 导致 signal_only Wisdom fallback 整体失败、智慧建议缺失）。取内层 stage 名。
+        stage = (stage.get("stage") or "").strip() or ""
     danger_signals = signal.get("danger_signals", [])
+    if isinstance(danger_signals, dict):
+        # signal_pipeline:501 注入的是 dict（signals/severity/description/action），
+        # 空 dict 也是 truthy，且 dict[:2] 抛 KeyError: slice(None, 2, None
+        # （2026-08-10 实测：与 stage bug 同链路的第二处崩溃，无危险信号也必现）。
+        # 取内层 signals 列表，空列表自然跳过提示。
+        danger_signals = danger_signals.get("signals", []) or []
     divergence = signal.get("divergence", {})
     money_flow = signal.get("money_flow", {})
     fundamental = signal.get("fundamental", {})

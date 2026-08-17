@@ -286,6 +286,15 @@ def test_format_screener_report_empty():
     assert "未找到符合条件的标的" in content
 
 
+def test_format_screener_report_data_unavailable():
+    card = format_screener_report(
+        [], total_scanned=5000, data_quality="unavailable", status="all_sources_failed"
+    )
+    content = card["card"]["elements"][0]["text"]["content"]
+    assert "关键资金流数据源异常，结果不完整，请勿据此判断市场偏弱" in content
+    assert "可能是市场整体偏弱" not in content
+
+
 def test_format_screener_report_all_passed():
     """全部 passed。"""
     r = ScreeningResult(

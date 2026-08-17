@@ -80,6 +80,20 @@ class RealtimeSignalScanner:
                 logger.warning("实时扫描: execution.mode=live 但 QMT 未连接，跳过自动执行")
                 # 仍推送信号（推荐模式），但不自动下单
 
+        # P0-3 修复（2026-08-05）：实时循环中执行止损检查 + 升级检查。
+        # 此前止损升级仅在 run_daily_cycle 的交易时段分支调用（每日 4 轮），
+        # RealtimeSignalScanner 每 5 分钟一轮却从不检查止损 → 破位持仓
+        # 告警 14:46 后不再升级，用户不知情。track_live 模式尤其关键
+        # （系统只提醒不自动交易，止损升级是用户唯一的执行信号）。
+        try:
+            if getattr(self._engine, "_stop_loss_escalator", None) is not None:
+                await self._engine._check_stop_loss_escalation()
+            # 非熔断状态下的止损检查（熔断时 run_daily_cycle 已处理）
+            if not getattr(self._engine._risk, "is_halted", False):
+                await self._engine._check_stop_loss()
+        except Exception as e:
+            logger.warning("实时止损检查异常: {}", e)
+
         signals = await self._scan()
         pushed: list[dict[str, Any]] = []
         for signal in signals:
@@ -242,6 +256,18 @@ class RealtimeSignalScanner:
                 suggested_qty,
                 "成交" if result.success else f"未成交: {result.message}",
             )
+            notifier = getattr(self._engine, "_notifier", None)
+            if notifier is not None:
+                paper_signal = dict(signal)
+                paper_signal["execution_mode"] = "paper_sidecar"
+                paper_signal["order_result"] = {
+                    "success": result.success,
+                    "price": result.price,
+                    "quantity": result.quantity,
+                    "commission": result.commission,
+                    "message": result.message,
+                }
+                await notifier.notify_signal(paper_signal)
         except Exception as e:
             logger.error("实时信号模拟盘(并行)异常: {} {} {}", direction, symbol, e)
 

@@ -138,20 +138,39 @@ class StrategyPool:
 
     def _normalize_weights(self) -> None:
         """归一化权重，并保证下限与上限（v0.8.1 修复权重塌缩）。"""
-        total = sum(v.weight for v in self._weights.values())
-        if total <= 0:
+        if not self._weights:
             return
-        # 先归一化到总和 1.0
-        for v in self._weights.values():
-            v.weight = max(v.weight / total, MIN_WEIGHT)
-        # 钳制单策略上限（防止 94% 塌缩）
-        for v in self._weights.values():
-            v.weight = min(v.weight, MAX_WEIGHT)
-        # 二次归一化（因下限/上限可能导致总和变化）
-        total = sum(v.weight for v in self._weights.values())
-        if total > 0:
+        total = sum(max(v.weight, 0.0) for v in self._weights.values())
+        if total <= 0:
+            base = 1.0 / len(self._weights)
             for v in self._weights.values():
-                v.weight /= total
+                v.weight = base
+            return
+
+        values = [max(v.weight, 0.0) / total for v in self._weights.values()]
+        count = len(values)
+        result = [MIN_WEIGHT] * count
+        remaining = 1.0 - MIN_WEIGHT * count
+        free = set(range(count))
+        while free:
+            free_total = sum(values[i] for i in free)
+            changed = False
+            for i in tuple(free):
+                share = remaining * values[i] / free_total if free_total else remaining / len(free)
+                if MIN_WEIGHT + share > MAX_WEIGHT:
+                    result[i] = MAX_WEIGHT
+                    remaining -= MAX_WEIGHT - MIN_WEIGHT
+                    free.remove(i)
+                    changed = True
+            if not changed:
+                for i in free:
+                    result[i] += (
+                        remaining * values[i] / free_total if free_total else remaining / len(free)
+                    )
+                break
+
+        for value, weight in zip(result, self._weights.values(), strict=True):
+            weight.weight = value
 
     def get_weights(self) -> dict[str, float]:
         """获取当前策略权重。"""

@@ -38,6 +38,8 @@ class Position:
     # P1 修复：持仓以来最低价（用于 NoAverageDownChecker 累计最大浮亏检查）
     # PaperBroker.update_price 在 price < lowest_price 时自动更新
     lowest_price: float = 0.0
+    # P0 修复（v0.8.2）：建仓日期（ISO 格式 YYYY-MM-DD），用于持仓时间熔断
+    entry_date: str = ""
     # 是否经过除权除息调整
     dividend_adjusted: bool = False
 

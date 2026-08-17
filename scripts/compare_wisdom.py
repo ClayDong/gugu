@@ -114,7 +114,7 @@ if __name__ == "__main__":
     parser.add_argument("--symbol", default="600519", help="股票代码")
     parser.add_argument("--strategy", default="turtle", help="策略名称")
     parser.add_argument("--days", type=int, default=120, help="回测天数")
-    parser.add_argument("--version", action="version", version="gugu 0.1.0")
+    parser.add_argument("--version", action="version", version="gugu 0.6.0")
     args = parser.parse_args()
 
     asyncio.run(main(args.symbol, args.strategy, args.days))

@@ -134,6 +134,7 @@ class PositionController:
         if remaining_slots > 0:
             single_limit = min(self._max_single, total_limit / remaining_slots)
             single_limit = max(single_limit, 0.05)  # 下限 5%
+            single_limit = min(single_limit, total_limit)  # P1-4 修复：单股不超过总预算
         else:
             single_limit = 0.0
 

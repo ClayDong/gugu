@@ -155,6 +155,13 @@ def main(mode: str, loop_interval: int) -> int:
     """主入口。"""
     cfg = get_config()
 
+    # P0 防护：单实例锁，防止与 launchd 管理的 scheduler 并行运行
+    from gugu.utils.single_instance import acquire_single_instance_lock
+
+    if not acquire_single_instance_lock(project_root=Path(__file__).resolve().parents[1]):
+        logger.error("已有 gugu scheduler 实例在运行，拒绝启动第二个实例")
+        return 1
+
     logger.info("=== gugu 实盘环境检查 ===")
     for item in _checklist():
         logger.info(f"  {item}")
@@ -214,7 +221,7 @@ if __name__ == "__main__":
         metavar="N",
         help="循环间隔分钟数（signal_only 模式，0=单次）",
     )
-    parser.add_argument("--version", action="version", version="gugu 0.1.0")
+    parser.add_argument("--version", action="version", version="gugu 0.6.0")
     args = parser.parse_args()
 
     if args.dry_run:

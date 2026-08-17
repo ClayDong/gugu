@@ -38,6 +38,20 @@ def isolate_project_paths(tmp_path, monkeypatch):
     monkeypatch.setattr("gugu.config.PROJECT_ROOT", tmp_path)
     monkeypatch.setattr("gugu.risk.manager.RISK_STATE_FILE", tmp_path / "risk_state.json")
     monkeypatch.setattr("gugu.execution.paper.STATE_FILE", tmp_path / "paper_broker_state.json")
+    # L7 (2026-08-10)：source_health 的 _EVENTS_FILE/_SUMMARY_FILE 在模块导入时绑定
+    # 生产路径（from gugu.config import PROJECT_ROOT），conftest patch PROJECT_ROOT 属性
+    # 不影响它 → 测试进程的真实 DataManager 失败会写生产 data/source_health_events.jsonl，
+    # 掺入 watchdog 失败率统计（当日 53-61% 高失败率部分为测试污染）。
+    # 单例 _instance 也需重置，否则 __init__ 只在首实例绑定一次旧路径。
+    monkeypatch.setattr(
+        "gugu.data.source_health._EVENTS_FILE",
+        tmp_path / "source_health_events.jsonl",
+    )
+    monkeypatch.setattr(
+        "gugu.data.source_health._SUMMARY_FILE",
+        tmp_path / "source_health_daily.json",
+    )
+    monkeypatch.setattr("gugu.data.source_health.DataSourceHealthMonitor._instance", None)
     # 屏蔽 signals_history.jsonl 写入（测试用例无需关心历史记录持久化）
     monkeypatch.setattr("gugu.engine.main.record_signal_history", lambda *a, **kw: None)
     # L5: signal_pipeline 的告警函数未隔离 → 测试 mock PROJECT_ROOT 为不存在路径时，

@@ -103,10 +103,18 @@ class BoxBreakoutStrategy(Strategy):
 
         buy_count = int(np.sum(df["signal"] == 1))
         sell_count = int(np.sum(df["signal"] == -1))
+        # P1-2 修复（2026-08-05）：日志口径——"N买入M卖出"是 120 天历史窗口
+        # 累计信号数，不是当日信号。用户看到"4 买入"误以为今天有 4 个买入，
+        # 实为 router 只取最后一行（当日）。必须明确标注统计范围：
+        #   - 历史窗口（120天累计）：诊断策略活跃度用
+        #   - 当日最新（最后一行）：真实信号语义
+        last_signal = int(df["signal"].iloc[-1]) if len(df) else 0
+        last_date = str(df["date"].iloc[-1])[:10] if "date" in df.columns and len(df) else "?"
+        last_signal_desc = {1: "买入", -1: "卖出", 0: "无"}.get(last_signal, "无")
         logger.info(
-            f"box_breakout v2 生成信号: {buy_count} 买入, {sell_count} 卖出, "
-            f"趋势过滤={'on' if trend_filter else 'off'}, "
-            f"最大持仓={max_hold_days}天"
+            f"box_breakout v2 信号统计[120天窗口]: {buy_count} 买入, {sell_count} 卖出, "
+            f"趋势过滤={'on' if trend_filter else 'off'}, 最大持仓={max_hold_days}天 | "
+            f"当日({last_date})最新信号: {last_signal_desc}"
         )
 
         return df

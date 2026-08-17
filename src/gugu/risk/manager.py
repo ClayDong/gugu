@@ -12,6 +12,7 @@ Levels:
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -126,6 +127,8 @@ class RiskManager:
             self.max_holding_days_halt = rc.max_holding_days_halt
             cfg = get_config().flatten().get("risk", {})
         self._logger = get_logger()
+        # P0 修复（P0-P1 审查 v0.8.2）：关键状态线程安全
+        self._lock = threading.Lock()
         self._halted: bool = False
         self._last_halt_reset_time: float = 0.0  # P1-7: 熔断解除时间戳
         self._last_reset_date: str = ""
@@ -137,25 +140,36 @@ class RiskManager:
         # P0 修复（v0.8.0）：按 scope 选择状态文件，回测与生产隔离
         self._scope = scope
         self._state_file = self._BACKTEST_STATE_FILE if scope == "backtest" else RISK_STATE_FILE
-        # P0-2 修复：启动时从磁盘加载熔断状态（仅加载 halt 状态，不加载 portfolio_peak）
+        # P0 修复（v0.8.2）：从磁盘加载所有持久化状态（含 portfolio_peak 生产 scope）
         self._load_halt_state()
 
     @property
     def is_halted(self) -> bool:
         """Whether the manager is in halt state (all trading blocked)."""
-        return self._halted
+        with self._lock:
+            return self._halted
+
+    def reset_backtest_state(self) -> None:
+        with self._lock:
+            self._halted = False
+            self._last_halt_reset_time = 0.0
+            self._last_reset_date = ""
+            self._portfolio_peak = 0.0
+            self._daily_start_value = 0.0
+            self._daily_realized_pnl = 0.0
 
     def reset_halt(self) -> None:
         """Reset halt state. Call at the start of a new trading day."""
-        if self._halted:
-            self._logger.info("Risk manager halt state reset")
-        self._halted = False
-        from datetime import date as _date
+        with self._lock:
+            if self._halted:
+                self._logger.info("Risk manager halt state reset")
+            self._halted = False
+            from datetime import date as _date
 
-        self._last_reset_date = _date.today().isoformat()
-        # P1-3 修复：start-of-day 不设冷却（首日熔断器应立即生效）
-        self._last_halt_reset_time = 0.0
-        self._save_halt_state()
+            self._last_reset_date = _date.today().isoformat()
+            # P1-3 修复：start-of-day 不设冷却（首日熔断器应立即生效）
+            self._last_halt_reset_time = 0.0
+            self._save_halt_state()
 
     def clear_halt_only(self) -> None:
         """仅清除 L2 熔断状态，不重置日初净值。
@@ -169,18 +183,19 @@ class RiskManager:
         注意：此方法会绕过熔断铁律，调用前应确保人工确认。
         熔断状态解除后，当日亏损继续累计，若再次触发熔断将重新阻断交易。
         """
-        if self._halted:
-            self._logger.warning(
-                "⚠️ L2 熔断状态人工解除（clear_halt_only）—— "
-                "日初净值保留不变，当日亏损继续累计。"
-                "若当日亏损继续扩大至熔断阈值，将再次触发熔断。"
-            )
-        else:
-            self._logger.info("clear_halt_only 调用但熔断未激活，无操作")
-            return
-        self._halted = False
-        self._last_halt_reset_time = time.time()  # P1-7: 记录解除时间
-        self._save_halt_state()
+        with self._lock:
+            if self._halted:
+                self._logger.warning(
+                    "⚠️ L2 熔断状态人工解除（clear_halt_only）—— "
+                    "日初净值保留不变，当日亏损继续累计。"
+                    "若当日亏损继续扩大至熔断阈值，将再次触发熔断。"
+                )
+            else:
+                self._logger.info("clear_halt_only 调用但熔断未激活，无操作")
+                return
+            self._halted = False
+            self._last_halt_reset_time = time.time()  # P1-7: 记录解除时间
+            self._save_halt_state()
 
     @staticmethod
     def _apply_safety_caps(
@@ -208,11 +223,11 @@ class RiskManager:
         )
 
     def _load_halt_state(self) -> None:
-        """P0-2 修复：从磁盘加载熔断状态，防止进程重启绕过熔断。
+        """P0 修复（v0.8.2）：从磁盘加载所有持久化状态。
 
-        仅加载 halt 状态和冷却时间，**不加载 portfolio_peak**。
-        portfolio_peak 是账户级状态，跨账户/跨回测共享会导致误熔断（v0.8.0 P0 修复）。
-        生产环境通过 update_portfolio_peak() 在运行时自然重建峰值。
+        加载 halt 状态、冷却时间和 portfolio_peak。
+        production scope 恢复 portfolio_peak 确保进程重启后组合回撤保护不失效。
+        backtest scope **不恢复** portfolio_peak（回测间独立，从 0 开始）。
 
         P0 修复：fail-safe — 文件损坏时保守保持 halted=False 但记录 ERROR。
         """
@@ -236,25 +251,38 @@ class RiskManager:
                 loaded_cooling = data.get("last_halt_reset_time", 0.0)
                 if loaded_cooling and float(loaded_cooling) > self._last_halt_reset_time:
                     self._last_halt_reset_time = float(loaded_cooling)
-                # v0.8.0 P0 修复：不再从磁盘恢复 portfolio_peak
-                # portfolio_peak 是账户级状态，跨账户共享会导致误熔断
-                # 生产环境通过 update_portfolio_peak() 在运行时自然重建
+                # P0 修复（v0.8.2）：production scope 恢复 portfolio_peak
+                # backtest scope 不恢复（回测间独立）
+                if self._scope == "production":
+                    loaded_peak = data.get("portfolio_peak", 0.0)
+                    if loaded_peak and float(loaded_peak) > self._portfolio_peak:
+                        self._portfolio_peak = float(loaded_peak)
         except Exception as e:
             self._logger.error(
-                "加载熔断状态失败({})，文件可能损坏。保守恢复为非熔断状态，请人工核查 {}",
+                "加载熔断状态失败({})，文件可能损坏。已设置为熔断保护状态，调用 reset() 恢复 {}",
                 e,
                 self._state_file,
             )
+            self._halted = True  # 文件损坏时保守置为熔断（阻断交易），而非错误放行
+            self._halt_date = "2000-01-01"
 
     @property
     def last_reset_date(self) -> str:
         """上次 reset() 日期（用于 TradingEngine 的 _last_cycle_date 同步）。"""
         return self._last_reset_date
 
+    def reload(self) -> None:
+        """P0 修复（v0.8.2）：从磁盘文件重新加载风控状态。
+
+        用于 Web/引擎跨进程状态同步。进程重启或 Web 需要获取引擎最新熔断状态时调用。
+        只重新加载 halt 状态和 portfolio_peak，不修改构造函数传入的配置参数。
+        """
+        self._load_halt_state()
+
     def _save_halt_state(self) -> None:
-        """P0-2 修复：将熔断状态持久化到磁盘，含 last_reset_date 用于跨日同步。
-        P0 修复：原子写入（tmp + os.replace），防止崩溃导致文件截断。
-        v0.8.0：使用 self._state_file 区分生产/回测。
+        """P0 修复（v0.8.2）：持久化全部风控状态。
+        含 portfolio_peak（production scope 用于进程重启恢复）。
+        原子写入（tmp + os.replace），防止崩溃导致文件截断。
         """
         try:
             self._state_file.parent.mkdir(parents=True, exist_ok=True)
@@ -265,6 +293,8 @@ class RiskManager:
                 "halt_date": _date.today().isoformat(),
                 "last_reset_date": self._last_reset_date,
                 "last_halt_reset_time": self._last_halt_reset_time,
+                "portfolio_peak": self._portfolio_peak,
+                "scope": self._scope,
                 "updated_at": __import__("pandas").Timestamp.now().isoformat(),
             }
             from gugu.utils.atomic import atomic_write_json
@@ -350,6 +380,14 @@ class RiskManager:
                 level=RiskLevel.L3_SYSTEM,
                 action=RiskAction.HALT,
                 message=f"{symbol} at price limit, trading not allowed",
+            )
+
+        # P1-1 修复：ST 买入硬拦截（风控铁律层）
+        if direction == "buy" and is_st:
+            return RiskCheckResult(
+                level=RiskLevel.L3_SYSTEM,
+                action=RiskAction.HALT,
+                message=f"{symbol} is ST, buy not allowed",
             )
 
         if direction == "buy":
@@ -504,22 +542,13 @@ class RiskManager:
         if loss_pct < 0:
             loss_pct = 0.0
 
-        # P1-7: 熔断冷却检查（解除后需等待 N 秒才能再次触发）
-        if self._last_halt_reset_time > 0:
-            elapsed = time.time() - self._last_halt_reset_time
-            if elapsed < self.HALT_RESET_COOLDOWN_SECONDS:
-                return RiskCheckResult(
-                    level=RiskLevel.L2_DAILY_LOSS,
-                    action=RiskAction.ALLOW,
-                    message=(
-                        f"熔断冷却中（{elapsed:.0f}s/{self.HALT_RESET_COOLDOWN_SECONDS:.0f}s），"
-                        f"暂不触发新熔断"
-                    ),
-                )
-
+        # P0 修复（v0.8.2）：熔断冷却不允许绕过熔断。
+        # HALT 阈值 >= daily_loss_halt 无论是否在冷却中都必须触发熔断。
+        # WARN 照常触发（由调用方决定是否抑制通知），冷却只防抖动。
         if loss_pct >= self.daily_loss_halt:
-            self._halted = True
-            self._save_halt_state()  # P0-2: 持久化熔断状态
+            with self._lock:
+                self._halted = True
+                self._save_halt_state()  # P0-2: 持久化熔断状态
             self._logger.warning(
                 "L2 HALT: daily loss {:.2%} >= {:.2%}, trading halted until reset()",
                 loss_pct,
@@ -624,11 +653,13 @@ class RiskManager:
 
         应在每根 K 线或每个 tick 处理完后调用，确保盘中回撤检测及时。
         v0.8.0：persist=False 时仅更新内存峰值，不写盘（回测场景）。
+        P0 修复（v0.8.2）：线程安全 + production scope 写盘。
         """
-        if total_value > self._portfolio_peak:
-            self._portfolio_peak = total_value
-            if persist:
-                self._save_halt_state()
+        with self._lock:
+            if total_value > self._portfolio_peak:
+                self._portfolio_peak = total_value
+                if persist:
+                    self._save_halt_state()
 
     def check_portfolio_drawdown(
         self, total_value: float, *, persist: bool = True
@@ -637,46 +668,37 @@ class RiskManager:
 
         回撤 ≥ 15% 时触发熔断（设置 _halted），阻止所有交易。
         v0.8.0 P0 修复：persist=False 时不在回测中写盘，避免污染生产状态。
+        P0 修复（v0.8.2）：冷却不绕过熔断，只抑制 WARN 去重；线程安全。
         """
-        # P1-4 修复：冷却检查（防止 clear_halt_only 后立即重触发）
-        if self._last_halt_reset_time > 0:
-            import time as _time
-
-            elapsed = _time.time() - self._last_halt_reset_time
-            if elapsed < self.HALT_RESET_COOLDOWN_SECONDS:
+        with self._lock:
+            if self._portfolio_peak <= 0:
                 return RiskCheckResult(
                     level=RiskLevel.L2_DAILY_LOSS,
                     action=RiskAction.ALLOW,
-                    message=f"熔断冷却中（{elapsed:.0f}s/{self.HALT_RESET_COOLDOWN_SECONDS:.0f}s），暂不触发组合回撤熔断",
+                    message="组合峰值未初始化",
                 )
-        if self._portfolio_peak <= 0:
+            dd = (self._portfolio_peak - total_value) / self._portfolio_peak
+            if dd >= self._max_drawdown_halt:
+                self._halted = True
+                if persist:
+                    self._save_halt_state()
+                self._logger.warning(
+                    "L2 HALT: 组合回撤 {:.2%} >= {:.0%}, trading halted until reset()",
+                    dd,
+                    self._max_drawdown_halt,
+                )
+                return RiskCheckResult(
+                    level=RiskLevel.L2_DAILY_LOSS,
+                    action=RiskAction.HALT,
+                    message=(
+                        f"组合回撤 {dd:.2%} 触发熔断（阈值 {self._max_drawdown_halt:.0%}），仅允许减仓"
+                    ),
+                )
             return RiskCheckResult(
                 level=RiskLevel.L2_DAILY_LOSS,
                 action=RiskAction.ALLOW,
-                message="组合峰值未初始化",
+                message=f"组合回撤 {dd:.2%} 在安全范围内",
             )
-        dd = (self._portfolio_peak - total_value) / self._portfolio_peak
-        if dd >= self._max_drawdown_halt:
-            self._halted = True
-            if persist:
-                self._save_halt_state()
-            self._logger.warning(
-                "L2 HALT: 组合回撤 {:.2%} >= {:.0%}, trading halted until reset()",
-                dd,
-                self._max_drawdown_halt,
-            )
-            return RiskCheckResult(
-                level=RiskLevel.L2_DAILY_LOSS,
-                action=RiskAction.HALT,
-                message=(
-                    f"组合回撤 {dd:.2%} 触发熔断（阈值 {self._max_drawdown_halt:.0%}），仅允许减仓"
-                ),
-            )
-        return RiskCheckResult(
-            level=RiskLevel.L2_DAILY_LOSS,
-            action=RiskAction.ALLOW,
-            message=f"组合回撤 {dd:.2%} 在安全范围内",
-        )
 
     def check_holding_duration(
         self, symbol: str, entry_date: str, current_pnl_pct: float

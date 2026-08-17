@@ -19,7 +19,7 @@ def main() -> None:
     parser.add_argument("--host", default="0.0.0.0", help="监听地址")
     parser.add_argument("--port", type=int, default=8080, help="监听端口")
     parser.add_argument("--reload", action="store_true", help="开发模式（自动重载）")
-    parser.add_argument("--version", action="version", version="gugu 0.1.0")
+    parser.add_argument("--version", action="version", version="gugu 0.6.0")
     args = parser.parse_args()
 
     try:

@@ -12,6 +12,9 @@ from gugu.screener.validator import ValidationResult
 def format_screener_report(
     results: list[ScreeningResult],
     total_scanned: int,
+    data_quality: str | None = None,
+    status: str | None = None,
+    data_errors: list[str] | None = None,
 ) -> dict[str, Any]:
     """将尾盘选股结果格式化为 Feishu 卡片。
 
@@ -26,12 +29,17 @@ def format_screener_report(
         Feishu interactive card dict。
     """
     if not results:
+        no_result_reason = (
+            "关键资金流数据源异常，结果不完整，请勿据此判断市场偏弱"
+            if data_quality in {"unavailable", "invalid", "degraded"}
+            or status == "all_sources_failed"
+            else "可能是市场整体偏弱，建议关注明日机会。"
+        )
         return _build_card(
             "尾盘选股 · 无结果",
             "yellow",
             sections=[
-                f"今日扫描 {total_scanned} 只股票，未找到符合条件的标的。\n"
-                "可能是市场整体偏弱，建议关注明日机会。",
+                f"今日扫描 {total_scanned} 只股票，未找到符合条件的标的。\n" f"{no_result_reason}",
             ],
             note="明策 · gugu · 尾盘选股",
         )

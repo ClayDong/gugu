@@ -40,6 +40,14 @@ def atomic_write_text(path: str | Path, content: str) -> None:
         raise
 
 
+def append_jsonl(path: str | Path, record: Any, *, max_lines: int = 10000) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    lines.append(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+    atomic_write_text(path, "\n".join(lines[-max_lines:]) + "\n")
+
+
 def atomic_write_json(path: str | Path, data: Any, **kwargs: Any) -> None:
     """原子写入 JSON 文件。
 

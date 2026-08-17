@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from gugu.models import Position
@@ -11,7 +13,7 @@ from gugu.risk.rules import RiskAction, RiskLevel
 
 @pytest.fixture
 def manager() -> RiskManager:
-    return RiskManager(
+    m = RiskManager(
         {
             "max_position_ratio": 0.30,
             "daily_loss_warn": 0.03,
@@ -20,6 +22,11 @@ def manager() -> RiskManager:
             "t_plus_1": True,
         }
     )
+    # 测试隔离：_check_buy 中的 IndustryConstraint.check_buy 内部调用 akshare
+    # 拉取行业/历史数据（东财分页+随机sleep 0.5-1.5s×多页），真实执行导致超时
+    m._industry_constraint = MagicMock()
+    m._industry_constraint.check_buy.return_value = {"allowed": True, "reason": ""}
+    return m
 
 
 @pytest.fixture

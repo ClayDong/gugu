@@ -139,7 +139,8 @@ class OrderManager:
         # 使用 wisdom 调整后的仓位比例
         suggested_ratio = signal.get("suggested_position_ratio", 0.0)
         if suggested_ratio <= 0:
-            suggested_ratio = get_config().risk.max_position_ratio * 0.8
+            # 0 或负预算（总仓位满/市场禁买/熔断），跳过下单
+            return None
 
         # ATR 波动率调整仓位（风险平价）
         df_for_sizing = signal.get("_df")

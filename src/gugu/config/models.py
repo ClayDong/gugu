@@ -7,11 +7,26 @@ section and provides a ``from_settings()`` factory that reads the YAML file.
 
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
+
+_ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _expand_env_values(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _expand_env_values(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand_env_values(item) for item in value]
+    if isinstance(value, str):
+        return _ENV_PATTERN.sub(lambda match: os.environ.get(match.group(1), ""), value)
+    return value
+
 
 # ──────────────────────────────────────────────────────────────────────
 #  Individual section models
@@ -22,6 +37,7 @@ class RiskConfig(BaseModel):
     """三级风控参数."""
 
     max_position_ratio: float = Field(default=0.30, ge=0.0, le=1.0, description="单股仓位上限")
+    max_total_position_ratio: float = Field(default=0.70, ge=0.0, le=1.0, description="总仓位上限")
     daily_loss_warn: float = Field(default=0.03, ge=0.0, le=1.0, description="日亏预警阈值")
     daily_loss_halt: float = Field(default=0.05, ge=0.0, le=1.0, description="日亏熔断阈值")
     max_total_positions: int = Field(default=5, ge=1, description="最大持仓数")
@@ -119,7 +135,9 @@ class StrategyConfig(BaseModel):
     def fusion_mode(self) -> str:
         return self.signal_fusion
 
-    def get_enabled_for_regime(self, regime: str | None = None) -> list[str]:
+    def get_enabled_for_regime(
+        self, regime: str | None = None, execution_mode: str | None = None
+    ) -> list[str]:
         """获取指定市场状态下启用的策略列表。
 
         v0.7.5 P0-1修复：优先使用 verified_strategies + experimental_strategies。
@@ -132,6 +150,10 @@ class StrategyConfig(BaseModel):
         Returns:
             启用的策略名称列表
         """
+        allow_experimental = execution_mode in (None, "paper")
+        if execution_mode in ("signal_only", "track_live", "live"):
+            allow_experimental = False
+
         # v0.7.5 P0-1修复：优先使用 verified_strategies
         if self.verified_strategies:
             # 如果 enabled_by_regime 有配置，按 regime 过滤
@@ -143,7 +165,11 @@ class StrategyConfig(BaseModel):
                     ]
                     # experimental 策略也加入（在 track_live/paper 模式下产生信号用于绩效追踪）
                     experimental = []
-                    if hasattr(self, "experimental_strategies") and self.experimental_strategies:
+                    if (
+                        allow_experimental
+                        and hasattr(self, "experimental_strategies")
+                        and self.experimental_strategies
+                    ):
                         experimental = [
                             s
                             for s in self.enabled_by_regime[regime]
@@ -152,7 +178,11 @@ class StrategyConfig(BaseModel):
                     return verified + experimental
                 # regime 未知：返回所有 verified + experimental
                 result = list(self.verified_strategies)
-                if hasattr(self, "experimental_strategies") and self.experimental_strategies:
+                if (
+                    allow_experimental
+                    and hasattr(self, "experimental_strategies")
+                    and self.experimental_strategies
+                ):
                     result.extend(self.experimental_strategies)
                 return result
             # 无 regime 配置：返回所有 verified
@@ -302,6 +332,10 @@ class FlowReportConfig(BaseModel):
 class SchedulerTasksConfig(BaseModel):
     """调度任务开关配置."""
 
+    market_temp: bool = Field(default=True, description="08:25 市场温度计")
+    signal_daily_validation: bool = Field(default=True, description="15:25 信号次日验证")
+    signal_weekly: bool = Field(default=True, description="周日 20:30 信号绩效周报")
+    screener_auto_tune: bool = Field(default=True, description="15:10 尾盘选股自动调优")
     macro_morning: bool = Field(default=True, description="08:00 早间全球简报")
     perspective_daily: bool = Field(default=True, description="08:30 十大视角日报")
     signal_morning: bool = Field(default=True, description="09:10 盘前信号汇总")
@@ -594,7 +628,7 @@ class AppConfig(BaseModel):
         with path.open("r", encoding="utf-8") as fh:
             raw: dict[str, Any] = yaml.safe_load(fh) or {}
 
-        return cls.model_validate(raw)
+        return cls.model_validate(_expand_env_values(raw))
 
     # ── compat helper ────────────────────────────────────────────────
 
@@ -641,6 +675,7 @@ def flatten_config(app_config: AppConfig) -> dict[str, Any]:
         },
         "risk": {
             "max_position_ratio": app_config.risk.max_position_ratio,
+            "max_total_position_ratio": app_config.risk.max_total_position_ratio,
             "daily_loss_warn": app_config.risk.daily_loss_warn,
             "daily_loss_halt": app_config.risk.daily_loss_halt,
             "max_total_positions": app_config.risk.max_total_positions,
@@ -676,6 +711,7 @@ def flatten_config(app_config: AppConfig) -> dict[str, Any]:
             "timezone": app_config.scheduler.timezone,
             "trading_days_only": app_config.scheduler.trading_days_only,
             "scan_times": list(app_config.scheduler.scan_times),
+            "tasks": app_config.scheduler.tasks.model_dump(),
         },
         "wisdom": {
             "skill_dir": app_config.wisdom.skill_dir,

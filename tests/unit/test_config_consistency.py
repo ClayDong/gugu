@@ -214,17 +214,32 @@ class TestStrategyRegistryRegistration:
     def test_manifest_signal_strategies_in_registry(
         self, signal_strategies: dict, registry_keys: set[str]
     ):
-        """3: strategy_manifest.yaml 中 signal_strategies 的所有策略必须在 _REGISTRY 中注册。
+        """3: strategy_manifest.yaml 中 signal_strategies 的策略原则上必须在 _REGISTRY 中注册。
 
         _REGISTRY 仅管理信号生成策略（gugu.strategies.*）。
         risk_strategies（gugu.analysis.*）与 skill_strategies（wisdom skills）
         由各自模块直接实例化，不在 _REGISTRY 范围内。
+
+        v0.9.7 例外：**已证伪策略（validation=backtest_failed 且 enabled=false）允许不注册**——
+        manifest 保留完整证伪档案（审计价值），但注册表只放活跃策略（fail-fast 防幽灵泄漏）。
+        hot_money（2026-08-01 样本外证伪）即此类。
         """
         manifest_signal_keys = set(signal_strategies.keys())
         unregistered = manifest_signal_keys - registry_keys
-        assert not unregistered, (
+        # 已证伪且禁用的策略豁免注册要求
+        truly_unregistered = set()
+        for key in unregistered:
+            entry = signal_strategies.get(key)
+            if (
+                isinstance(entry, dict)
+                and not entry.get("enabled", False)
+                and "backtest_failed" in str(entry.get("validation", ""))
+            ):
+                continue  # 已证伪策略：档案保留、注册表移除
+            truly_unregistered.add(key)
+        assert not truly_unregistered, (
             f"以下 signal 策略在 manifest 中声明但未在 _REGISTRY 注册: "
-            f"{sorted(unregistered)}。"
+            f"{sorted(truly_unregistered)}。"
             f"请在 src/gugu/strategies/registry.py 的 _REGISTRY 中添加。"
         )
 

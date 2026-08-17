@@ -246,24 +246,32 @@ class HighLowConsistencyRule(ValidationRule):
 
 
 class FreshnessRule(ValidationRule):
-    """数据时效性检查。最新数据不应超过指定自然日数（长假期间放宽）。"""
+    """数据时效性检查。最新数据不应超过指定自然日数（长假期间放宽）。
+
+    now 参数（可选）：参考日期，默认 date.today()。测试注入用——缓存/回测
+    场景的时间基准必须与数据新鲜度判定一致，否则缓存测试随时间漂移变红
+    （cache.get 注入 now 但质量校验仍用真实今天 → 基准不一致 bug，2026-08-12 修复）。
+    """
 
     def __init__(
         self,
         max_stale_days: int = 7,
         holiday_max_days: int = 15,
         date_column: str = "date",
+        now: date | None = None,
     ) -> None:
         self._max_stale_days = max_stale_days
         self._holiday_max_days = holiday_max_days
         self._date_column = date_column
+        self._now = now
 
     def check(self, df: pd.DataFrame, symbol: str = "") -> tuple:
         if df.empty or self._date_column not in df.columns:
             return True, "no date column, skip freshness check"
 
         latest = pd.to_datetime(df[self._date_column].iloc[-1]).date()
-        calendar_days = (date.today() - latest).days
+        ref_date = self._now or date.today()
+        calendar_days = (ref_date - latest).days
 
         if calendar_days <= self._max_stale_days:
             return True, "data is fresh"
@@ -275,7 +283,7 @@ class FreshnessRule(ValidationRule):
             trade_days = 0
             # P2-8 修复：从 latest+1 开始计数（latest 本身已有数据）
             d = latest + timedelta(days=1)
-            while d <= date.today():
+            while d <= ref_date:
                 if ccal.is_workday(d):
                     trade_days += 1
                 d += timedelta(days=1)
@@ -439,9 +447,35 @@ STOCK_FLOW_VALIDATOR: DataValidator = (
 # ──────────────────────────────────────────────
 
 
-def validate_stock_history(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:
-    """校验个股历史行情数据。"""
-    return STOCK_HISTORY_VALIDATOR.validate(df, symbol)
+def validate_stock_history(
+    df: pd.DataFrame, symbol: str = "", now: date | None = None
+) -> pd.DataFrame:
+    """校验个股历史行情数据。
+
+    Args:
+        df: 行情 DataFrame
+        symbol: 股票代码
+        now: 参考日期（测试/缓存注入用）。传入时以该日期为新鲜度基准，
+            否则用 date.today()。修复时间基准不一致 bug（2026-08-12）：
+            cache.get 注入 now 但质量校验仍用真实今天 → 缓存测试随时间漂移变红。
+    """
+    if now is None:
+        return STOCK_HISTORY_VALIDATOR.validate(df, symbol)
+    # 注入 now：重建带参考日期的校验器（只替换 FreshnessRule）
+    validator = DataValidator()
+    for rule in STOCK_HISTORY_VALIDATOR._rules:  # noqa: SLF001 模块内访问
+        if isinstance(rule, FreshnessRule):
+            validator.add_rule(
+                FreshnessRule(
+                    max_stale_days=rule._max_stale_days,  # noqa: SLF001
+                    holiday_max_days=rule._holiday_max_days,  # noqa: SLF001
+                    date_column=rule._date_column,  # noqa: SLF001
+                    now=now,
+                )
+            )
+        else:
+            validator.add_rule(rule)
+    return validator.validate(df, symbol)
 
 
 def validate_sector_flow(df: pd.DataFrame, symbol: str = "") -> pd.DataFrame:

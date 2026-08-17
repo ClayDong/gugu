@@ -66,6 +66,22 @@ def test_ma5_momentum_buy_after_big_yang_and_pullback() -> None:
     assert (out["signal"] == 1).any(), "应产生买入信号"
 
 
+def test_ma5_momentum_excludes_current_day_from_recent_big_yang() -> None:
+    close = [100.0] * 10 + [106.0] + [106.0] * 4
+    volume = [500_000] * 10 + [1_500_000] + [300_000] * 4
+    out = MA5MomentumStrategy({"big_yang_lookback": 3})._generate_signals_impl(
+        _make_df(close, volume)
+    )
+    assert bool(out.loc[10, "recent_big_yang"]) is False
+
+
+def test_ma5_momentum_rejects_invalid_windows() -> None:
+    with pytest.raises(ValueError, match="big_yang_lookback"):
+        MA5MomentumStrategy({"big_yang_lookback": 0})
+    with pytest.raises(ValueError, match="vol_ma_window"):
+        MA5MomentumStrategy({"vol_ma_window": 0})
+
+
 def test_ma5_momentum_no_buy_without_big_yang() -> None:
     """没有放量大阳线时不应产生买入信号。"""
     n = 30

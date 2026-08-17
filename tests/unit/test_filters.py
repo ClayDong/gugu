@@ -429,6 +429,32 @@ class TestMoneyFlowFilter:
 
     @patch("gugu.config.get_config")
     @patch("gugu.filters.money_flow.data_manager")
+    async def test_explicit_unavailable_data_has_reason(
+        self,
+        mock_dm: MagicMock,
+        mock_get_config: MagicMock,
+    ) -> None:
+        mock_get_config.return_value.execution.mode = "paper"
+        dm_instance = AsyncMock()
+        dm_instance.fetch_stock_flow = AsyncMock()
+        df = pd.DataFrame()
+        df.attrs.update(
+            data_available=False,
+            all_sources_failed=True,
+            data_error="all_sources_failed",
+        )
+        dm_instance.fetch_stock_flow.return_value = df
+        mock_dm.return_value = dm_instance
+
+        result = await MoneyFlowFilter().check("000001")
+
+        assert result["pass"] is False
+        assert result["data_missing"] is True
+        assert result["data_error"] == "all_sources_failed"
+        assert "关键资金流数据不可用" in result["reasons"][0]
+
+    @patch("gugu.config.get_config")
+    @patch("gugu.filters.money_flow.data_manager")
     async def test_missing_data_allowed_in_signal_only_mode(
         self,
         mock_dm: MagicMock,

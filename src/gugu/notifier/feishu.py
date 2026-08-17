@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -104,13 +105,14 @@ class FeishuNotifier:
         self._app_id: str = cfg.feishu_app_id
         self._app_secret: str = cfg.feishu_app_secret
         self._chat_id: str = cfg.feishu_chat_id
+        self._business_chat_id: str = cfg.feishu_business_chat_id
         self._webhook: str = cfg.feishu_webhook
 
         self._token: str = ""
         self._token_expires_at: float = 0.0
         self._client: httpx.AsyncClient = httpx.AsyncClient(timeout=10.0)
         # P1-4 修复：重试队列并发安全锁，保护 _enqueue 和 retry_queued 的文件操作
-        self._queue_lock: asyncio.Lock = asyncio.Lock()
+        self._queue_lock: asyncio.Lock | None = None
 
         # P0-5 修复：近期发送卡片指纹集合（用于去重，防止重复发送）
         self._recent_card_fingerprints: dict[str, float] = {}
@@ -126,6 +128,9 @@ class FeishuNotifier:
             self._queue_path: Path = Path(tempfile.gettempdir()) / "gugu_test_notify_queue.jsonl"
         else:
             self._queue_path: Path = PROJECT_ROOT / "data" / "notify_queue.jsonl"
+
+        # PR1：通知发送审计日志路径（只追加，区分 sent/deduped/failed）
+        self._audit_path: Path = self._queue_path.parent / "notification_audit.jsonl"
 
         # 读取通知开关配置
         feishu_cfg = get_config().feishu
@@ -143,6 +148,11 @@ class FeishuNotifier:
                 "All notifications will be skipped."
             )
 
+    def _get_queue_lock(self) -> asyncio.Lock:
+        if self._queue_lock is None:
+            self._queue_lock = asyncio.Lock()
+        return self._queue_lock
+
     def __repr__(self) -> str:
         """屏蔽敏感凭证，防止日志/调试意外泄露 token（S-01 修复）。"""
         configured = self._is_configured()
@@ -152,6 +162,26 @@ class FeishuNotifier:
     def _is_configured(self) -> bool:
         """Check if required Feishu credentials are present."""
         return bool(self._app_id and self._app_secret and self._chat_id)
+
+    def _test_mode_blocks_http(self) -> bool:
+        """GUGU_TEST_MODE 下结构性地禁止真实 HTTP 外发（2026-08-05 P0 防护）。
+
+        背景：2026-08-01/08-05 两次事故——后台测试进程创建的 FeishuNotifier
+        未 mock `_client`（或 daemon 线程构造真实 notifier），导致测试信号
+        真实推送到生产飞书。GUGU_TEST_MODE 只重定向队列文件路径，不阻止 HTTP。
+
+        本方法在三个真实 HTTP 外发点（_get_tenant_token / _post_card /
+        _post_webhook）入口调用：测试模式下直接短路，结构上不可能外发。
+
+        注意：测试中显式替换 `_client = MockTransport(...)` 的用例不受影响——
+        短路条件是 GUGU_TEST_MODE 且 client 为真实网络客户端；MockTransport
+        是测试注入的网络替身，不产生真实外发，允许放行。
+        """
+        if not os.environ.get("GUGU_TEST_MODE"):
+            return False
+        # 测试注入 MockTransport → 不产生真实外发，放行（测试断言依赖它）
+        # 真实网络客户端 + 测试模式 → 结构性禁止外发
+        return not isinstance(getattr(self._client, "_transport", None), httpx.MockTransport)
 
     @retry(
         stop=stop_after_attempt(3),
@@ -164,6 +194,11 @@ class FeishuNotifier:
 
         Token is cached for TOKEN_TTL_SECONDS. Retries on network/API errors.
         """
+        # P0 防护：测试模式下禁止真实 HTTP 外发
+        if self._test_mode_blocks_http():
+            logger.debug("GUGU_TEST_MODE: 跳过飞书 token 请求（测试隔离）")
+            return "test-mode-token"
+
         if self._token and time.time() < self._token_expires_at:
             return self._token
 
@@ -180,16 +215,22 @@ class FeishuNotifier:
         logger.debug("Feishu tenant_access_token refreshed")
         return self._token
 
-    async def _post_card(self, token: str, card: dict[str, Any]) -> None:
+    async def _post_card(
+        self, token: str, card: dict[str, Any], receive_id: str | None = None
+    ) -> None:
         """Post interactive card to Feishu chat. Raises on failure.
 
         P0-5 修复：移除 @retry 装饰器，避免 POST 成功但响应解析失败时重复发送卡片。
         重试逻辑统一由 send_card 外层处理，确保幂等性。
         """
+        # P0 防护：测试模式下禁止真实 HTTP 外发（结构上不可能泄漏到生产）
+        if self._test_mode_blocks_http():
+            logger.debug("GUGU_TEST_MODE: 跳过飞书卡片外发（测试隔离）")
+            return
         # Formatter returns {"msg_type": "interactive", "card": {...}}; extract card.
         card_payload = card.get("card", card)
         body = {
-            "receive_id": self._chat_id,
+            "receive_id": receive_id or self._chat_id,
             "msg_type": "interactive",
             "content": json.dumps(card_payload, ensure_ascii=False),
         }
@@ -206,7 +247,9 @@ class FeishuNotifier:
         if data.get("code") != 0:
             raise RuntimeError(f"Feishu API error: {data.get('msg')}")
 
-    async def send_card(self, card: dict[str, Any]) -> bool:
+    async def send_card(
+        self, card: dict[str, Any], receive_id: str | None = None, dedup_key: str | None = None
+    ) -> bool:
         """Send an interactive card to the configured chat.
 
         Returns True on success, False on failure or when not configured.
@@ -215,19 +258,40 @@ class FeishuNotifier:
 
         P0-5 修复：添加卡片指纹去重，防止同一张卡片重复发送。
         使用卡片内容的 hash 作为唯一标识，5 分钟内不重复发送。
+
+        PR1 修复（2026-08-14）：
+        - 新增 dedup_key 参数：告警类卡片传语义化去重 key（如 stop_loss_upgrade_{symbol}_{level}_{date}），
+          避免同模板告警被误拦截
+        - dedup 命中返回 False（旧实现返回 True 假装成功，导致告警被吞而调用方无感）
+        - 发送结果写入审计日志（notification_audit.jsonl）
         """
+        # P0 防护：测试模式 + 真实网络 client → 结构性禁止外发，返回 False
+        # （测试未 mock _client 时 send_card 直接短路，不会产生任何真实 HTTP）
+        if self._test_mode_blocks_http():
+            logger.debug("GUGU_TEST_MODE: 跳过飞书卡片发送（测试隔离）")
+            return False
         if not self._enabled:
             logger.debug("Feishu notifications disabled by config")
             return False
-        if not self._is_configured():
-            logger.warning("Feishu not configured, skip card send")
+        if not self._app_id or not self._app_secret:
+            logger.warning("Feishu credentials not configured, skip card send")
+            return False
+        target_chat_id = receive_id or self._chat_id
+        if not target_chat_id:
+            logger.warning("Feishu target chat not configured, skip card send")
             return False
 
-        # P0-5 修复：卡片指纹去重检查
-        card_fingerprint = self._get_card_fingerprint(card)
+        # PR1：卡片指纹去重检查（支持语义化 dedup_key）
+        import hashlib
+
+        if dedup_key:
+            card_fingerprint = "dk:" + hashlib.sha256(dedup_key.encode()).hexdigest()
+        else:
+            card_fingerprint = self._get_card_fingerprint(card)
         if card_fingerprint in self._recent_card_fingerprints:
             logger.info("卡片已在近期发送过，跳过重复发送: {}...", card_fingerprint[:16])
-            return True
+            self._audit("deduped", target=target_chat_id, event=dedup_key or card_fingerprint[:16])
+            return False  # PR1：去重命中 = 未发送（旧实现返回 True 假装成功）
 
         # v0.7.6 P0-13修复：信号级去重检查（跨进程）
         signal_key = self._get_signal_key_from_card(card)
@@ -237,11 +301,12 @@ class FeishuNotifier:
 
         try:
             token = await self._get_tenant_token()
-            await self._post_card(token, card)
+            await self._post_card(token, card, target_chat_id)
             # 发送成功，记录指纹和信号去重
             self._record_card_fingerprint(card_fingerprint)
             if signal_key:
                 self._mark_signal_notified(signal_key)
+            self._audit("sent", target=target_chat_id, event=dedup_key or card_fingerprint[:16])
             return True
         except Exception as e:
             logger.warning("Feishu send_card 首次失败: {}, 2秒后刷新token重试", e)
@@ -252,17 +317,25 @@ class FeishuNotifier:
             self._token_expires_at = 0.0
             try:
                 token = await self._get_tenant_token()
-                await self._post_card(token, card)
+                await self._post_card(token, card, target_chat_id)
                 logger.info("Feishu send_card 重试成功")
                 # 发送成功，记录指纹和信号去重
                 self._record_card_fingerprint(card_fingerprint)
                 if signal_key:
                     self._mark_signal_notified(signal_key)
+                self._audit("sent", target=target_chat_id, event=dedup_key or card_fingerprint[:16])
                 return True
             except Exception as e2:
                 logger.error("Feishu send_card 重试仍失败: {}", e2)
+                self._audit(
+                    "failed",
+                    target=target_chat_id,
+                    event=dedup_key or card_fingerprint[:16],
+                    error=str(e2)[:100],
+                )
                 # 入队等待后续重试（P1-4: 使用异步加锁版本，避免与 retry_queued 并发写文件）
-                await self._enqueue_async(card)
+                # 必须携带 receive_id，保证重试时发回原目标群（P0: 业务/系统路由保真）
+                await self._enqueue_async(card, receive_id=target_chat_id)
                 return False
 
     def _get_card_fingerprint(self, card: dict[str, Any]) -> str:
@@ -345,6 +418,27 @@ class FeishuNotifier:
             if now - ts < 3600  # 1 小时
         }
         self._recent_card_fingerprints[fingerprint] = now
+
+    def _audit(self, result: str, target: str = "", event: str = "", error: str = "") -> None:
+        """写入通知发送审计日志（只追加，不抛异常）。
+
+        result: sent | deduped | failed | queued
+        event: 卡片指纹或 dedup_key
+        """
+        try:
+            import json
+
+            record = {
+                "ts": time.time(),
+                "result": result,
+                "target": str(target)[:40],
+                "event": str(event)[:200],
+                "error": str(error)[:200],
+            }
+            with open(str(self._audit_path), "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
 
     def _get_signal_key_from_card(self, card: dict[str, Any]) -> str | None:
         """从卡片中提取信号去重 key。
@@ -456,13 +550,18 @@ class FeishuNotifier:
         except Exception as e:
             logger.warning("标记信号已通知失败: {}", e)
 
-    def _enqueue(self, card: dict[str, Any]) -> None:
-        """失败通知入队，持久化到 data/notify_queue.jsonl。"""
+    def _enqueue(self, card: dict[str, Any], receive_id: str | None = None) -> None:
+        """失败通知入队，持久化到 data/notify_queue.jsonl。
+
+        记录 receive_id（目标会话），保证重试时发回原目标群，
+        避免业务卡片（开悟之路群）重试时被误发到系统对话（Hermes 对话）。
+        """
         try:
             self._queue_path.parent.mkdir(parents=True, exist_ok=True)
             record = {
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "card": card,
+                "receive_id": receive_id or "",
                 "retry_count": 0,
             }
             with self._queue_path.open("a", encoding="utf-8") as f:
@@ -471,10 +570,10 @@ class FeishuNotifier:
         except Exception as e:
             logger.error("通知入队失败: {}", e)
 
-    async def _enqueue_async(self, card: dict[str, Any]) -> None:
+    async def _enqueue_async(self, card: dict[str, Any], receive_id: str | None = None) -> None:
         """异步入队（线程安全，与 retry_queued 互斥）。"""
-        async with self._queue_lock:
-            self._enqueue(card)
+        async with self._get_queue_lock():
+            self._enqueue(card, receive_id=receive_id)
 
     async def retry_queued(self) -> int:
         """重试队列中的失败通知（per-item 追加模式，防丢失）。
@@ -498,7 +597,7 @@ class FeishuNotifier:
         self._token_expires_at = 0.0
 
         # P1-4: 第一段锁——读取 pending 列表
-        async with self._queue_lock:
+        async with self._get_queue_lock():
             if not self._queue_path.exists():
                 return 0
 
@@ -558,8 +657,7 @@ class FeishuNotifier:
                     f"通知重试次数超限({retry_count}), 永久丢弃: "
                     f"{json.dumps(item.get('card', {}), ensure_ascii=False)[:200]}"
                 )
-                # 尝试通过飞书 webhook 发送一条告警（有 webhook 时）
-                if self._webhook:
+                if self._is_configured():
                     try:
                         token = await self._get_tenant_token()
                         alert_card = {
@@ -600,19 +698,20 @@ class FeishuNotifier:
             card_fingerprint = self._get_card_fingerprint(card)
             if card_fingerprint in self._recent_card_fingerprints:
                 logger.info("重试队列中卡片已发送过，跳过: {}...", card_fingerprint[:16])
-                success_count += 1  # 计为成功（因为之前已发送成功）
                 continue
 
             # v0.7.6 P0-13修复：重试前检查信号是否已通知过（跨进程去重）
             signal_key = self._get_signal_key_from_card(card)
             if signal_key and self._is_signal_notified(signal_key):
                 logger.info("重试队列中信号已通知过，跳过: {}", signal_key)
-                success_count += 1  # 计为成功（因为之前已发送成功）
                 continue
 
             try:
                 token = await self._get_tenant_token()
-                await self._post_card(token, card)
+                # P0 修复：重试发回原目标会话（receive_id），
+                # 兼容旧队列条目（无 receive_id 字段时回退系统对话，与旧行为一致）
+                item_receive_id = item.get("receive_id") or None
+                await self._post_card(token, card, item_receive_id)
                 # 发送成功，记录指纹
                 self._record_card_fingerprint(card_fingerprint)
                 # v0.7.6 P0-13修复：发送成功，记录信号已通知
@@ -627,7 +726,7 @@ class FeishuNotifier:
 
         # P1-4: 第三段锁——合并写回 still_failed（保留发送期间新入队的条目）
         if still_failed:
-            async with self._queue_lock:
+            async with self._get_queue_lock():
                 # 读取发送期间 _enqueue_async 新追加的条目
                 newly_queued: list[dict[str, Any]] = []
                 if self._queue_path.exists():
@@ -658,7 +757,7 @@ class FeishuNotifier:
                             f.write(json.dumps(item, ensure_ascii=False, default=str) + "\n")
         else:
             # 全部成功，清空队列（但保留发送期间新入队的条目）
-            async with self._queue_lock:
+            async with self._get_queue_lock():
                 # 检查是否有新条目入队
                 has_new = self._queue_path.exists() and self._queue_path.stat().st_size > 0
                 if not has_new:
@@ -795,6 +894,10 @@ class FeishuNotifier:
     )
     async def _post_webhook(self, text: str) -> None:
         """Post text to webhook. Raises on failure (will be retried)."""
+        # P0 防护：测试模式下禁止真实 HTTP 外发（结构上不可能泄漏到生产）
+        if self._test_mode_blocks_http():
+            logger.debug("GUGU_TEST_MODE: 跳过飞书 webhook 外发（测试隔离）")
+            return
         body = {"msg_type": "text", "content": {"text": text}}
         resp = await self._client.post(self._webhook, json=body)
         resp.raise_for_status()
@@ -802,22 +905,118 @@ class FeishuNotifier:
         if data.get("code") != 0:
             raise RuntimeError(f"Feishu webhook error: {data.get('msg')}")
 
-    async def send_text(self, text: str) -> bool:
+    async def send_text(self, text: str, receive_id: str | None = None) -> bool:
         """Send plain text via webhook (fallback).
 
-        Returns True on success, False on failure or when webhook not configured.
+        webhook 未配置时降级为文本卡片发送（receive_id 或系统对话），
+        保证告警（止损升级/队列堆积）不因 webhook 缺失而静默丢失。
+
+        Returns True on success, False on failure.
         Never raises to caller.
         """
-        if not self._webhook:
-            logger.warning("Feishu webhook not configured, skip text send")
-            return False
+        if self._webhook:
+            try:
+                await self._post_webhook(text)
+                return True
+            except Exception as e:
+                logger.error("Feishu send_text failed: {}", e)
+                return False
 
-        try:
-            await self._post_webhook(text)
-            return True
-        except Exception as e:
-            logger.error("Feishu send_text failed: {}", e)
+        # webhook 未配置 → 降级为卡片发送（P1 修复：原实现直接返回 False，告警丢失）
+        logger.warning("Feishu webhook not configured, degrade to card send: {}", text[:50])
+        card = {
+            "msg_type": "interactive",
+            "card": {
+                "header": {
+                    "title": {"tag": "plain_text", "content": "🔔 gugu 告警"},
+                    "template": "red",
+                },
+                "elements": [
+                    {"tag": "div", "text": {"tag": "lark_md", "content": text}},
+                ],
+            },
+        }
+        return await self.send_card(card, receive_id=receive_id or self._chat_id)
+
+    async def send_business_text(self, text: str) -> bool:
+        """公开方法：发送文本到业务群（开悟之路）。
+
+        业务内容（止损升级等）统一走业务通道，避免发错群。
+        webhook 未配置时降级为卡片发送。
+        """
+        if not self._business_chat_id:
+            logger.warning("Feishu business chat not configured, skip business text")
             return False
+        return await self.send_text(text, receive_id=self._business_chat_id)
+
+    async def send_stop_loss_escalation(
+        self, symbol: str, level: int, urgency_label: str, first_alert_ts: float
+    ) -> bool:
+        """发送止损告警升级卡片到业务群（带语义化去重 key）。
+
+        PR1 新增：专用方法替代 send_business_text 降级路径，
+        卡片标题带 symbol 便于用户识别，dedup_key 基于 symbol+level+date
+        避免同模板告警全天被拦截。
+        """
+        import time
+        from datetime import date
+
+        from gugu.data.stock_names import lookup_stock_name
+
+        name = lookup_stock_name(symbol) or symbol
+        header_time = time.strftime("%H:%M", time.localtime(first_alert_ts))
+        card = {
+            "msg_type": "interactive",
+            "card": {
+                "header": {
+                    "title": {
+                        "tag": "plain_text",
+                        "content": f"{urgency_label} 止损告警升级 · {name}",
+                    },
+                    "template": "red",
+                },
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {
+                            "tag": "lark_md",
+                            "content": (
+                                f"**股票**: {symbol}\n"
+                                f"**首次告警**: {header_time}\n"
+                                f"**升级级别**: {level}\n"
+                                f"请尽快手动执行止损"
+                            ),
+                        },
+                    }
+                ],
+            },
+        }
+        dedup_key = f"stop_loss_upgrade_{symbol}_{level}_{date.today().isoformat()}"
+        return await self.send_card(card, receive_id=self._business_chat_id, dedup_key=dedup_key)
+
+    async def _send_business_card(self, card: dict[str, Any]) -> bool:
+        if not self._business_chat_id:
+            logger.warning("Feishu business chat not configured, skip business notification")
+            return False
+        return await self.send_card(card, receive_id=self._business_chat_id)
+
+    async def send_business_card(self, card: dict[str, Any]) -> bool:
+        """公开方法：发送业务卡片到业务群（开悟之路）。
+
+        业务内容（信号/日报/绩效/宏观等）统一走此通道，
+        与系统通知（Hermes 对话）隔离，避免业务内容发错群。
+        """
+        return await self._send_business_card(card)
+
+    async def _send_system_card(self, card: dict[str, Any]) -> bool:
+        return await self.send_card(card, receive_id=self._chat_id)
+
+    async def send_system_card(self, card: dict[str, Any]) -> bool:
+        """公开方法：发送系统卡片到系统对话（Hermes 对话）。
+
+        系统内容（错误/健康/基础设施告警）统一走此通道。
+        """
+        return await self._send_system_card(card)
 
     async def notify_signal(self, signal: dict[str, Any]) -> bool:
         """Format and send a trade signal notification."""
@@ -870,45 +1069,61 @@ class FeishuNotifier:
         strategies_list = signal.get("strategies", [])
         is_cloud_trend = strategy == "cloud_trend" or "cloud_trend" in strategies_list
         if is_cloud_trend:
-            return await self.send_card(format_cloud_trend_signal(signal))
+            return await self._send_business_card(format_cloud_trend_signal(signal))
 
         # 游资策略信号使用专属卡片格式
         is_hot_money = strategy == "hot_money" or "hot_money" in strategies_list
         if is_hot_money:
-            return await self.send_card(format_hot_money_signal(signal))
+            return await self._send_business_card(format_hot_money_signal(signal))
 
-        return await self.send_card(format_signal(signal))
+        return await self._send_business_card(format_signal(signal))
 
     async def notify_daily_report(self, period: str, data: dict[str, Any]) -> bool:
         """Format and send a daily report notification."""
         if not self._daily_report_enabled:
             return False
-        return await self.send_card(format_daily_report(period, data))
+        return await self._send_business_card(format_daily_report(period, data))
 
     async def notify_risk_alert(self, alert: dict[str, Any]) -> bool:
-        """Format and send a risk alert notification."""
+        """Format and send a risk alert notification.
+
+        风控告警（止损/熔断/仓位预警）属于交易业务通知 → 业务群（开悟之路）。
+        """
         if not self._risk_alert_enabled:
             return False
-        return await self.send_card(format_risk_alert(alert))
+        return await self._send_business_card(format_risk_alert(alert))
 
     async def notify_backtest(self, report: dict[str, Any]) -> bool:
         """Format and send a backtest report notification."""
         if not self._backtest_enabled:
             return False
-        return await self.send_card(format_backtest_report(report))
+        return await self._send_business_card(format_backtest_report(report))
 
     async def notify_validation(self, report: dict[str, Any]) -> bool:
         """Format and send a strategy validation/gate report notification."""
         if not self._backtest_enabled:
             return False
-        return await self.send_card(format_validation_report(report))
+        return await self._send_business_card(format_validation_report(report))
 
-    async def notify_screener(self, results: list, total_scanned: int) -> bool:
+    async def notify_screener(
+        self,
+        results: list,
+        total_scanned: int,
+        data_quality: str | None = None,
+        status: str | None = None,
+        data_errors: list[str] | None = None,
+    ) -> bool:
         """发送尾盘选股结果。"""
         if not self._signal_enabled:
             return False
-        card = format_screener_report(results, total_scanned)
-        return await self.send_card(card)
+        card = format_screener_report(
+            results,
+            total_scanned,
+            data_quality=data_quality,
+            status=status,
+            data_errors=data_errors,
+        )
+        return await self._send_business_card(card)
 
     async def notify_screener_validation(self, results: list) -> bool:
         """发送尾盘选股次日验证结果。"""
@@ -917,7 +1132,7 @@ class FeishuNotifier:
         from gugu.screener.report import format_screener_validation
 
         card = format_screener_validation(results)
-        return await self.send_card(card)
+        return await self._send_business_card(card)
 
     async def notify_range_watchlist(self, candidates: list, market_regime: str) -> bool:
         """P1-1: 震荡市盘中扫描推送观察列表（非买入建议）。
@@ -930,7 +1145,7 @@ class FeishuNotifier:
         from gugu.screener.report import format_range_watchlist
 
         card = format_range_watchlist(candidates, market_regime)
-        return await self.send_card(card)
+        return await self._send_business_card(card)
 
     async def notify_error(self, error: dict[str, Any]) -> bool:
         """Format and send a system error notification.
@@ -956,7 +1171,7 @@ class FeishuNotifier:
         if friendly_msg != msg:
             error["suggestion"] = error.get("suggestion", "") or friendly_msg
         error["message"] = msg
-        return await self.send_card(format_system_error(error))
+        return await self._send_system_card(format_system_error(error))
 
     async def notify_flow_report(self, period: str, data: dict[str, Any]) -> bool:
         """Format and send a capital flow report.
@@ -966,11 +1181,11 @@ class FeishuNotifier:
             data: Result from run_morning_report() / run_afternoon_report() / run_close_report().
         """
         card = data["card"]
-        return await self.send_card(card)
+        return await self._send_business_card(card)
 
     async def notify_holdings_sell_alert(self, stocks: list[dict]) -> bool:
         """Format and send a holdings sell signal alert."""
-        return await self.send_card(format_holdings_sell_alert(stocks))
+        return await self._send_business_card(format_holdings_sell_alert(stocks))
 
     async def notify_intraday_alert(self, alerts: list) -> bool:
         """推送盘中异动告警卡片。
@@ -1008,11 +1223,7 @@ class FeishuNotifier:
             if dedup_path.exists():
                 with dedup_path.open("r", encoding="utf-8") as f:
                     notified = json.load(f)
-                # 清理过期记录（保留近 2 天）
-                from datetime import timedelta as _timedelta
-
-                cutoff = (_date.today() - _timedelta(days=2)).isoformat()
-                notified = {k: v for k, v in notified.items() if v >= cutoff}
+                notified = {k: v for k, v in notified.items() if v == today_str}
         except Exception as e:
             logger.warning("加载盘中告警去重记录失败: {}", e)
             notified = {}
@@ -1031,21 +1242,18 @@ class FeishuNotifier:
             logger.debug("盘中告警全部已通知过，跳过发送")
             return False
 
-        # 保存去重记录（原子写入）
-        try:
-            dedup_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = dedup_path.with_suffix(".tmp")
-            with tmp_path.open("w", encoding="utf-8") as f:
-                json.dump(notified, f, ensure_ascii=False)
-            tmp_path.replace(dedup_path)
-        except Exception as e:
-            logger.warning("保存盘中告警去重记录失败: {}", e)
-
         try:
             from gugu.notifier.intraday_alert import build_intraday_alert_card
 
             card = build_intraday_alert_card(new_alerts)
-            return await self.send_card(card)
+            sent = await self._send_business_card(card)
+            if sent:
+                dedup_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = dedup_path.with_suffix(".tmp")
+                with tmp_path.open("w", encoding="utf-8") as f:
+                    json.dump(notified, f, ensure_ascii=False)
+                tmp_path.replace(dedup_path)
+            return sent
         except Exception as e:
             logger.warning("盘中告警卡片发送失败: {}", e)
             return False
@@ -1066,7 +1274,7 @@ class FeishuNotifier:
             state: 可选的 TakeProfitState dict，用于展示减仓历史。
         """
 
-        return await self.send_card(format_take_profit_alert(symbol, name, signal, state))
+        return await self._send_business_card(format_take_profit_alert(symbol, name, signal, state))
 
     async def notify_strategy_dashboard(self) -> bool:
         """发送策略注册中心全景看板卡片。"""
@@ -1096,19 +1304,19 @@ class FeishuNotifier:
                 },
             ],
         }
-        return await self.send_card(card)
+        return await self._send_business_card(card)
 
     async def notify_conflict(self, symbol: str, name: str, resolution: dict[str, Any]) -> bool:
         """发送多视角冲突研讨卡片。"""
 
-        return await self.send_card(format_conflict_card(symbol, name, resolution))
+        return await self._send_business_card(format_conflict_card(symbol, name, resolution))
 
     async def notify_concept(
         self, concept_name: str, definition: str, explanation: str, citations: list[dict[str, str]]
     ) -> bool:
         """发送每日概念卡（小白学堂）。"""
 
-        return await self.send_card(
+        return await self._send_business_card(
             format_concept_card(concept_name, definition, explanation, citations)
         )
 
@@ -1161,7 +1369,7 @@ class FeishuNotifier:
             from gugu.notifier.formatter import _card
 
             card = _card("📊 因子综合评分报告", "blue", sections, note=note)
-            return await self.send_card(card)
+            return await self._send_business_card(card)
         except Exception as e:
             logger.warning("发送Alpha因子摘要失败: {}", e)
             return False
@@ -1195,7 +1403,7 @@ class FeishuNotifier:
             from gugu.notifier.formatter import _card
 
             card = _card("🧠 持仓认知分析报告", "indigo", sections, note="明策 · gugu · 每日15:35")
-            return await self.send_card(card)
+            return await self._send_business_card(card)
         except Exception as e:
             logger.warning("发送持仓认知报告失败: {}", e)
             return False
@@ -1208,7 +1416,7 @@ class FeishuNotifier:
             from gugu.notifier.formatter import build_signal_daily_validation_card
 
             card = build_signal_daily_validation_card(report)
-            return await self.send_card(card)
+            return await self._send_business_card(card)
         except Exception as e:
             logger.warning("发送信号次日验证报告失败: {}", e)
             return False
@@ -1221,7 +1429,7 @@ class FeishuNotifier:
             from gugu.notifier.formatter import build_signal_weekly_card
 
             card = build_signal_weekly_card(report)
-            return await self.send_card(card)
+            return await self._send_business_card(card)
         except Exception as e:
             logger.warning("发送信号绩效周报失败: {}", e)
             return False

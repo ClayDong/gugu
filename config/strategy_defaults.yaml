@@ -79,6 +79,7 @@ chen_jiangting:
   ma_short: 20  # 短期均线（趋势判断 + 跌破卖出）
   ma_long: 60  # 长期均线（中期趋势过滤）
   max_daily_gain_pct: 0.07  # 阶段过滤：当日涨幅 >7% 视为疯狂阶段，不追
+  divergence_vol_window: 5
 
 pullback_low:
   # 低吸回踩策略：震荡市专用
@@ -165,6 +166,39 @@ rebound_elite:
   vol_ratio_min: 1.2           # 反包日放量阈值（量比≥1.2）
   stop_loss_pct: 0.08          # 破位止损（跌破首板开盘价×(1-8%)）
   max_hold_days: 10            # 时间止损/最大持仓天数
+
+rebound_system:
+  # 断板反包·陈学长实战体系（手册完整版，2026-08-12 用户手册逐条量化）
+  # 定位：experimental。历史裁决 edge 未证实（买点A p=0.53 存疑/买点C证伪），实盘前向验证中
+  # ── 硬性过滤（一票否决）──
+  mv_min: 50                    # 总市值下限（亿）——手册 50亿≤MV≤150亿（裁决维持，勿改30-50亿）
+  mv_max: 150                   # 总市值上限（亿）
+  price_min: 3.0                # 收盘价下限（>3元）
+  hot_limit_ups: 3              # 题材热度/辨识度：近250日涨停≥3次（"近1年内多次涨停"量化）
+  amp_min: 0.03                 # 股性：20日均振幅>3%（"心电图"式横盘剔除）
+  # ── 形态四阶段 ──
+  limit_up_pct: 0.095           # 涨停判定（主板9.5%）
+  big_yang_pct: 0.07            # 大阳线判定（>7%）
+  search_window: 25             # 首板回溯窗口（首板+5日洗盘+12日护盘≈18日，留余量）
+  wash_gap: 5                   # 首板后找洗盘大阴最大间隔
+  support_tol: 0.0              # 护盘容忍（手册：收盘必须守住首板开盘价，0容忍）
+  shrink_ratio: 0.5             # 缩量：横盘期量 ≤ 洗盘量×50%（护盘结束/抛压枯竭）
+  # ── 成交额体系（流通市值×比例；扫描器传 float_mv 列启用）──
+  first_amt_ratio: 0.01         # 首板成交额 ≈ 流通市值×1%（判断真实封板）
+  first_amt_tol: 0.003          # 首板成交额容差 ±0.3%
+  limit_vol_cap: 3.0            # 首板量 < 3×20日均量（过度放量=情绪顶点，因子漏斗验证负因子）
+  rebound_amt_min: 0.015        # 反包日成交额 ≥ 流通市值×1.5%
+  rebound_amt_max: 0.02         # 反包日成交额 ≤ 流通市值×2%（超2%=倍量危险/出货）
+  valid_vol_ratio: 0.005        # 有效放量 = 流通市值×0.5%（买点C早盘上冲标准）
+  danger_amt_ratio: 0.02        # 倍量危险 = 流通市值×2%（高位爆量→出货预警）
+  # ── 买点 ──
+  buy_point_a_optimized: true   # 买点A 优化四条件（首板涨停+首板量<3×20日均量+洗盘量≥1.5×首板+护盘缩量≤0.5×洗盘）
+                                #   回测 +3.78%/胜率53.7%/p=0.0504，三年全正（探索性，N=41）
+  buy_point_b_enabled: true     # 买点B 底背离（价新低 MACD 不新低 + 缩量，日线近似）
+  buy_point_c_enabled: false    # 买点C 放量追击（历史证伪 -3.63%~-5.17% p<0.0001，默认禁用）
+  # ── 卖出 ──
+  stop_loss_pct: 0.03           # SL1 破位止损：收盘 < 首板开盘价即触发（手册铁律）
+  max_hold_days: 15             # 最大持仓天数（时间止损）
 
 capital_flow_alert:
   # 资金流异动监控策略：4卖出特征识别主力出逃 + 3买入特征捕捉洗盘结束
@@ -611,4 +645,21 @@ bollinger_oversold_rebound:
   exit_mode: mid                # 卖出模式：mid=反弹到中轨卖出 / hold=持有N日固定卖出
   max_hold_days: 10             # 反弹持有上限（短线）
   confirm_days: 0               # 信号当天成立
+
+fanbao:
+  # 小圈圈儿《反包策略》：炸板反包+高位跌停反包
+  # 来源：广东经济出版社，2025年6月
+  # 定位：新策略，pending，待回测验证
+  # ── 硬性过滤 ──
+  mv_min: 50                    # 最小流通市值（亿）
+  limit_up_pct: 0.095           # 涨停判定
+  # ── 工程参数（代码读取，默认值兜底）──
+  use_gate_open: true           # 是否使用集合竞价过滤
+  is_hot_topic: false           # 是否启用热点话题过滤
+  skip_red_lines: false         # 是否跳过红线检查
+  verbose: false                # 调试日志开关
+  skip_sentiment: false         # 是否跳过情绪判断
+  skip_checks: false            # 是否跳过安全检查
+  confirm_days: 0               # 信号当天成立（隔日超短，次日即执行）
+  max_hold_days: 3              # 最大持仓天数（隔日超短，最多持3天）
 

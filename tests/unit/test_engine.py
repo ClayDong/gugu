@@ -172,6 +172,7 @@ async def test_process_signal_risk_blocked(
         "price": 10.0,
         "strategies": ["turtle"],
         "strategy": "turtle",
+        "suggested_position_ratio": 0.15,
     }
     await engine._process_signal(signal)
     engine._broker.order.assert_not_called()
@@ -191,6 +192,7 @@ async def test_process_signal_success(
         "price": 10.0,
         "strategies": ["turtle"],
         "strategy": "turtle",
+        "suggested_position_ratio": 0.15,
     }
     await engine._process_signal(signal)
     mock_broker.order.assert_called_once()

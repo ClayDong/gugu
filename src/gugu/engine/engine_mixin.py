@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -18,7 +17,7 @@ import pandas as pd
 from gugu.analysis.signal_tracker import SignalTracker
 from gugu.config import PROJECT_ROOT
 from gugu.engine.signal_pipeline import record_signal_history
-from gugu.utils.atomic import atomic_write_json, atomic_write_text
+from gugu.utils.atomic import append_jsonl, atomic_write_json, atomic_write_text
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -53,7 +52,7 @@ class EngineOpsMixin:
 
     # v0.7.5 P0-10修复：策略级去重配置
     _DEDUP_CONFIG: dict[str, dict] = {
-        "hot_money": {"min_interval_minutes": 30, "dedup_key_include_strategy": True},
+        # v0.9.7: hot_money 已移除（2026-08-01 证伪）
     }
     _DEFAULT_DEDUP: dict = {"min_interval_minutes": 0, "dedup_key_include_strategy": False}
 
@@ -258,6 +257,28 @@ class EngineOpsMixin:
                     if df is None or df.empty:
                         return None
 
+                    # P0 前视偏差修复（2026-08-07, AUDIT_LOOKAHEAD_20260807）:
+                    # 盘中时段(收盘前) 当日K线未完成(high/low/close为盘中瞬时值),
+                    # 用未完成K线生成信号 = 盘中信号≠回测信号 → 实盘信号无法用回测验证。
+                    # 修复: 盘中只基于"已收盘历史K线"判断形态; 收盘后(15:00)用完整K线重算。
+                    # 判断收盘: 15:00后(含)视为已收盘K线可用; 早于15:00视为盘中。
+                    # ⚠️ 2026-08-11 修复（AUDIT_LOOKAHEAD 副作用，告警评估员发现）:
+                    # 原实现盘中无条件 iloc[:-1] 假设"最后一行=当日未完成K线"，但 A股
+                    # 日K源盘中通常不含当日bar（最后一行=昨日已收盘bar，见
+                    # ParquetPersistentCache 新鲜度语义: 盘中允许昨日bar）→ 把昨日
+                    # 完整bar也删掉 → 策略基于 2 个交易日前数据计算（实证:
+                    # 2026-08-11 10:19 日志 最后bar=2026-08-07，而缓存最后bar=08-10）。
+                    # 正确语义: 仅当最后一行日期==今日（数据源确实含当日未完成bar）才剔除。
+                    from datetime import datetime as _dt
+
+                    _now = _dt.now()
+                    if _now.strftime("%H:%M") < "15:00" and "date" in df.columns:
+                        _last_bar_date = pd.Timestamp(df["date"].iloc[-1]).date()
+                        if _last_bar_date == _now.date():
+                            df = df.iloc[:-1].copy()  # 仅剔除当日未完成K线(确实存在时)
+                            if len(df) < 2:  # 剔除后数据不足(上市初期/停牌), 放弃本轮
+                                return None
+
                     meta = await self._dm.fetch_stock_meta(symbol)
                     portfolio = self._broker.get_portfolio()
                     account = self._broker.get_account()
@@ -314,6 +335,16 @@ class EngineOpsMixin:
 
         self._collect_filtered_signals(results, scan_list)
         self._log_daily_signal_summary(signals, scan_list)
+        flow_results = [r.get("money_flow", {}) for r in results if r and r.get("money_flow")]
+        flow_available = all(not r.get("data_missing", False) for r in flow_results)
+        flow_errors = [r["data_error"] for r in flow_results if r.get("data_error")]
+        self._write_signal_scan_status(
+            len(signals),
+            len(scan_list),
+            data_health="degraded" if flow_errors else "ok",
+            data_errors=flow_errors,
+            flow_data_available=flow_available if flow_results else None,
+        )
 
         return signals
 
@@ -392,7 +423,7 @@ class EngineOpsMixin:
         else:
             dedup_key = f"{symbol}_{direction}"
         today_str = date.today().isoformat()
-        async with self._dedup_lock:
+        async with self._get_dedup_lock():
             if self._notified_signals.get(dedup_key) == today_str:
                 logger.info("{} {} 信号已通知过，跳过重复发送", symbol, direction)
                 return
@@ -474,24 +505,56 @@ class EngineOpsMixin:
         return
 
     async def _check_stop_loss_escalation(self) -> None:
-        """检查止损告警是否需要升级（track_live 模式）。"""
+        """检查止损告警是否需要升级（track_live 模式）。
+
+        PR1 修复（2026-08-14）：
+        - 改用 send_stop_loss_escalation 专用方法（带语义化 dedup_key，不走 send_text 降级路径）
+        - 发送成功才调用 confirm_escalation_sent（未送达不推进级别）
+        - 增加恢复清除：破位持仓价格回到止损线上方 → clear 状态，不再骚扰用户
+        """
         if not self._stop_loss_escalator:
             return
         pending = self._stop_loss_escalator.get_pending_alerts()
         for alert in pending:
+            # 恢复清除：价格回到止损线上方 → 清状态，不再打扰
+            try:
+                if self._broker:
+                    pos = self._broker.get_position(alert.symbol)
+                    if pos is not None:
+                        cur = getattr(pos, "current_price", 0) or 0
+                        stop = getattr(pos, "stop_loss_price", 0) or 0
+                        if cur > stop and stop > 0:
+                            self._stop_loss_escalator.clear(alert.symbol)
+                            logger.info(
+                                "止损告警 {} 已恢复（价格 {} > 止损价 {}），清除告警状态",
+                                alert.symbol,
+                                cur,
+                                stop,
+                            )
+                            continue
+            except Exception:
+                pass
+
             needs_alert, level, urgency_label = self._stop_loss_escalator.check_escalation(
                 alert.symbol
             )
             if needs_alert:
                 logger.warning("止损告警升级 {}: level={} {}", alert.symbol, level, urgency_label)
                 try:
-                    await self._notifier.send_text(
-                        f"{urgency_label} 止损告警升级\n"
-                        f"股票: {alert.symbol}\n"
-                        f"首次告警: {time.strftime('%H:%M', time.localtime(alert.first_alert_ts))}\n"
-                        f"升级级别: {level}\n"
-                        f"请尽快手动执行止损"
+                    sent = await self._notifier.send_stop_loss_escalation(
+                        symbol=alert.symbol,
+                        level=level,
+                        urgency_label=urgency_label,
+                        first_alert_ts=alert.first_alert_ts,
                     )
+                    if sent:
+                        self._stop_loss_escalator.confirm_escalation_sent(alert.symbol, level)
+                    else:
+                        logger.warning(
+                            "止损升级告警 {} level={} 未送达（去重或失败），等待下轮重试",
+                            alert.symbol,
+                            level,
+                        )
                 except Exception as e:
                     logger.warning("止损升级告警发送失败: {}", e)
 
@@ -629,13 +692,34 @@ class EngineOpsMixin:
         except Exception as e:
             logger.warning("历史文件轮转失败: {}", e)
 
+    def _write_signal_scan_status(
+        self,
+        signals_count: int,
+        scanned_count: int,
+        data_health: str = "unknown",
+        data_errors: list[str] | None = None,
+        flow_data_available: bool | None = None,
+    ) -> None:
+        path = PROJECT_ROOT / "data" / "signal_scan.json"
+        payload = {
+            "last_scan_at": pd.Timestamp.now().isoformat(),
+            "signals_count": signals_count,
+            "scanned_count": scanned_count,
+            "data_health": data_health,
+            "data_errors": data_errors or [],
+            "flow_data_available": flow_data_available,
+        }
+        try:
+            atomic_write_json(path, payload, ensure_ascii=False)
+        except Exception as e:
+            logger.warning("写入 signal_scan.json 失败: {}", e)
+
     def _write_heartbeat(self, status: str) -> None:
         """写入心跳文件，便于外部监控。"""
         hb_dir = PROJECT_ROOT / "data"
         hb_dir.mkdir(exist_ok=True)
         path = hb_dir / "heartbeat.json"
         history_path = hb_dir / "heartbeat_history.jsonl"
-        self._rotate_jsonl(history_path)
 
         try:
             account = self._broker.get_account()
@@ -664,8 +748,7 @@ class EngineOpsMixin:
             logger.warning("写入 heartbeat.json 失败: {}", e)
 
         try:
-            with history_path.open("a", encoding="utf-8") as f:
-                f.write(payload_json + "\n")
+            append_jsonl(history_path, payload, max_lines=5000)
         except Exception as e:
             logger.warning("写入 heartbeat_history.jsonl 失败: {}", e)
 

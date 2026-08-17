@@ -51,15 +51,33 @@ class BaseCollector(ABC):
             )
 
     def _flow_record_success(self) -> None:
+        """记录资金流成功：重置失败计数。
+
+        2026-08-10 修复：熔断冷却期内成功**不提前解除熔断**，只清零失败计数。
+        原实现 `_flow_breaker_until = 0.0` 导致振荡——sector_flow 偶尔成功
+        立即解除熔断 → 下一分钟 19 只股票 stock_flow 又失败 3 次 → 又熔断
+        （实证：09:40:22 与 09:40:27 相隔 5 秒两次熔断触发，冷却 1800s 形同虚设）。
+        熔断状态只随冷却时间自然到期，到期后首个请求自然恢复探测。
+        """
         self._flow_fail_count = 0
-        self._flow_breaker_until = 0.0
+        if time.time() >= self._flow_breaker_until:
+            self._flow_breaker_until = 0.0
 
     def _flow_breaker_guard(self, what: str) -> pd.DataFrame:
-        """熔断期内直接返回空 DataFrame（静默降级，不调 API）。"""
+        """熔断期内直接返回空 DataFrame（静默降级，不调 API）。
+
+        返回的 DataFrame 带 attrs 标记 flow_breaker_active=True，
+        DataManager 据此识别为「预期降级」而非「真实失败」——
+        避免熔断空结果被记成 all_sources_failed 刷爆失败率（2026-08-10 实证：
+        东财限流期间每分钟 19 条假失败，失败率 61% 触发 watchdog 误告警）。
+        """
         logger.debug(
             "{} 资金流熔断冷却中，跳过 {}（{}）", self.source, what, self._flow_breaker_until
         )
-        return pd.DataFrame()
+        df = pd.DataFrame()
+        df.attrs["flow_breaker_active"] = True
+        df.attrs["flow_breaker_source"] = self.source
+        return df
 
     def _set_attrs(self, df: pd.DataFrame) -> pd.DataFrame:
         df.attrs["data_source"] = self.source

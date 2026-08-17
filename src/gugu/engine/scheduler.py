@@ -548,6 +548,19 @@ class TradingScheduler(SchedulerJobsMixin):
         self._record_boot()
         logger.info("调度器已启动，按 Ctrl+C 退出")
 
+        async def _heartbeat_loop() -> None:
+            """每 60 秒写入心跳。"""
+            while True:
+                with contextlib.suppress(Exception):
+                    self._engine._write_heartbeat("alive")
+                await asyncio.sleep(60)
+
+        # 心跳循环必须先于启动扫描创建（2026-08-10 修复实证）：数据源降级时
+        # run_daily_cycle 可能耗时 5-10 分钟（当日两次重启均 ~6 分钟无心跳），
+        # 若心跳循环在其后创建，watchdog 心跳阈值(15min)可能在慢扫描下误判挂死
+        # 而触发 auto-recover 重启 → 重启风暴风险。先启动心跳，扫描期间心跳照常新鲜。
+        hb_task = asyncio.create_task(_heartbeat_loop())
+
         if is_trading_day() and is_trading_time():
             logger.info("启动后立即执行一次盘中扫描（交易时段内）...")
             try:
@@ -556,15 +569,6 @@ class TradingScheduler(SchedulerJobsMixin):
                 logger.exception("启动扫描异常: {}", e)
         elif is_trading_day():
             logger.info("启动时为交易日但非交易时段，跳过立即扫描")
-
-        async def _heartbeat_loop() -> None:
-            """每 60 秒写入心跳。"""
-            while True:
-                with contextlib.suppress(Exception):
-                    self._engine._write_heartbeat("alive")
-                await asyncio.sleep(60)
-
-        hb_task = asyncio.create_task(_heartbeat_loop())
 
         try:
             while True:

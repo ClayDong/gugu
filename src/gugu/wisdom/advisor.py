@@ -46,6 +46,23 @@ LLM_MAX_STOP_LOSS_PCT = 0.10  # LLM 止损最大幅度 10%
 # P1-6: 记录 LLM 决策 vs 硬编码 fallback 决策的对比日志
 WISDOM_COMPARISON_LOG = PROJECT_ROOT / "data" / "wisdom_comparison.jsonl"
 
+
+def _wisdom_comparison_log_path() -> Path:
+    """返回决策对比日志路径（v0.9.7 P0：测试模式重定向，防污染生产数据）。
+
+    与 feishu.py 的 _queue_path 同理：测试/回测/调试运行不得写入生产
+    data/wisdom_comparison.jsonl——凌晨 00:33 的 600519 调试记录即此类污染，
+    会歪曲 LLM 接入率统计（avail=False 占多数）。GUGU_TEST_MODE 下重定向到临时目录。
+    """
+    import os
+
+    if os.environ.get("GUGU_TEST_MODE"):
+        import tempfile
+
+        return Path(tempfile.gettempdir()) / "gugu_test_wisdom_comparison.jsonl"
+    return WISDOM_COMPARISON_LOG
+
+
 # ========== LLM 输出校验增强 ==========
 LLM_PRICE_DEVIATION_STD = 3.0
 LLM_STOP_LOSS_MIN_DISTANCE = 0.02
@@ -230,8 +247,9 @@ class WisdomAdvisor:
                 "llm_used": llm_result is not None,
             }
 
-            WISDOM_COMPARISON_LOG.parent.mkdir(parents=True, exist_ok=True)
-            with WISDOM_COMPARISON_LOG.open("a", encoding="utf-8") as f:
+            log_path = _wisdom_comparison_log_path()
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
         except Exception as e:
             logger.debug("[wisdom] 写入决策对比日志失败: {}", e)

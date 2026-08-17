@@ -54,7 +54,17 @@ _UNVERIFIED_CTX = ssl._create_unverified_context()
 
 
 def _to_tencent_code(code: str) -> str:
-    """股票代码 → 腾讯带前缀格式（如 sh600519）。"""
+    """股票代码 → 腾讯带前缀格式（如 sh600519）。
+
+    v0.9.7 P0：指数代码自动识别交易所（000300 沪深300 → sh000300）。
+    """
+    # 显式 sh/sz 前缀（调用方指定交易所，最高优先级）
+    if code[:2].lower() in ("sh", "sz", "bj") and code[2:].isdigit():
+        return code
+    if code in BaseCollector.SH_INDEX_CODES:
+        return f"sh{code}"
+    if code in BaseCollector.SZ_INDEX_CODES:
+        return f"sz{code}"
     prefix = _TENCENT_PREFIX.get(code[0], "sz")
     return f"{prefix}{code}"
 
@@ -125,7 +135,7 @@ class TencentCollector(BaseCollector):
                 # 注意：腾讯 K 线 volume 单位不统一（主板sh6/sz0/sz3=手×100，科创板sh688=股×1）。
                 # 直接用 ×100 会导致科创板 amount 高估 100 倍，进而污染换手率计算。
                 # 用代码前缀识别：68/688 开头为科创板(股单位)，其余为手单位。
-                vol_factor = 1 if tencent_code.startswith(("sh688", "sh689")) else 100
+                vol_factor = 1 if tencent_code.startswith(("sh688", "sh689", "bj")) else 100
                 amount = float(row[6]) if len(row) > 6 and row[6] else volume * close * vol_factor
                 rows.append(
                     {

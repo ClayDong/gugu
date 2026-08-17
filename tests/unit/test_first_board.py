@@ -126,6 +126,13 @@ class TestFirstBoardStrategyParams:
         with pytest.raises(ValueError, match="limit_up_lookback"):
             FirstBoardStrategy({"limit_up_lookback": 20})
 
+    def test_turnover_rate_is_required_for_turnover_filter(self):
+        df = _make_df()
+        df["turnover_rate"] = 0.02
+        strategy = FirstBoardStrategy()
+        result = strategy._generate_signals_impl(_inject_first_board(df, 130))
+        assert bool(result.loc[130, "turnover_ok"]) is False
+
 
 class TestFirstBoardSignal:
     """首板买入信号测试。"""
@@ -186,6 +193,32 @@ class TestFirstBoardSignal:
                 result.loc[board_idx, "signal"] != "buy"
                 or result.loc[board_idx, "signal_strength"] < 0.3
             )
+
+    def test_volume_ratio_semantics_keep_buy_condition_reachable(self):
+        df = _make_df()
+        board_idx = 130
+        df = _inject_first_board(df, board_idx, vol_ratio=2.5)
+        df["turnover_rate"] = 0.10
+        for hist_idx in [50, 80, 110]:
+            df.loc[hist_idx, "close"] = df.loc[hist_idx - 1, "close"] * 1.095
+            df.loc[hist_idx, "high"] = df.loc[hist_idx, "close"]
+        strategy = FirstBoardStrategy({"confirm_days": 0})
+        result = strategy._generate_signals_impl(df)
+        assert bool(result.loc[board_idx, "turnover_ok"]) is True
+        assert bool(result.loc[board_idx, "vol_expand_ok"]) is True
+
+    def test_entry_close_is_fixed_for_single_open_position(self):
+        df = _make_df()
+        first_idx, second_idx = 130, 132
+        df = _inject_first_board(df, first_idx, base_price=105.0, vol_ratio=2.5)
+        df = _inject_first_board(df, second_idx, base_price=115.0, vol_ratio=2.5)
+        df["turnover_rate"] = 0.10
+        strategy = FirstBoardStrategy({"confirm_days": 0, "time_stop_window": 10})
+        result = strategy._generate_signals_impl(df)
+        assert (result["signal"] == 1).sum() <= 1
+        assert result.loc[second_idx, "signal"] != 1
+        entry_values = result.loc[result["entry_close"].notna(), "entry_close"]
+        assert len(entry_values.unique()) <= 1
 
     def test_not_first_board_no_signal(self):
         """连续涨停不应产生买入信号（只做首板）。"""

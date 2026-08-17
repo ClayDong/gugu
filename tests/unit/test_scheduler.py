@@ -45,10 +45,10 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     # 4 scan + 1 rsi_scan + 1 screener + 1 screener_validate + 1 screener_validate_eod
     # + 1 screener_auto_tune + 2 range_watchlist + 1 report_close + 1 retry + 4 macro
     # + 1 cache_cleanup + 1 weekly_optimize + 1 heuristic_optimize + 1 weekly_review
-    # + 1 market_temp + 1 intraday_monitor + 1 config_hot_reload
-    # + 1 portfolio_report + 1 signal_daily_validation + 1 signal_weekly = 27
+    # + 1 intraday_monitor + 1 config_hot_reload
+    # + 1 portfolio_report + 1 signal_daily_validation + 1 signal_weekly = 26
     # flow_morning/flow_close/afternoon_flow 已合并到宏观卡片或禁用，不再单独注册
-    assert len(jobs) == 27
+    assert len(jobs) == 26
     job_ids = {j.id for j in jobs}
     assert "intraday_monitor" in job_ids
     assert "scan_1" in job_ids
@@ -76,8 +76,8 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     assert "portfolio_report_1535" in job_ids
     # 缓存清理任务
     assert "cache_cleanup_0700" in job_ids
-    # 市场温度计任务
-    assert "market_temp_0825" in job_ids
+    # 市场温度计在 settings.yaml 中关闭
+    assert "market_temp_0825" not in job_ids
     # 信号绩效反馈任务
     assert "signal_daily_validation_1525" in job_ids
     assert "signal_weekly_2030" in job_ids
@@ -128,6 +128,22 @@ async def test_safe_report_catches_exception(
     mock_engine.send_daily_report.assert_awaited_once()
     # 验证 period 参数被正确传递
     mock_engine.send_daily_report.assert_awaited_with("close")
+    mock_engine._notifier.notify_error.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_safe_afternoon_flow_notifies_error(
+    scheduler: TradingScheduler, mock_engine: mock.AsyncMock
+) -> None:
+    with (
+        mock.patch("gugu.engine.scheduler.is_trading_day", return_value=True),
+        mock.patch("gugu.engine.scheduler_jobs.is_trading_day", return_value=True),
+        mock.patch(
+            "gugu.notifier.flow_report.run_afternoon_report", side_effect=RuntimeError("flow boom")
+        ),
+    ):
+        await scheduler._safe_afternoon_flow()
+    mock_engine._notifier.notify_error.assert_awaited_once()
 
 
 @pytest.mark.asyncio

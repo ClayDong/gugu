@@ -143,6 +143,25 @@ class TestDataManagerMeta:
         meta = await dm.fetch_stock_meta("600519")
         assert meta["prev_close"] == 1490.0
 
+    @pytest.mark.asyncio
+    async def test_fetch_meta_prev_close_is_zero_for_single_history_row(
+        self, dm: DataManager
+    ) -> None:
+        hist_df = pd.DataFrame(
+            {
+                "date": ["2024-01-02"],
+                "close": [1500.0],
+                "open": [1495.0],
+                "high": [1505.0],
+                "low": [1495.0],
+                "volume": [1000000],
+            }
+        )
+        dm.fetch_stock_realtime = AsyncMock(return_value=pd.DataFrame())
+        dm.fetch_stock_history = AsyncMock(return_value=hist_df)
+        meta = await dm.fetch_stock_meta("600519")
+        assert meta["prev_close"] == 0.0
+
 
 class TestDataManagerConcurrentFallback:
     """并发降级测试。"""

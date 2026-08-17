@@ -149,24 +149,24 @@ def test_route_volume_confirmed_buy_passes(df: pd.DataFrame) -> None:
 
 
 def test_route_low_volume_buy_discount(df: pd.DataFrame) -> None:
-    """缩量买入信号置信度应被打折。"""
+    """缩量买入信号置信度应被打折（v0.9.7：0.85 档起，不再一票否决）。"""
     with mock.patch("gugu.engine.signal_router.get_config") as mock_cfg:
         mock_cfg.return_value.strategy.signal_fusion = "any"
         mock_cfg.return_value.strategy.min_confidence = 0.5
         df = df.copy()
-        # 使最新量能约为 20 日均量的 0.82 倍，命中 0.85 折扣档
+        # 使最新量能约为 20 日均量的 0.82 倍，命中 0.95 折扣档
         df.iloc[-1, df.columns.get_loc("volume")] = 800_000
         router = SignalRouter([AlwaysBuy()])
         sig = router.route(df, "600519")
         assert sig is not None
         assert sig["direction"] == "buy"
         assert sig.get("volume_confirmed") is False
-        # 0.8 * 0.85 = 0.68
-        assert sig["confidence"] == pytest.approx(0.68, abs=0.01)
+        # 0.8 * 0.95 = 0.76（v0.9.7 放宽折扣）
+        assert sig["confidence"] == pytest.approx(0.76, abs=0.01)
 
 
 def test_route_shrink_volume_buy_filtered(df: pd.DataFrame) -> None:
-    """极度缩量买入信号应被过滤。"""
+    """极度缩量买入信号置信度应被深度打折但不再直接过滤（v0.9.7 放宽）。"""
     with mock.patch("gugu.engine.signal_router.get_config") as mock_cfg:
         mock_cfg.return_value.strategy.signal_fusion = "any"
         mock_cfg.return_value.strategy.min_confidence = 0.5
@@ -174,7 +174,10 @@ def test_route_shrink_volume_buy_filtered(df: pd.DataFrame) -> None:
         df.iloc[-1, df.columns.get_loc("volume")] = 200_000
         router = SignalRouter([AlwaysBuy()])
         sig = router.route(df, "600519")
-        assert sig is None
+        # 0.8 * 0.85 = 0.68 > 0.5 → 信号保留（不再因缩量被直接过滤）
+        assert sig is not None
+        assert sig.get("volume_confirmed") is False
+        assert sig["confidence"] == pytest.approx(0.68, abs=0.01)
 
 
 def test_route_sell_ignores_volume(df: pd.DataFrame) -> None:

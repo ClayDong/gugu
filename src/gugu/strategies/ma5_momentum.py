@@ -26,6 +26,25 @@ class MA5MomentumStrategy(Strategy):
     name = "ma5_momentum"
     category = "trend"
 
+    def validate_params(self) -> None:
+        positive_params = (
+            "big_yang_lookback",
+            "vol_ma_window",
+            "ma5_break_exit_days",
+        )
+        for name in positive_params:
+            if int(self.params.get(name, 0)) <= 0:
+                raise ValueError(f"{name} 必须大于 0")
+        for name in (
+            "big_yang_gain_pct",
+            "big_yang_vol_ratio",
+            "pullback_tolerance",
+            "shrink_vol_ratio",
+            "profit_deviation_pct",
+        ):
+            if float(self.params.get(name, 0)) < 0:
+                raise ValueError(f"{name} 不能小于 0")
+
     def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         self._ensure_columns(df)
         df = df.copy()
@@ -52,7 +71,7 @@ class MA5MomentumStrategy(Strategy):
 
         # 近 lookback 日内是否出现过放量大阳线
         df["recent_big_yang"] = (
-            df["is_big_yang"].rolling(big_yang_lookback).max().fillna(0).astype(bool)
+            df["is_big_yang"].shift(1).rolling(big_yang_lookback).max().fillna(0).astype(bool)
         )
 
         # 回踩 MA5 条件：收盘价 >= MA5 * (1 - tolerance) 且未跌破 MA5

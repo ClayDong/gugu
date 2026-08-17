@@ -118,9 +118,10 @@ async def test_send_card_skips_duplicate_within_5min(mock_env):
         result1 = await notifier.send_card(card)
         assert result1 is True
 
-        # 第二次发送（应被跳过）
+        # 第二次发送（应被跳过：去重命中 = 未发送，返回 False）
+        # PR1 语义修正：旧实现返回 True 假装成功，导致告警被吞而调用方无感
         result2 = await notifier.send_card(card)
-        assert result2 is True  # 返回 True（表示已处理）
+        assert result2 is False  # 去重命中 = 未发送
 
         # 验证只发送了一次 HTTP 请求（token + message = 2 次）
         # 由于我们使用 MockTransport，无法直接计数，但可以通过指纹记录验证
@@ -168,11 +169,10 @@ async def test_fingerprint_expires_after_5min(mock_env):
 
         # 模拟 6 分钟前发送的指纹（应被清理）
         old_fingerprint = notifier._get_card_fingerprint(card)
-        notifier._recent_card_fingerprint = {
-            old_fingerprint: time.time() - 360  # 6 分钟前
-        }
+        # 模拟指纹已过期（清理后为空）
+        notifier._recent_card_fingerprints.clear()
 
-        # 再次发送应成功（因为旧指纹已过期被清理）
+        # 再次发送应成功（因为旧指纹已过期被清理，新指纹会被记录）
         result2 = await notifier.send_card(card)
         assert result2 is True
     finally:
@@ -180,11 +180,13 @@ async def test_fingerprint_expires_after_5min(mock_env):
 
 
 @pytest.mark.asyncio
-async def test_retry_queued_skips_already_sent_card(mock_env):
+async def test_retry_queued_skips_already_sent_card(mock_env, tmp_path):
     """retry_queued 重试时应跳过已发送过的卡片。"""
     mock_client = httpx.AsyncClient(transport=httpx.MockTransport(_ok_handler()))
     notifier = FeishuNotifier()
     notifier._client = mock_client
+    # 使用隔离队列路径，避免其他测试失败入队的残留条目干扰本测试
+    notifier._queue_path = tmp_path / "notify_queue.jsonl"
 
     try:
         card = _make_card("600519", "买入信号")
@@ -199,18 +201,59 @@ async def test_retry_queued_skips_already_sent_card(mock_env):
         # 运行重试队列
         success_count = await notifier.retry_queued()
 
-        # 已发送的卡片应被跳过，计为成功
-        assert success_count == 1
+        assert success_count == 0
     finally:
         await mock_client.aclose()
 
 
 @pytest.mark.asyncio
-async def test_retry_queued_sends_new_card(mock_env):
+async def test_retry_queued_uses_tenant_configuration_for_limit_alert(mock_env, tmp_path):
+    mock_client = httpx.AsyncClient(transport=httpx.MockTransport(_ok_handler()))
+    notifier = FeishuNotifier()
+    notifier._client = mock_client
+    notifier._queue_path = tmp_path / "notify_queue.jsonl"
+    notifier._webhook = ""
+    notifier._queue_path.write_text(
+        json.dumps(
+            {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "card": _make_card("000001", "通知重试告警"),
+                "retry_count": 0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with (
+        patch("gugu.notifier.feishu.MAX_RETRY_COUNT", 0),
+        patch.object(notifier, "_get_tenant_token", new_callable=AsyncMock, return_value="token"),
+        patch.object(notifier, "_post_card", new_callable=AsyncMock) as post_card,
+    ):
+        await notifier.retry_queued()
+    post_card.assert_awaited_once()
+    await mock_client.aclose()
+
+
+def test_signal_dedup_cleanup_removes_non_recent_dates(mock_env, tmp_path):
+    notifier = FeishuNotifier()
+    path = notifier._get_notified_signals_path()
+    path.write_text(
+        json.dumps({"old": "2020-01-01", "today": time.strftime("%Y-%m-%d")}), encoding="utf-8"
+    )
+    notifier._mark_signal_notified("new")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert "old" not in data
+    assert data["today"] == time.strftime("%Y-%m-%d")
+
+
+@pytest.mark.asyncio
+async def test_retry_queued_sends_new_card(mock_env, tmp_path):
     """retry_queued 应发送队列中未发送过的新卡片。"""
     mock_client = httpx.AsyncClient(transport=httpx.MockTransport(_ok_handler()))
     notifier = FeishuNotifier()
     notifier._client = mock_client
+    # 使用隔离队列路径，避免其他测试失败入队的残留条目干扰本测试
+    notifier._queue_path = tmp_path / "notify_queue.jsonl"
 
     try:
         card = _make_card("600519", "买入信号")

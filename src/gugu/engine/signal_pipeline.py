@@ -297,8 +297,19 @@ class SignalPipeline:
             self._init_market_context(signal, regime, portfolio, account)
 
             # P1修复：盘中前视偏差防护
+            # ⚠️ 2026-08-11 修复（与 engine_mixin AUDIT_LOOKAHEAD 同根因）:
+            # 原实现 is_intraday 时无条件 iloc[:-1]，但 A股日K源盘中不含当日bar
+            # （最后一行=昨日已收盘bar）→ 分析阶段也丢掉昨日完整bar。
+            # 正确语义: 仅当最后一行日期==今日才剔除当日未完成K线。
             is_intraday = rt_all is not None and not rt_all.empty and pd.Timestamp.now().hour < 15
-            df_for_analysis = df.iloc[:-1] if is_intraday and len(df) > 60 else df
+            if is_intraday and len(df) > 60 and "date" in df.columns:
+                _last_bar_date = pd.Timestamp(df["date"].iloc[-1]).date()
+                if _last_bar_date == pd.Timestamp.now().date():
+                    df_for_analysis = df.iloc[:-1]
+                else:
+                    df_for_analysis = df
+            else:
+                df_for_analysis = df
 
             # 阶段判断 + 危险信号 + 量价背离 + 周线趋势
             self._detect_stage_and_danger(signal, symbol, df, df_for_analysis)

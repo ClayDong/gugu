@@ -238,19 +238,19 @@ async def _push_macro_report(
     card["elements"] = elements
 
     # ── 先推送宏观+资金流卡片（数据优先，不等待 LLM）──
-    ok = await notifier.send_card(card)
+    ok = await notifier.send_business_card(card)
     if ok:
         logger.info(f"[macro] {version} 日报推送成功（含资金流）")
     else:
         logger.warning(f"[macro] {version} 日报推送失败（已入重试队列）")
 
-    # ── 后台异步补发大师兄解读（不阻塞主流程）──
-    # LLM 超时或失败不影响宏观数据推送，解读为锦上添花
-    portfolio_summary = _build_portfolio_summary(broker)
-    _wisdom_task = asyncio.create_task(
-        _push_wisdom_interpretation(version, snapshot, builder, notifier, portfolio_summary)
-    )
-    _wisdom_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+    # ── [已关闭] 后台异步补发大师兄解读（LLM 解读已禁用）──
+    # 如需重新启用，取消注释以下 5 行
+    # portfolio_summary = _build_portfolio_summary(broker)
+    # _wisdom_task = asyncio.create_task(
+    #     _push_wisdom_interpretation(version, snapshot, builder, notifier, portfolio_summary)
+    # )
+    # _wisdom_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
 
 async def _push_wisdom_interpretation(
@@ -294,7 +294,7 @@ async def _push_wisdom_interpretation(
             },
             "elements": elements,
         }
-        ok = await notifier.send_card(card)
+        ok = await notifier.send_business_card(card)
         if ok:
             logger.info(f"[macro] {version} 大师兄解读补发成功")
         else:

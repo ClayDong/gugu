@@ -112,5 +112,6 @@ from gugu.notifier.flow_formatter import (  # noqa: F401
     _fmt,
     _fmt_flow,
     _format_decision_guidance,
+    _format_key_industries_section,
     _rotation_label,
 )

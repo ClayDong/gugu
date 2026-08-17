@@ -95,13 +95,16 @@ gugu/
 │       ├── _legacy_config.py   # 旧版 settings() 函数（迁移桥接）
 │       ├── data/                # 数据层
 │       │   ├── manager.py       # DataManager（统一数据入口）
-│       │   ├── quality.py       # 数据质量校验
-│       │   ├── cache.py         # 本地缓存
+│       │   ├── quality.py       # 数据质量校验（v0.9.11 新增 sanitize_dataframe 入口清洗）
+│       │   ├── cache.py         # 本地缓存（LRU + 新鲜度语义盘后盘中分离）
+│       │   ├── source_health.py # 数据源健康监控（事件驱动，持久化健康摘要）
 │       │   ├── ml_models/       # ML 模型持久化（gradient_boost_v1.pkl + scaler）
 │       │   └── collectors/      # 采集器
-│       │       ├── base.py      # BaseCollector 抽象
-│       │       ├── fallback.py  # 主源（新浪，设置中 primary）
+│       │       ├── base.py      # BaseCollector 抽象（含资金流熔断 v0.9.13）
+│       │       ├── fallback.py  # 主源（新浪 Market_Center 全市场快照，v0.9.10）
 │       │       ├── akshare_collector.py # 降级源（东方财富）
+│       │       ├── eastmoney_collector.py # 东方财富 push2 直连 HTTP
+│       │       ├── tencent_collector.py # 终极兜底源（腾讯 ifzq.gtimg.cn qfq 日 K）
 │       │       ├── holder_structure.py # 股东户数采集器
 │       │       └── altalpha/   # 另类Alpha数据采集器（v0.5.9）
 │       │           ├── base.py              # AltAlphaCollector 基类（限流+缓存+降级）
@@ -125,11 +128,23 @@ gugu/
 │       │   ├── trend.py         # 趋势跟踪（海龟/双均线/MACD）
 │       │   ├── mean_revert.py   # 均值回归（RSI/KDJ/布林带）
 │       │   ├── breakout.py      # 突破（箱体/Dual Thrust/支撑阻力）
-│       │   ├── generator.py     # LLM 自然语言策略生成器
+│       │   ├── first_board.py   # 首板策略
+│       │   ├── breakout_rebound.py # 断板反包反弹（陈学长6大规则组合）
+│       │   ├── ma5_momentum.py  # MA5 动量突破
+│       │   ├── rebound_system.py # 陈学长断板反包实战体系（手册完整版，v0.9.22）
+│       │   ├── rebound/         # 断板反包规则 SSoT（单一事实源，v0.9.22）
+│       │   │   ├── __init__.py
+│       │   │   └── rules.py     # 形态规则唯一实现 RULE_VERSION="v2.0.0-20260812"
+│       │   ├── fanbao_strategy.py # 小圈圈儿《反包策略》V2.0，5+1 种战法
+│       │   ├── asset_combo.py   # 认知资产组合验证策略
+│       │   ├── risk_rules.py    # 通用风险/认知规则组件（活跃度/破位止损/板上减半）
+│       │   ├── rebound_elite.py # 断板反包精英追涨（已验证子集）
+│       │   ├── fanbao/          # 反包策略相关模块
 │       │   ├── regime_cycle.py  # 四周期/幻灭期反弹/布林超跌（公众号战法，v0.9.5）
 │       │   ├── capability.py    # 策略能力画像（市场状态/周期/风险偏好匹配）
-│       │   ├── registry.py      # 策略注册表
-│       │   └── manifest.py      # 策略注册中心（统一清单加载器）
+│       │   ├── registry.py      # 策略注册表（含 verify_registry_consistency 自检）
+│       │   ├── manifest.py      # 策略注册中心（统一清单加载器）
+│       │   └── generator.py     # LLM 自然语言策略生成器
 │       ├── backtest/            # 回测引擎
 │       │   ├── engine.py
 │       │   ├── metrics.py       # 收益/夏普/回撤/胜率
@@ -179,26 +194,54 @@ gugu/
 │       │   ├── signal_router.py # 多策略信号融合
 │       │   ├── signal_pipeline.py # 信号过滤/处理管道
 │       │   └── realtime_scanner.py # 盘中 5 分钟实时信号扫描（v0.9.x）
-│       ├── health/               # 健康守护（watchdog，P0 静默失效检测）
-│       │   └── watchdog.py       # 心跳新鲜度/信号历史失忆/重启风暴检测
+│       ├── health/               # 健康守护（watchdog + auto_recover）
+│       │   ├── __init__.py        # 导出自愈闭环
+│       │   ├── watchdog.py        # 5 项健康检查 + 告警去重（120min 指纹抑制）
+│       │   └── auto_recover.py    # 自动修复闭环（v0.9.12，安全边界+冷却防风暴）
 │       ├── web/                 # Web 仪表盘
 │       │   ├── app.py           # FastAPI 应用
 │       │   └── static/index.html # 单页仪表盘
 │       └── utils/
-│           ├── log.py           # 日志
+│           ├── log.py           # 日志（10MB 轮转，30天保留；GUGU_TEST_MODE 重定向）
+│           ├── single_instance.py # 单实例锁（PID+命令行验证，v0.9.8）
 │           └── calendar.py      # 交易日历（节假日识别）
 ├── tests/
-│   ├── unit/                    # 单元测试
+│   ├── unit/                    # 单元测试（2277 passed, 1 skipped）
+│   │   ├── test_analysis.py
+│   │   ├── test_backtest_benchmark.py
+│   │   ├── test_asset_combo.py
+│   │   ├── test_auto_recover.py
+│   │   ├── test_p0_first_batch_guard.py
+│   │   ├── test_p0_second_batch_fix.py
+│   │   ├── test_rebound_system.py
+│   │   ├── test_rebound_rules_consistency.py
+│   │   ├── test_fanbao_strategy.py
+│   │   ├── test_risk_rules.py
+│   │   ├── test_lookahead_fix.py
+│   │   └── ...
 │   ├── integration/             # 集成测试
 │   ├── fixtures/                # 测试数据
-│   └── conftest.py
+│   └── conftest.py              # 脏数据 fixture + GUGU_TEST_MODE 隔离
 ├── scripts/
 │   ├── run_backtest.py          # 回测入口
 │   ├── run_paper.py             # 模拟盘入口
 │   ├── run_web.py               # Web 仪表盘入口
+│   ├── run_scheduler.py         # 调度器入口（含单实例锁）
+│   ├── run_live.py              # 实盘入口（阶段四）
+│   ├── health_watchdog.py       # 健康看门狗（支持 --auto-fix 自愈模式）
+│   ├── alert_triage.py          # 告警分诊采集（agent cron 每30分钟）
+│   ├── e2e_verify.py            # E2E 验证（锁/心跳/磁盘/数据源/通知链路）
+│   ├── scan_rebound_market.py   # 断板反包扫描
+│   ├── gen_rebound_charts.py    # 断板反包图表
+│   ├── draw_rebound_samples.py  # 断板反包样本绘制
+│   ├── validate_asset_combo.py  # 认知资产组合验证
+│   ├── walk_forward_asset_combo.py # 资产组合 Walk-Forward 验证
+│   ├── score_rebound_signals.py # 断板反包信号评分
+│   ├── render_rebound_signal_charts.py # 信号图表渲染
 │   ├── show_portfolio.py        # 持仓查看入口
 │   ├── verify_strategies.py     # 策略注册中心验证 CLI
-│   └── run_live.py              # 实盘入口（阶段四）
+│   ├── compare_wisdom.py        # Wisdom 决策对比
+│   └── optimize_params.py       # 参数优化器（GA/PSO）
 ├── docs/                        # 文档
 │   ├── PRODUCT.md               # 产品文档
 │   ├── TECH.md                  # 技术文档
@@ -351,10 +394,23 @@ gugu/
 ## 元数据
 
 - 创建日期：2026-07-06
-- 版本：v0.8.1
+- 版本：v0.9.22
 - 阶段：阶段三（信号监控）+ P0 修复上线质量门禁 + 数据源健康监控 + 信号绩效验证闭环
-- 测试：1974 passed, 1 skipped（pre-existing failures in test_cloud_trend/test_first_board/test_ma5_momentum/test_north_force_long）
-- 最近审查：2026-07-31（多专家综合审查修复 + v0.8.1 上线审查）
+- 测试：2277 passed, 1 skipped（排除5个已知预存失败文件：test_cloud_trend/test_first_board/test_ma5_momentum/test_north_force_long/test_first_board_prefilter）
+- 最近审查：2026-07-31（多专家综合审查修复 + v0.8.1 上线审查）；2026-08-12（rebound_system 落地 + 6 预存失败修复，全量回归 0 failed）
+- v0.9.22 变更（2026-08-12）：
+  - 🆕 新策略 rebound_system（陈学长断板反包实战体系·手册完整版）
+    - 硬性过滤：市值50-150亿 / 股价>3元 / 题材热度(近250日涨停≥3) / 股性(20日均振幅>3%) / 非ST非创业非科创
+    - 四阶段：S1首板(成交额≈流通市值1%±0.3%) → S2暴力洗盘(量≥1.5×首板) → S3护盘(收盘不破首板开盘价) → S4反包(收盘>首板最高价, 成交额≥1.5%)
+    - 三买点：A缩量回踩(优化四条件默认开) / B底背离 / C放量追击(历史证伪默认关)
+    - 六卖出：SL1破位 / SL2次日不及预期 / TP1反包减仓 / TP2顶背离 / TP3量价背离+倍量 / TP4压力位
+    - 定位 experimental：settings.yaml 未启用，edge 未证实前仅信号观察
+  - 🆕 scan_rebound_market.py 升级：成交额估算列 + 振幅/题材过滤 + 洗盘1.5×严格化 + 反包收盘>首板最高价
+  - 🔴 修复 6 个预存测试失败（全量回归 2277 passed, 0 failed）：
+    - 代码缺陷：cache.get 时间基准不一致（质量校验用真实 today，缓存注入 now 失效）
+      → FreshnessRule 支持 now 注入 + validate_stock_history 透传 + cache.get 统一 ref_time
+    - 测试数据日期写死：test_bj_volume_factor 改动态日期
+    - 测试过期：test_screener_params 对齐 v0.9.10（bear 不再跳过，候选×0.4）
 - v0.8.1 变更（2026-08-01 上线级质量审查修复）：
   - 🔴 P0修复：风控状态隔离
     - P0-1：RiskManager scope 参数隔离生产/回测状态文件（risk_state.json vs risk_state_backtest.json）

@@ -75,6 +75,46 @@ class TestFallbackMode:
         expected_stop = round(1500.0 * (1 - FALLBACK_STOP_LOSS_PCT), 2)
         assert decision["stop_loss_price"] == expected_stop
 
+    def test_fallback_dict_stage_no_crash(self, fallback_advisor: WisdomAdvisor) -> None:
+        """signal_pipeline 注入的 stage/danger_signals 是 dict（非字符串/列表），不得崩溃（2026-08-10 回归）。
+
+        实测：首个真实信号（600519 buy）触发 TypeError: unhashable type: 'dict'（stage 消费），
+        修复后又暴露第二处：danger_signals 为 dict 时 dict[:2] 抛 KeyError: slice(None, 2, None)。
+        两处都是 signal_only Wisdom fallback 整体失败的根因，智慧建议缺失。
+        """
+        signal = {
+            "symbol": "600519",
+            "direction": "buy",
+            "price": 1258.0,
+            "confidence": 0.6,
+            "strategies": ["double_yin"],
+            "stage": {
+                "stage": "normal_up",
+                "confidence": 0.53,
+                "description": "正常升势阶段",
+                "suggestion": "顺势持有/加仓，分层下注",
+            },
+            "danger_signals": {
+                "signals": ["long_upper_shadow"],
+                "severity": "low",
+                "description": "检测到危险信号",
+                "action": "谨慎",
+            },
+        }
+        result = fallback_advisor.advise(signal)
+
+        decision = result["wisdom_decision"]
+        assert decision["source"] == "fallback"
+        assert "stop_loss_price" in decision
+        wisdom = result["wisdom"]
+        # 阶段名应被正常消费（dict 内层 stage 名 → 中文映射）
+        assert "升势" in wisdom.get("entry_check", "") or "市场阶段" in wisdom.get(
+            "entry_check", ""
+        )
+        # 危险信号列表应被正确提取（dict 内层 signals）
+        assert "long_upper_shadow" in wisdom.get("entry_check", "")
+        assert "psychology_check" in wisdom
+
     def test_fallback_low_confidence_filtered(self, fallback_advisor: WisdomAdvisor) -> None:
         """低置信度买入信号应被入场过滤。"""
         signal = {

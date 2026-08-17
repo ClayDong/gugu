@@ -222,6 +222,8 @@ class DataManager:
                 adjust_type=getattr(source_collector, "adjust_type", "none"),
             )
 
+        self._cache_key_for = _cache_key_for  # 供 _return_fallback_success 复用（2026-08-10）
+
         # 直接跳过主源的场景：sina不支持的方法直接走降级源，避免无效失败计数。
         # v0.9.10：fetch_stock_realtime([]) 全市场快照不再跳过 sina——
         # SinaCollector 已实现新浪 Market_Center 分页快照（东财限流保底源）。
@@ -287,51 +289,56 @@ class DataManager:
                 for fb in self._fallbacks
             }
             done, pending = await asyncio.wait(tasks.values(), return_when=asyncio.FIRST_COMPLETED)
-        for t in done:
-            try:
-                df = t.result()
-                if df is not None and not df.empty:
-                    success_fb = next(fb for fb, task in tasks.items() if task is t)
-                    self._health.record_fallback_used(success_fb.source, method)
-                    logger.info("降级源 {} 成功获取 {}", success_fb.source, method)
-                    df = self._validate(method, df, args)
-                    self._set_attrs(df, success_fb)
-                    df.attrs["data_available"] = not df.empty
-                    cache().set(_cache_key_for(success_fb), df)
-                    # 持久化缓存
-                    if method == "fetch_stock_history" and len(args) >= 1 and not df.empty:
-                        self._parquet_cache.set(
-                            str(args[0]), int(args[1]) if len(args) > 1 else 60, df, adjust_type
-                        )
-                    for pt in pending:
-                        pt.cancel()
-                    return df
-            except Exception as e:
-                logger.warning("降级源完成结果异常: {}", e)
-        if pending:
-            all_done, _ = await asyncio.wait(pending, timeout=_COLLECTOR_TIMEOUT_SECONDS)
-            for t in all_done:
-                try:
-                    df = t.result()
-                    if df is not None and not df.empty:
-                        success_fb = next(fb for fb, task in tasks.items() if task is t)
-                        self._health.record_fallback_used(success_fb.source, method)
-                        logger.info("降级源 {} 成功获取 {}", success_fb.source, method)
-                        df = self._validate(method, df, args)
-                        self._set_attrs(df, success_fb)
-                        df.attrs["data_available"] = not df.empty
-                        cache().set(_cache_key_for(success_fb), df)
-                        if method == "fetch_stock_history" and len(args) >= 1 and not df.empty:
-                            self._parquet_cache.set(
-                                str(args[0]),
-                                int(args[1]) if len(args) > 1 else 60,
-                                df,
-                                getattr(success_fb, "adjust_type", "none"),
-                            )
-                        return df
-                except Exception:
-                    continue
 
+            # 收集已完成任务结果（安全取值，容忍异常/取消）
+            def _collect(
+                done_tasks: set[asyncio.Task],
+            ) -> list[tuple[asyncio.Task, pd.DataFrame | None]]:
+                results: list[tuple[asyncio.Task, pd.DataFrame | None]] = []
+                for t in done_tasks:
+                    try:
+                        if not t.cancelled():
+                            res = t.result()
+                            results.append((t, res if isinstance(res, pd.DataFrame) else None))
+                    except Exception:
+                        results.append((t, None))
+                return results
+
+            done_results = _collect(done)
+
+            # 快速路径：已有真实成功 → 立即返回（保持 FIRST_COMPLETED 快速语义）
+            for t, df in done_results:
+                if df is not None and not df.empty:
+                    return self._return_fallback_success(t, df, tasks, method, args, adjust_type)
+
+            # 熔断判定（2026-08-10 修复）：已完成结果中有熔断空标记
+            breaker_results = [
+                res
+                for _, res in done_results
+                if res is not None and res.attrs.get("flow_breaker_active")
+            ]
+            if breaker_results:
+                # 等 pending 完成（最多 _COLLECTOR_TIMEOUT_SECONDS），确认没有真实成功
+                if pending:
+                    all_done, _ = await asyncio.wait(pending, timeout=_COLLECTOR_TIMEOUT_SECONDS)
+                    pending_results = _collect(all_done)
+                    done_results += pending_results
+                # 熔断短路：所有 fallback 均熔断（或空）→ 静默返回，不记录 all 失败
+                if not any(res is not None and not res.empty for _, res in done_results):
+                    df = breaker_results[0]
+                    df.attrs["data_available"] = False
+                    df.attrs["data_error"] = "flow_breaker_active"
+                    return df
+
+            # 常规路径：等待剩余 pending 完成后返回首个成功
+            if pending:
+                all_done, _ = await asyncio.wait(pending, timeout=_COLLECTOR_TIMEOUT_SECONDS)
+                done_results += _collect(all_done)
+            for t, df in done_results:
+                if df is not None and not df.empty:
+                    return self._return_fallback_success(t, df, tasks, method, args, adjust_type)
+
+        # 所有真实 fallback 都失败（非熔断）→ 记录 all 失败 + 缓存兜底
         logger.warning("所有数据源 {} 均失败，尝试缓存兜底", method)
         self._health.record_failure("all", method, detail="all_sources_failed")
         stale_cached = cache().get(cache_key, ignore_ttl=True)
@@ -356,6 +363,30 @@ class DataManager:
         df.attrs["data_source"] = collector.source
         df.attrs["adjust_type"] = getattr(collector, "adjust_type", "none")
         df.attrs.setdefault("fetch_timestamp", pd.Timestamp.now().isoformat())
+        return df
+
+    def _return_fallback_success(
+        self,
+        task: asyncio.Task,
+        df: pd.DataFrame,
+        tasks: dict[BaseCollector, asyncio.Task],
+        method: str,
+        args: tuple,
+        adjust_type: str,
+    ) -> pd.DataFrame:
+        """降级源成功结果的统一返回路径（校验/属性/内存缓存/持久化缓存）。"""
+        success_fb = next(fb for fb, t in tasks.items() if t is task)
+        self._health.record_fallback_used(success_fb.source, method)
+        logger.info("降级源 {} 成功获取 {}", success_fb.source, method)
+        df = self._validate(method, df, args)
+        self._set_attrs(df, success_fb)
+        df.attrs["data_available"] = not df.empty
+        cache().set(self._cache_key_for(success_fb), df)
+        # 持久化缓存
+        if method == "fetch_stock_history" and len(args) >= 1 and not df.empty:
+            self._parquet_cache.set(
+                str(args[0]), int(args[1]) if len(args) > 1 else 60, df, adjust_type
+            )
         return df
 
     def _validate(self, method: str, df: pd.DataFrame, args: tuple) -> pd.DataFrame:

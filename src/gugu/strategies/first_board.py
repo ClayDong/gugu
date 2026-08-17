@@ -212,11 +212,13 @@ class FirstBoardStrategy(Strategy):
         # ════════════════════════════════════════════════
         # 条件2: 换手率判断（5%-15%）
         # ════════════════════════════════════════════════
-        # 换手率 = 成交量 / 流通股本（这里用 amount / close 近似）
-        # 由于没有流通股本数据，用 vol_ratio 作为替代指标
-        df["turnover_ok"] = (df["vol_ratio"] >= turnover_min * 10) & (
-            df["vol_ratio"] <= turnover_max * 10
-        )
+        if "turnover_rate" in df.columns:
+            turnover_rate = pd.to_numeric(df["turnover_rate"], errors="coerce")
+            if turnover_rate.dropna().median() > 1:
+                turnover_rate = turnover_rate / 100
+            df["turnover_ok"] = (turnover_rate >= turnover_min) & (turnover_rate <= turnover_max)
+        else:
+            df["turnover_ok"] = True
 
         # ════════════════════════════════════════════════
         # 条件3: 量能放大（2-3倍前5日均量）
@@ -300,50 +302,44 @@ class FirstBoardStrategy(Strategy):
             + score_position
         ).clip(0, 1)
 
-        # ════════════════════════════════════════════════
-        # 卖出信号（隔日卖出逻辑）
-        # ════════════════════════════════════════════════
-        # 买入后次日卖出信号
-        df["in_position"] = buy_first_board.rolling(window=time_stop_window + 1).sum() > 0
-
-        # 追踪入场点信息
-        df["entry_close"] = np.nan
-        df.loc[buy_first_board, "entry_close"] = df.loc[buy_first_board, "close"]
-        df["entry_close"] = df["entry_close"].ffill()
-
-        # ── 卖点1: 高开止盈（高开≥3%）──
-        df["gap_up"] = (df["open"] - df["prev_close"]) / df["prev_close"]
-        sell_high_open = df["in_position"] & (df["gap_up"] >= take_profit_pct)
-
-        # ── 卖点2: 低开止损（低开>2%）──
-        sell_low_open = df["in_position"] & (df["gap_up"] < -stop_loss_pct)
-
-        # ── 卖点3: 时间止损（持仓超期）──
-        df["days_since_entry"] = 0
-        buy_idx_list = df.index[buy_first_board].tolist()
-        for i in range(len(df)):
-            prev_buys = [idx for idx in buy_idx_list if idx <= i]
-            if prev_buys:
-                df.loc[df.index[i], "days_since_entry"] = i - prev_buys[-1]
-        sell_time_stop = df["in_position"] & (df["days_since_entry"] >= time_stop_window)
-
-        # ── 卖点4: 破位止损（跌破入场日收盘价）──
-        sell_break_entry = df["in_position"] & (df["close"] < df["entry_close"])
-
-        # ════════════════════════════════════════════════
-        # 信号赋值（卖出优先于买入）
-        # ════════════════════════════════════════════════
         min_confidence = float(self.params.get("min_confidence", 0.0))
         buy_cond_final = buy_first_board & (df["confidence_score"] >= min_confidence)
-
+        df["gap_up"] = (df["open"] - df["prev_close"]) / df["prev_close"]
         df["signal"] = 0
-        df.loc[buy_cond_final, "signal"] = 1
+        df["in_position"] = False
+        df["entry_close"] = np.nan
+        df["days_since_entry"] = 0
 
-        # 卖出信号：时间止损优先（隔日必卖），然后是高低开
-        df.loc[
-            sell_time_stop | sell_high_open | sell_low_open | sell_break_entry,
-            "signal",
-        ] = -1
+        in_position = False
+        entry_close = np.nan
+        entry_index = -1
+        for i, index in enumerate(df.index):
+            if not in_position:
+                if bool(buy_cond_final.iloc[i]):
+                    in_position = True
+                    entry_close = float(df["close"].iloc[i])
+                    entry_index = i
+                    df.loc[index, "signal"] = 1
+                    df.loc[index, "in_position"] = True
+                    df.loc[index, "entry_close"] = entry_close
+                continue
+
+            days_since_entry = i - entry_index
+            df.loc[index, "in_position"] = True
+            df.loc[index, "entry_close"] = entry_close
+            df.loc[index, "days_since_entry"] = days_since_entry
+            gap_up = df["gap_up"].iloc[i]
+            should_sell = (
+                days_since_entry >= time_stop_window
+                or gap_up >= take_profit_pct
+                or gap_up < -stop_loss_pct
+                or df["close"].iloc[i] < entry_close
+            )
+            if should_sell:
+                df.loc[index, "signal"] = -1
+                in_position = False
+                entry_close = np.nan
+                entry_index = -1
 
         # ════════════════════════════════════════════════
         # 置信度赋值

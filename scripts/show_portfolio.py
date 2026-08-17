@@ -102,7 +102,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="gugu 持仓查看")
     parser.add_argument("--trades", action="store_true", help="查看交易记录")
     parser.add_argument("--all", action="store_true", help="查看全部（持仓+交易记录）")
-    parser.add_argument("--version", action="version", version="gugu 0.1.0")
+    parser.add_argument("--version", action="version", version="gugu 0.6.0")
     args = parser.parse_args()
 
     broker = PaperBroker()

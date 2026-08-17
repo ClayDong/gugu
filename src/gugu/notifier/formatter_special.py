@@ -314,7 +314,7 @@ def format_holdings_sell_alert(stocks: list[dict]) -> dict[str, Any]:
 
     return _card(
         title="⚠️ 持仓卖出信号告警",
-        template="red",
+        template="green",
         sections=["\n".join(lines)],
         note="明策 · gugu · 持仓告警",
     )
@@ -388,7 +388,7 @@ def format_take_profit_alert(
     if history_lines:
         sections.append("\n".join(history_lines))
 
-    template = "red" if trigger_step == 4 else "yellow"
+    template = "green" if trigger_step == 4 else "red"
     title_prefix = "大跌减半" if trigger_step == 4 else "止盈减仓"
 
     return _card(

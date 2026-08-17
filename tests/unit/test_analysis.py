@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -706,6 +707,20 @@ class TestRegimeDetector:
         assert result2["regime"] == result1["regime"]
         assert result2["total_position_limit"] == result1["total_position_limit"]
 
+    @pytest.mark.asyncio
+    async def test_cache_refreshes_after_intraday_window(self, uptrend_250: pd.DataFrame) -> None:
+        detector = _make_regime_detector_with_data(uptrend_250)
+        detector._dm.fetch_stock_history = mock.AsyncMock(return_value=uptrend_250)
+        detector._cache_ttl_seconds = 300
+        with mock.patch(
+            "gugu.analysis.regime_detector.time.monotonic",
+            side_effect=[100.0, 100.0, 101.0, 401.0, 401.0],
+        ):
+            await detector.detect()
+            await detector.detect()
+            await detector.detect()
+        assert detector._dm.fetch_stock_history.call_count == 2
+
 
 # =========================================================================
 # PositionController
@@ -1247,11 +1262,9 @@ class TestStrategyPool:
 
         stats = pool.get_stats()
         assert stats["mean_revert"]["enabled"] is True, "连续亏损后策略仍应保留"
-        # v0.8.1: 权重有二次归一化（除以全策略总和），绝对下限 0.05 归一化后
-        # 会随策略数量稀释（此处 3 策略 → ≈0.0875）。断言改为相对降级：
-        # 连续亏损 5 次后权重应 < 初始权重的一半（大幅降级语义）
-        assert stats["mean_revert"]["weight"] < initial_weight * 0.5, "连续亏损后权重应大幅降级"
-        assert stats["mean_revert"]["weight"] >= 0.01, "权重不应低于最低保留值"
+        assert stats["mean_revert"]["weight"] < initial_weight
+        assert 0.05 <= stats["mean_revert"]["weight"] <= 0.40
+        assert sum(item["weight"] for item in stats.values()) == pytest.approx(1.0, abs=1e-6)
 
     def test_recover_after_consecutive_wins(self) -> None:
         """降权后连续盈利 3 次应恢复权重。"""

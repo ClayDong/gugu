@@ -420,7 +420,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--show", action="store_true", help="显示当前策略参数")
     parser.add_argument("--notify", action="store_true", help="优化完成后推送飞书通知")
-    parser.add_argument("--version", action="version", version="gugu 0.1.0")
+    parser.add_argument("--version", action="version", version="gugu 0.6.0")
     args = parser.parse_args()
 
     asyncio.run(

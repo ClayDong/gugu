@@ -57,7 +57,12 @@ def _check_env_file() -> None:
     env_vars = {
         line.split("=", 1)[0].strip() for line in lines if "=" in line and not line.startswith("#")
     }
-    for key in ["feishu_app_id", "feishu_app_secret", "feishu_chat_id"]:
+    for key in [
+        "feishu_app_id",
+        "feishu_app_secret",
+        "feishu_chat_id",
+        "feishu_business_chat_id",
+    ]:
         if key not in env_vars:
             missing.append(key)
         else:
@@ -95,10 +100,20 @@ def _check_feishu() -> None:
         from gugu.config import env as env_getter
 
         cfg = env_getter()
-        if cfg.feishu_app_id and cfg.feishu_app_secret and cfg.feishu_chat_id:
-            print(f"✅ 飞书已配置 (chat_id={cfg.feishu_chat_id[:8]}...)")
+        if (
+            cfg.feishu_app_id
+            and cfg.feishu_app_secret
+            and cfg.feishu_chat_id
+            and cfg.feishu_business_chat_id
+        ):
+            print(
+                f"✅ 飞书已配置 (系统chat={cfg.feishu_chat_id[:8]}..., 业务群={cfg.feishu_business_chat_id[:8]}...)"
+            )
         else:
             print("⚠️  飞书配置不完整，通知功能将跳过")
+            print(
+                "   需要: FEISHU_APP_ID / FEISHU_APP_SECRET / FEISHU_CHAT_ID(系统) / FEISHU_BUSINESS_CHAT_ID(业务群)"
+            )
     except Exception:
         print("⚠️  飞书配置检查失败")
 

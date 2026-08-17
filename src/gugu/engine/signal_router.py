@@ -89,6 +89,7 @@ class SignalRouter:
             }
         """
         if df.empty or len(df) < 30:
+            logger.debug("{} route 跳过: 数据不足 {} 行", symbol, len(df))
             return None
 
         votes: list[tuple[str, int, float]] = []  # (strategy_name, signal, confidence)
@@ -103,10 +104,27 @@ class SignalRouter:
                 conf = float(last.get("confidence", 0))
                 if sig != 0:
                     votes.append((strategy.name, sig, conf))
+                else:
+                    # P0-2 可观测性（2026-08-05）：策略当日无信号也要留痕——
+                    # 此前"通过 0 过滤 0"无法区分「策略没触发」vs「触发被过滤」
+                    logger.debug(
+                        "{} 策略 {} 当日无信号（signal=0）最后bar={} conf={:.3f}",
+                        symbol,
+                        strategy.name,
+                        df["date"].iloc[-1] if "date" in df.columns else "?",
+                        conf,
+                    )
             except Exception as e:
                 logger.warning("策略 {} 在 {} 执行失败: {}", strategy.name, symbol, e)
 
         if not votes:
+            # P0-2 可观测性：全策略无信号（区别于"有信号但被过滤"）
+            logger.info(
+                "{} 所有策略无信号（{} 只策略，最后bar={}）——非过滤，是策略未触发",
+                symbol,
+                len(self._strategies),
+                df["date"].iloc[-1] if "date" in df.columns else "?",
+            )
             return None
 
         # 统计买卖票数（仅统计实际触发投票的策略）
@@ -118,9 +136,9 @@ class SignalRouter:
         # 趋势类/突破类策略若发出 sell，说明趋势已破坏，禁止买入
         # 这些策略的 sell 信号覆盖任何 buy 信号
         # v0.7.3 优化：策略池精简后，仅保留核心趋势/突破类策略的卖出硬否决
+        # v0.9.7 P0 修复：移除 hot_money（2026-08-01 样本外证伪已从注册表删除）
         _trend_breakdown_strategies = {
             "box_breakout",
-            "hot_money",
         }
         sell_strategy_names = {n for n, _ in sell_votes}
         trend_breakdown = sell_strategy_names & _trend_breakdown_strategies
@@ -203,6 +221,16 @@ class SignalRouter:
                 triggered = pool_result.get("strategies", ["weighted"])
                 avg_conf = pool_result["confidence"]
             else:
+                # P0-2 可观测性：加权融合无方向（票数/置信度未达内部门槛）
+                logger.info(
+                    "{} 加权融合无方向: votes={} buy={} sell={} pool_conf={:.3f}——"
+                    "有策略触发但未达融合门槛（非策略未触发）",
+                    symbol,
+                    len(votes),
+                    len(buy_votes),
+                    len(sell_votes),
+                    float(pool_result.get("confidence", 0) or 0),
+                )
                 return None
 
         elif self._fusion_rule == "unanimous":
@@ -258,6 +286,9 @@ class SignalRouter:
         # 原逻辑：单策略触发时 avg_conf = 该策略 confidence（常为 1.0），无共识惩罚
         # 修复：单策略信号置信度打折，多策略共识才给高置信度
         # A股高噪声环境，单策略信号可靠性远低于多策略共识
+        # v0.9.7 P0 修复：共识折扣从 0.7+0.3*ratio 放宽为 0.85+0.15*ratio——
+        # 原折扣过重（单策略直接打 7 折），叠加成交量折扣后置信度系统性低于 0.4
+        # 门槛导致 30 天 0 信号。单策略 0.85 起步、多策略接近 1.0，仍保留共识溢价。
         # 非加权模式：计算获胜方向的平均置信度
         if self._fusion_rule != "weighted":
             chosen_votes = buy_votes if direction == "buy" else sell_votes
@@ -269,11 +300,13 @@ class SignalRouter:
         agreeing_count = len(triggered)
         if active_voters > 1:
             consensus_ratio = min(agreeing_count / active_voters, 1.0)
-            consensus_factor = 0.7 + 0.3 * consensus_ratio
+            consensus_factor = 0.85 + 0.15 * consensus_ratio
             avg_conf *= consensus_factor
 
         # v0.7.10 新增：买入信号成交量确认
         # 缩量买入往往是假突破/诱多，需对置信度打折；卖出允许缩量（恐慌性抛售）
+        # v0.9.7 P0 修复：折扣下限从 0.5 放宽到 0.85（极端缩量），
+        # 原 0.5 与共识折扣叠乘会把置信度压到门槛以下导致 0 信号。
         volume_factor = self._apply_volume_confirmation(df, direction)
         avg_conf *= volume_factor
 
@@ -326,12 +359,6 @@ class SignalRouter:
             if cloud_data:
                 result["market_context"] = cloud_data
 
-        # 游资策略专属：附加三数交易法数据到 market_context
-        if "hot_money" in triggered:
-            hm_data = self._extract_hot_money_context(df)
-            if hm_data:
-                result["market_context"] = hm_data
-
         return result
 
     def _apply_volume_confirmation(self, df: pd.DataFrame, direction: str) -> float:
@@ -341,7 +368,11 @@ class SignalRouter:
         - 买入需要成交量配合，缩量买入往往为假突破/诱多
         - 卖出不强制放量（恐慌性抛售可能缩量）
 
-        返回折扣因子（0.5 ~ 1.0），直接乘到置信度上。
+        v0.9.7 P0 修复：折扣从 0.5~1.0 放宽到 0.85~1.0——
+        原 0.5 档与共识折扣叠乘会把置信度压到门槛以下，导致 30 天 0 信号。
+        缩量仅轻度降级（0.85），不再"一票否决"；趋势/共识已承担主要过滤职责。
+
+        返回折扣因子（0.85 ~ 1.0），直接乘到置信度上。
         """
         if direction != "buy" or "volume" not in df.columns or len(df) < 20:
             return 1.0
@@ -356,10 +387,10 @@ class SignalRouter:
             if ratio >= 1.0:
                 return 1.0
             if ratio >= 0.8:
-                return 0.85
+                return 0.95
             if ratio >= 0.5:
-                return 0.7
-            return 0.5
+                return 0.9
+            return 0.85
         except Exception:
             return 1.0
 
@@ -414,35 +445,6 @@ class SignalRouter:
             )
             is_yang = bool(last.get("is_yang", False))
             context["double_yin_reversal"] = prev_yin and prev2_yin and (not is_yin or is_yang)
-
-            return context
-        except Exception:
-            return None
-
-    def _extract_hot_money_context(self, df: pd.DataFrame) -> dict[str, Any] | None:
-        """从游资策略输出中提取三数交易法上下文数据。
-
-        游资策略在 df 上附加了 hm_has_limit_up / hm_ref_volume /
-        hm_days_since_limit_up / hm_is_shrink_entry / hm_is_expand_exit /
-        hm_is_rolling 等列，提取最后一行的值供飞书卡片展示。
-        """
-        try:
-            if df.empty:
-                return None
-            last = df.iloc[-1]
-            required_cols = ["hm_has_limit_up", "hm_ref_volume", "hm_days_since_limit_up"]
-            if not all(c in df.columns for c in required_cols):
-                return None
-
-            context = {
-                "hm_has_limit_up": bool(last.get("hm_has_limit_up", False)),
-                "hm_ref_volume": float(last.get("hm_ref_volume", 0) or 0),
-                "hm_days_since_limit_up": int(last.get("hm_days_since_limit_up", 0) or 0),
-                "hm_is_shrink_entry": bool(last.get("hm_is_shrink_entry", False)),
-                "hm_is_expand_exit": bool(last.get("hm_is_expand_exit", False)),
-                "hm_is_rolling": bool(last.get("hm_is_rolling", False)),
-                "hm_current_volume": float(last.get("volume", 0)),
-            }
 
             return context
         except Exception:

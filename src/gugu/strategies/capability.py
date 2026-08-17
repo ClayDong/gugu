@@ -98,9 +98,7 @@ STRATEGY_PROFILES: dict[str, StrategyProfile] = {
     "dragon_tiger_short": StrategyProfile(
         "dragon_tiger_short", EXPLAINABILITY_RULE, IN_REVIEW, 0.10, "龙虎榜反包"
     ),
-    "hot_money": StrategyProfile(
-        "hot_money", EXPLAINABILITY_RULE, IN_REVIEW, 0.10, "游资三数交易法"
-    ),
+    # hot_money 已移除（2026-08-01 样本外证伪：集中度超标不可信）
     "industry_capital_momentum": StrategyProfile(
         "industry_capital_momentum", EXPLAINABILITY_TECHNICAL, IN_REVIEW, 0.15, "行业资金动量"
     ),
@@ -128,6 +126,13 @@ STRATEGY_PROFILES: dict[str, StrategyProfile] = {
     ),
     "rebound_elite": StrategyProfile(
         "rebound_elite", EXPLAINABILITY_RULE, IN_REVIEW, 0.10, "断板反包精英"
+    ),
+    "fanbao": StrategyProfile(
+        "fanbao",
+        EXPLAINABILITY_RULE,
+        IN_REVIEW,
+        0.10,
+        "小圈圈儿《反包策略》：炸板反包+高位跌停反包",
     ),
     # ── 公众号战法（2026-08-01 落地，技术面规则明确，待事件研究验证）──
     "regime_cycle_four": StrategyProfile(

@@ -58,10 +58,17 @@ def _get_web_broker() -> Any:
     return _web_broker
 
 
-def _get_web_risk() -> RiskManager:
+def _get_web_risk(*, reload: bool = False) -> RiskManager:
+    """获取 Web 风控管理器单例。
+
+    Args:
+        reload: 如果 True，每次调用从磁盘重新加载状态，确保与引擎状态一致。
+    """
     global _web_risk
     if _web_risk is None:
         _web_risk = RiskManager()
+    if reload:
+        _web_risk.reload()
     return cast(RiskManager, _web_risk)
 
 
@@ -109,7 +116,7 @@ def _require_admin_auth(x_api_key: str | None = Header(None, alias="X-API-Key"))
 
 def create_app() -> FastAPI:
     """创建 FastAPI 应用实例。"""
-    app = FastAPI(title="gugu 交易仪表盘", version="0.1.0")
+    app = FastAPI(title="gugu 交易仪表盘", version="0.6.0")
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
@@ -165,8 +172,8 @@ def create_app() -> FastAPI:
 
     @app.get("/api/risk")
     async def get_risk_status() -> dict[str, Any]:
-        """获取风控状态。"""
-        risk = _get_web_risk()
+        """获取风控状态（从磁盘 reload 确保与引擎一致）。"""
+        risk = _get_web_risk(reload=True)
         broker = _get_web_broker()
         account = broker.get_account()
         start_value = broker.daily_start_value
@@ -341,9 +348,9 @@ def create_app() -> FastAPI:
             except Exception:
                 pass
 
-        # 熔断状态
+        # 熔断状态（reload 确保与引擎一致）
         try:
-            risk = _get_web_risk()
+            risk = _get_web_risk(reload=True)
             is_halted = risk.is_halted
         except Exception:
             is_halted = False

@@ -65,12 +65,23 @@ class AkshareCollector(BaseCollector):
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
     def fetch_stock_realtime(self, symbols: list[str]) -> pd.DataFrame:
-        """获取个股实时行情（全市场快照后过滤）。"""
+        """获取个股实时行情（全市场快照后过滤）。
+
+        2026-08-11 修复：接入资金流熔断（v0.9.9 熔断的同类遗漏——实时行情方法漏接）。
+        ak.stock_zh_a_spot_em 全市场快照对东财限流最敏感（RemoteDisconnected），
+        主源降级窗口内每轮 fallback 并发调用失败 3 次 retry，15 分钟刷 228 条 ERROR
+        （v0.9.9 单日 1705 次事故同款）。熔断后冷却期静默返回空，DataManager
+        识别 flow_breaker_active attrs 短路（不记 all 假失败）。
+        """
+        if self._flow_breaker_active():
+            return self._flow_breaker_guard("实时行情")
         try:
             df = ak.stock_zh_a_spot_em()
         except Exception as e:
             logger.error(f"akshare 实时行情失败: {e}")
+            self._flow_record_failure()
             raise
+        self._flow_record_success()
 
         if symbols:
             codes = {self.normalize_symbol(s) for s in symbols}

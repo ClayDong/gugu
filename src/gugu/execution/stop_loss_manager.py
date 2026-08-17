@@ -271,7 +271,8 @@ class StopLossManager:
                             )
                             if not notify_ok:
                                 logger.error(
-                                    "[track_live] 止损提醒 {} 通知失败，请检查飞书配置", symbol
+                                    "[track_live] 止损提醒 {} 通知未发送（可能是飞书去重/配置/网络问题，首条通知已发送则为正常去重）",
+                                    symbol,
                                 )
                         else:
                             logger.info("[track_live] 止损提醒 {} 已去重，跳过通知", symbol)

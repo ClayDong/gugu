@@ -81,6 +81,8 @@ class SectorRotation:
     def __init__(self):
         self._cache: dict[str, Any] = {}
         self._cache_date: str = ""
+        self._cool_until: float = 0.0  # 熔断冷却到期时间戳
+        self._cool_reason: str = ""
 
     async def detect(self, top_n: int = 5) -> dict[str, Any]:
         """检测当前强势板块。
@@ -88,11 +90,21 @@ class SectorRotation:
         Returns:
             dict with: hot_sectors, sector_scores, recommended_sectors, reason
         """
+        import time
         from datetime import date
 
         today = str(date.today())
         if self._cache_date == today and self._cache:
             return self._cache
+
+        now = time.time()
+        if self._cool_until > now:
+            logger.warning(
+                "板块轮动冷却中（剩余 {:.0f}s）: {}",
+                self._cool_until - now,
+                self._cool_reason,
+            )
+            return self._fallback(reason=self._cool_reason)
 
         try:
             # 获取行业板块行情
@@ -127,8 +139,11 @@ class SectorRotation:
             return result
 
         except Exception as e:
-            logger.error(f"板块轮动检测失败: {e}")
-            return self._fallback()
+            cool_seconds = 1800  # 30分钟冷却，与资金流熔断一致
+            self._cool_until = time.time() + cool_seconds
+            self._cool_reason = f"板块数据获取失败，冷却 {cool_seconds // 60} 分钟: {e}"
+            logger.error("板块轮动检测失败，触发冷却: {}", self._cool_reason)
+            return self._fallback(reason=self._cool_reason)
 
     def _score_sectors(self, df: pd.DataFrame) -> dict[str, dict[str, float]]:
         """计算板块评分"""
@@ -193,13 +208,13 @@ class SectorRotation:
 
         return filtered
 
-    def _fallback(self) -> dict[str, Any]:
+    def _fallback(self, reason: str = "板块数据获取失败") -> dict[str, Any]:
         return {
             "hot_sectors": [],
             "sector_scores": {},
             "recommended_sectors": [],
             "categories": [],
-            "reason": "板块数据获取失败",
+            "reason": reason,
         }
 
     # ════════════════════════════════════════════════════════════

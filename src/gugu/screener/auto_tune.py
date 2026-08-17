@@ -153,10 +153,15 @@ def generate_adjustments(
     adjustments: dict[str, float] = {}
 
     # 情况 A：效果差 → 收紧
-    poor_performance = (
-        metrics.avg_open_excess < params.tune_tighten_open_excess
-        and metrics.win_rate < params.tune_tighten_win_rate
-    )
+    # P1-3 修复（2026-08-05）：AND 条件 → OR 主导判定。
+    # 原 `超额<-0.3 AND 胜率<25%` 同时满足才收紧——实测超额 -0.35%（显著为负）
+    # 但胜率 28%（>25%）→ 永远判"中性区间"不调整，负 alpha 长期存续。
+    # 超额收益是主信号：显著为负即应收紧（即使胜率略高于阈值，因为
+    # 超额为负意味着开盘买入系统性亏损）；胜率过低是辅信号（低胜率+正超额
+    # 可能是肥尾策略，需结合超额判断）。
+    poor_excess = metrics.avg_open_excess < params.tune_tighten_open_excess
+    poor_win_rate = metrics.win_rate < params.tune_tighten_win_rate
+    poor_performance = poor_excess or poor_win_rate
     too_much_stop_loss = metrics.stop_loss_rate > params.tune_tighten_stop_loss_rate
 
     if poor_performance or too_much_stop_loss:

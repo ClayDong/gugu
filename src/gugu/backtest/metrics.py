@@ -215,11 +215,9 @@ def _sortino_ratio(
         return 0.0
     daily_rf = rf_rate / periods
     excess = returns - daily_rf
-    # Only negative deviations
-    downside = returns[returns < 0]
-    if len(downside) == 0:
-        return 0.0
-    downside_std = float(downside.std())
+    # Sortino: downside deviation = sqrt(mean(min(0, r - rf)^2)) over all periods
+    downside_devs = np.minimum(excess, 0)
+    downside_std = float(np.sqrt(np.mean(downside_devs**2)))
     if downside_std == 0 or np.isnan(downside_std):
         return 0.0
     mean_excess = float(excess.mean())

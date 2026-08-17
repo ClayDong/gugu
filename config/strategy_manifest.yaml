@@ -172,13 +172,18 @@ signal_strategies:
     summary: RSI 离开超卖区买入、离开超买区卖出
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 通过 2026-07-26
+    # 2026-08-15 审查：validation_gate 缺少 total_trades/avg_sharpe 等量化字段，待补充全市场回测记录
     validation_gate:
       status: conditional_pass
       sample: 震荡市适用，RSI 超卖反弹逻辑
       metrics:
         suitable_regime: sideways
         logic: RSI<30 超卖买入，RSI>70 超买卖出
-      next_action: 观察实盘信号质量
+        total_trades: 0    # 待补充
+        avg_sharpe: 0.0    # 待补充
+        avg_return: 0.0    # 待补充
+        profitable_ratio: 0.0  # 待补充
+      next_action: 补充全市场量化的回测指标（收益/夏普/回撤/胜率）
   macd:
     name: MACD 金叉死叉
     module: gugu.strategies.trend
@@ -380,7 +385,7 @@ signal_strategies:
     module: gugu.strategies.double_yin
     class: DoubleYinMoneyBagStrategy
     source: 实战派「双阴钱袋子」战法（微信公众号文章深度整理）
-    enabled: true
+    enabled: true  # 2026-08-15 从 verified 降级 experimental（Sharpe -0.02/param_stability 0.4），保留信号观察
     summary: 主力洗盘结束 + 倍量反转确认的波段拐点信号（3K 组合确认）
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0
@@ -515,6 +520,30 @@ signal_strategies:
         paper_return: 0.0
       next_action: 证伪策略，不入信号融合；除非重新设计（如加入弱市保护+严格止损）并样本外验证通过
     notes: "验证核心结论（2026-07-31 事件研究）：\\n断板反包形态整体期望为负（5日超额-1.5%, p=0.04显著逆基准），不能作独立策略。\\n但有三条被验证有效的规律：\\n  1. 只做高活跃老妖（历史涨停≥20）方向正确：低活跃股-5.6% → 高活跃股打平\\n  2. 唯一正收益格子 = 高活跃妖股+放量反包追涨（5日+4.08%/10日+9.99%/盈亏比2.76，样本16不显著）\\n  3. 最爱的护盘回踩低吸买点统计显著为负（胜率38%），已废弃\\n因此本策略只做反包追涨、只在高活跃股触发、只在牛/反弹市启用。\\n\\n设计参数：\\n  - 活跃度过滤：过去120日涨停≥8次（历史高活跃/妖股特征）\\n  - 反包确认：收盘突破洗盘日最高 + 放量(量比≥1.2) + 收阳\\n  - 护盘支撑：洗盘后不破首板开盘价×(1-3%)（主力成本底线）\\n  - 止损：跌破首板开盘价×(1-8%) + 10日时间止损\\n定位：作为牛市环境下的高赔率彩票（承认胜率不高，用活跃度+择时放大赔率）。\\n"
+  rebound_system:
+    name: 断板反包·陈学长实战体系（手册完整版）
+    module: gugu.strategies.rebound_system
+    class: ReboundSystemStrategy
+    source: 陈学长不吃面「断板反包实战体系」系统提示词最终版（2026-08-12 用户手册逐条量化）
+    enabled: false  # experimental：历史裁决 edge 未证实（买点A p=0.53 存疑/买点C证伪），实盘前向验证中
+    summary: 手册完整版四阶段形态（吸筹首板→暴力洗盘→护盘→反包）+ 三买点（A缩量回踩/B底背离/C放量追击）+ 六卖出（TP1反包减仓/TP2顶背离/TP3涨停未遂/TP4压力位/SL1破位/SL2次日不及预期）+ 成交额体系（流通市值×1%/1.5-2%/0.5%）。买点C历史证伪默认禁用；买点A优化四条件默认启用（回测+3.78%/p=0.0504）
+    params_entry: strategy_defaults.yaml
+    validation: 2026-08-11 裁决——市值50-150亿维持；买点A动态池+0.73%/笔 p=0.53 conditional_pass；买点C显著为负禁用；优化四条件探索性正（+3.78% p=0.0504 N=41）
+    validation_gate:
+      status: conditional_pass
+      sample: 动态池103只形态股 2024-02~2026-07（买点A）；优化四条件 N=41 探索性
+      metrics:
+        total_trades: 103
+        avg_return: 0.0073
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.477
+        param_stability: 1.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: 实盘前向验证积累 30+ 可交易信号后复验 p 值；买点C维持禁用；只在牛/反弹市启用
+    notes: "手册逐条量化（2026-08-12）：\\n硬性过滤5项：市值50-150亿 / 非ST非创业板非科创板 / 股价>3元 / 题材热度(近250日涨停≥3) / 股性(20日均振幅>3%)。\\n形态四阶段：S1首板(成交额≈流通市值1%±0.3%, 缩量优先) → S2暴力洗盘(跌幅≤-3%, 量≥1.5×首板) → S3护盘(收盘不破首板开盘价, 横盘缩量≤50%) → S4反包(涨幅>5%或涨停, 收盘>首板最高价, 成交额≥流通市值1.5%-2%)。\\n买点：A缩量回踩支撑(优化四条件默认开) / B底背离(价新低MACD不新低+缩量, 日线近似) / C放量追击(历史证伪, 默认关)。\\n卖出：TP1反包即减仓50% / TP2顶背离 / TP3量价背离涨停未遂(拉8-9%成交额<流通市值1%) / TP4压力位(前高/BOLL上轨) / SL1破位止损(收盘破首板开盘价) / SL2次日不及预期(低开-3%无拉升)。\\n核心铁律：首板开盘价=主力成本底线，收盘有效跌破=形态失败。\\n数据说明：腾讯K线无成交额，用 volume×100×close 估算；扫描器传入 float_mv 启用精确成交额标准。\\n定位：experimental，仅信号观察；买点C禁用；确认 edge 前不进入核心信号融合。\\n"
+
   ml_factor:
     name: LightGBM 多因子策略
     module: gugu.strategies.ml_factor
@@ -537,11 +566,7 @@ signal_strategies:
         paper_signals: 0
         paper_return: 0.0
       next_action: 待全市场回测验证 + 4 项解锁条件通过后再启用
-    notes: "核心思想：规则策略在 A 股市场有效性不足，用机器学习找因子组合的非线性 alpha。\n流程：AlphaFactory 计算 26 因子\
-      \ → PCA 正交化去冗余 → LightGBM 预测 5 日涨跌 → 阈值生成信号。\n约束（适配 8GB RAM / 2 核 CPU）：\n  -\
-      \ LightGBM: n_estimators=100, max_leaves=31, num_threads=2\n  - 训练数据不超过 500\
-      \ 只股票 × 750 天\n  - 不引入 PyTorch/TensorFlow\nWalk-Forward：前 80% 训练，后 20% 验证，避免前视偏差。\n\
-      启用条件：必须通过 9 项准入门禁 + paper 验证 30+ 信号。\n"
+    notes: "核心思想：规则策略在 A 股市场有效性不足，用机器学习找因子组合的非线性 alpha。\n流程：AlphaFactory 计算 26 因子\n      → PCA 正交化去冗余 → LightGBM 预测 5 日涨跌 → 阈值生成信号。\n约束（适配 8GB RAM / 2 核 CPU）：\n  -\n      LightGBM: n_estimators=100, max_leaves=31, num_threads=2\n  - 训练数据不超过 500\n      只股票 × 750 天\n  - 不引入 PyTorch/TensorFlow\nWalk-Forward：前 80% 训练，后 20% 验证，避免前视偏差。\n\n      启用条件：必须通过 9 项准入门禁 + paper 验证 30+ 信号。\n"
   north_force_long:
     name: 长线主力吸筹跟随
     module: gugu.strategies.north_force_long
@@ -807,7 +832,7 @@ signal_strategies:
     module: gugu.strategies.blogger_rules.chenxuezhang
     class: ChenXueZhangStrategy
     source: 陈学长不吃面系列视频转写（6大独特规则）
-    enabled: true
+    enabled: false  # 2026-08-15 持仓回测审计证伪：事件研究+1.02%→持仓回测-0.22%，Sharpe-0.24
     summary: 假调整+尾盘骗线+涨停中继+趋势回踩+量价背离+突破回踩，6个高胜率规则组合触发
     params_entry: strategy_defaults.yaml
     # 2026-08-01 出场端优化（exit_mode=optimized，A/B 验证）：
@@ -818,20 +843,22 @@ signal_strategies:
     #      legacy 收益+11.22%/夏普+0.151/交易1687 → optimized +19.44%/+0.225/1034。
     #      持仓中位 2-3日→7-10日，<=2日占比 58-63%→11-15%。
     validation: conditional_pass 2026-08-01 - 事件研究入场端有效（val 10d +1.02% p=0.000）；引擎级夏普从 legacy -0.15 提升到 optimized +0.225（A/B 同池对比），出场端优化落地
+    # 2026-08-15 持仓回测审计：1105只主板500d，100只抽样回测。总收益均值-0.22%，Sharpe -0.24，胜率46.85%。
+    # 口径偏差：事件研究+1.02% vs 持仓回测-0.22%（高估1.24%）。非严重高估，但正超额不成立。
     notes: '核心规则：假调整（R12）缩量回踩均线、尾盘骗线（R15）、涨停中继（R18）、趋势回踩（R22）、量价背离（R25）、突破回踩（R28）。'
     validation_gate:
       status: conditional_pass
-      sample: 15 只活跃题材股，600 交易日（事件研究，2024-02~2026-07，2435信号）
+      sample: 15 只活跃题材股，600 交易日（事件研究，2024-02~2026-07，2435信号）+ 1105只主板持仓回测审计（100只抽样）
       metrics:
-        total_trades: 2435
-        avg_return: 0.0128
-        avg_sharpe: 0.0
-        max_drawdown: 0.0
-        profitable_ratio: 0.0
+        total_trades: 2435（事件研究） / 13430（持仓回测）
+        avg_return: 0.0128（事件研究） / -0.0022（持仓回测）
+        avg_sharpe: 0.0（事件研究更新前） / -0.24（持仓回测）
+        max_drawdown: 0.0（事件研究更新前） / -0.2023（持仓回测均值）
+        profitable_ratio: 0.0（事件研究更新前） / 0.4685（持仓回测）
         param_stability: 0.0
         paper_signals: 0
         paper_return: 0.0
-      next_action: 出场端优化已落地（optimized 模式夏普-0.15→+0.225）。持续 paper 观察 30+ 信号后转 verified；2026 年超额衰减需月度监控
+      next_action: 持仓回测审计完成。事件研究高估1.24%，Sharpe -0.24且不盈利。建议降级为disabled，或确认出口端优化后的A/B模拟夏普+0.225是否被持仓回测复现。持续paper观察30+信号后决策。
   linjudaye:
     name: 邻居大爷规则策略
     module: gugu.strategies.blogger_rules.linjudaye
@@ -847,20 +874,23 @@ signal_strategies:
     # 另发现：策略只有5个买入规则(R01/02/03/05/08)且无卖出信号→引擎回测资金锁死失真，
     #   已补 max_hold_days=10 时间止损。引擎级A/B：收益 +10.05%→+14.16%、夏普 +0.101→+0.118。
     validation: conditional_pass 2026-08-01 - 40股事件研究校准后验证期超额+0.37%(p=0.001)显著，2026衰减修复；引擎级(含时间止损)夏普+0.118，收益+14.16%
+    # 2026-08-15 持仓回测审计：1105只主板500d，100只抽样回测。总收益均值+13.48%，Sharpe +0.02，胜率33.40%。
+    # 口径偏差：事件研究+0.37% vs 持仓回测+13.48%（低估13.11%）。超跌抄底策略在多次交易后累积了超额收益，
+    # 事件研究仅看10日超额，低估了策略的复合效应。但Sharpe仅+0.02，波动大。
     notes: '核心规则：地量抄底（R01）、黄金分割买入（R02）、缩量回踩（R03）、量能背离（R04）、箱体震荡突破（R05）、均线粘合突破（R06）、龙抬头（R07）、量价齐升（R08）。'
     validation_gate:
       status: conditional_pass
-      sample: 15 只活跃题材股，600 交易日（事件研究，2024-02~2026-07，2247信号）
+      sample: 15 只活跃题材股，600 交易日（事件研究，2024-02~2026-07，2247信号）+ 1105只主板持仓回测审计（100只抽样）
       metrics:
-        total_trades: 2247
-        avg_return: 0.0109
-        avg_sharpe: 0.0
-        max_drawdown: 0.0
-        profitable_ratio: 0.0
+        total_trades: 2247（事件研究） / 13371（持仓回测）
+        avg_return: 0.0109（事件研究） / 0.1348（持仓回测均值）
+        avg_sharpe: 0.0（事件研究更新前） / 0.02（持仓回测）
+        max_drawdown: 0.0（事件研究更新前） / -0.2424（持仓回测均值）
+        profitable_ratio: 0.0（事件研究更新前） / 0.3340（持仓回测）
         param_stability: 0.0
         paper_signals: 0
         paper_return: 0.0
-      next_action: 参数校准+时间止损已落地（验证期p=0.001显著，2026衰减修复）。持续 paper 观察 30+ 信号后转 verified；月度监控 2026 超额是否保持非负
+      next_action: 持仓回测审计完成。事件研究低估13.11%，持仓回测+13.48%/Sharpe+0.02。正收益可验证但波动大，建议保持enabled，补充Sharpe>0的正股比例统计后考虑升级。
   ml_gradient_boost:
     name: ML GradientBoosting 策略
     module: gugu.strategies.ml_gradient_boost
@@ -1121,36 +1151,147 @@ signal_strategies:
     module: gugu.strategies.regime_cycle
     class: DeathValleyReboundStrategy
     source: 公众号《八月，来了~~》（幻灭期个股修复反弹）
-    enabled: true
+    enabled: false  # 2026-08-15 持仓回测审计：事件研究+3.02%→持仓回测-0.57%，Sharpe-5.33，信号低频(1185笔/100股)无正超额，从enabled降级
     summary: 幻灭期(MA5<MA60空头排列)+20日累计跌幅>10%超跌 + 3日不创新低 + KDJ金叉状态 + 站上5日线 → 修复性反弹买入；跌破5日线/持有超限 → 卖出
     params_entry: strategy_defaults.yaml
+    # 2026-08-15 持仓回测审计：1105只主板500d，100只抽样回测。总收益均值-0.57%，Sharpe -5.33，胜率27.85%。
+    # 口径偏差：事件研究+3.02%(p=0.0012) vs 持仓回测-0.57%（高估3.59%严重）。信号低频且持仓回测无正超额。
+    validation: conditional_pass 2026-08-15 - 持仓回测审计：事件研究高估3.59%，100只抽样Sharpe-5.33/收益-0.57%不盈利。降级disabled。
     validation_gate:
       status: conditional_pass
-      sample: 15股×600日事件研究（88事件，12/15股有信号，集中度19%，剔除最大贡献者后仍显著）
+      sample: 15股×600日事件研究（88事件）+ 1105只主板持仓回测审计（100只/1185笔交易）
       metrics:
         excess_10d: 0.0202
         p_value_10d: 0.0006
         val_excess_10d: 0.0302
         val_p_10d: 0.0012
         param_stability: 稳健（8-12%阈值均显著，20日窗口甜蜜点；10d太少/30d失效）
-      next_action: paper 观察 30+ 真实信号后转 verified
+        bt_total_return: -0.0057  # 持仓回测审计补充
+        bt_sharpe: -5.33
+        bt_max_drawdown: -0.0167
+        bt_win_rate: 0.2785
+      next_action: 持仓回测审计完成。事件研究高估3.59%，Sharpe-5.33无正超额。已从enabled降级为disabled。暂不考虑恢复，除非有新的入场信号改造。
   bollinger_oversold_rebound:
     name: 布林下轨超跌反弹
     module: gugu.strategies.regime_cycle
     class: BollingerOversoldReboundStrategy
     source: 公众号《八月，来了~~》（一路砸盘跌出布林下轨才有报复性反弹）
-    enabled: true
+    enabled: false  # 2026-08-15 持仓回测审计：事件研究+3.65%→持仓回测-2.24%，Sharpe-1.78，从enabled降级
     summary: 20日累计跌幅>12%超跌 + 收盘跌破布林下轨 → 超跌反弹买入；反弹到中轨（目标位）/持有超限 → 卖出。站不上中轨没拐点
     params_entry: strategy_defaults.yaml
+    # 2026-08-15 持仓回测审计：1105只主板500d，100只抽样回测。总收益均值-2.24%，Sharpe -1.78，胜率52.52%。
+    # 口径偏差：事件研究+3.65%(p=0.0001) vs 持仓回测-2.24%（高估5.89%严重超估）。全部策略中事件研究最显著，持仓回测偏差最大。
+    validation: conditional_pass 2026-08-15 - 持仓回测审计：事件研究高估5.89%，100只抽样Sharpe-1.78/收益-2.24%不盈利。降级disabled。
     validation_gate:
       status: conditional_pass
-      sample: 15股×600日事件研究（90事件，集中度13%，剔除最大贡献者后p=0.000仍显著，2024/2025/2026三年全正超额）
+      sample: 15股×600日事件研究（90事件）+ 1105只主板持仓回测审计（100只/856笔交易）
       metrics:
         excess_10d: 0.0352
         p_value_10d: 0.0001
         val_excess_10d: 0.0365
         val_p_10d: 0.0001
-      next_action: paper 观察 30+ 真实信号后转 verified
+        bt_total_return: -0.0224  # 持仓回测审计补充
+        bt_sharpe: -1.78
+        bt_max_drawdown: -0.0476
+        bt_win_rate: 0.5252
+      next_action: 持仓回测审计完成。事件研究高估5.89%（全部策略中最大偏差），Sharpe-1.78无正超额。已从enabled降级为disabled。暂不考虑恢复。
+  asset_combo:
+    name: 认知资产组合验证策略（risk_rules 五条组件 + regime 过滤）
+    module: gugu.strategies.asset_combo
+    class: AssetComboStrategy
+    source: 首板入场 + risk_rules 五条认知资产 + HS300 regime 过滤（三层架构验证载体）
+    enabled: false
+    summary: 涨停首板入场 + entry_gap_filter(0-3%开盘溢价) + regime_filter(弱势期入场) + support_break_stop(破位止损) + detect_lock_profit_days(板上减半)。非独立盈利策略，Sharpe全负；gap+regime 弱势可作为风控工具嵌入其他策略
+    params_entry: strategy_defaults.yaml
+    validation: conditional_pass（2026-08-15 三轮验证：512只主板500d 事件研究 WF 5d +0.82%/p=0.36；持仓回测595只 A组合+0.31%/Sharpe-37.84/B +0.57%/-37.99/D +0.76%/-0.93。真alpha来源=弱势+gap过滤，破位止损=回撤控制，板上减半=无效，位置/活跃度=幸存者偏差）
+    notes: '三层架构验证载体（STRATEGY_LIFECYCLE.md）。六条认知资产审计最终真值表（2026-08-15）：
+
+      count_limit_ups 活跃度：无效（90d幸存者偏差）
+
+      position_percentile 位置：负贡献（滤掉高位趋势股）
+
+      entry_gap_filter 开盘溢价：减亏核心（5日改善+0.67%/10日+2.37%）
+
+      apply_support_break_stop 破位止损：回撤控制工具（改善max_dd 5.68%，但降收益+0.31%→+0.76%）
+
+      detect_lock_profit_days 板上减半：无效（大样本与时间止损无区别）
+
+      regime 弱势过滤：唯一alpha来源（弱势期+gap +1.92% p=0.07；强势期-1.08% p=0.007 显著亏）
+
+      关键教训：陈学长"牛市战法"完全反了——是弱势反弹期战法；真alpha不在K线形态，在「市场环境×入场时机」二维过滤。
+      三条被证伪的旧结论：活跃度=唯一正因子(90d幸存者偏差)→gap=alpha(500d事件研究)→持仓Sharpe全负(持仓回测审判)。
+      建议用法：entry_gap_filter + regime_filter 作为其他策略的入场前风控组件。
+      '
+    validation_gate:
+      status: conditional_pass
+      sample: 512只主板×500d 事件研究 + 595只×250+d 持仓回测
+      metrics:
+        total_trades: 242（WF） / 1105（持仓回测）
+        avg_excess_5d: 0.0082
+        p_value_5d: 0.36
+        avg_return: 0.0031（A组合持仓回测）
+        avg_sharpe: -37.84（A组合）/ -0.93（D组合仅时间止损）
+        max_drawdown: -7.19%（A组合）/ -12.87%（D组合）
+        profitable_ratio: 0.223（A组合）
+      next_action: 不启用；提取 gap_max=0.03 + regime 弱势过滤作为「风控组件」嵌入其他 conditional_pass 策略的入场校验
+  fanbao:
+    name: 小圈圈儿《反包策略》V2.0 完整版（5+1战法）
+    module: gugu.strategies.fanbao_strategy
+    class: FanbaoStrategy
+    source: 小圈圈儿《反包策略》广东经济出版社，2025年6月，原书完整修正版 V2.0
+    enabled: false  # V2.0 重构完成，待全市场回测验证
+    summary: 5+1战法：①跌停板战法（高位/低位连板跌停次日高开）②炸板反包（涨停→炸板→>6%→次日高开）③一字涨停板反包（一字板断板整理后高开）④反包回调战法（有反包基因的股票回调企稳再进）⑤跳空涨停式反包（跳空缺口涨停断板后高开）+⑥暴力洗盘（主流题材急跌次日高开）。统一进场信号=次日高开。含情绪周期/风险红线/性价比评分
+    params_entry: strategy_defaults.yaml
+    # 2026-08-15 升级到 V2.0 原书完整修正版：
+    # 原有2种战法 → 扩展为5+1种战法
+    # 新增：6条风险红线、7阶段情绪周期、性价比评分、统一高开进场信号
+    # 对应文档：docs/validation/反包策略执行框架V2.0.md
+    # 注意：当前只实现了代码逻辑，尚未回测验证
+    validation_gate:
+      status: pending
+      sample: 0 只股票，0 个交易日（V2.0 重构未回测）
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+        max_drawdown: 0.0
+        profitable_ratio: 0.0
+        param_stability: 0.0
+        paper_signals: 0
+        paper_return: 0.0
+      next_action: V2.0 已实现，需做全市场回测验证后评估是否启用。5+1战法各自独立，建议先验证炸板反包（模式二）再做全量
+    notes: 'V2.0 原书完整修正版（2026-08-15）。
+      5+1 战法：
+
+      ① 跌停板战法（极端反包）：涨停→断板→跌停→次日高开买。
+         分类：高位（连板≥2，市值≥50亿，性价比=市值×连板高度）
+               低位（仅一板断后跌停，条件可适当放宽）
+         核心：连板高度越高越好，市值越大越好。
+
+      ② 炸板反包（新手首选）：涨停→炸板(盘中打开未封)→收盘≥6%→次日高开买。
+         条件：市值≥50亿，炸板日高开，炸板日高位收盘。
+
+      ③ 一字涨停板反包：一字板→断板整理→高开放量买。
+         排除：第3/4板才出现一字加速（已高位）。
+         位置要求：年线附近或底部。
+
+      ④ 反包回调战法：有"反包基因"（历史涨停→断板→反包）的股票
+         → 回调3-10天→出现企稳阳星→再次高开放量买。
+         回调幅度不超过5%。
+
+      ⑤ 跳空涨停式反包：跳空高开涨停（开盘>昨日最高）→一板断→高开买。
+         大市值=资金合力强劲。
+
+      +⑥ 暴力洗盘战法：涨停后→急速下跌(>7%)→次日高开买。
+         条件：主流题材+热门股+大市值暴跌更能确认是洗盘。
+
+      通用规则：
+      - 风险红线6条（ST/立案/低价/低市值/阴跌/退潮题材）
+      - 情绪周期7阶段（只做启动-发酵-主升）
+      - 通用前置条件（市值≥50亿/位置低位/题材热度≥3次涨停）
+      - 统一进场信号=次日高开（原书核心：跌停当天不能潜伏）
+      - 性价比评分：市值分(0-40)+连板高度分(0-40)+题材分(0-20)
+      '
 risk_strategies:
   trailing_stop:
     name: 浪谷递进移动止损

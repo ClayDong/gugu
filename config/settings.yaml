@@ -61,14 +61,14 @@ strategy:
     # 牛市（3/3条件满足）：核心+实验策略全开（experimental仅参与信号观察）
     bull:
       - box_breakout
-      - double_yin
+      - double_yin  # experimental：Sharpe -0.02，2026-08-15 从 verified 降级
       - rsi_reversal
-      - chenxuezhang
+      # chenxuezhang 已移除：2026-08-15 持仓回测审计证伪（Sharpe -0.24）
       - linjudaye
       - price_volume_signal
       - regime_cycle_four      # 四周期模型（2026-08-01 公众号战法，in_review）
-      - death_valley_rebound   # 幻灭期修复反弹（2026-08-01 公众号战法，in_review）
-      - bollinger_oversold_rebound  # 布林下轨超跌反弹（2026-08-01 公众号战法，in_review）
+      # death_valley_rebound 已移除：2026-08-15 持仓回测审计：事件研究+3.02%→持仓回测-0.57%，Sharpe-5.33
+      # bollinger_oversold_rebound 已移除：2026-08-15 持仓回测审计：事件研究+3.65%→持仓回测-2.24%，Sharpe-1.78
       # rebound_elite 已移除：2026-08-01 Walk-Forward 样本外证伪（验证期10日-5.40%/超额-6.95% p=0.035显著为负）
       # hot_money 已移除：2026-08-01 事件研究证伪（510信号依赖单股sh688041占36%，剔除后验证期超额-0.77%转负）
       # ma5_momentum 已移除：2026-08-01 事件研究证伪（63信号全部不显著）
@@ -78,12 +78,12 @@ strategy:
       - box_breakout
       - double_yin
       - rsi_reversal
-      - chenxuezhang
+      # chenxuezhang 已移除：2026-08-15 持仓回测审计证伪（Sharpe -0.24）
       - linjudaye
       - price_volume_signal
       - regime_cycle_four
-      - death_valley_rebound
-      - bollinger_oversold_rebound
+      # death_valley_rebound 已移除：2026-08-15 持仓回测审计证伪
+      # bollinger_oversold_rebound 已移除：2026-08-15 持仓回测审计证伪
       # rebound_elite 已移除：2026-08-01 Walk-Forward 样本外证伪
       # hot_money 已移除：2026-08-01 事件研究证伪（集中股依赖）
       # ma5_momentum 已移除：2026-08-01 事件研究证伪（信号过稀不显著）
@@ -93,8 +93,8 @@ strategy:
       - box_breakout
       - double_yin
       - rsi_reversal
-      - death_valley_rebound   # 超跌反弹在震荡市适用
-      - bollinger_oversold_rebound
+      # death_valley_rebound 已移除：2026-08-15 持仓回测审计证伪
+      # bollinger_oversold_rebound 已移除：2026-08-15 持仓回测审计证伪
     # 熊市/暴跌：空仓观察，不启用任何买入策略
     bear: []
     crash: []
@@ -108,16 +108,17 @@ strategy:
   # 三个策略均为"有条件通过"，无一达到严格上线标准，权重分配已按证据强度调整
   verified_strategies:
     - box_breakout      # conditional_pass（回测证据支持，Walk-Forward 未完全达标）
-    - double_yin        # conditional_pass（收益弱正，需 paper 验证）
-    - rsi_reversal      # conditional_pass（Walk-Forward 通过，唯一严格达标者）
+    - rsi_reversal      # conditional_pass（Walk-Forward 通过，震荡市专用）
+    # double_yin 已移除：2026-08-15 Sharpe -0.02 不满足条件，降为 experimental
   # 实验性策略（仅 paper 模式参与信号融合，signal_only/track_live 仅观察）
   experimental_strategies:
-    - chenxuezhang     # 陈学长不吃面规则策略（2026-08-01 事件研究 conditional_pass）
+    # chenxuezhang 已移除：2026-08-15 持仓回测审计证伪（Sharpe -0.24），等 paper 观察 30+ 信号若改善再恢复
     - linjudaye        # 邻居大爷规则策略（2026-08-01 事件研究 conditional_pass）
     - price_volume_signal  # 换手率+量比尾盘黄金信号（大样本回测验证通过，等 paper 观察30+信号转正）
     - regime_cycle_four      # 四周期模型（公众号战法，2026-08-01 落地 in_review，待事件研究验证）
-    - death_valley_rebound   # 幻灭期修复反弹（公众号战法，2026-08-01 落地 in_review）
-    - bollinger_oversold_rebound  # 布林下轨超跌反弹（公众号战法，2026-08-01 落地 in_review）
+    - double_yin       # 双阴钱袋子（Sharpe -0.02/param_stability 0.4，从 verified 降级观察）
+    # death_valley_rebound 已移除：2026-08-15 持仓回测审计证伪
+    # bollinger_oversold_rebound 已移除：2026-08-15 持仓回测审计证伪
     # rebound_elite 已移除：2026-08-01 Walk-Forward 样本外证伪（43信号全部年份负超额，验证期p=0.035显著为负）
     # hot_money 已移除：2026-08-01 事件研究证伪（510信号依赖单股sh688041占36%，剔除后验证期超额-0.77%转负）
     # ma5_momentum 已移除：2026-08-01 事件研究证伪（63信号全部不显著）
@@ -127,17 +128,18 @@ strategy:
   # v0.7.5 P0-1修复：仅 verified 策略参与权重分配（总和=1.0）
   # 权重会在 StrategyPool 中根据近期表现动态调整
   weights:
-    box_breakout: 0.40
-    double_yin: 0.35
-    rsi_reversal: 0.25
+    box_breakout: 0.60
+    rsi_reversal: 0.40
+    # double_yin 移除：2026-08-15 Sharpe -0.02，从 verified 降级 experimental
   # 实验性策略权重（仅 paper 模式使用）
   experimental_weights:
-    chenxuezhang: 0.30
-    linjudaye: 0.25
-    price_volume_signal: 0.10
-    regime_cycle_four: 0.08
-    death_valley_rebound: 0.08
-    bollinger_oversold_rebound: 0.08
+    linjudaye: 0.30
+    price_volume_signal: 0.15
+    regime_cycle_four: 0.15
+    double_yin: 0.15   # 从 verified 降级，Sharpe -0.02
+    # chenxuezhang 已移除：2026-08-15 持仓回测 Sharpe -0.24，建议降级 disabled
+    # death_valley_rebound 已移除：2026-08-15 持仓回测审计证伪
+    # bollinger_oversold_rebound 已移除：2026-08-15 持仓回测审计证伪
     # rebound_elite 权重已移除（样本外证伪）
     # hot_money 权重已移除（2026-08-01 事件研究证伪，集中股依赖）
     # ma5_momentum / ml_gradient_boost 权重已移除（证伪 / 模型缺失）

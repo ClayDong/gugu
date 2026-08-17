@@ -1596,7 +1596,7 @@ if __name__ == "__main__":
         default=None,
         help="随机种子（默认=None，仅 GA/PSO 生效，用于结果复现）",
     )
-    parser.add_argument("--version", action="version", version="gugu 0.1.0")
+    parser.add_argument("--version", action="version", version="gugu 0.6.0")
     args = parser.parse_args()
 
     asyncio.run(

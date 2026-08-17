@@ -92,7 +92,21 @@ class MoneyFlowFilter:
             return default
 
         if df is None or df.empty:
+            data_error = (df.attrs if df is not None else {}).get("data_error")
+            if df is not None and df.attrs.get("data_available") is False:
+                default["data_error"] = data_error or "data_unavailable"
+                default["reasons"] = (
+                    ["关键资金流数据不可用，无法确认主力方向"] if not pass_when_missing else []
+                )
             logger.warning("资金流数据为空 {}", symbol)
+            self._set_cached(symbol, default)
+            return default
+
+        if df.attrs.get("data_available") is False:
+            default["data_error"] = df.attrs.get("data_error", "data_unavailable")
+            default["reasons"] = (
+                ["关键资金流数据不可用，无法确认主力方向"] if not pass_when_missing else []
+            )
             self._set_cached(symbol, default)
             return default
 

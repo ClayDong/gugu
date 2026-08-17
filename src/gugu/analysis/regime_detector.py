@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -65,6 +66,8 @@ class MultiPeriodRegimeDetector:
         self._dm = data_manager()
         self._cache: dict[str, Any] = {}
         self._cache_date: str = ""
+        self._cache_timestamp: float | None = None
+        self._cache_ttl_seconds = 300
         self._enhancer = enhancer
 
     async def detect(self) -> dict[str, Any]:
@@ -72,7 +75,12 @@ class MultiPeriodRegimeDetector:
         from datetime import date
 
         today = str(date.today())
-        if self._cache_date == today:
+        now = time.monotonic()
+        if (
+            self._cache_date == today
+            and self._cache_timestamp is not None
+            and now - self._cache_timestamp < self._cache_ttl_seconds
+        ):
             return self._cache
 
         try:
@@ -224,6 +232,7 @@ class MultiPeriodRegimeDetector:
 
             self._cache = result
             self._cache_date = today
+            self._cache_timestamp = time.monotonic()
             return result
 
         except Exception as e:

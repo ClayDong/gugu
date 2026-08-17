@@ -48,6 +48,7 @@ class EnvSettings(BaseSettings):
     feishu_app_id: str = ""
     feishu_app_secret: str = ""
     feishu_chat_id: str = ""
+    feishu_business_chat_id: str = ""
     feishu_webhook: str = ""
 
     llm_base_url: str = ""
@@ -97,6 +98,7 @@ def settings() -> dict[str, Any]:
         return load_yaml("settings")
 
 
+@lru_cache(maxsize=1)
 def strategy_defaults() -> dict[str, Any]:
     """获取策略默认参数。"""
     return load_yaml("strategy_defaults")

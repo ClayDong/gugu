@@ -29,12 +29,15 @@ class TestScreenerParamsDefaults:
         assert p.effective_max_candidates("bull") == 10
         assert p.effective_max_candidates("rally") == 10
         assert p.effective_max_candidates("sideways") == 6
-        assert p.effective_max_candidates("bear") == 0
+        # v0.9.10：bear 不再跳过（用户要求熊市也出选股）→ 候选数 ×0.4 = 4
+        assert p.effective_max_candidates("bear") == 4
+        # crash 保留保护性空仓（系统性崩盘日不接飞刀）
         assert p.effective_max_candidates("crash") == 0
 
     def test_should_skip_bear_crash(self):
         p = ScreenerParams()
-        assert p.should_skip("bear") is True
+        # v0.9.10：bear 不再跳过（熊市降级候选数量控制仓位，见 candidate_modifier）
+        assert p.should_skip("bear") is False
         assert p.should_skip("crash") is True
         assert p.should_skip("bull") is False
         assert p.should_skip("sideways") is False

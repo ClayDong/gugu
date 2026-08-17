@@ -327,7 +327,7 @@ class TerminalScreener:
 
         # 条件4: 量比上限（缩量）
         if "量比" in spot.columns:
-            mask &= (spot["量比"] > 0) & (spot["量比"] < self.params.max_vol_ratio)
+            mask &= (spot["量比"] > 0) & (spot["量比"] < self.params.max_vol_ratio + 1e-9)
             logger.info("尾盘选股: 快照硬过滤 量比<{:.2f} 应用", self.params.max_vol_ratio)
 
         # 条件7: 换手率区间

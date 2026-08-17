@@ -14,9 +14,11 @@ from __future__ import annotations
 import fcntl
 import json
 import math
+import os
 import random
 import threading
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
 from gugu.config import PROJECT_ROOT, get_config
@@ -69,6 +71,21 @@ class PaperBroker(BaseBroker):
         self._market_value_cache: dict[str, float] = {}
         # P1 修复：线程安全锁，保护 _cash / _positions / _trades
         self._lock = threading.RLock()
+        # P1-1 修复（2026-08-05）：GUGU_TEST_MODE 下隔离状态文件——
+        # 测试进程创建 PaperBroker 会实例化即读写生产 data/paper_broker_state.json，
+        # 2026-08-05 已实证 600519 幽灵成交（非生产进程 11:26 写入生产模拟盘）。
+        # 测试模式用 per-instance 唯一临时文件（uuid），既隔离生产，
+        # 又避免测试间共享固定文件名导致状态互相污染（2026-08-05 实测：
+        # 固定名 gugu_test_paper_state.json 导致 test_trade_record trades=4≠1）。
+        if os.environ.get("GUGU_TEST_MODE"):
+            import tempfile
+            import uuid
+
+            self._state_file = (
+                Path(tempfile.gettempdir()) / f"gugu_test_paper_{uuid.uuid4().hex[:8]}.json"
+            )
+        else:
+            self._state_file = STATE_FILE
         # 从磁盘恢复状态
         self._load_state()
 
@@ -168,16 +185,19 @@ class PaperBroker(BaseBroker):
         return not (direction == "sell" and change_pct <= -limit_pct * 0.95)
 
     @staticmethod
-    def _get_limit_pct(symbol: str) -> float:
+    def _get_limit_pct(symbol: str, is_st: bool = False) -> float:
         """根据股票代码前缀返回涨跌停幅度（P0 修复新增）。
 
         - 主板（60/00/30 开头）：±10%
         - 创业板（300/301）：±20%
         - 科创板（688/689）：±20%
         - 北交所（43/83/87/88/920）：±30%
-        - ST/*ST：±5%（需外部标记 is_st，此处保守按 10%）
+        - ST/*ST：±5%（需外部标记 is_st）
         """
+        if is_st:
+            return 0.05  # P1-5 修复：ST 涨跌停 ±5%
         if not symbol:
+            return 0.10  # 默认主板
             return 0.10  # 默认主板
         code = symbol.strip().zfill(6)
         if code.startswith(("300", "301", "688", "689")):
@@ -578,7 +598,7 @@ class PaperBroker(BaseBroker):
         """
         with self._lock:
             try:
-                STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+                self._state_file.parent.mkdir(parents=True, exist_ok=True)
                 data = {
                     "cash": self._cash,
                     "positions": {
@@ -601,23 +621,27 @@ class PaperBroker(BaseBroker):
                     },
                     "trades": self._trades,
                     "daily_start_value": self._daily_start_value,
+                    # P1-1 修复（2026-08-05）：状态文件必须带时间戳。
+                    # 此前无 updated_at，无法判断状态是否新鲜——600519 幽灵成交
+                    # （非生产进程 11:26 写入）因无时间戳而难以追溯。
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
                 }
                 content = json.dumps(data, ensure_ascii=False, indent=2)
                 # 备份现有文件（保留上一版本，便于回滚）
-                if STATE_FILE.exists():
-                    backup = STATE_FILE.with_suffix(STATE_FILE.suffix + ".bak")
+                if self._state_file.exists():
+                    backup = self._state_file.with_suffix(self._state_file.suffix + ".bak")
                     try:
-                        backup.write_bytes(STATE_FILE.read_bytes())
+                        backup.write_bytes(self._state_file.read_bytes())
                     except Exception as e:
                         logger.warning(f"备份状态文件失败: {e}")
                 # 文件锁 + 原子写入：避免引擎和Web进程并发覆盖
                 # fcntl.LOCK_EX 是排他锁，其他进程读/写会阻塞等待
-                with open(STATE_FILE, "a") as lock_f:
+                with open(self._state_file, "a") as lock_f:
                     fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
                     try:
-                        tmp = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
+                        tmp = self._state_file.with_suffix(self._state_file.suffix + ".tmp")
                         tmp.write_text(content, encoding="utf-8")
-                        tmp.replace(STATE_FILE)
+                        tmp.replace(self._state_file)
                     finally:
                         fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
             except Exception as e:
@@ -631,20 +655,20 @@ class PaperBroker(BaseBroker):
         1. 主文件解析失败 → 尝试 .bak 备份
         2. .bak 也失败 → 抛 RuntimeError（fail-fast），拒绝用空状态继续
         """
-        if not STATE_FILE.exists():
+        if not self._state_file.exists():
             # 尝试 .bak（可能主文件被误删但 .bak 还在）
-            bak = STATE_FILE.with_suffix(STATE_FILE.suffix + ".bak")
+            bak = self._state_file.with_suffix(self._state_file.suffix + ".bak")
             if bak.exists():
-                logger.warning("主状态文件 {} 不存在，尝试 .bak 备份", STATE_FILE)
+                logger.warning("主状态文件 {} 不存在，尝试 .bak 备份", self._state_file)
                 self._load_from_path(bak)
                 return
             return
 
         try:
-            self._load_from_path(STATE_FILE)
+            self._load_from_path(self._state_file)
         except Exception as e:
             # 主文件损坏 → 尝试 .bak 回退
-            bak = STATE_FILE.with_suffix(STATE_FILE.suffix + ".bak")
+            bak = self._state_file.with_suffix(self._state_file.suffix + ".bak")
             if bak.exists():
                 logger.error(f"主状态文件损坏({e})，尝试从 .bak 备份恢复: {bak}")
                 try:
@@ -655,9 +679,9 @@ class PaperBroker(BaseBroker):
                     logger.error(f".bak 备份也损坏: {bak_err}")
             # P0 修复：fail-fast，拒绝用默认 100万空仓继续
             raise RuntimeError(
-                f"模拟盘状态文件损坏且无可用备份。主文件: {STATE_FILE}，错误: {e}。"
+                f"模拟盘状态文件损坏且无可用备份。主文件: {self._state_file}，错误: {e}。"
                 f"拒绝用空状态继续（防止用户真实持仓凭空消失）。"
-                f"请人工修复 {STATE_FILE} 或从 {bak} 恢复后重启。"
+                f"请人工修复 {self._state_file} 或从 {bak} 恢复后重启。"
             ) from e
 
     def _load_from_path(self, path) -> None:

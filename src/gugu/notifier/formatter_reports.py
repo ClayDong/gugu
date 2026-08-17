@@ -220,7 +220,8 @@ def format_performance(perf: dict[str, Any]) -> dict[str, Any]:
 
     total = perf.get("total_signals", 0)
     forward_hit_rate = perf.get("forward_5d_signal_hit_rate", 0)
-    template = "green" if forward_hit_rate >= 0.5 else "red"
+    # P0 修复（v0.9.0）：A 股红涨绿跌——命中率≥50% 用红色，<50% 用绿色
+    template = "red" if forward_hit_rate >= 0.5 else "green"
 
     return _card(
         title="📈 信号绩效验证",
@@ -371,7 +372,8 @@ def build_signal_performance_card(report: dict[str, Any]) -> dict[str, Any]:
     period_days = report.get("period_days", 30)
     generated_at = report.get("generated_at", "")
 
-    template = "green" if forward_hit_rate >= 0.5 else "red"
+    # P0 修复（v0.9.0）：A 股红涨绿跌——命中率≥50% 用红色，<50% 用绿色
+    template = "red" if forward_hit_rate >= 0.5 else "green"
 
     overview_lines = [
         f"**统计区间**：近 {period_days} 天",
@@ -472,7 +474,7 @@ def build_signal_daily_validation_card(report: dict[str, Any]) -> dict[str, Any]
     stop_hit_rate = report.get("stop_hit_rate", 0)
     target_date = report.get("date", "")
 
-    template = "green" if win_rate >= 0.5 else "red"
+    template = "red" if win_rate >= 0.5 else "green"
 
     overview_lines = [
         f"**信号日期**：{target_date}",
@@ -543,7 +545,7 @@ def build_signal_weekly_card(report: dict[str, Any]) -> dict[str, Any]:
     start_date = report.get("start_date", "")
     end_date = report.get("end_date", "")
 
-    template = "green" if win_rate >= 0.5 else "red"
+    template = "red" if win_rate >= 0.5 else "green"
 
     overview_lines = [
         f"**统计区间**：{start_date} ~ {end_date}",

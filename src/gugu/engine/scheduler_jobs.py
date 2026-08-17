@@ -64,7 +64,13 @@ class SchedulerJobsMixin:
                     for r in results
                 ]
                 save_screener_records(records)
-            await self._engine._notifier.notify_screener(results, total)
+            await self._engine._notifier.notify_screener(
+                results,
+                total,
+                data_quality=scan_result.data_quality if scan_result else None,
+                status=scan_result.status if scan_result else None,
+                data_errors=scan_result.data_errors if scan_result else None,
+            )
         except Exception as e:
             logger.exception("尾盘选股异常: {}", e)
             try:
@@ -141,6 +147,13 @@ class SchedulerJobsMixin:
                 )
         except Exception as e:
             logger.exception("尾盘收盘验证异常: {}", e)
+            await self._engine._notifier.notify_error(
+                {
+                    "message": f"尾盘收盘验证异常: {e}",
+                    "level": "error",
+                    "source": "scheduler._safe_validate_screener_eod",
+                }
+            )
 
     async def _safe_auto_tune_screener(self) -> None:
         """安全执行尾盘选股参数自动调优（15:10，非交易日跳过）。"""
@@ -250,6 +263,16 @@ class SchedulerJobsMixin:
             logger.info("盘后资金流决策报告推送完成（14:30）")
         except Exception as e:
             logger.exception("盘后资金流决策报告异常: {}", e)
+            try:
+                await self._engine._notifier.notify_error(
+                    {
+                        "message": f"盘后资金流决策报告异常: {e}",
+                        "level": "error",
+                        "source": "scheduler._safe_afternoon_flow",
+                    }
+                )
+            except Exception as notify_err:
+                logger.error("盘后资金流异常通知发送失败: {}", notify_err)
 
     async def _safe_altalpha_fetch(self) -> None:
         """安全执行另类因子数据盘后批量采集（18:00，非交易日跳过）。"""
@@ -359,6 +382,13 @@ class SchedulerJobsMixin:
             )
         except Exception as e:
             logger.exception("因子综合评分报告异常: {}", e)
+            await self._engine._notifier.notify_error(
+                {
+                    "message": f"因子综合评分报告异常: {e}",
+                    "level": "error",
+                    "source": "scheduler._safe_alpha_summary",
+                }
+            )
 
     async def _safe_portfolio_report(self) -> None:
         """安全执行持仓认知分析报告（15:35，非交易日跳过）。"""
@@ -410,6 +440,13 @@ class SchedulerJobsMixin:
                 logger.info("持仓认知分析报告: LLM 无输出，跳过推送")
         except Exception as e:
             logger.exception("持仓认知分析报告异常: {}", e)
+            await self._engine._notifier.notify_error(
+                {
+                    "message": f"持仓认知分析报告异常: {e}",
+                    "level": "error",
+                    "source": "scheduler._safe_portfolio_report",
+                }
+            )
 
     async def _safe_concept_daily(self) -> None:
         """安全执行每日概念推送（20:00，非交易日跳过）。"""
@@ -720,12 +757,12 @@ class SchedulerJobsMixin:
             results = engine.analyze_batch(contexts)
 
             summary_card = build_batch_summary_card(results)
-            await self._engine._notifier.send_card(summary_card)
+            await self._engine._notifier.send_business_card(summary_card)
 
             for result in results:
                 try:
                     detail_card = build_perspective_card(result)
-                    await self._engine._notifier.send_card(detail_card)
+                    await self._engine._notifier.send_business_card(detail_card)
                     await asyncio.sleep(1.0)
                 except Exception as e:
                     logger.warning("十大视角: {} 详细卡片发送失败: {}", result.symbol, e)
@@ -749,7 +786,7 @@ class SchedulerJobsMixin:
             if card is None:
                 logger.warning("市场温度计子进程未返回卡片，跳过推送")
                 return
-            await self._engine._notifier.send_card(card)
+            await self._engine._notifier.send_business_card(card)
             logger.info("市场温度计推送完成（子进程隔离执行）")
         except Exception as e:
             logger.exception("市场温度计推送异常: {}", e)
@@ -793,7 +830,7 @@ class SchedulerJobsMixin:
             tracker = SignalTracker()
             report = await tracker.generate_report(days=30)
             card = build_signal_performance_card(report)
-            await self._engine._notifier.send_card(card)
+            await self._engine._notifier.send_business_card(card)
 
             total = report.get("total_signals", 0)
             forward_hit_rate = report.get("forward_5d_signal_hit_rate", 0)

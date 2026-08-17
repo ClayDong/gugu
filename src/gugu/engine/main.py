@@ -160,11 +160,10 @@ class TradingEngine(EngineOpsMixin):
         watchlist: list[str] | None = None,
         alert_history_file: Path | None = None,
     ) -> None:
-        self._lock = asyncio.Lock()
-        self._dedup_lock = asyncio.Lock()
+        self._lock: asyncio.Lock | None = None
+        self._dedup_lock: asyncio.Lock | None = None
         self._alert_dedup_lock = threading.Lock()
         self._running: bool = False
-
         self._app_config: AppConfig | None = None
         with contextlib.suppress(Exception):
             self._app_config = get_config()
@@ -313,6 +312,16 @@ class TradingEngine(EngineOpsMixin):
             self._exec_mode,
         )
 
+    def _get_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
+    def _get_dedup_lock(self) -> asyncio.Lock:
+        if self._dedup_lock is None:
+            self._dedup_lock = asyncio.Lock()
+        return self._dedup_lock
+
     @property
     def auto_select_enabled(self) -> bool:
         try:
@@ -338,7 +347,7 @@ class TradingEngine(EngineOpsMixin):
             if not is_trading_day():
                 logger.info("非交易日，跳过")
                 return
-            async with self._lock:
+            async with self._get_lock():
                 if self._running:
                     logger.warning("交易循环正在运行中，跳过本次重入调用")
                     return
@@ -358,7 +367,7 @@ class TradingEngine(EngineOpsMixin):
 
         if not is_trading_time():
             logger.info("非交易时段，跳过买入流程，仅执行止损检查")
-            async with self._lock:
+            async with self._get_lock():
                 if self._running:
                     return
                 self._running = True
@@ -372,7 +381,7 @@ class TradingEngine(EngineOpsMixin):
                     self._event_engine.put(EVENT_CYCLE_END, {"off_hours": True})
             return
 
-        async with self._lock:
+        async with self._get_lock():
             if self._running:
                 logger.warning("交易循环正在运行中，跳过本次重入调用")
                 return
@@ -596,7 +605,7 @@ class TradingEngine(EngineOpsMixin):
         await self._report_manager.send_report(
             period=period,
             check_holdings_sell=self._check_holdings_sell_signals,
-            engine_lock=self._lock,
+            engine_lock=self._get_lock(),
             engine_running=self._running,
             filtered_signals=filtered,
         )

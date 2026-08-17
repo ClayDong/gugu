@@ -68,17 +68,14 @@ def get_config() -> AppConfig:
 
 
 def refresh_config() -> AppConfig:
-    """强制刷新配置缓存（热加载）。
+    """强制刷新配置缓存（热加载）。"""
+    from gugu.strategies.registry import reload_strategies
 
-    调用场景：
-    - 用户手动修改 settings.yaml 后调用
-    - scheduler 定时检测文件变更（每 5 分钟）
-    - Web 仪表盘提供"重载配置"按钮
-
-    Returns:
-        新的 AppConfig 实例
-    """
     get_config.cache_clear()
+    load_yaml.cache_clear()
+    env.cache_clear()
+    strategy_defaults.cache_clear()
+    reload_strategies()
     return get_config()
 
 

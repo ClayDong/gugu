@@ -159,7 +159,13 @@ class TrailingStopEngine:
                 else:
                     mult = atr_multiplier or self.DEFAULT_ATR_MULTIPLIER
                 # P0 修复：使用 df.iloc[:-1] 排除当日未完成 K 线，避免回测/盘中未来函数
-                _df_for_atr = df.iloc[:-1] if len(df) > 20 else df
+                # ⚠️ 2026-08-11：仅当最后一行==今日（数据源确含当日未完成bar）才剔除——
+                # A股日K源盘中最后一行=昨日已收盘bar，无条件剔除会让 ATR 少算一个交易日
+                _df_for_atr = df
+                if len(df) > 20 and "date" in df.columns:
+                    _last_bar_date = pd.Timestamp(df["date"].iloc[-1]).date()
+                    if _last_bar_date == pd.Timestamp.now().date():
+                        _df_for_atr = df.iloc[:-1]
                 atr_value = float(calc_atr(_df_for_atr, period=14).iloc[-1])
                 if atr_value > 0:
                     stop_price = round(entry_price - mult * atr_value, 2)
@@ -324,7 +330,12 @@ class TrailingStopEngine:
             from gugu.analysis.technical import atr as calc_atr
 
             # P0 修复：使用 df.iloc[:-1] 排除当日数据，避免未来函数
-            _df_for_atr = df.iloc[:-1] if len(df) > 20 else df
+            # ⚠️ 2026-08-11：仅当最后一行==今日才剔除（A股日K源盘中最后一行=昨日已收盘bar）
+            _df_for_atr = df
+            if len(df) > 20 and "date" in df.columns:
+                _last_bar_date = pd.Timestamp(df["date"].iloc[-1]).date()
+                if _last_bar_date == pd.Timestamp.now().date():
+                    _df_for_atr = df.iloc[:-1]
             atr_value = float(calc_atr(_df_for_atr, period=14).iloc[-1])
             price = float(df["close"].iloc[-1])
             if price > 0:

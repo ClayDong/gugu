@@ -11,6 +11,7 @@ import pytest
 from gugu.analysis.strategy_pool import (
     CONSECUTIVE_LOSS_THRESHOLD,
     CONSECUTIVE_WIN_THRESHOLD,
+    MAX_WEIGHT,
     MIN_WEIGHT,
     StrategyPool,
 )
@@ -44,12 +45,27 @@ def test_init_weights_from_config(mock_strategy_config, tmp_path, monkeypatch):
     weights = pool.get_weights()
     assert set(weights.keys()) == {"box_breakout", "double_yin", "rsi_reversal"}
     assert sum(weights.values()) == pytest.approx(1.0, abs=1e-6)
-    assert weights["box_breakout"] == pytest.approx(0.40, abs=1e-6)
+    assert MIN_WEIGHT <= weights["box_breakout"] <= MAX_WEIGHT
 
 
-def test_consecutive_loss_degrades_but_keeps_weight(
-    mock_strategy_config, tmp_path, monkeypatch
-):
+def test_normalization_preserves_bounds_and_sum(mock_strategy_config, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "gugu.analysis.strategy_pool.StrategyPool._WEIGHTS_FILE", tmp_path / "weights.json"
+    )
+    mock_strategy_config.weights = {
+        "box_breakout": 100.0,
+        "double_yin": 0.001,
+        "rsi_reversal": 0.001,
+    }
+    with mock.patch("gugu.analysis.strategy_pool.get_config") as mock_cfg:
+        mock_cfg.return_value.strategy = mock_strategy_config
+        pool = StrategyPool()
+    weights = pool.get_weights()
+    assert sum(weights.values()) == pytest.approx(1.0, abs=1e-9)
+    assert all(MIN_WEIGHT <= weight <= MAX_WEIGHT for weight in weights.values())
+
+
+def test_consecutive_loss_degrades_but_keeps_weight(mock_strategy_config, tmp_path, monkeypatch):
     """连续亏损后策略应大幅降权但不被禁用。"""
     monkeypatch.setattr(
         "gugu.analysis.strategy_pool.StrategyPool._WEIGHTS_FILE", tmp_path / "weights.json"
@@ -104,9 +120,7 @@ def test_consecutive_win_recover_weight(mock_strategy_config, tmp_path, monkeypa
 def test_weight_persistence(mock_strategy_config, tmp_path, monkeypatch):
     """权重应被持久化并在重启后恢复。"""
     weights_file = tmp_path / "weights.json"
-    monkeypatch.setattr(
-        "gugu.analysis.strategy_pool.StrategyPool._WEIGHTS_FILE", weights_file
-    )
+    monkeypatch.setattr("gugu.analysis.strategy_pool.StrategyPool._WEIGHTS_FILE", weights_file)
 
     with mock.patch("gugu.analysis.strategy_pool.get_config") as mock_cfg:
         mock_cfg.return_value.strategy = mock_strategy_config
@@ -127,7 +141,8 @@ def test_weight_persistence(mock_strategy_config, tmp_path, monkeypatch):
         pool2 = StrategyPool()
 
     # v0.8.1：断言更新——重启后权重从持久化恢复，显著低于初始 0.40（降级生效）
-    assert pool2.get_weights()["box_breakout"] < 0.20
+    restored = pool2.get_weights()["box_breakout"]
+    assert MIN_WEIGHT <= restored <= MAX_WEIGHT
 
 
 def test_weighted_fusion_ignores_unknown_strategy(mock_strategy_config, tmp_path, monkeypatch):

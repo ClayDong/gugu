@@ -19,6 +19,7 @@ Mock 策略：仅 mock httpx.AsyncClient（通过 httpx.MockTransport），
 from __future__ import annotations
 
 import json
+import time
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -33,7 +34,8 @@ def mock_env():
     with patch("gugu.notifier.feishu.env") as mock_env:
         mock_env.return_value.feishu_app_id = "app-id"
         mock_env.return_value.feishu_app_secret = "secret"
-        mock_env.return_value.feishu_chat_id = "chat-id"
+        mock_env.return_value.feishu_chat_id = "system-chat-id"
+        mock_env.return_value.feishu_business_chat_id = "business-chat-id"
         mock_env.return_value.feishu_webhook = (
             "https://open.feishu.cn/open-apis/bot/v2/hook/test-token"
         )
@@ -119,13 +121,30 @@ async def test_notify_signal_sends_post_with_correct_url_and_payload(mock_env):
         assert msg_req.headers.get("Authorization") == "Bearer fake-token"
 
         body = json.loads(msg_req.content)
-        assert body["receive_id"] == "chat-id"
+        assert body["receive_id"] == "business-chat-id"
         assert body["msg_type"] == "interactive"
         content = json.loads(body["content"])
         assert content["header"]["template"] == "red"  # buy = red (A 股红涨)
         assert "600519" in content["header"]["title"]["content"]
     finally:
         await mock_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_notify_signal_uses_business_chat(mock_env):
+    notifier = FeishuNotifier()
+    with patch.object(notifier, "send_card", new_callable=AsyncMock) as send_card:
+        signal = {
+            "symbol": "600519",
+            "direction": "buy",
+            "strategy": "price_volume_signal",
+            "strategies": ["price_volume_signal"],
+            "reason": "换手+量比观察",
+            "price": 1500.0,
+            "confidence": 0.8,
+        }
+        await notifier.notify_signal(signal)
+        assert send_card.await_args.kwargs["receive_id"] == "business-chat-id"
 
 
 @pytest.mark.asyncio
@@ -298,6 +317,116 @@ async def test_notify_risk_alert_sends_alert(mock_env):
         assert "熔断" in content["header"]["title"]["content"]
     finally:
         await mock_client.aclose()
+
+
+@patch("asyncio.sleep", new_callable=AsyncMock)
+@pytest.mark.asyncio
+async def test_notify_risk_alert_routes_to_business_chat(mock_sleep, mock_env):
+    """P0 修复：风控告警（止损/熔断）属于交易业务 → 必须发到业务群（开悟之路）。"""
+    notifier = FeishuNotifier()
+    with patch.object(
+        notifier, "send_card", new_callable=AsyncMock, return_value=True
+    ) as send_card:
+        alert = {"level": "halt", "message": "日亏5%熔断", "suggestion": "减仓"}
+        result = await notifier.notify_risk_alert(alert)
+
+        assert result is True
+        assert send_card.await_args.kwargs["receive_id"] == "business-chat-id"
+
+
+@pytest.mark.asyncio
+async def test_notify_error_routes_to_system_chat(mock_env):
+    """系统异常 → 必须发到系统对话（Hermes 对话），与业务群隔离。"""
+    notifier = FeishuNotifier()
+    with patch.object(
+        notifier, "send_card", new_callable=AsyncMock, return_value=True
+    ) as send_card:
+        error = {"module": "data", "message": "采集失败", "suggestion": "重试"}
+        result = await notifier.notify_error(error)
+
+        assert result is True
+        assert send_card.await_args.kwargs["receive_id"] == "system-chat-id"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_preserves_receive_id(mock_env, tmp_path):
+    """P0 修复：入队必须记录 receive_id，重试时发回原目标群。"""
+    notifier = FeishuNotifier()
+    notifier._queue_path = tmp_path / "notify_queue.jsonl"
+
+    card = {
+        "msg_type": "interactive",
+        "card": {"header": {"title": {"tag": "plain_text", "content": "业务卡片"}}},
+    }
+    await notifier._enqueue_async(card, receive_id="business-chat-id")
+
+    import json as _json
+
+    lines = tmp_path.joinpath("notify_queue.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    record = _json.loads(lines[0])
+    assert record["receive_id"] == "business-chat-id"
+
+
+@pytest.mark.asyncio
+async def test_retry_queued_sends_to_recorded_receive_id(mock_env, tmp_path):
+    """P0 修复：重试队列中的业务卡片必须发回业务群，而非系统对话。"""
+    notifier = FeishuNotifier()
+    notifier._queue_path = tmp_path / "notify_queue.jsonl"
+    notifier._queue_path.write_text(
+        json.dumps(
+            {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "card": {
+                    "msg_type": "interactive",
+                    "card": {"header": {"title": {"tag": "plain_text", "content": "业务信号"}}},
+                },
+                "receive_id": "business-chat-id",
+                "retry_count": 0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with (
+        patch.object(notifier, "_post_card", new_callable=AsyncMock) as post_card,
+        patch.object(notifier, "_get_tenant_token", new_callable=AsyncMock, return_value="token"),
+    ):
+        success_count = await notifier.retry_queued()
+
+    assert success_count == 1
+    # 重试必须带 receive_id=business-chat-id（不能回退到系统对话）
+    assert post_card.await_args.args[2] == "business-chat-id"
+
+
+@pytest.mark.asyncio
+async def test_retry_queued_fallback_system_chat_for_legacy_items(mock_env, tmp_path):
+    """兼容：旧队列条目（无 receive_id）重试时回退系统对话，与旧行为一致。"""
+    notifier = FeishuNotifier()
+    notifier._queue_path = tmp_path / "notify_queue.jsonl"
+    notifier._queue_path.write_text(
+        json.dumps(
+            {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "card": {
+                    "msg_type": "interactive",
+                    "card": {"header": {"title": {"tag": "plain_text", "content": "旧条目"}}},
+                },
+                "retry_count": 0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with (
+        patch.object(notifier, "_post_card", new_callable=AsyncMock) as post_card,
+        patch.object(notifier, "_get_tenant_token", new_callable=AsyncMock, return_value="token"),
+    ):
+        success_count = await notifier.retry_queued()
+
+    assert success_count == 1
+    assert post_card.await_args.args[2] is None  # 无 receive_id → 默认系统对话
 
 
 # ========== notify_error ==========

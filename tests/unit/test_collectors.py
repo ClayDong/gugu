@@ -160,10 +160,92 @@ class TestAkshareCollectorFlowBreaker:
         assert collector._flow_fail_count == 0
         assert collector._flow_breaker_until == 0.0
 
+    def test_flow_success_does_not_clear_active_breaker(self, monkeypatch):
+        """2026-08-10 修复：熔断冷却期内 success 不提前解除熔断。
+
+        原实现 `_flow_breaker_until = 0.0` 导致振荡——sector_flow 偶尔成功
+        立即解除熔断 → 下一轮 stock_flow 又连续失败重新熔断（09:40 两次熔断
+        相隔 5 秒实证）。冷却期内成功只清失败计数，熔断自然到期。
+        """
+        collector = self._collector(monkeypatch)
+        collector._flow_breaker_until = 9999.0  # 熔断冷却中（time=1000）
+        collector._flow_fail_count = 2
+        collector._flow_record_success()
+        assert collector._flow_fail_count == 0, "成功应清零失败计数"
+        assert collector._flow_breaker_active() is True, "冷却期内成功不应解除熔断"
+
     def test_flow_breaker_expires_after_cooldown(self, monkeypatch):
         collector = self._collector(monkeypatch)
         collector._flow_breaker_until = 500.0  # time.time()=1000 已过期
         assert collector._flow_breaker_active() is False
+        # 冷却到期后的 success 才允许复位 until（自然恢复）
+        collector._flow_record_success()
+        assert collector._flow_breaker_until == 0.0
+
+    def test_realtime_breaker_guard_returns_empty_without_calling_api(self, monkeypatch):
+        """2026-08-11 修复：fetch_stock_realtime 接入熔断。
+
+        熔断冷却期内直接返回空 DataFrame，不调 stock_zh_a_spot_em（不刷 ERROR）。
+        """
+        import gugu.data.collectors.akshare_collector as ak_mod
+
+        collector = self._collector(monkeypatch)
+        collector._flow_breaker_until = 9999.0  # 熔断冷却中（time=1000）
+
+        def _boom(*a, **kw):
+            raise AssertionError("熔断期内不应调用东财全市场快照 API")
+
+        monkeypatch.setattr(ak_mod.ak, "stock_zh_a_spot_em", _boom)
+        df = collector.fetch_stock_realtime(["600519"])
+        assert df.empty
+        assert df.attrs.get("flow_breaker_active") is True
+        assert collector._flow_breaker_active() is True
+
+    def test_realtime_failure_triggers_breaker(self, monkeypatch):
+        """2026-08-11 修复：实时行情失败计入熔断计数，达阈值后熔断。"""
+        import gugu.data.collectors.akshare_collector as ak_mod
+        import tenacity.nap
+        from tenacity import RetryError
+
+        # tenacity retry 的 wait_exponential 会真实 sleep（1-8s），测试禁掉
+        monkeypatch.setattr(tenacity.nap, "sleep", lambda *a, **kw: None)
+
+        collector = self._collector(monkeypatch)
+
+        def _boom(*a, **kw):
+            raise ConnectionError("RemoteDisconnected('Remote end closed connection')")
+
+        monkeypatch.setattr(ak_mod.ak, "stock_zh_a_spot_em", _boom)
+        # 单次调用：stop_after_attempt(3) 内部 3 次失败即达熔断阈值 3
+        with pytest.raises(RetryError):
+            collector.fetch_stock_realtime(["600519"])
+        assert collector._flow_breaker_active() is True
+
+    def test_realtime_success_resets_failure_count(self, monkeypatch):
+        """2026-08-11 修复：实时行情成功后重置失败计数（与资金流方法同语义）。"""
+        import gugu.data.collectors.akshare_collector as ak_mod
+        import pandas as pd
+
+        collector = self._collector(monkeypatch)
+        collector._flow_fail_count = 2
+
+        monkeypatch.setattr(
+            ak_mod.ak,
+            "stock_zh_a_spot_em",
+            lambda *a, **kw: pd.DataFrame(
+                {
+                    "代码": ["600519"],
+                    "名称": ["贵州茅台"],
+                    "最新价": [1500.0],
+                    "涨跌幅": [1.2],
+                    "成交量": [1000],
+                    "成交额": [1.5e9],
+                }
+            ),
+        )
+        df = collector.fetch_stock_realtime(["600519"])
+        assert not df.empty
+        assert collector._flow_fail_count == 0
 
     def test_eastmoney_inherits_breaker_guard(self, monkeypatch):
         """eastmoney 同源东财，熔断期间两个资金流接口都静默返回空。"""
@@ -502,9 +584,11 @@ class TestSinaCollectorFullMarketSnapshot:
 
 class TestTencentCollectorHistory:
     def test_bj_volume_factor(self, monkeypatch):
-        payload = {
-            "data": {"bj430047": {"qfqday": [["2026-08-03", "10", "12", "13", "9", "1000"]]}}
-        }
+        # 动态日期：mock 数据用最近交易日（避免 FreshnessRule 随时间漂移拒绝）
+        from datetime import date, timedelta
+
+        mock_date = (date.today() - timedelta(days=1)).isoformat()
+        payload = {"data": {"bj430047": {"qfqday": [[mock_date, "10", "12", "13", "9", "1000"]]}}}
 
         class MockResponse:
             def __enter__(self):

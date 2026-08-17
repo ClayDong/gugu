@@ -30,6 +30,13 @@ from gugu.engine.scheduler import TradingScheduler
 def main() -> None:
     """启动交易调度器守护进程。"""
     logging.basicConfig(level=logging.INFO)
+
+    # P0 防护：单实例锁，防止与 launchd/手动启动的实例并行运行
+    from gugu.utils.single_instance import acquire_single_instance_lock
+
+    if not acquire_single_instance_lock(project_root=ROOT):
+        sys.exit(1)
+
     scheduler = TradingScheduler()
     try:
         import asyncio

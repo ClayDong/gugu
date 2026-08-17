@@ -119,3 +119,12 @@ def test_validate_stock_history_zero_price() -> None:
     )
     out = validate_stock_history(df, "600519")
     assert len(out) == 2
+
+
+def test_plausible_price_excludes_latest_value_from_ma() -> None:
+    from gugu.data.quality import PlausiblePriceRule
+
+    df = pd.DataFrame({"close": [100.0, 100.0, 1000.0], "volume": [1000] * 3})
+    passed, result, _ = PlausiblePriceRule(ma_window=2, max_deviation=3.0).check(df)
+    assert passed is False
+    assert result.empty

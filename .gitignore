@@ -72,3 +72,4 @@ scripts/scan_*.py
 scripts/verify_price_volume.py
 scripts/*.csv
 docs/validation/
+.workbuddy/

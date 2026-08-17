@@ -51,7 +51,7 @@ if __name__ == "__main__":
     parser.add_argument("--daemon", action="store_true", help="守护进程模式（保活）")
     parser.add_argument("--report", action="store_true", help="单次模式结束后发送信号汇总")
     parser.add_argument("--reset-halt", action="store_true", help="重置 L2 熔断状态后执行")
-    parser.add_argument("--version", action="version", version="gugu 0.1.0")
+    parser.add_argument("--version", action="version", version="gugu 0.6.0")
     args = parser.parse_args()
 
     if args.daemon:

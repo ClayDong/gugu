@@ -18,6 +18,17 @@ from gugu.notifier.formatter import (
     format_risk_alert,
     format_signal,
 )
+from gugu.notifier.formatter_reports import (
+    build_signal_daily_validation_card as build_daily_report_card,
+    build_signal_performance_card as build_performance_report_card,
+    build_signal_weekly_card as build_weekly_report_card,
+)
+from gugu.notifier.formatter_special import (
+    format_cloud_trend_signal,
+    format_holdings_sell_alert,
+    format_hot_money_signal,
+    format_take_profit_alert,
+)
 from gugu.notifier.perspective_report import build_batch_summary_card
 from gugu.analysis.perspectives.data_types import PerspectiveAnalysisResult
 
@@ -67,6 +78,33 @@ def test_format_signal_sell():
     }
     card = format_signal(signal)
     assert card["card"]["header"]["template"] == "green"
+
+
+def test_strong_sell_formatters_use_green():
+    signal = {"symbol": "600519", "direction": "sell", "price": 1600.0, "reason": "趋势破坏"}
+    assert format_cloud_trend_signal(signal)["card"]["header"]["template"] == "green"
+    assert format_hot_money_signal(signal)["card"]["header"]["template"] == "green"
+
+
+def test_report_formatters_use_red_for_positive_results():
+    performance = build_performance_report_card(
+        {"total_signals": 3, "forward_5d_signal_hit_rate": 0.8}
+    )
+    daily = build_daily_report_card({"total_signals": 3, "valid_count": 3, "win_rate": 0.8})
+    weekly = build_weekly_report_card({"total_signals": 3, "valid_count": 3, "win_rate": 0.8})
+    assert performance["card"]["header"]["template"] == "red"
+    assert daily["card"]["header"]["template"] == "red"
+    assert weekly["card"]["header"]["template"] == "red"
+
+
+def test_holdings_sell_alert_uses_green():
+    card = format_holdings_sell_alert([{"symbol": "600519", "sell_count": 2}])
+    assert card["card"]["header"]["template"] == "green"
+
+
+def test_take_profit_alert_uses_red():
+    card = format_take_profit_alert("600519", "贵州茅台", {"trigger_step": 1})
+    assert card["card"]["header"]["template"] == "red"
 
 
 def test_format_risk_alert_halt():
@@ -228,7 +266,8 @@ async def test_feishu_notifier_token_and_send():
     with mock.patch("gugu.notifier.feishu.env") as mock_env:
         mock_env.return_value.feishu_app_id = "app-id"
         mock_env.return_value.feishu_app_secret = "secret"
-        mock_env.return_value.feishu_chat_id = "chat-id"
+        mock_env.return_value.feishu_chat_id = "system-chat-id"
+        mock_env.return_value.feishu_business_chat_id = "business-chat-id"
         notifier = FeishuNotifier()
         notifier._client = mock_client
         ok = await notifier.notify_signal(

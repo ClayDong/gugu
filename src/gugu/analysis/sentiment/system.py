@@ -48,7 +48,7 @@ class SentimentSystem:
         report = await self.run_daily_report()
         if notifier and report.get("news_count", 0) > 0:
             card = self._report.format_feishu_card(report)
-            ok = await notifier.send_card(card)
+            ok = await notifier.send_business_card(card)
             logger.info("舆情飞书推送: {}", "成功" if ok else "失败")
         return report
 

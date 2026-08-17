@@ -151,6 +151,11 @@ def test_confidence_range():
         assert 0 <= conf <= 1.0, f"置信度应在 0-1 之间，实际 {conf}"
 
 
+def test_defaults_include_divergence_volume_window():
+    strategy = ChenJiangtingStrategy()
+    assert strategy.params["divergence_vol_window"] == 5
+
+
 def test_strategy_registered():
     """策略应注册到 registry。"""
     from gugu.strategies.registry import _REGISTRY
