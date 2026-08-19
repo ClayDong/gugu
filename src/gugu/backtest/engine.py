@@ -1037,28 +1037,52 @@ def walk_forward_optimize_multi_stock(
     n_stocks = len(symbols)
     logger.info(f"多股聚合 Walk-Forward: {n_stocks} 只股票, {n_splits} 窗口")
 
-    # 对齐所有股票的数据长度（取最短的）
-    min_len = min(len(df) for df in stock_dfs.values())
-    if min_len < 120:
-        return [{"error": f"最短股票数据 {min_len} 行 < 120，无法做 walk-forward"}]
+    # 只在所有股票共同拥有的交易日上切分，避免把错位交易日当成同一时点。
+    normalized_dfs: dict[str, pd.DataFrame] = {}
+    common_dates: set[pd.Timestamp] | None = None
+    for symbol, df in stock_dfs.items():
+        if "date" not in df.columns:
+            return [{"error": f"{symbol} 缺少 date 列，无法做 walk-forward"}]
+        dates = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
+        if dates.isna().any():
+            return [{"error": f"{symbol} 存在无效 date，无法做 walk-forward"}]
+        if dates.duplicated().any():
+            return [{"error": f"{symbol} 存在重复交易日，无法做 walk-forward"}]
+        order = dates.sort_values().index
+        normalized = df.loc[order].copy()
+        normalized["date"] = dates.loc[order].to_numpy()
+        normalized_dfs[symbol] = normalized
+        symbol_dates = set(normalized["date"])
+        common_dates = symbol_dates if common_dates is None else common_dates & symbol_dates
 
-    # 用同一时间索引切分窗口
-    window_size = min_len // n_splits
-    step = max(1, min_len // (n_splits * 2))
+    ordered_dates = pd.DatetimeIndex(sorted(common_dates or set()))
+    common_len = len(ordered_dates)
+    if common_len < 120:
+        return [{"error": f"共同交易日 {common_len} < 120，无法做 walk-forward"}]
+
+    window_size = common_len // n_splits
+    step = max(1, common_len // (n_splits * 2))
     results: list[dict] = []
 
     for w in range(n_splits):
         split_start = w * step
         train_end = split_start + int(window_size * train_ratio)
         test_start = train_end
-        test_end = min(split_start + window_size, min_len)
+        test_end = min(split_start + window_size, common_len)
 
         if test_end - test_start < 20:
             break
 
-        # 对每只股票切分训练/测试数据
-        train_dfs = {s: df.iloc[split_start:train_end] for s, df in stock_dfs.items()}
-        test_dfs = {s: df.iloc[test_start:test_end] for s, df in stock_dfs.items()}
+        train_dates = ordered_dates[split_start:train_end]
+        test_dates = ordered_dates[test_start:test_end]
+        train_start_date = train_dates[0]
+        train_end_date = train_dates[-1]
+        test_start_date = test_dates[0]
+        test_end_date = test_dates[-1]
+
+        # 每只股票按共同日期筛选，保证训练/测试边界真实一致。
+        train_dfs = {s: df[df["date"].isin(train_dates)].copy() for s, df in normalized_dfs.items()}
+        test_dfs = {s: df[df["date"].isin(test_dates)].copy() for s, df in normalized_dfs.items()}
 
         best_params: dict[str, Any] = {}
         best_avg_sharpe = -999.0
@@ -1177,19 +1201,65 @@ def walk_forward_optimize_multi_stock(
                 logger.debug(f"多股测试 {sym} 失败: {e}")
 
         n = max(len(test_sharpes), 1)
+        total_test_trades = sum(detail["trades"] for detail in test_details)
+        test_min_sharpe = min(test_sharpes, default=0.0)
+        test_min_return = min(test_returns, default=0.0)
+        test_worst_max_dd = max(test_max_dds, default=0.0)
+        test_negative_return_ratio = sum(ret < 0 for ret in test_returns) / n
+        test_max_trade_share = (
+            max((detail["trades"] for detail in test_details), default=0) / total_test_trades
+            if total_test_trades
+            else 0.0
+        )
+        risk_flags: list[str] = []
+        if len(test_details) < n_stocks:
+            risk_flags.append("incomplete_stock_coverage")
+        if test_negative_return_ratio > 0:
+            risk_flags.append("negative_return_stock")
+        if test_max_trade_share > 0.5:
+            risk_flags.append("trade_count_concentration")
+        if test_worst_max_dd >= 0.25:
+            risk_flags.append("high_drawdown_stock")
+
         results.append(
             {
                 "window": w + 1,
+                "train_start": train_start_date.date().isoformat(),
+                "train_end": train_end_date.date().isoformat(),
+                "test_start": test_start_date.date().isoformat(),
+                "test_end": test_end_date.date().isoformat(),
                 "best_params": best_params,
                 "train_avg_sharpe": round(best_avg_sharpe, 4),
                 "test_avg_sharpe": round(sum(test_sharpes) / n, 4),
                 "test_avg_return": round(sum(test_returns) / n, 4),
                 "test_avg_max_dd": round(sum(test_max_dds) / n, 4),
                 "test_avg_win_rate": round(sum(test_win_rates) / n, 4),
+                "test_min_sharpe": round(test_min_sharpe, 4),
+                "test_min_return": round(test_min_return, 4),
+                "test_worst_max_dd": round(test_worst_max_dd, 4),
+                "test_negative_return_ratio": round(test_negative_return_ratio, 4),
+                "test_max_trade_share": round(test_max_trade_share, 4),
+                "risk_flags": risk_flags,
                 "test_stock_count": len(test_details),
                 "test_details": test_details,
             }
         )
+
+    if results:
+        worst_sharpe = min(results, key=lambda item: item["test_min_sharpe"])
+        worst_return = min(results, key=lambda item: item["test_min_return"])
+        worst_drawdown = max(results, key=lambda item: item["test_worst_max_dd"])
+        for result in results:
+            result.update(
+                {
+                    "global_worst_sharpe_window": worst_sharpe["window"],
+                    "global_worst_return_window": worst_return["window"],
+                    "global_worst_drawdown_window": worst_drawdown["window"],
+                    "global_min_test_sharpe": worst_sharpe["test_min_sharpe"],
+                    "global_min_test_return": worst_return["test_min_return"],
+                    "global_worst_test_max_dd": worst_drawdown["test_worst_max_dd"],
+                }
+            )
 
     logger.info(
         f"多股 Walk-forward 完成: {len(results)} 窗口 × {n_stocks} 股, "

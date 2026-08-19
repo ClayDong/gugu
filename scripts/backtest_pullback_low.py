@@ -199,12 +199,38 @@ async def run_walk_forward_optimization(target_count: int = 10) -> None:
 
     # 运行 Walk-Forward
     try:
-        result = walk_forward_optimize_multi_stock(
+        results = walk_forward_optimize_multi_stock(
             strategy_cls=PullbackLowStrategy,
-            stock_data=stock_data,
+            stock_dfs=stock_data,
             param_grid=_PARAM_GRID,
             n_splits=5,
         )
+        if not results or "error" in results[0]:
+            print(
+                f"❌ Walk-Forward 无有效结果: "
+                f"{results[0].get('error', '未知错误') if results else '空结果'}"
+            )
+            return
+
+        param_votes: dict[str, dict[str, int]] = {}
+        for window in results:
+            for name, value in window.get("best_params", {}).items():
+                votes = param_votes.setdefault(name, {})
+                key = str(value)
+                votes[key] = votes.get(key, 0) + 1
+        best_params = {name: max(votes, key=votes.get) for name, votes in param_votes.items()}
+        stability = min(
+            (max(votes.values()) / len(results) for votes in param_votes.values() if votes),
+            default=1.0,
+        )
+        result = {
+            "best_params": best_params,
+            "train_sharpe": sum(r.get("train_avg_sharpe", 0) for r in results) / len(results),
+            "test_sharpe": sum(r.get("test_avg_sharpe", 0) for r in results) / len(results),
+            "avg_max_dd": sum(r.get("test_avg_max_dd", 0) for r in results) / len(results),
+            "avg_return": sum(r.get("test_avg_return", 0) for r in results) / len(results),
+            "param_stability": stability,
+        }
 
         print("\n" + "=" * 70)
         print("📊 Walk-Forward 优化结果")

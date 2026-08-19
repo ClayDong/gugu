@@ -244,6 +244,10 @@ async def run_offline_optimization(
     print(f"平均样本外收益:    {avg_return:.2%}")
     print(f"平均最大回撤:      {avg_max_dd:.2%}")
     print(f"平均胜率:           {avg_win_rate:.2%}")
+    print(f"最差股票 Sharpe:    {min(r.get('test_min_sharpe', 0) for r in results):.4f}")
+    print(f"最差股票收益:       {min(r.get('test_min_return', 0) for r in results):.2%}")
+    print(f"最差股票最大回撤:   {max(r.get('test_worst_max_dd', 0) for r in results):.2%}")
+    print(f"最大交易笔数集中度: {max(r.get('test_max_trade_share', 0) for r in results):.2%}")
     print(f"\n最优参数（多窗口投票）:")
     for k, v in best_params.items():
         default_val = defaults.get(strategy_name, {}).get(k, "?")
@@ -254,7 +258,11 @@ async def run_offline_optimization(
             f"  窗口{r.get('window', '?')}: "
             f"训练avg_sharpe={r.get('train_avg_sharpe', 0):.4f}, "
             f"测试avg_sharpe={r.get('test_avg_sharpe', 0):.4f}, "
+            f"最差sharpe={r.get('test_min_sharpe', 0):.4f}, "
             f"收益={r.get('test_avg_return', 0):.2%}, "
+            f"最差收益={r.get('test_min_return', 0):.2%}, "
+            f"集中度={r.get('test_max_trade_share', 0):.2%}, "
+            f"风险标记={r.get('risk_flags', [])}, "
             f"参数={r.get('best_params', {})}"
         )
         for d in r.get("test_details", [])[:3]:

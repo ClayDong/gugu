@@ -109,11 +109,13 @@ regime_cycle_four
 
 ### P1：优化目标只看平均 Sharpe，容易掩盖最差标的和集中风险
 
-证据：`src/gugu/backtest/engine.py:1066-1129` 按所有股票平均训练 Sharpe 选参数；`1180-1191` 返回平均测试指标，同时虽然有 `test_details`，但没有把最差股票、负收益股票比例、收益集中度纳入解锁。
+证据：`src/gugu/backtest/engine.py:1066-1129` 按所有股票平均训练 Sharpe 选参数；此前测试结果只返回平均测试指标，虽然有 `test_details`，但没有把最差股票、负收益股票比例、收益集中度纳入审计。
 
 影响：一只强趋势股或少数股票可能拉高平均值；策略对大多数股票无效时仍可能“平均通过”。
 
-修复：优化目标改为组合评分：平均 OOS Sharpe、最差分位收益、正收益股票比例、单股/板块贡献上限、最大回撤和交易成本敏感性共同约束。至少增加 `worst_decile_return`、`profitable_stock_ratio`、`max_symbol_contribution`、`max_sector_contribution`。
+阶段性修复：`walk_forward_optimize_multi_stock()` 现在在保持原有 `test_avg_*` 字段兼容的同时，输出 `test_min_sharpe`、`test_min_return`、`test_worst_max_dd`、`test_negative_return_ratio`、`test_max_trade_share` 和 `risk_flags`，并在所有窗口中标记全局最差窗口。离线验证报告同步展示这些风险指标。
+
+当前边界：`test_max_trade_share` 仅衡量交易笔数集中度，不等同于资金或收益贡献集中度；后续必须增加成交金额、已实现 PnL 和行业映射后，才能实现 `max_symbol_contribution`、`max_sector_contribution`。这些指标目前是审计输出，不自动改变生产准入门禁。
 
 ### P1：缺少完整的多重检验/研究次数记录
 

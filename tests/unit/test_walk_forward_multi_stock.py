@@ -77,8 +77,24 @@ class TestMultiStockWalkForwardBasic:
             assert "train_avg_sharpe" in r
             assert "test_avg_sharpe" in r
             assert "test_details" in r
+            assert "test_min_sharpe" in r
+            assert "test_min_return" in r
+            assert "test_worst_max_dd" in r
+            assert "test_negative_return_ratio" in r
+            assert "test_max_trade_share" in r
+            assert "risk_flags" in r
+            assert 0 <= r["test_negative_return_ratio"] <= 1
+            assert 0 <= r["test_max_trade_share"] <= 1
+            sharpes = [detail["test_sharpe"] for detail in r["test_details"]]
+            returns = [detail["test_return"] for detail in r["test_details"]]
+            drawdowns = [detail["test_max_dd"] for detail in r["test_details"]]
+            assert r["test_min_sharpe"] == min(sharpes)
+            assert r["test_min_return"] == min(returns)
+            assert r["test_worst_max_dd"] == max(drawdowns)
             # 每个窗口应该有3只股票的明细
             assert r["test_stock_count"] == 3
+            assert r["global_min_test_sharpe"] == min(x["test_min_sharpe"] for x in results)
+            assert r["global_min_test_return"] == min(x["test_min_return"] for x in results)
 
     def test_returns_per_stock_details(self) -> None:
         """结果应包含每只股票的测试明细。"""
@@ -148,12 +164,12 @@ class TestMultiStockWalkForwardEdgeCases:
         assert len(results) > 0
         assert "error" not in results[0]
 
-    def test_aligns_different_length_dfs(self) -> None:
-        """不同长度的股票数据应按最短对齐。"""
-        stock_dfs = {
-            "600519": _make_stock_df("600519", n=200, seed=1, trend="up"),
-            "000858": _make_stock_df("000858", n=150, seed=2, trend="up"),  # 较短
-        }
+    def test_aligns_different_dates_by_common_trading_days(self) -> None:
+        """不同交易日序列应按共同交易日对齐，而不是按行号对齐。"""
+        first = _make_stock_df("600519", n=200, seed=1, trend="up")
+        second = _make_stock_df("000858", n=200, seed=2, trend="up")
+        second = second.drop(index=[50, 100, 150]).copy()
+        stock_dfs = {"600519": first, "000858": second}
 
         results = walk_forward_optimize_multi_stock(
             strategy_cls=DualMAStrategy,
@@ -161,8 +177,26 @@ class TestMultiStockWalkForwardEdgeCases:
             param_grid={"short_window": [5], "long_window": [20]},
             n_splits=2,
         )
-        # 应正常返回，按 150 行对齐
         assert "error" not in results[0]
+        for result in results:
+            assert result["train_end"] < result["test_start"] <= result["test_end"]
+            assert result["train_start"] <= result["train_end"]
+            assert result["test_stock_count"] == 2
+
+    def test_rejects_duplicate_dates(self) -> None:
+        """重复交易日会破坏时间边界，必须 fail-closed。"""
+        duplicate = _make_stock_df("000858", n=150, seed=2, trend="up")
+        duplicate.loc[1, "date"] = duplicate.loc[0, "date"]
+        results = walk_forward_optimize_multi_stock(
+            strategy_cls=DualMAStrategy,
+            stock_dfs={
+                "600519": _make_stock_df("600519", n=150, seed=1, trend="up"),
+                "000858": duplicate,
+            },
+            param_grid={"short_window": [5], "long_window": [20]},
+            n_splits=2,
+        )
+        assert results == [{"error": "000858 存在重复交易日，无法做 walk-forward"}]
 
 
 class TestMultiStockVsSingleStock:
@@ -194,6 +228,7 @@ class TestMultiStockVsSingleStock:
         # （而不是被强趋势股拉得过高）
         for r in multi_results:
             sharpes = [d["test_sharpe"] for d in r["test_details"]]
+            assert r["test_min_sharpe"] == min(sharpes)
             if len(sharpes) >= 2:
                 min_s = min(sharpes)
                 max_s = max(sharpes)
