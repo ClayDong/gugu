@@ -29,7 +29,13 @@ from gugu.engine.scheduler import TradingScheduler
 
 def main() -> None:
     """启动交易调度器守护进程。"""
+    # 配置标准 logging（APScheduler 使用标准 Python logging）
     logging.basicConfig(level=logging.INFO)
+    # 抑制 APScheduler 的 INFO 日志写入 stderr（launchd 捕获到无轮转的 err.log）
+    # APScheduler 每 1 分钟执行一次实时盯盘，每次输出 2 行 INFO 日志，
+    # 导致 scheduler_launchd.err.log 快速增长至 49MB 且永不轮转。
+    # gugu 的 loguru 日志系统已完整记录所有日志并带 10MB 轮转。
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
     # P0 防护：单实例锁，防止与 launchd/手动启动的实例并行运行
     from gugu.utils.single_instance import acquire_single_instance_lock

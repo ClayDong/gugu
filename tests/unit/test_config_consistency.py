@@ -177,6 +177,18 @@ class TestManifestSettingsConsistency:
             f"请在 manifest 中设为 enabled=true 或从 settings.yaml 移除。"
         )
 
+    def test_conditional_pass_is_not_track_live_runtime_enabled(self, signal_strategies: dict):
+        """条件通过策略只能进入 paper，不能进入 track_live。"""
+        from gugu.strategies.manifest import StrategyManifest
+
+        manifest = StrategyManifest(_MANIFEST_PATH)
+        for key, info in signal_strategies.items():
+            if not isinstance(info, dict) or not info.get("enabled"):
+                continue
+            if info.get("validation_gate", {}).get("status") == "conditional_pass":
+                assert manifest.is_runtime_enabled(key, "paper") is True
+                assert manifest.is_runtime_enabled(key, "track_live") is False
+
     def test_settings_enabled_by_regime_exists_and_enabled_in_manifest(
         self, signal_strategies: dict
     ):

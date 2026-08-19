@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from unittest import mock
 
 import pandas as pd
@@ -70,6 +71,30 @@ async def test_primary_success_not_degraded(
     assert not df.empty
     mock_sina.assert_called()
     assert mock_ak.call_count == 0
+    assert df.attrs["data_source"] == "sina"
+    assert df.attrs["quality_status"] == "validated"
+    assert df.attrs["data_stale"] is False
+
+
+@mock.patch.object(AkshareCollector, "fetch_stock_history", return_value=_make_basic_df())
+@mock.patch.object(SinaCollector, "fetch_stock_history", return_value=pd.DataFrame())
+@pytest.mark.asyncio
+async def test_empty_primary_result_uses_fallback(
+    mock_sina: mock.MagicMock,
+    mock_ak: mock.MagicMock,
+) -> None:
+    """主源返回空数据时必须视为不可用并走降级源。"""
+    cache().clear()
+    dm = _fresh_dm()
+    dm._fail_threshold = 1
+
+    df = await dm.fetch_stock_history("600519", days=60)
+
+    assert not df.empty
+    assert mock_sina.call_count == 1
+    assert mock_ak.call_count == 1
+    assert df.attrs["data_source"] == "akshare"
+    assert dm._fail_count == 1
 
 
 @mock.patch.object(AkshareCollector, "fetch_stock_history", return_value=_make_basic_df())
@@ -161,6 +186,31 @@ async def test_sector_validator_accepts_symbol_and_preserves_attrs() -> None:
     df.attrs["data_available"] = True
     validated = dm._validate("fetch_sector_flow", df, ())
     assert validated.attrs["data_available"] is True
+
+
+@pytest.mark.asyncio
+async def test_all_sources_fail_uses_stale_cache_with_evidence() -> None:
+    cache().clear()
+    dm = _fresh_dm()
+    dm._fail_threshold = 1
+    stale = _make_basic_df()
+    stale.attrs["fetch_timestamp"] = "2026-08-17T15:00:00"
+    cache_key = "fetch_stock_history|600519|60|adjust_type=none|source=sina"
+    cache().set(cache_key, stale)
+    cache()._store[cache_key] = (time.time() - 300, stale)
+    with mock.patch.object(
+        SinaCollector, "fetch_stock_history", side_effect=RuntimeError("sina error")
+    ):
+        with mock.patch.object(
+            AkshareCollector, "fetch_stock_history", side_effect=RuntimeError("ak error")
+        ):
+            df = await dm.fetch_stock_history("600519", days=60)
+
+    assert not df.empty
+    assert df.attrs["data_stale"] is True
+    assert df.attrs["quality_status"] == "stale"
+    assert df.attrs["data_error"] == "all_sources_failed"
+    assert df.attrs["data_available"] is True
 
 
 @mock.patch.object(AkshareCollector, "fetch_stock_flow", side_effect=RuntimeError("ak error"))

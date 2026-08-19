@@ -679,14 +679,16 @@ class RiskManager:
                 )
             dd = (self._portfolio_peak - total_value) / self._portfolio_peak
             if dd >= self._max_drawdown_halt:
+                was_halted = self._halted
                 self._halted = True
                 if persist:
                     self._save_halt_state()
-                self._logger.warning(
-                    "L2 HALT: 组合回撤 {:.2%} >= {:.0%}, trading halted until reset()",
-                    dd,
-                    self._max_drawdown_halt,
-                )
+                if not was_halted:
+                    self._logger.warning(
+                        "L2 HALT: 组合回撤 {:.2%} >= {:.0%}, trading halted until reset()",
+                        dd,
+                        self._max_drawdown_halt,
+                    )
                 return RiskCheckResult(
                     level=RiskLevel.L2_DAILY_LOSS,
                     action=RiskAction.HALT,

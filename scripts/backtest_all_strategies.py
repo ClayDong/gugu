@@ -34,7 +34,7 @@ from gugu.backtest import BacktestEngine
 from gugu.backtest.metrics import calc_metrics
 from gugu.config import get_config
 from gugu.data.manager import data_manager
-from gugu.strategies.registry import get_strategy, list_strategies
+from gugu.strategies.registry import get_runtime_strategy_names, get_strategy, list_strategies
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -58,9 +58,8 @@ _DISTRIBUTION_METRICS = [
 
 
 def get_enabled_strategies() -> list[str]:
-    """从 settings.yaml 读取实际启用的信号策略。"""
-    cfg = get_config().strategy
-    return cfg.get_all_enabled_unique() if cfg.enabled_by_regime else list(cfg.enabled)
+    """读取当前执行模式经过准入门禁的信号策略。"""
+    return get_runtime_strategy_names()
 
 
 async def fetch_stock_list(max_stocks: int | None = None) -> list[str]:

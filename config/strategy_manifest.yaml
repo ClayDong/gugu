@@ -459,10 +459,10 @@ signal_strategies:
     summary: 主力完整周期（吸筹→异动首板→洗盘大阴线→护盘缩量横盘→反包再介入）的短线信号系统
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0；2026-07-31 事件研究证实整体负期望
-    # v0.8.1 策略清洗：本策略（完整版战法）已被 rebound_elite（验证有效子集）替代。
-    # 事件研究结论：整体形态负期望（5日超额-1.5%），护盘低吸买点显著为负（胜率38%），
-    # 仅「高活跃妖股+放量反包追涨」子集有效 → 见 rebound_elite。保留本策略仅供历史参考，禁止重新启用。
-    notes: 已废弃。请勿启用。有效用法见 rebound_elite。陈学长三套定位：breakout_rebound(完整版,废弃) / rebound_elite(验证子集,启用) / chenxuezhang(6独立规则,启用)
+    # v0.8.1 策略清洗：本策略（完整版战法）已证伪，仅供历史研究，禁止重新启用。
+    # 事件研究结论：整体形态负期望（5日超额-1.5%），护盘低吸买点显著为负；
+    # rebound_elite 的小样本正收益随后被 Walk-Forward 证伪，不能作为启用依据。
+    notes: 已废弃。请勿启用。陈学长断板反包三套实现均为研究/禁用：breakout_rebound（完整版）/ rebound_elite（高活跃子集，已证伪）/ chenxuezhang（6独立规则，持仓回测不通过）。
     validation_gate:
       status: backtest_failed
       sample: 待补充
@@ -842,12 +842,12 @@ signal_strategies:
     #      max_hold_days=10 时间止损。A/B 回测（15股×600日同脚本）：
     #      legacy 收益+11.22%/夏普+0.151/交易1687 → optimized +19.44%/+0.225/1034。
     #      持仓中位 2-3日→7-10日，<=2日占比 58-63%→11-15%。
-    validation: conditional_pass 2026-08-01 - 事件研究入场端有效（val 10d +1.02% p=0.000）；引擎级夏普从 legacy -0.15 提升到 optimized +0.225（A/B 同池对比），出场端优化落地
+    validation: backtest_failed 2026-08-15 - 事件研究+1.02%→持仓回测-0.22%，Sharpe -0.24，正超额不成立
     # 2026-08-15 持仓回测审计：1105只主板500d，100只抽样回测。总收益均值-0.22%，Sharpe -0.24，胜率46.85%。
-    # 口径偏差：事件研究+1.02% vs 持仓回测-0.22%（高估1.24%）。非严重高估，但正超额不成立。
-    notes: '核心规则：假调整（R12）缩量回踩均线、尾盘骗线（R15）、涨停中继（R18）、趋势回踩（R22）、量价背离（R25）、突破回踩（R28）。'
+    # 研究结论：事件研究与连续持仓口径不一致，不能作为生产准入证据。
+    notes: '研究/禁用。保留六类规则与历史结果用于语义标签研究，不参与信号融合，不产生自动下单。'
     validation_gate:
-      status: conditional_pass
+      status: backtest_failed
       sample: 15 只活跃题材股，600 交易日（事件研究，2024-02~2026-07，2435信号）+ 1105只主板持仓回测审计（100只抽样）
       metrics:
         total_trades: 2435（事件研究） / 13430（持仓回测）
@@ -858,7 +858,7 @@ signal_strategies:
         param_stability: 0.0
         paper_signals: 0
         paper_return: 0.0
-      next_action: 持仓回测审计完成。事件研究高估1.24%，Sharpe -0.24且不盈利。建议降级为disabled，或确认出口端优化后的A/B模拟夏普+0.225是否被持仓回测复现。持续paper观察30+信号后决策。
+      next_action: 保持 disabled/research-only。若要恢复，必须先完成连续持仓 Walk-Forward、30+ paper 信号和语义标签人工一致性验证；此前不得进入 verified_strategies。
   linjudaye:
     name: 邻居大爷规则策略
     module: gugu.strategies.blogger_rules.linjudaye

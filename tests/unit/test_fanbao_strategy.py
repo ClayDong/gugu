@@ -134,6 +134,13 @@ def test_red_lines_board_filter():
     assert not red.passed
 
 
+def test_red_lines_st_name_filter():
+    df = _make_kline(closes=[10.0] * 100)
+    red = check_red_lines("sh600519", df, name="*ST测试", float_mv=200)
+    assert not red.passed
+    assert any("ST" in reason for reason in red.reasons)
+
+
 # ── 情绪周期测试 ──────────────────────────────────────
 
 
@@ -517,6 +524,22 @@ def test_detect_all_returns_list():
     df = _build_active_stock()
     sigs = detect_all("sh600519", df, float_mv=100, skip_red_lines=True, sentiment_ok=True)
     assert isinstance(sigs, list)
+
+
+def test_detect_all_passes_explicit_today_open_to_all_detectors():
+    """显式今日竞价应覆盖最后一根历史 K 线中的开盘字段。"""
+    df = _make_zhaban_data(_build_active_stock())
+    df.loc[df.index[-1], "open"] = df["close"].iloc[-2]
+    sigs = detect_all(
+        "sh600519",
+        df,
+        float_mv=100,
+        skip_red_lines=True,
+        skip_checks=True,
+        today_open=float(df["close"].iloc[-2] * 1.03),
+        today_prev_close=float(df["close"].iloc[-2]),
+    )
+    assert any("炸板反包" in sig.strategy for sig in sigs)
 
 
 # ── 通用前置条件测试 ──────────────────────────────────────

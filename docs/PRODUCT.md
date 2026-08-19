@@ -48,38 +48,39 @@
 | 已验证 | rsi_reversal | RSI 超买超卖反弹（震荡市专用） |
 | 实验性 | hot_money | 游资三数交易法（7 日内涨停 + 缩量买入/放量卖出） |
 | 实验性 | ma5_momentum | MA5 动量突破（待 Walk-Forward 验证） |
-| 实验性 | chenxuezhang | 陈学长不吃面规则策略（6 大高胜率规则组合） |
+| 已禁用/研究 | chenxuezhang | 陈学长不吃面规则策略；持仓回测 Sharpe -0.24，语义标签研究专用 |
 | 实验性 | linjudaye | 邻居大爷规则策略（8 大量价规则组合） |
-| 实验性 | ml_gradient_boost | ML GradientBoosting 5 日收益预测（需预训练模型） |
+| 已禁用/研究 | ml_gradient_boost | ML GradientBoosting 5 日收益预测（需滚动重训和样本外复验） |
 | 历史/观察 | Turtle / DualMA / MACD | 趋势跟踪基础策略（当前未启用，保留代码） |
 | 历史/观察 | KDJ / Bollinger / PullbackLow | 均值回归/低吸策略（当前未启用，保留代码） |
 | 历史/观察 | NorthForceLong | 趋势向上+缩量回踩 MA20（回测未通过，持续调参） |
 | 历史/观察 | DragonTigerShort | 涨停断板反包（回测观察通过，仅在 paper 观察） |
-| 已验证 | rebound_elite | 断板反包精英追涨（基于事件研究验证的有效子集：高活跃妖股+放量反包追涨，5日+4.08%/10日+9.99%） |
-| 实验性 | price_volume_signal | 换手率+量比尾盘黄金信号（四信号框架，5日收益+13.85%胜率82% bootstrap显著） |
+| 已禁用/研究 | rebound_elite | 断板反包精英追涨；小样本正收益后被 Walk-Forward 证伪，禁止进入信号融合 |
+| 实验性 | price_volume_signal | 换手率+量比尾盘黄金信号（四信号框架，待 paper 观察） |
 | 已禁用 | IndustryCapitalMomentum | 行业资金强度+动量确认 v1.2（回测 -15.38%，待重构） |
-| 已验证 | regime_cycle_four | 公众号《八月，来了~~》四周期模型（银山谷+MACD金叉潜伏期买/死亡谷+死叉幻灭期卖，事件研究验证 10日+2.19%） |
-| 已验证 | death_valley_rebound | 幻灭期修复反弹（空头排列+20日跌>10%超跌+3日不创新低+KDJ金叉+站上5日线，验证期 10日+3.02% p=0.0012） |
-| 已验证 | bollinger_oversold_rebound | 布林下轨超跌反弹（20日跌>12%+跌破下轨抢反弹，中轨/持有N日卖出，验证期 10日+3.65% p=0.0001） |
-| 已验证 | fanbao_strategy | 小圈圈儿《反包策略》V2.0 —— 5+1 种反包战法（跌停板/炸板/一字涨停/反包回调/跳空涨停+暴力洗盘），7 阶段情绪周期，6 条风险红线，性价比评分，统一高开进场 |
-| 实验性 | rebound_system | 陈学长断板反包实战体系·手册完整版 —— F1-F5 硬性过滤（市值50-150亿/股价>3元/题材热度/股性/非ST非创业非科创）、S1-S4 形态四阶段、三买点（A缩量回踩/B底背离/C放量追击默认关）、六卖出机制；定位 experimental，edge 未证实前仅信号观察 |
-| 实验性 | asset_combo | 认知资产组合验证策略 —— 验证 risk_rules 中五条规则的 alpha 有效性，实证发现强势期无 alpha、弱势期+gap 过滤才是真 alpha |
-| 已验证 | risk_rules (通用组件) | 从断板反包战法中抢救出的通用认知资产：活跃度过滤（count_limit_ups）/ 位置分位（position_percentile）/ 破位止损（apply_support_break_stop）/ 板上减半止盈（detect_lock_profit_days），供全项目策略复用 |
-| 已验证 | breakout_rebound | 断板反包反弹策略（陈学长6大高胜率规则组合，放宽参数后信号产量大幅提升） |
+| 研究中 | regime_cycle_four | 公众号《八月，来了~~》四周期模型；事件研究方向为正但验证期不显著，待扩池复验 |
+| 已禁用/研究 | death_valley_rebound | 持仓回测收益 -0.57%、Sharpe -5.33，事件研究结果不可作为准入依据 |
+| 已禁用/研究 | bollinger_oversold_rebound | 持仓回测收益 -2.24%、Sharpe -1.78，事件研究结果不可作为准入依据 |
+| 已禁用/研究 | fanbao_strategy | 小圈圈儿《反包策略》V2.0 已实现，尚未完成全市场回测，禁止启用 |
+| 已禁用/研究 | rebound_system | 陈学长断板反包实战体系·手册完整版；买点 A 仅探索性正向，买点 C 已证伪，尚未完成前向验证 |
+| 已禁用/研究 | asset_combo | 认知资产组合验证载体；仅提取 gap/regime 风控组件，不作为独立盈利策略 |
+| 研究组件 | risk_rules (通用组件) | 从断板反包战法中抢救出的认知资产，必须经过独立验证后才能复用，不代表原策略有效 |
+| 已禁用/研究 | breakout_rebound | 断板反包完整版；样本外未通过，禁止重新启用 |
 
-**当前启用策略（按市场状态分流，v0.9.10+）**：
-- `bull/rally`：3 个已验证策略（box_breakout / double_yin / rsi_reversal）+ 5 个实验性策略（hot_money / ma5_momentum / chenxuezhang / linjudaye / ml_gradient_boost）
-- `sideways`：3 个已验证策略（box_breakout / double_yin / rsi_reversal）
+**当前策略配置（按市场状态分流）**：
+- `bull/rally`：配置中保留 box_breakout、double_yin、rsi_reversal、linjudaye、price_volume_signal、regime_cycle_four；实验性信号仅按配置和运行模式观察，不能据此宣称已验证
+- `sideways`：配置中保留 box_breakout、double_yin、rsi_reversal
+- `chenxuezhang`、`breakout_rebound`、`rebound_elite`、`rebound_system`：disabled / research-only，不参与信号融合
 - `bear`：候选数 ×0.4（熊市也出选股，MA5<MA10 弱势市候选数再减半），不空仓
 - `crash`：保护性空仓（系统性崩盘日不接飞刀）
-- 实验性策略在 `signal_only/track_live` 模式下仅作为观察信号（卡片标注警告），仅在 `paper` 模式下参与融合
+- `conditional_pass` 仅允许进入 `paper`；`track_live/signal_only/live` 只加载 manifest 状态为 `enabled` 的策略。当前配置保持 `track_live`，未达到严格 `enabled` 的策略不会进入生产信号列表
 
 **策略池动态权重（v0.7.10+）**：`StrategyPool` 根据近 20 笔交易表现动态调整策略权重，连续亏损 5 次大幅降权但保留策略（不删除），连续盈利 3 次逐步恢复；权重持久化到 `data/strategy_pool_weights.json`，进程重启不丢失。
 
 **买入成交量确认（v0.7.10+）**：`SignalRouter` 对买入信号应用成交量折扣，最新量能低于 20 日均量时按档位降低置信度（0.85 / 0.7 / 0.5），过滤缩量诱多/假突破。
 **LLM 自然语言策略生成**：描述策略逻辑 → LLM 生成 Python 代码 → AST 校验 → 自动注册。
 
-**策略注册中心**（v0.3.5+）：所有策略（信号生成/风控择时/止盈止损/Skill）统一登记到 `config/strategy_manifest.yaml`，支持：
+**策略注册中心**（v0.3.5+）：所有策略（信号生成/风控择时/止盈止损/Skill）统一登记到 `config/strategy_manifest.yaml`；运行时信号策略必须同时通过 settings 候选、manifest 验证状态和 `_REGISTRY` 注册表三重过滤，统一入口为 `get_runtime_strategy_names()`，支持：
 - `python scripts/verify_strategies.py list` — 列出全量策略
 - `python scripts/verify_strategies.py check` — 代码与清单一致性校验
 - `python scripts/verify_strategies.py dashboard` — 推送策略看板到飞书

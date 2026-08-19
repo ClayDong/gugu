@@ -536,6 +536,7 @@ class TestOrderManagerE2E:
 
         # ── 1. 创建组件 ──
         broker = PaperBroker(initial_capital=1_000_000)
+        broker.set_market_context("000858", prev_close=148.0)
         risk = RiskManager()
         notifier = make_mock_notifier()
         event_engine = EventEngine()
@@ -565,6 +566,7 @@ class TestOrderManagerE2E:
             "prev_close": 148.0,
             "is_st": False,
             "is_suspended": False,
+            "data_quality": "fresh_valid",
             "_df": make_bollinger_buy_df(60, 100.0),
         }
 
@@ -609,6 +611,83 @@ class TestOrderManagerE2E:
         assert EVENT_ORDER_FILLED in event_types
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "signal_overrides",
+        [
+            {"observation_only": True, "data_quality": "fresh_valid"},
+            {"rejected": True, "data_quality": "fresh_valid"},
+            {"data_quality": "stale_degraded"},
+            {"data_quality": "unavailable"},
+        ],
+    )
+    async def test_order_manager_buy_gate_is_fail_closed(self, signal_overrides):
+        """绕过 SignalPipeline 的不合格买入必须在 OrderManager 入口被阻断。"""
+        order_mgr = OrderManager()
+        broker = mock.MagicMock()
+        risk = mock.MagicMock()
+        notifier = mock.AsyncMock()
+        event_engine = mock.MagicMock()
+        signal = {
+            "symbol": "000858",
+            "direction": "buy",
+            "price": 150.0,
+            "suggested_position_ratio": 0.15,
+            "data_quality": "stale_degraded",
+            **signal_overrides,
+        }
+
+        result = await order_mgr.execute(
+            signal=signal,
+            broker=broker,
+            risk=risk,
+            notifier=notifier,
+            event_engine=event_engine,
+        )
+
+        assert result is None
+        broker.get_account.assert_not_called()
+        broker.order.assert_not_called()
+        risk.check_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_order_manager_sell_does_not_require_position_ratio(self, tmp_path, monkeypatch):
+        """卖出/止损信号没有 suggested_position_ratio 也必须到达风控和下单。"""
+        monkeypatch.setattr("gugu.execution.paper.STATE_FILE", tmp_path / "state.json")
+        monkeypatch.setattr("gugu.risk.manager.RISK_STATE_FILE", tmp_path / "risk_state.json")
+        monkeypatch.setattr("gugu.config.PROJECT_ROOT", tmp_path)
+
+        broker = PaperBroker(initial_capital=100_000)
+        broker.set_market_context("000858", prev_close=100.0, market_value_billion=1000.0)
+        monkeypatch.setattr(
+            broker,
+            "_simulate_partial_fill",
+            lambda quantity, fill_price, partial_prob: (quantity, fill_price),
+        )
+        assert broker.order("000858", "buy", 100, 100.0).success is True
+        broker.settle_t_plus_1()
+
+        order_mgr = OrderManager()
+        result = await order_mgr.execute(
+            signal={
+                "symbol": "000858",
+                "direction": "sell",
+                "price": 105.0,
+                "prev_close": 100.0,
+                "is_st": False,
+                "is_suspended": False,
+            },
+            broker=broker,
+            risk=RiskManager(),
+            notifier=make_mock_notifier(),
+            event_engine=EventEngine(),
+        )
+
+        assert result is not None
+        assert result["risk_allowed"] is True
+        assert result["order_result"]["success"] is True
+        assert broker.get_position("000858") is None
+
+    @pytest.mark.asyncio
     async def test_order_manager_risk_rejected(self, tmp_path, monkeypatch):
         """风控拦截时返回 risk_allowed=False。"""
         monkeypatch.setattr("gugu.execution.paper.STATE_FILE", tmp_path / "state.json")
@@ -616,6 +695,7 @@ class TestOrderManagerE2E:
         monkeypatch.setattr("gugu.config.PROJECT_ROOT", tmp_path)
 
         broker = PaperBroker(initial_capital=1000)  # 极小资金
+        broker.set_market_context("600519", prev_close=1480.0)
         risk = RiskManager()
         notifier = make_mock_notifier()
         event_engine = EventEngine()
@@ -636,6 +716,7 @@ class TestOrderManagerE2E:
             "prev_close": 1480.0,
             "is_st": False,
             "is_suspended": False,
+            "data_quality": "fresh_valid",
         }
 
         result = await order_mgr.execute(
@@ -662,6 +743,7 @@ class TestOrderManagerE2E:
         monkeypatch.setattr("gugu.config.PROJECT_ROOT", tmp_path)
 
         broker = PaperBroker(initial_capital=1_000_000)
+        broker.set_market_context("000858", prev_close=148.0)
         risk = RiskManager()
         notifier = make_mock_notifier()
         event_engine = EventEngine()
@@ -681,6 +763,7 @@ class TestOrderManagerE2E:
             "prev_close": 148.0,
             "is_st": False,
             "is_suspended": False,
+            "data_quality": "fresh_valid",
         }
 
         result = await order_mgr.execute(
@@ -712,6 +795,7 @@ class TestStopLossManagerE2E:
 
         # ── 1. 买入建仓 ──
         broker = PaperBroker(initial_capital=1_000_000)
+        broker.set_market_context("000858", prev_close=148.0)
         risk = RiskManager()
         notifier = make_mock_notifier()
         event_engine = EventEngine()
@@ -741,6 +825,7 @@ class TestStopLossManagerE2E:
         pos.avg_cost = 150.0
         # 前收盘价设为 105，10% 日跌停价 ≈ 94.5，当前价 100 在合法范围内
         pos.prev_close = 105.0
+        broker.set_market_context("000858", prev_close=105.0)
         pos.is_st = False
         pos.is_suspended = False
         pos.current_price = 100.0
@@ -779,6 +864,7 @@ class TestStopLossManagerE2E:
         monkeypatch.setattr("gugu.config.PROJECT_ROOT", tmp_path)
 
         broker = PaperBroker(initial_capital=1_000_000)
+        broker.set_market_context("000858", prev_close=148.0)
         risk = RiskManager()
         notifier = make_mock_notifier()
         event_engine = EventEngine()
@@ -1087,6 +1173,7 @@ class TestCompletePipelineE2E:
         signal["prev_close"] = float(df["close"].iloc[-2])
         signal["is_st"] = False
         signal["is_suspended"] = False
+        signal["data_quality"] = "fresh_valid"
 
         # ── 2. 智慧决策 ──
         max_ratio = get_config().risk.max_position_ratio
@@ -1100,6 +1187,7 @@ class TestCompletePipelineE2E:
 
         # ── 3. 风控 → 下单 ──
         broker = PaperBroker(initial_capital=1_000_000)
+        broker.set_market_context("000858", prev_close=float(signal["prev_close"]))
         risk = RiskManager()
         notifier = make_mock_notifier()
         event_engine = EventEngine()

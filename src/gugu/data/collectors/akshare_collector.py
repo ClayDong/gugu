@@ -40,7 +40,9 @@ class AkshareCollector(BaseCollector):
                 symbol=code, period="daily", start_date=start, end_date=end, adjust="qfq"
             )
         except Exception as e:
-            logger.error(f"akshare 获取 {code} 历史失败: {e}")
+            # 备用源失败属设计内降级路径（上游会兜底/重试），记 WARNING 而非 ERROR，
+            # 避免每次瞬时限流都污染 ERROR 统计（与 fallback.py 网易/新浪备用源级别一致）。
+            logger.warning(f"akshare 获取 {code} 历史失败: {e}")
             raise
 
         if df.empty:
@@ -145,7 +147,10 @@ class AkshareCollector(BaseCollector):
         try:
             df = ak.stock_individual_fund_flow(stock=code, market=_market(code))
         except Exception as e:
-            logger.error(f"akshare 个股资金流 {code} 失败: {e}")
+            # 备用源失败属设计内降级路径（eastmoney 会兜底，上游还有缓存兜底），
+            # 记 WARNING 而非 ERROR，避免每次瞬时限流都污染 ERROR 统计
+            # （与同文件历史K线失败级别一致）。
+            logger.warning(f"akshare 个股资金流 {code} 失败: {e}")
             self._flow_record_failure()
             raise
         self._flow_record_success()
@@ -179,6 +184,6 @@ def _market(code: str) -> str:
         return "sh"
     if code.startswith(("00", "30")):
         return "sz"
-    if code.startswith(("43", "83", "87", "88")):
+    if code.startswith(("43", "83", "87", "88", "920")):
         return "bj"
     return "sh"

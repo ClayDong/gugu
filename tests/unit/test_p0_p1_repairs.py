@@ -84,6 +84,11 @@ def test_experimental_strategies_are_filtered_by_execution_mode(
         ),
     )
     monkeypatch.setattr(config_module, "get_config", lambda: cfg)
+    monkeypatch.setattr(
+        registry_module,
+        "get_manifest",
+        lambda: mock.Mock(list_runtime_enabled=lambda mode, keys: list(keys)),
+    )
     result = registry_module.get_enabled_strategies_for_regime("bull")
     assert [strategy.name for strategy in result] == ["box_breakout"]
 

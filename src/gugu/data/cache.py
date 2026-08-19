@@ -45,7 +45,8 @@ class DataCache:
                 return None
             ts, val = self._store[key]
             if not ignore_ttl and time.time() - ts > self._ttl:
-                del self._store[key]
+                # 保留过期值，供上层在所有数据源失败时通过 ignore_ttl=True 兜底。
+                # 正常读取仍视为 miss；显式 clear/淘汰负责回收长期过期条目。
                 return None
             self._store.move_to_end(key)
             return val

@@ -24,6 +24,7 @@ from gugu.strategies.industry_capital_momentum import IndustryCapitalMomentumStr
 from gugu.strategies.leopard_three_factors import LeopardThreeFactorsStrategy
 from gugu.strategies.ma5_momentum import MA5MomentumStrategy
 from gugu.strategies.ma20_trend import MA20TrendStrategy
+from gugu.strategies.manifest import get_manifest
 from gugu.strategies.mean_revert import BollingerStrategy, KDJStrategy, RSIStrategy
 from gugu.strategies.ml_factor import MLFactorStrategy
 from gugu.strategies.ml_gradient_boost import MLGradientBoostStrategy
@@ -123,30 +124,31 @@ def list_strategies() -> list[str]:
     return list(_REGISTRY.keys())
 
 
-@lru_cache(maxsize=1)
-def get_enabled_strategies() -> list[Strategy]:
-    """获取配置中启用的策略实例列表（带缓存，全局共享同一批实例）。
+def get_runtime_strategy_names(
+    regime: str | None = None,
+    execution_mode: str | None = None,
+) -> list[str]:
+    """返回经过配置、manifest 和注册表三重过滤的运行时策略名。
 
-    v0.5.6 优化1：优先使用 enabled_by_regime 的并集（向后兼容 enabled）
-    v0.9.7 P0 修复：必须按 execution_mode 过滤 experimental 策略——
-    原实现用 get_all_enabled_unique()（所有 regime 并集），会把 experimental
-    策略（chenxuezhang/linjudaye 等）泄漏进 track_live/signal_only 模式，
-    与 get_enabled_strategies_for_regime() 的行为不一致，导致自动选股路径
-    跑"不应启用"的策略。现统一委托 get_enabled_for_regime(None, mode)。
-    注：按 regime 过滤由 get_enabled_strategies_for_regime() 实现
+    这是所有运行入口和验证脚本的唯一策略准入入口。未传执行模式时，
+    使用当前配置；``paper`` 可加载 ``conditional_pass``，其余安全运行模式
+    只能加载 manifest 状态为 ``enabled`` 的策略。
     """
     from gugu.config import get_config
 
     cfg = get_config()
-    strategy_cfg = cfg.strategy
-    # v0.9.7: 统一按 execution_mode 过滤（track_live/signal_only/live 排除 experimental）
-    if strategy_cfg.verified_strategies:
-        enabled = strategy_cfg.get_enabled_for_regime(None, cfg.execution.mode)
-    elif strategy_cfg.enabled_by_regime:
-        enabled = strategy_cfg.get_all_enabled_unique()
-    else:
-        enabled = strategy_cfg.enabled
-    return [get_strategy(name) for name in enabled if name in _REGISTRY]
+    mode = execution_mode or cfg.execution.mode
+    candidates = cfg.strategy.get_enabled_for_regime(regime, mode)
+    if mode in ("track_live", "signal_only", "live"):
+        candidates = [name for name in candidates if name in cfg.strategy.verified_strategies]
+    runtime_enabled = set(get_manifest().list_runtime_enabled(mode, set(candidates)))
+    return [name for name in candidates if name in runtime_enabled and name in _REGISTRY]
+
+
+@lru_cache(maxsize=1)
+def get_enabled_strategies() -> list[Strategy]:
+    """获取当前执行模式允许加载的策略实例列表（带缓存）。"""
+    return [get_strategy(name) for name in get_runtime_strategy_names()]
 
 
 def get_enabled_strategies_for_regime(regime: str | None) -> list[Strategy]:
@@ -163,21 +165,14 @@ def get_enabled_strategies_for_regime(regime: str | None) -> list[Strategy]:
     - 震荡：拐点策略（double_yin）
     - 熊市：空仓观察（返回空列表）
     """
-    from gugu.config import get_config
 
-    app_cfg = get_config()
-    cfg = app_cfg.strategy
-    enabled = cfg.get_enabled_for_regime(regime, app_cfg.execution.mode)
-    return [get_strategy(name) for name in enabled if name in _REGISTRY]
+    return [get_strategy(name) for name in get_runtime_strategy_names(regime)]
 
 
 def reload_strategies() -> None:
-    """清除策略缓存，使下次 get_enabled_strategies 调用重新读取配置（O-01 修复）。
-
-    用于配置热更新场景：修改 settings.yaml 后调用此方法，
-    无需重启进程即可生效。也可通过飞书指令触发。
-    """
+    """清除策略缓存，使下次调用重新读取配置和 manifest。"""
     get_enabled_strategies.cache_clear()
+    get_manifest.cache_clear()
     from gugu.utils.log import get_logger
 
     get_logger().info("策略缓存已清除，下次调用将重新读取配置")

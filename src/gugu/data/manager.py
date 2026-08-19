@@ -24,6 +24,7 @@ from gugu.data.collectors.base import BaseCollector
 from gugu.data.collectors.eastmoney_collector import EastmoneyCollector
 from gugu.data.collectors.fallback import SinaCollector
 from gugu.data.collectors.tencent_collector import TencentCollector
+from gugu.data.evidence import set_evidence
 from gugu.data.quality import (
     sanitize_dataframe,
     validate_sector_flow,
@@ -235,15 +236,18 @@ class DataManager:
             days = int(args[1]) if len(args) > 1 else 60
             parquet_df = self._parquet_cache.get(symbol, days, adjust_type)
             if parquet_df is not None and not parquet_df.empty:
-                self._set_attrs(parquet_df, collector)
+                self._set_attrs(parquet_df, collector, quality_status="validated")
                 parquet_df.attrs["data_available"] = True
+                parquet_df.attrs["data_stale"] = False
                 cache().set(cache_key, parquet_df)
                 return parquet_df
 
         # 2. 内存缓存
         cached = cache().get(cache_key)
         if cached is not None:
+            self._set_attrs(cached, collector, quality_status="validated")
             cached.attrs.setdefault("data_available", not cached.empty)
+            cached.attrs["data_stale"] = False
             return cached
 
         # 3. 实时请求
@@ -257,11 +261,14 @@ class DataManager:
                 df = await asyncio.wait_for(
                     asyncio.to_thread(_fn), timeout=_COLLECTOR_TIMEOUT_SECONDS
                 )
+                df = self._validate(method, df, args)
+                if df.empty and not df.attrs.get("flow_breaker_active"):
+                    raise RuntimeError(f"主源 {method} 返回空数据")
                 async with self._get_lock():
                     await self._on_success_locked(method)
-                df = self._validate(method, df, args)
-                self._set_attrs(df, self._primary)
+                self._set_attrs(df, self._primary, quality_status="validated")
                 df.attrs["data_available"] = not df.empty
+                df.attrs["data_stale"] = False
                 # P0 修复：空结果不缓存，避免 120s 内持续返回空且不触发降级
                 if not df.empty:
                     cache().set(cache_key, df)
@@ -306,45 +313,63 @@ class DataManager:
 
             done_results = _collect(done)
 
-            # 快速路径：已有真实成功 → 立即返回（保持 FIRST_COMPLETED 快速语义）
-            for t, df in done_results:
-                if df is not None and not df.empty:
-                    return self._return_fallback_success(t, df, tasks, method, args, adjust_type)
+            # v0.9.x 修复：所有分支 finally 统一取消 pending 任务，防止
+            # "Task exception was never retrieved" asyncio 未检索异常泄漏刷屏
+            try:
+                # 快速路径：已有真实成功 → 立即返回（保持 FIRST_COMPLETED 快速语义）
+                for t, df in done_results:
+                    if df is not None and not df.empty:
+                        return self._return_fallback_success(
+                            t, df, tasks, method, args, adjust_type
+                        )
 
-            # 熔断判定（2026-08-10 修复）：已完成结果中有熔断空标记
-            breaker_results = [
-                res
-                for _, res in done_results
-                if res is not None and res.attrs.get("flow_breaker_active")
-            ]
-            if breaker_results:
-                # 等 pending 完成（最多 _COLLECTOR_TIMEOUT_SECONDS），确认没有真实成功
+                # 熔断判定（2026-08-10 修复）：已完成结果中有熔断空标记
+                breaker_results = [
+                    res
+                    for _, res in done_results
+                    if res is not None and res.attrs.get("flow_breaker_active")
+                ]
+                if breaker_results:
+                    # 等 pending 完成（最多 _COLLECTOR_TIMEOUT_SECONDS），确认没有真实成功
+                    if pending:
+                        all_done, _ = await asyncio.wait(
+                            pending, timeout=_COLLECTOR_TIMEOUT_SECONDS
+                        )
+                        pending_results = _collect(all_done)
+                        done_results += pending_results
+                    # 熔断短路：所有 fallback 均熔断（或空）→ 静默返回，不记录 all 失败
+                    if not any(res is not None and not res.empty for _, res in done_results):
+                        df = breaker_results[0]
+                        df.attrs["data_available"] = False
+                        df.attrs["data_error"] = "flow_breaker_active"
+                        return df
+
+                # 常规路径：等待剩余 pending 完成后返回首个成功
                 if pending:
                     all_done, _ = await asyncio.wait(pending, timeout=_COLLECTOR_TIMEOUT_SECONDS)
-                    pending_results = _collect(all_done)
-                    done_results += pending_results
-                # 熔断短路：所有 fallback 均熔断（或空）→ 静默返回，不记录 all 失败
-                if not any(res is not None and not res.empty for _, res in done_results):
-                    df = breaker_results[0]
-                    df.attrs["data_available"] = False
-                    df.attrs["data_error"] = "flow_breaker_active"
-                    return df
-
-            # 常规路径：等待剩余 pending 完成后返回首个成功
-            if pending:
-                all_done, _ = await asyncio.wait(pending, timeout=_COLLECTOR_TIMEOUT_SECONDS)
-                done_results += _collect(all_done)
-            for t, df in done_results:
-                if df is not None and not df.empty:
-                    return self._return_fallback_success(t, df, tasks, method, args, adjust_type)
+                    done_results += _collect(all_done)
+                for t, df in done_results:
+                    if df is not None and not df.empty:
+                        return self._return_fallback_success(
+                            t, df, tasks, method, args, adjust_type
+                        )
+            finally:
+                # 统一取消未完成任务（幂等：done/cancelled 任务为 no-op）
+                self._cancel_pending_tasks(tasks)
 
         # 所有真实 fallback 都失败（非熔断）→ 记录 all 失败 + 缓存兜底
         logger.warning("所有数据源 {} 均失败，尝试缓存兜底", method)
         self._health.record_failure("all", method, detail="all_sources_failed")
         stale_cached = cache().get(cache_key, ignore_ttl=True)
         if stale_cached is not None and not stale_cached.empty:
+            self._set_attrs(
+                stale_cached,
+                collector,
+                quality_status="stale",
+                data_stale=True,
+                data_error="all_sources_failed",
+            )
             stale_cached.attrs["data_available"] = True
-            stale_cached.attrs["data_stale"] = True
             stale_cached.attrs["data_error"] = "all_sources_failed"
             logger.info("{} 使用过期缓存兜底，下次请求自动重试", method)
             return stale_cached
@@ -359,11 +384,39 @@ class DataManager:
         return unavailable
 
     @staticmethod
-    def _set_attrs(df: pd.DataFrame, collector: BaseCollector) -> pd.DataFrame:
-        df.attrs["data_source"] = collector.source
-        df.attrs["adjust_type"] = getattr(collector, "adjust_type", "none")
-        df.attrs.setdefault("fetch_timestamp", pd.Timestamp.now().isoformat())
-        return df
+    def _set_attrs(
+        df: pd.DataFrame,
+        collector: BaseCollector,
+        *,
+        quality_status: str = "validated",
+        data_stale: bool = False,
+        data_error: str | None = None,
+    ) -> pd.DataFrame:
+        return set_evidence(
+            df,
+            data_source=collector.source,
+            period="daily",
+            adjust_type=getattr(collector, "adjust_type", "none"),
+            quality_status=quality_status,
+            fetch_timestamp=df.attrs.get("fetch_timestamp"),
+            data_stale=data_stale,
+            data_available=not df.empty,
+            data_error=data_error,
+        )
+
+    @staticmethod
+    def _cancel_pending_tasks(tasks: dict[BaseCollector, asyncio.Task]) -> None:
+        """取消所有未完成的 fallback 任务，避免"Task exception was never retrieved"。
+
+        在 _call_with_fallback 的每个 return 前调用，确保 pending 任务被取消后
+        其 CancelledError 被 asyncio 正常处理，不会泄漏为未检索异常。
+        """
+        for t in tasks.values():
+            if not t.done():
+                t.cancel()
+            # 无论 done/pending 都检索异常，防止 done 任务异常未被 _collect 覆盖时泄漏
+            with contextlib.suppress(asyncio.CancelledError, asyncio.InvalidStateError, Exception):
+                t.exception()
 
     def _return_fallback_success(
         self,
@@ -375,12 +428,14 @@ class DataManager:
         adjust_type: str,
     ) -> pd.DataFrame:
         """降级源成功结果的统一返回路径（校验/属性/内存缓存/持久化缓存）。"""
+        self._cancel_pending_tasks(tasks)
         success_fb = next(fb for fb, t in tasks.items() if t is task)
         self._health.record_fallback_used(success_fb.source, method)
         logger.info("降级源 {} 成功获取 {}", success_fb.source, method)
         df = self._validate(method, df, args)
-        self._set_attrs(df, success_fb)
+        self._set_attrs(df, success_fb, quality_status="validated")
         df.attrs["data_available"] = not df.empty
+        df.attrs["data_stale"] = False
         cache().set(self._cache_key_for(success_fb), df)
         # 持久化缓存
         if method == "fetch_stock_history" and len(args) >= 1 and not df.empty:

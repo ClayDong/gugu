@@ -80,7 +80,11 @@ class StrategyManifest:
         return self._data.get(category, {})
 
     def list_enabled(self) -> list[dict[str, Any]]:
-        """列出所有已启用的策略（跨类别）。"""
+        """列出元数据中 ``enabled=true`` 的策略（跨类别）。
+
+        该方法保留看板语义；运行时必须使用 :meth:`list_runtime_enabled`，
+        因为元数据 enabled 不等于验证门禁已通过。
+        """
         result: list[dict[str, Any]] = []
         for category, strategies in self._data.items():
             if not isinstance(strategies, dict):
@@ -100,6 +104,44 @@ class StrategyManifest:
                         }
                     )
         return result
+
+    def get_validation_status(self, key: str) -> str | None:
+        """获取策略的结构化验证状态。"""
+        info = self.get_strategy(key)
+        if not isinstance(info, dict):
+            return None
+        gate = info.get("validation_gate")
+        if isinstance(gate, dict):
+            status = gate.get("status")
+            return str(status) if status is not None else None
+        return None
+
+    def is_runtime_enabled(self, key: str, execution_mode: str = "paper") -> bool:
+        """判断策略是否满足指定执行模式的运行时准入条件。"""
+        info = self.get_strategy(key)
+        if not isinstance(info, dict) or not info.get("enabled", False):
+            return False
+        status = self.get_validation_status(key)
+        if execution_mode in ("track_live", "signal_only", "live"):
+            return status == "enabled"
+        if execution_mode == "paper":
+            return status in {"enabled", "conditional_pass"}
+        return False
+
+    def list_runtime_enabled(
+        self,
+        execution_mode: str = "paper",
+        keys: set[str] | None = None,
+    ) -> list[str]:
+        """列出满足 manifest 验证状态和执行模式的信号策略名称。"""
+        strategies = self._data.get("signal_strategies", {})
+        if not isinstance(strategies, dict):
+            return []
+        return [
+            key
+            for key in strategies
+            if (keys is None or key in keys) and self.is_runtime_enabled(key, execution_mode)
+        ]
 
     def list_disabled(self) -> list[dict[str, Any]]:
         """列出所有未启用的策略。"""

@@ -56,8 +56,8 @@ class TestIndexCodeRecognition:
 class TestEnabledStrategiesFiltering:
     """get_enabled_strategies() 按 execution_mode 过滤 experimental（P1-1）。"""
 
-    def test_track_live_excludes_experimental(self):
-        """track_live 模式下 experimental 策略不应被加载。"""
+    def test_track_live_requires_manifest_enabled_status(self):
+        """track_live 模式下 conditional 和 experimental 策略均不应被加载。"""
         with patch("gugu.config.get_config") as mock_cfg:
             mock_cfg.return_value.execution.mode = "track_live"
             strategy_cfg = mock_cfg.return_value.strategy
@@ -80,5 +80,6 @@ class TestEnabledStrategiesFiltering:
             names = {s.name for s in strategies}
             assert "chenxuezhang" not in names
             assert "linjudaye" not in names
-            assert "box_breakout" in names
+            assert "box_breakout" not in names
+            assert "double_yin" not in names
             get_enabled_strategies.cache_clear()

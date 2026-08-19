@@ -9,6 +9,7 @@ from typing import Any
 
 from gugu.config import get_config, strategy_defaults
 from gugu.utils.log import get_logger
+from gugu.validation.gate_policy import GatePolicy
 
 logger = get_logger()
 
@@ -125,16 +126,28 @@ def validate_strategy_consistency() -> list[str]:
 
 # v0.7.5 P0-9修复：策略验证状态检查（experimental → verified 升级建议）
 # v0.8.1 升级：5 项解锁条件（新增交易次数下限，防止小样本过拟合）
-# 依据：pullback_low 教训——30股小样本通过→1710股大样本失败（过拟合）；
-# box_breakout 教训——样本外 Sharpe 勉强>0 但实盘无信号。
-# 门槛说明：Sharpe>0 太弱（box_breakout 实测 -1.43），但为保持兼容保留 0 阈值；
-# 真正的防线是 min_total_trades ≥ 30（样本量不足直接不通过）。
+# 门槛统一由 GatePolicy 管理，避免脚本、优化器和启动检查发生漂移。
 _UNLOCK_CONDITIONS = {
-    "out_of_sample_sharpe": {"threshold": 0.0, "description": "样本外 Sharpe > 0"},
-    "param_stability": {"threshold": 0.80, "description": "参数稳定性 ≥ 80%（v0.8.1 从 50% 上调）"},
-    "max_drawdown": {"threshold": 0.25, "description": "最大回撤 < 25%"},
-    "avg_return": {"threshold": 0.0, "description": "平均收益 ≥ 0"},
-    "min_total_trades": {"threshold": 30, "description": "样本外交易次数 ≥ 30（v0.8.1 新增）"},
+    "out_of_sample_sharpe": {
+        "threshold": GatePolicy.WRITEBACK_RULES["avg_sharpe"].threshold,
+        "description": GatePolicy.WRITEBACK_RULES["avg_sharpe"].label,
+    },
+    "param_stability": {
+        "threshold": GatePolicy.WRITEBACK_RULES["param_stability"].threshold,
+        "description": GatePolicy.WRITEBACK_RULES["param_stability"].label,
+    },
+    "max_drawdown": {
+        "threshold": GatePolicy.WRITEBACK_RULES["max_drawdown"].threshold,
+        "description": GatePolicy.WRITEBACK_RULES["max_drawdown"].label,
+    },
+    "avg_return": {
+        "threshold": GatePolicy.WRITEBACK_RULES["avg_return"].threshold,
+        "description": GatePolicy.WRITEBACK_RULES["avg_return"].label,
+    },
+    "min_total_trades": {
+        "threshold": GatePolicy.WRITEBACK_RULES["oos_trades"].threshold,
+        "description": GatePolicy.WRITEBACK_RULES["oos_trades"].label,
+    },
 }
 
 
@@ -159,28 +172,26 @@ def check_strategy_upgrade_eligibility(
     if walk_forward_results is None:
         walk_forward_results = {}
 
-    failed: list[str] = []
-    # v0.8.1：交易次数缺失时从 total_trades 字段兼容读取
+    # 兼容历史字段名，再交给统一 GatePolicy 做唯一判断。
     results = dict(walk_forward_results)
-    if "min_total_trades" not in results and "total_trades" in results:
-        results["min_total_trades"] = float(results.get("total_trades", 0) or 0)
+    if "avg_sharpe" not in results and "out_of_sample_sharpe" in results:
+        results["avg_sharpe"] = results["out_of_sample_sharpe"]
+    if "oos_trades" not in results:
+        results["oos_trades"] = results.get("min_total_trades", results.get("total_trades", 0))
 
-    for condition, cfg in _UNLOCK_CONDITIONS.items():
-        value = results.get(condition)
-        if value is None:
-            failed.append(f"{condition}: 无数据")
-            continue
-        threshold = cfg["threshold"]
-        if condition == "max_drawdown":
-            # 回撤是越小越好
-            if value >= threshold:
-                failed.append(f"{cfg['description']}（实际 {value:.2%}）")
-        else:
-            # 其他是越大越好
-            if value <= threshold:
-                failed.append(f"{cfg['description']}（实际 {value:.4f}）")
-
-    return len(failed) == 0, failed
+    report = GatePolicy.evaluate_writeback(results)
+    failed: list[str] = []
+    labels = {
+        "avg_sharpe": "样本外 Sharpe ≤ 0",
+        "param_stability": "参数稳定性 <80%",
+        "max_drawdown": "最大回撤 ≥ 25%",
+        "avg_return": "平均样本外收益 < 0",
+        "oos_trades": "样本外交易次数 < 30",
+    }
+    for key in report["failed_checks"]:
+        value = results.get(key)
+        failed.append(f"{labels[key]}（实际 {value!r}）")
+    return report["passed"], failed
 
 
 def suggest_strategy_upgrades(

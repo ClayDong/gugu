@@ -65,6 +65,10 @@ def _to_tencent_code(code: str) -> str:
         return f"sh{code}"
     if code in BaseCollector.SZ_INDEX_CODES:
         return f"sz{code}"
+    if code.startswith("920"):
+        # v0.9.12：北交所新代码段（920xxx）——"9" 开头默认为沪市B股，必须特判为 bj。
+        # 实测腾讯 bj920068 日 K 可用（ifzq.gtimg.cn qfq）。
+        return f"bj{code}"
     prefix = _TENCENT_PREFIX.get(code[0], "sz")
     return f"{prefix}{code}"
 

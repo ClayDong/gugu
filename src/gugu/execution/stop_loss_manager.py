@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Callable
+from datetime import date
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -228,7 +229,8 @@ class StopLossManager:
                                 "level": "warn",
                                 "message": f"止损卖出: {symbol} {result.quantity}股 @ {result.price}",
                                 "suggestion": "止损价由移动止损引擎管理，已自动执行",
-                            }
+                            },
+                            dedup_key=f"stop_loss_sold_{symbol}_{date.today().isoformat()}",
                         )
                         if not notify_ok:
                             logger.error(
@@ -267,7 +269,8 @@ class StopLossManager:
                                         f"track_live 模式不自动下单，请手动在券商APP以 ￥{price:.2f} 附近挂单，"
                                         f"卖出 {int(available)}股"
                                     ),
-                                }
+                                },
+                                dedup_key=f"stop_loss_manual_{symbol}_{date.today().isoformat()}",
                             )
                             if not notify_ok:
                                 logger.error(
@@ -390,7 +393,11 @@ class StopLossManager:
                                     f"track_live 模式不自动下单，请手动在券商APP以 ￥{pos.current_price:.2f} 附近挂单，"
                                     f"卖出 {reduce_qty}股（减仓比例 {tp_signal.reduce_ratio:.0%}）"
                                 ),
-                            }
+                            },
+                            dedup_key=(
+                                f"take_profit_manual_{symbol}_{tp_signal.trigger_step}_"
+                                f"{date.today().isoformat()}"
+                            ),
                         )
                         if not notify_ok:
                             logger.error(

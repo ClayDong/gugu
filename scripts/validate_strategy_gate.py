@@ -14,66 +14,19 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from gugu.config import get_config  # noqa: E402
+from gugu.strategies.registry import get_runtime_strategy_names  # noqa: E402
+from gugu.validation.gate_policy import GatePolicy  # noqa: E402
 
-GATE_THRESHOLDS: dict[str, float] = {
-    "total_trades": 100,
-    "avg_return": 0.0,
-    "median_return": 0.0,
-    "avg_sharpe": 0.0,
-    "max_drawdown": 0.25,
-    "profitable_ratio": 0.50,
-    "param_stability": 0.50,
-    "paper_signals": 30,
-    "paper_return": 0.0,
-}
-
-
-_HIGHER_IS_BETTER = {
-    "total_trades",
-    "avg_return",
-    "median_return",
-    "avg_sharpe",
-    "profitable_ratio",
-    "param_stability",
-    "paper_signals",
-    "paper_return",
-}
-
-
-_LOWER_IS_BETTER = {"max_drawdown"}
+GATE_THRESHOLDS = GatePolicy.thresholds()
 
 
 def evaluate_gate(strategy: str, metrics: dict[str, Any]) -> dict[str, Any]:
     """根据统一门槛评估策略是否允许启用。"""
-    failed: list[str] = []
-    checks: dict[str, dict[str, Any]] = {}
-
-    for key, threshold in GATE_THRESHOLDS.items():
-        value = metrics.get(key)
-        if value is None:
-            passed = False
-        elif key in _HIGHER_IS_BETTER:
-            passed = float(value) >= threshold
-        elif key in _LOWER_IS_BETTER:
-            passed = float(value) <= threshold
-        else:
-            passed = False
-
-        checks[key] = {
-            "value": value,
-            "threshold": threshold,
-            "passed": passed,
-        }
-        if not passed:
-            failed.append(key)
-
+    report = GatePolicy.evaluate(metrics)
     return {
         "date": str(date.today()),
         "strategy": strategy,
-        "passed": not failed,
-        "failed_checks": failed,
-        "checks": checks,
+        **report,
     }
 
 
@@ -86,8 +39,8 @@ def _load_metrics(path: str) -> dict[str, Any]:
 
 
 def _enabled_strategies() -> list[str]:
-    cfg = get_config().strategy
-    return cfg.get_all_enabled_unique() if cfg.enabled_by_regime else list(cfg.enabled)
+    """列出当前执行模式实际允许的策略，而非仅列配置候选。"""
+    return get_runtime_strategy_names()
 
 
 def main() -> None:

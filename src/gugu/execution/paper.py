@@ -58,6 +58,7 @@ class PaperBroker(BaseBroker):
         commission_rate: float | None = None,
         stamp_tax: float | None = None,
         slippage: float | None = None,
+        state_file: Path | None = None,
     ) -> None:
         cfg = get_config().execution.paper
         self._cash = float(initial_capital or cfg.initial_capital)
@@ -69,6 +70,7 @@ class PaperBroker(BaseBroker):
         self._daily_start_value: float | None = None
         # 部分成交状态缓存 {symbol: market_value_in_billions}
         self._market_value_cache: dict[str, float] = {}
+        self._market_context: dict[str, dict[str, float]] = {}
         # P1 修复：线程安全锁，保护 _cash / _positions / _trades
         self._lock = threading.RLock()
         # P1-1 修复（2026-08-05）：GUGU_TEST_MODE 下隔离状态文件——
@@ -77,7 +79,9 @@ class PaperBroker(BaseBroker):
         # 测试模式用 per-instance 唯一临时文件（uuid），既隔离生产，
         # 又避免测试间共享固定文件名导致状态互相污染（2026-08-05 实测：
         # 固定名 gugu_test_paper_state.json 导致 test_trade_record trades=4≠1）。
-        if os.environ.get("GUGU_TEST_MODE"):
+        if state_file is not None:
+            self._state_file = Path(state_file)
+        elif os.environ.get("GUGU_TEST_MODE"):
             import tempfile
             import uuid
 
@@ -172,7 +176,12 @@ class PaperBroker(BaseBroker):
             是否可成交（硬阻断：涨停不能买入，跌停不能卖出）
         """
         if prev_close is None or prev_close <= 0:
-            return True
+            logger.warning(
+                "[模拟盘] {} 缺少有效前收盘价，拒绝 {} 交易以避免绕过涨跌停检查",
+                symbol,
+                direction,
+            )
+            return False
 
         change_pct = (price - prev_close) / prev_close
 
@@ -197,7 +206,6 @@ class PaperBroker(BaseBroker):
         if is_st:
             return 0.05  # P1-5 修复：ST 涨跌停 ±5%
         if not symbol:
-            return 0.10  # 默认主板
             return 0.10  # 默认主板
         code = symbol.strip().zfill(6)
         if code.startswith(("300", "301", "688", "689")):
@@ -277,11 +285,15 @@ class PaperBroker(BaseBroker):
                         message=f"价格偏离持仓成本 {deviation:.1f}x (现价{cur_price:.2f} vs 成本{pos.avg_cost:.2f})，拒绝下单",
                     )
 
-        # 获取前收盘价（T+1 / 涨跌停检查用）
+        # 获取前收盘价（T+1 / 涨跌停检查用）。新建仓必须由调用方提供真实前收。
         prev_close = None
-        existing_pos = self._positions.get(symbol)
-        if existing_pos:
-            prev_close = existing_pos.prev_close or existing_pos.current_price
+        context = self._market_context.get(symbol, {})
+        if context.get("prev_close", 0.0) > 0:
+            prev_close = context["prev_close"]
+        else:
+            existing_pos = self._positions.get(symbol)
+            if existing_pos:
+                prev_close = existing_pos.prev_close or existing_pos.current_price
 
         # 流动性感知滑点
         slippage_bps, partial_prob = self._get_liquidity_tier(symbol)
@@ -289,6 +301,16 @@ class PaperBroker(BaseBroker):
 
         if direction == "buy":
             # 涨跌停成交检查
+            if prev_close is None or prev_close <= 0:
+                return OrderResult(
+                    False,
+                    symbol,
+                    direction,
+                    0,
+                    0,
+                    0,
+                    message="缺少有效前收盘价，拒绝交易",
+                )
             if not self._check_limit_tradable("buy", cur_price, prev_close, symbol):
                 logger.info(f"[模拟盘] 涨停附近{cur_price:.2f}，买入{quantity}股未成交(概率)")
                 return OrderResult(False, symbol, direction, 0, 0, 0, message="涨停附近买入未成交")
@@ -458,6 +480,25 @@ class PaperBroker(BaseBroker):
                 positions_value=positions_value,  # P0-3 修复：补全缺失字段
             )
 
+    def set_market_context(
+        self,
+        symbol: str,
+        *,
+        prev_close: float,
+        market_value_billion: float | None = None,
+    ) -> None:
+        """设置订单执行所需的真实前收和流动性事实。"""
+        if prev_close <= 0:
+            raise ValueError("prev_close 必须为正数")
+        symbol = symbol.strip().zfill(6)
+        with self._lock:
+            self._market_context[symbol] = {"prev_close": float(prev_close)}
+            if market_value_billion is not None:
+                if market_value_billion <= 0:
+                    raise ValueError("market_value_billion 必须为正数")
+                self._market_value_cache[symbol] = float(market_value_billion)
+            self._save_state()
+
     def update_price(self, symbol: str, price: float) -> None:
         """更新现价，同步将旧现价赋给 prev_close（P-06+D-08 修复）。
 
@@ -620,6 +661,7 @@ class PaperBroker(BaseBroker):
                         for sym, p in self._positions.items()
                     },
                     "trades": self._trades,
+                    "market_context": self._market_context,
                     "daily_start_value": self._daily_start_value,
                     # P1-1 修复（2026-08-05）：状态文件必须带时间戳。
                     # 此前无 updated_at，无法判断状态是否新鲜——600519 幽灵成交
@@ -716,6 +758,7 @@ class PaperBroker(BaseBroker):
             except (KeyError, TypeError, ValueError) as pos_err:
                 logger.warning("恢复持仓 {} 失败，跳过该持仓: {}；原始数据: {}", sym, pos_err, p)
         self._trades = data.get("trades", [])
+        self._market_context = data.get("market_context", {})
         self._daily_start_value = data.get("daily_start_value")
         if self._positions:
             logger.info(

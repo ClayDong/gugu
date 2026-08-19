@@ -24,6 +24,8 @@ import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from gugu.data.collectors.base import BaseCollector
+from gugu.data.evidence import set_evidence
+from gugu.data.providers import HttpTransport, TransportConfig, TransportError
 from gugu.data.quality import validate_stock_history
 from gugu.utils.log import get_logger
 
@@ -35,11 +37,15 @@ _ADJUST_TYPE = "qfq"
 
 
 def _set_df_attrs(df: pd.DataFrame, fetch_timestamp: str | None = None) -> pd.DataFrame:
-    """设置 DataFrame 元数据属性（数据源/复权方式/采集时间戳）。"""
-    df.attrs["data_source"] = _DATA_SOURCE
-    df.attrs["adjust_type"] = _ADJUST_TYPE
-    df.attrs["fetch_timestamp"] = fetch_timestamp or datetime.now().isoformat()
-    return df
+    """设置 DataFrame 元数据属性（来源/时间/口径/质量状态）。"""
+    return set_evidence(
+        df,
+        data_source=_DATA_SOURCE,
+        adjust_type=_ADJUST_TYPE,
+        fetch_timestamp=fetch_timestamp,
+        quality_status="validated" if not df.empty else "empty",
+        data_available=not df.empty,
+    )
 
 
 # 东方财富 push API
@@ -71,6 +77,10 @@ def _to_secid(code: str) -> str:
     # 显式 sh/sz 前缀（调用方指定交易所，最高优先级）
     if code[:2].lower() in ("sh", "sz", "bj") and code[2:].isdigit():
         return ("1" if code[:2].lower() == "sh" else "0") + "." + code[2:]
+    # v0.9.12：北交所新代码段（920xxx）——"9" 开头默认为沪市B股（1.），
+    # 必须特判为 0. 前缀（与显式 bj 前缀分支的交易所归属一致）。
+    if code.startswith("920"):
+        return f"0.{code}"
     if code in BaseCollector.SH_INDEX_CODES:
         return f"1.{code}"
     if code in BaseCollector.SZ_INDEX_CODES:
@@ -91,12 +101,35 @@ class EastmoneyCollector(BaseCollector):
 
     def __init__(self) -> None:
         self._client: requests.Session | None = None
+        self._transport = HttpTransport(
+            "eastmoney",
+            config=TransportConfig(
+                min_interval_seconds=1.0,
+                max_retries=2,
+                backoff_base_seconds=1.0,
+                backoff_max_seconds=8.0,
+                timeout_seconds=15.0,
+                jitter_seconds=0.5,
+            ),
+        )
 
     def _get_client(self) -> requests.Session:
-        if self._client is None:
-            self._client = requests.Session()
-            self._client.headers.update(_EM_HEADERS)
-        return self._client
+        """兼容旧测试和少量非 JSON 调用方。"""
+        return self._transport.session
+
+    def _get_json(self, url: str, params: dict[str, Any]) -> dict[str, Any]:
+        """通过共享传输层取 JSON，并保留旧版测试注入点。"""
+        client = self._get_client()
+        if client is not self._transport.session:
+            response = client.get(
+                url, params=params, timeout=self._transport.config.timeout_seconds
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise TransportError("响应 JSON 不是对象")
+            return payload
+        return self._transport.get_json(url, params=params)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
     def fetch_stock_history(self, symbol: str, days: int = 90) -> pd.DataFrame:
@@ -116,13 +149,10 @@ class EastmoneyCollector(BaseCollector):
             "lmt": str(min(days * 2, 80)),
         }
         try:
-            client = self._get_client()
-            resp = client.get(_EM_KLINE_URL, params=params, timeout=15.0)
-            resp.raise_for_status()
-            data = resp.json()
+            data = self._get_json(_EM_KLINE_URL, params)
             if not data or not data.get("data") or not data["data"].get("klines"):
                 logger.warning(f"东方财富历史K线 {code} 返回空数据")
-                return pd.DataFrame()
+                return _set_df_attrs(pd.DataFrame())
 
             klines = data["data"]["klines"]
             rows: list[dict[str, Any]] = []
@@ -148,16 +178,18 @@ class EastmoneyCollector(BaseCollector):
                     continue
 
             if not rows:
-                return pd.DataFrame()
+                return _set_df_attrs(pd.DataFrame())
 
             df = pd.DataFrame(rows)
             df["date"] = pd.to_datetime(df["date"], errors="coerce")
             df = df.dropna(subset=["date"])
             df = df.sort_values("date")
             df = df.tail(days).reset_index(drop=True)
-            return validate_stock_history(df, code)
+            return _set_df_attrs(validate_stock_history(df, code))
         except Exception as e:
-            logger.error(f"东方财富历史K线 {code} 失败: {e}")
+            # 备用源失败属设计内降级路径（上游会兜底/重试），记 WARNING 而非 ERROR，
+            # 避免每次瞬时限流都污染 ERROR 统计（与 fallback.py 网易/新浪备用源级别一致）。
+            logger.warning(f"东方财富历史K线 {code} 失败: {e}")
             raise
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
@@ -172,7 +204,6 @@ class EastmoneyCollector(BaseCollector):
             return self._fetch_market_snapshot()
 
         rows: list[dict[str, Any]] = []
-        client = self._get_client()
         for symbol in symbols:
             code = self.normalize_symbol(symbol)
             secid = _to_secid(code)
@@ -181,9 +212,7 @@ class EastmoneyCollector(BaseCollector):
                 "fields": "f43,f44,f45,f46,f47,f48,f57,f58,f169,f170",
             }
             try:
-                resp = client.get(_EM_STOCK_GET_URL, params=params, timeout=10.0)
-                resp.raise_for_status()
-                data = resp.json()
+                data = self._get_json(_EM_STOCK_GET_URL, params)
                 if not data or not data.get("data"):
                     logger.warning(f"东方财富实时行情 {code} 返回空数据")
                     continue
@@ -239,12 +268,9 @@ class EastmoneyCollector(BaseCollector):
             "fields": "f12,f14,f2,f3,f62,f184,f66,f72,f78,f84",
         }
         try:
-            client = self._get_client()
-            resp = client.get(_EM_CLIST_URL, params=params, timeout=15.0)
-            resp.raise_for_status()
-            data = resp.json()
+            data = self._get_json(_EM_CLIST_URL, params)
             if not data or not data.get("data") or not data["data"].get("diff"):
-                return pd.DataFrame()
+                return _set_df_attrs(pd.DataFrame())
 
             diff = data["data"]["diff"]
             rows = []
@@ -275,11 +301,14 @@ class EastmoneyCollector(BaseCollector):
 
             df = pd.DataFrame(rows)
             self._flow_record_success()
-            return df if not df.empty else pd.DataFrame()
+            return _set_df_attrs(df)
         except Exception as e:
-            logger.error(f"东方财富行业资金流失败: {e}")
+            # 备用源失败属设计内降级路径（个股资金流有缓存兜底 + 1800s 熔断防刷屏），
+            # 记 WARNING 而非 ERROR，避免每次瞬时限流都污染 ERROR 统计
+            # （与 akshare_collector 同类资金流失败级别一致，v0.9.28 延续 v0.9.25）。
+            logger.warning(f"东方财富行业资金流失败: {e}")
             self._flow_record_failure()
-            return pd.DataFrame()
+            return _set_df_attrs(pd.DataFrame())
 
     def fetch_stock_flow(self, symbol: str) -> pd.DataFrame:
         """获取个股资金流明细（东方财富日K资金流接口）。"""
@@ -295,16 +324,12 @@ class EastmoneyCollector(BaseCollector):
             "lmt": "5",
         }
         try:
-            client = self._get_client()
-            resp = client.get(
+            data = self._get_json(
                 "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
-                params=params,
-                timeout=15.0,
+                params,
             )
-            resp.raise_for_status()
-            data = resp.json()
             if not data or not data.get("data") or not data["data"].get("klines"):
-                return pd.DataFrame()
+                return _set_df_attrs(pd.DataFrame())
 
             klines = data["data"]["klines"]
             rows = []
@@ -338,11 +363,14 @@ class EastmoneyCollector(BaseCollector):
             df["date"] = pd.to_datetime(df["date"], errors="coerce")
             df = df.dropna(subset=["date"])
             self._flow_record_success()
-            return df.tail(5).reset_index(drop=True) if not df.empty else df
+            return _set_df_attrs(df.tail(5).reset_index(drop=True))
         except Exception as e:
-            logger.error(f"东方财富个股资金流 {code} 失败: {e}")
+            # 个股资金流失败属设计内降级路径（DataManager 有缓存兜底 + 熔断防刷屏），
+            # 记 WARNING 而非 ERROR，避免每次瞬时限流都污染 ERROR 统计
+            # （与 akshare_collector 同类资金流失败级别一致，v0.9.28 延续 v0.9.25）。
+            logger.warning(f"东方财富个股资金流 {code} 失败: {e}")
             self._flow_record_failure()
-            return pd.DataFrame()
+            return _set_df_attrs(pd.DataFrame())
 
     def _fetch_market_snapshot(self) -> pd.DataFrame:
         """获取全市场实时快照（用于自动选股扫描）。
@@ -365,13 +393,10 @@ class EastmoneyCollector(BaseCollector):
             "fields": "f2,f3,f4,f5,f6,f7,f8,f12,f14,f15,f16,f17,f20,f21",
         }
         try:
-            client = self._get_client()
-            resp = client.get(_EM_CLIST_URL, params=params, timeout=15.0)
-            resp.raise_for_status()
-            data = resp.json()
+            data = self._get_json(_EM_CLIST_URL, params)
             if not data or not data.get("data") or not data["data"].get("diff"):
                 logger.warning("东方财富全市场快照返回空数据")
-                return pd.DataFrame()
+                return _set_df_attrs(pd.DataFrame())
 
             diff = data["data"]["diff"]
             rows: list[dict[str, Any]] = []
@@ -402,7 +427,7 @@ class EastmoneyCollector(BaseCollector):
 
             df = pd.DataFrame(rows)
             logger.info(f"东方财富全市场快照: {len(df)} 只股票")
-            return df
+            return _set_df_attrs(df)
         except Exception as e:
             logger.error(f"东方财富全市场快照失败: {e}")
-            return pd.DataFrame()
+            return _set_df_attrs(pd.DataFrame())

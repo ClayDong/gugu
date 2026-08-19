@@ -171,6 +171,60 @@ def _format_capability_line(signal: dict) -> str:
         return ""
 
 
+def format_cxbr_signal(signal: dict[str, Any]) -> dict[str, Any]:
+    """格式化 CXBR 研究/模拟盘事件；observe 永远显示为观察而非买入。"""
+    action = str(signal.get("action", "none"))
+    stage = str(signal.get("stage", ""))
+    labels = {
+        "observe": "次日关注 / 观察",
+        "buy": "买入条件成立（模拟盘）",
+        "sell": "卖出条件成立（模拟盘）",
+        "none": "CXBR 状态更新",
+    }
+    templates = {"buy": "red", "sell": "green", "observe": "yellow", "none": "grey"}
+    code = str(signal.get("code", signal.get("symbol", "")))
+    name = _resolve_name({"symbol": code, "name": signal.get("name", "")})
+    price = signal.get("price")
+    price_text = f"￥{float(price):.2f}" if price is not None else "未提供"
+    sections = [
+        f"**股票**：{name}({code})\n**状态**：{labels.get(action, action)}\n**阶段**：{stage}",
+        f"**数据截止**：{signal.get('asof') or '未提供'}\n"
+        f"**规则版本**：{signal.get('rule_version', 'cxbr-v1')}\n"
+        f"**数据质量**：{signal.get('data_quality', 'unknown')}\n"
+        f"**参考价格**：{price_text}",
+        f"**触发理由**：{signal.get('reason', '')}\n"
+        f"**买点**：{signal.get('buy_point') or '—'}\n"
+        f"**严格止损**：{_price_text(signal.get('strict_stop_price'))}\n"
+        f"**条件单提醒**：{_price_text(signal.get('conditional_stop_price'))}\n"
+        f"**建议仓位**：{_ratio_text(signal.get('suggested_position'))}\n"
+        f"**失效条件**：{signal.get('invalidation', '数据失效、形态破坏或超过护盘窗口')}",
+    ]
+    if signal.get("execution"):
+        execution = signal["execution"]
+        sections.append(
+            f"**模拟结果**：{'成交' if execution.get('success') else '未成交'}\n"
+            f"**成交价/数量**：￥{execution.get('fill_price', 0):.2f} / {execution.get('quantity', 0)}股\n"
+            f"**计划数量/部分成交**：{execution.get('requested_quantity', 0)} / "
+            f"{'是' if execution.get('partial_fill') else '否'}\n"
+            f"**滑点**：{float(execution.get('slippage', 0)):.3%}\n"
+            f"**备注**：{execution.get('message', '')}"
+        )
+    return _card(
+        f"{labels.get(action, action)} · {name}({code})",
+        templates.get(action, "grey"),
+        sections,
+        note="CXBR V1 研究/模拟盘通知；不代表实盘成交，不触发自动下单",
+    )
+
+
+def _price_text(value: Any) -> str:
+    return f"￥{float(value):.2f}" if value is not None else "—"
+
+
+def _ratio_text(value: Any) -> str:
+    return f"{float(value):.0%}" if value is not None else "—"
+
+
 def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     """Format a trade signal into a Feishu card."""
     direction = str(signal.get("direction", "buy")).lower()
@@ -291,12 +345,14 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     # P1/P2：数据质量戳 + 共振等级 + 能力圈标注（三大师共识：可靠性和自我认知）
     quality_badges = []
     dq = signal.get("data_quality")
-    if dq == "fresh":
+    if dq in {"fresh", "fresh_valid"}:
         quality_badges.append("🟢 实时数据")
-    elif dq == "degraded":
+    elif dq in {"degraded", "stale_degraded"}:
         quality_badges.append("🟡 数据降级")
     elif dq == "stale":
-        quality_badges.append("🔴 非实时价")
+        quality_badges.append("🔴 非实时价（数据不可用或非实时）")
+    elif dq == "unavailable":
+        quality_badges.append("🔴 数据不可用")
     res_lvl = signal.get("resonance_level")
     if res_lvl == "strong":
         quality_badges.append("🔵 多策略共振")

@@ -32,6 +32,7 @@ from gugu.notifier.formatter import (
     format_cloud_trend_signal,
     format_concept_card,
     format_conflict_card,
+    format_cxbr_signal,
     format_daily_report,
     format_holdings_sell_alert,
     format_hot_money_signal,
@@ -994,11 +995,11 @@ class FeishuNotifier:
         dedup_key = f"stop_loss_upgrade_{symbol}_{level}_{date.today().isoformat()}"
         return await self.send_card(card, receive_id=self._business_chat_id, dedup_key=dedup_key)
 
-    async def _send_business_card(self, card: dict[str, Any]) -> bool:
+    async def _send_business_card(self, card: dict[str, Any], dedup_key: str | None = None) -> bool:
         if not self._business_chat_id:
             logger.warning("Feishu business chat not configured, skip business notification")
             return False
-        return await self.send_card(card, receive_id=self._business_chat_id)
+        return await self.send_card(card, receive_id=self._business_chat_id, dedup_key=dedup_key)
 
     async def send_business_card(self, card: dict[str, Any]) -> bool:
         """公开方法：发送业务卡片到业务群（开悟之路）。
@@ -1017,6 +1018,24 @@ class FeishuNotifier:
         系统内容（错误/健康/基础设施告警）统一走此通道。
         """
         return await self._send_system_card(card)
+
+    async def notify_cxbr_signal(self, signal: dict[str, Any]) -> bool:
+        """发送 CXBR 研究/模拟盘通知，不复用生产策略信号门禁。"""
+        if not self._signal_enabled:
+            return False
+        action = str(signal.get("action", "none"))
+        if action not in {"buy", "sell", "observe", "none"}:
+            logger.warning("CXBR action 非法，拒绝通知: {}", action)
+            return False
+        code = str(signal.get("code", signal.get("symbol", ""))).strip()
+        if not code or signal.get("data_quality") == "unavailable":
+            signal = dict(signal)
+            signal.setdefault("reason", "数据不可用，禁止新增买入")
+        dedup_key = (
+            f"cxbr:{signal.get('rule_version', 'cxbr-v1')}:{code}:"
+            f"{action}:{signal.get('stage', '')}:{signal.get('asof', '')}"
+        )
+        return await self._send_business_card(format_cxbr_signal(signal), dedup_key=dedup_key)
 
     async def notify_signal(self, signal: dict[str, Any]) -> bool:
         """Format and send a trade signal notification."""
@@ -1084,14 +1103,19 @@ class FeishuNotifier:
             return False
         return await self._send_business_card(format_daily_report(period, data))
 
-    async def notify_risk_alert(self, alert: dict[str, Any]) -> bool:
+    async def notify_risk_alert(self, alert: dict[str, Any], dedup_key: str | None = None) -> bool:
         """Format and send a risk alert notification.
 
         风控告警（止损/熔断/仓位预警）属于交易业务通知 → 业务群（开悟之路）。
+
+        dedup_key: 语义化去重 key（如 stop_loss_manual_{symbol}_{date}）。
+        风控告警卡片内容含价格/股数等动态数据，指纹去重时这些行会被过滤，
+        导致不同股票的同类告警卡片指纹相同而互相误杀（PR1 同类缺陷）。
+        传入 dedup_key 后按语义 key 去重，同一股票/事件只发一次。
         """
         if not self._risk_alert_enabled:
             return False
-        return await self._send_business_card(format_risk_alert(alert))
+        return await self._send_business_card(format_risk_alert(alert), dedup_key=dedup_key)
 
     async def notify_backtest(self, report: dict[str, Any]) -> bool:
         """Format and send a backtest report notification."""

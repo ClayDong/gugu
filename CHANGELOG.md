@@ -1,3 +1,94 @@
+## 2026-08-19 — 修复 fallback 任务未取消导致 asyncio 异常泄漏 + 分诊评估
+
+### 变更：`src/gugu/data/manager.py` _call_with_fallback 全分支 finally 取消 pending 任务
+- **问题**：08:00-09:30 期间 akshare/eastmoney 资金流源持续 ConnectionError（上游限流/瞬时网络问题），降级链路中 tencent `fetch_stock_flow` 抛 NotImplementedError、pending 任务未取消 → `ERROR:asyncio:Task exception was never retrieved`（scheduler_launchd.err.log 出现 2 段完整 traceback），并伴随 `gugu.data.manager:282 主源 fetch_stock_history 异常 RetryError` ERROR 计数
+- **修复**：新增 `_cancel_pending_tasks()` 静态方法（未完成任务 cancel + 统一 `t.exception()` 检索异常），在 `_call_with_fallback` 降级块外层加 try/finally 覆盖**所有**返回路径（快速成功/熔断短路/常规成功/全部失败），`_return_fallback_success` 内部亦兜底调用。幂等设计：done/cancelled 任务为 no-op
+- **验证**：`pytest tests/unit/test_data_manager.py tests/unit/test_data_manager_extended.py tests/unit/test_data.py` 38 passed；`ruff check` + `ruff format` 通过；模拟 pending 异常任务场景实测无未检索异常泄漏
+
+### 变更：`src/gugu/data/collectors/eastmoney_collector.py` 资金流失败日志 ERROR → WARNING（延续 v0.9.25/28）
+- **问题**：v0.9.28 已将 akshare 个股资金流失败降为 WARNING，但 eastmoney 的个股资金流（363 行）与行业资金流（304 行）漏改，重启后发现 ERROR 继续刷屏（09:41 两条 600519/000858）
+- **修复**：两处失败日志降为 WARNING——该链路有 DataManager 缓存兜底 + 1800s 熔断防刷屏，失败属设计内降级路径，熔断/失败计数逻辑不变
+- **验证**：`pytest tests/unit/test_collectors.py tests/unit/test_eastmoney_datacenter_provider.py` 44 passed；`ruff check` 通过；调度器 kickstart 重启生效，心跳新鲜
+
+### 分诊评估（2026-08-19 09:30 扫描）
+- **放过**：主源 fetch_stock_history RetryError（tencent 立即兜底成功）与东财个股资金流 3 条 ERROR（akshare/eastmoney 上游瞬时 ConnectionError，熔断 1800s 自动恢复，今日失败率仅 2%），均属四级冗余设计内降级路径
+- **升级**：无（均为可自动恢复的瞬时数据源波动；本轮修复消除其伴生的 asyncio 异常泄漏）
+
+## 2026-08-19 — 策略准入入口统一与严格滚动验证
+
+### 变更
+- 新增 `get_runtime_strategy_names()`，统一应用配置、manifest 验证状态和注册表过滤；批量回测、按 regime 回测、验证脚本和 RSI 专项调度不再绕过运行时准入。
+- `conditional_pass` 只允许进入 `paper`；`track_live/signal_only/live` 仅接受 manifest `validation_gate.status=enabled`。
+- `calc_rolling_window_validation()` 改为按真实日期构造 train/test 窗口，测试指标仅来自 test，并保留训练/测试日期和参数信息。
+- 文档补充代码修改、settings、manifest 和文档修改对应的重启要求；当前仍保持 `execution.mode: track_live`，不自动下单。
+
+### 运维说明
+- Python 代码和 manifest 修改需要重启正在运行的 scheduler 才能完全生效。
+- 文档修改无需重启；settings 支持显式 `refresh_config()` 热加载，但生产操作建议与 scheduler 重启一起完成并核对心跳。
+
+## 2026-08-18 — v0.9.28 补全 akshare 个股资金流备用源失败降级 WARNING（延续 v0.9.25）
+
+### 变更：`src/gugu/data/collectors/akshare_collector.py` fetch_stock_flow 失败日志 ERROR → WARNING
+- **问题**：v0.9.25 已将 akshare/eastmoney 历史K线备用源失败降为 WARNING（避免瞬时限流污染 ERROR 统计），但同文件 150 行"个股资金流"漏改。8-18 当日 43 条 ERROR 中 23 条来自此处（Connection aborted / RemoteDisconnected 瞬时网络抖动），每次波动都触发分诊升级
+- **修复**：个股资金流失败同样记 WARNING——该链路有 eastmoney 兜底 + 缓存兜底 + 1800s 熔断防刷屏，失败属设计内降级路径，熔断/失败计数逻辑不变
+- **验证**：`pytest tests/unit/test_collectors.py tests/unit/test_data_manager.py` 49 passed；`ruff check` 通过；调度器 kickstart 重启生效，心跳新鲜
+
+## 2026-08-18 — v0.9.27 修复 stderr 日志刷满 launchd 错误日志（磁盘空间告警根因）
+
+### 变更：loguru stderr sink 级别改为 WARNING+，避免 INFO 日志填满 launchd 捕获文件
+- **问题**：loguru 的 stderr sink 使用 `level=level`（默认 INFO），所有 INFO 消息写入 stderr → launchd 捕获到 `scheduler_launchd.err.log`（47MB / 311,906 行，其中 147,554 行 INFO）。该文件不轮转，持续增长导致磁盘空间告警（395MB 剩余）
+- **修复**：`src/gugu/utils/log.py` stderr sink 级别改为 `level="WARNING"`，仅输出 WARNING/ERROR/CRITICAL 到 stderr；文件 sink 保持全级别（INFO+）
+- **效果**：`scheduler_launchd.err.log` 从源头缩小 ~80%（仅保留 WARNING/ERROR）；INFO 日志仍完整写入 `logs/gugu_*.log`（正常轮转 10MB/30天）
+- **运维**：已截断 47MB 历史积累文件 + 清理 .mypy_cache 45MB，合计回收 ~92MB 磁盘空间（剩余 395MB → 485MB）
+
+## 2026-08-17 — v0.9.26 修复北交所 920xxx 代码被误判为沪市B股（主源历史行情批量失败）
+
+### 变更：全链路代码前缀映射补全北交所 920 新代码段
+- **问题**：2024-10 启用的北交所 920xxx 代码在代码映射表中被 `"9"` → `"1"`（沪市B股）误判：
+  - 新浪主源：`sh920068` → 返回 null → `fetch_stock_history` 主源失败 → 每次扫描产生数十~数百条 ERROR（2026-08-17 当日 434 条 ERROR 主体，13:40 突发 335 条）→ 触发 auto_recover 降级告警
+  - 网易兜底：`1920068` → 恒 502（chddata 不支持北交所）
+  - 腾讯/东财兜底源同样误判为 sh/1.
+- **实锤**：新浪 `bj920068`/`bj430047` 与腾讯 `bj920068` 实测均返回有效 K 线；`sh920068`/`sz920068` 返回 null
+- **修复**（5 个文件）：
+  - `fallback.py`：新增 `_BSE_PREFIXES = ("43","83","87","88","920")`（与 risk/manager.py 一致），`_to_sina_code` 查表前特判 → `bj{code}`；`_try_netease_history` 对北交所短路跳过（避免 502 WARNING 刷屏）
+  - `tencent_collector.py`：`_to_tencent_code` 920 → `bj`（900xxx 沪市B股不受影响）
+  - `eastmoney_collector.py`：`_to_secid` 920 → `0.` 前缀（与显式 bj 分支一致）
+  - `akshare_collector.py`：`_market()` 920 → `bj`
+  - `base.py`：`symbol_with_prefix` 920 → `bj`
+- **效果**：主源直接成功，ERROR/WARNING 噪音从源头消失；降级链各源对北交所代码均正确路由
+- **测试**：`test_collectors.py` + `test_data_manager.py` + `test_data_manager_extended.py` 61 passed；前缀断言 + live 抓取 920068 历史 60 行验证通过；ruff 全绿
+
+## 2026-08-17 — v0.9.25 备用源失败降级为 WARNING（消除分诊误报噪音）
+
+### 变更：akshare/eastmoney 历史K线失败日志级别 ERROR → WARNING
+- **问题**：备用源（akshare/eastmoney）`fetch_stock_history` 失败打 ERROR，但它们是四级冗余降级链路上的一环——失败后由上游 manager 自动切换/重试（tencent 兜底/缓存兜底），属**设计内瞬时限流**。导致每次 RemoteDisconnected 瞬断都产生数百条 ERROR：2026-08-17 当日 418 条 ERROR 中 395 条（94%）来自这两处，告警分诊反复误报
+- **修复**：`akshare_collector.py:43` / `eastmoney_collector.py:160` 失败日志降为 WARNING（与 fallback.py 网易/新浪备用源级别一致）；真正无源可用的最终失败仍由 `data/manager.py`（主源异常 ERROR / 全部失败 WARNING+缓存兜底）和 source_health 事件流负责
+- **效果**：ERROR 统计只反映真实异常（主源异常、未兜底失败），不再被设计内降级噪音淹没
+- **测试**：`test_collectors.py` + `test_data_manager.py` 47 passed；ruff 全绿
+
+## 2026-08-17 — v0.9.24 修复风控告警跨股票指纹误杀（止损提醒被去重吞掉）
+
+### 变更：notify_risk_alert 支持语义化 dedup_key（PR1 同类缺陷补漏）
+- **问题**：`notify_risk_alert` 未传 dedup_key，走卡片内容指纹去重；而风控告警卡片的所有数字内容行（代码/价格/股数）会被 `_is_dynamic_content` 过滤，指纹只剩固定标题 "风控熔断 · gugu" → **不同股票的同类告警卡片指纹相同**，后触发的被误杀
+- **实锤**（2026-08-17 09:30 审计）：510500 与 512480 同秒触发移动止损提醒，指纹均 `e7998c209cc07bbb`；510500 发送后 512480 被 deduped 吞掉，用户只收到一只股票的止损提醒（当时 54 条 ERROR 中此条即为误报噪音），而 `stop_loss_upgrade` 因已带 symbol dedup_key 正常发出
+- **修复**：`FeishuNotifier.notify_risk_alert()` / `_send_business_card()` 增加 `dedup_key` 透传；stop_loss_manager 三处（止损卖出/止损提醒/止盈减仓）和 order_manager 三处（价格异常/数量为0/风控拦截）调用传入 symbol 级语义化 key（含日期）
+- **效果**：不同股票同秒告警不再互杀；同日同股重复触发仍可去重；dedup 命中返回 False 语义不变
+- **文件**：`src/gugu/notifier/feishu.py`、`src/gugu/execution/stop_loss_manager.py`、`src/gugu/execution/order_manager.py`
+- **测试**：`test_feishu_notifier.py` + `test_stop_loss_escalator.py` 27 passed；`test_notifier.py` + `test_engine.py` 68 passed；ruff 全绿
+
+## 2026-08-17 — v0.9.23 修复 L2 HALT 日志风暴 + 数据源降级告警评估
+
+### 变更一：修复 L2 HALT 日志风暴（66,296 条重复警告）
+- **问题**：`check_portfolio_drawdown` 在每次熔断后依然重复记录 WARNING（每扫描周期 6,000+/秒），当日日志 99.3% 被同一信息刷屏
+- **修复**：熔断首次触发后标记 `_halted`，后续调用不再重复记录 WARNING（仅 `_save_halt_state` 写盘，不产生日志行）
+- **文件**：`src/gugu/risk/manager.py` line 681-695
+- **测试**：`tests/unit/test_risk.py` + `tests/unit/test_risk_rules.py` 57 passed
+
+### 变更二：告警评估（自动放过）
+- 东方财富资金流 48 条 ERROR：`RemoteDisconnected` 瞬时网络波动，失败率仅 1%（7/1375），流量熔断器正常触发 → **放过**
+- 宏观采集器 WARNING：指数 399001/399006 和涨跌停统计瞬时失败 → **放过**
+- 信号扫描 `flow_breaker_active`：熔断冷却预期行为 → **放过**
+
 ## 2026-08-12 — v0.9.22 陈学长断板反包实战体系落地（rebound_system）+ 全量回归零失败
 
 ### 变更一：新策略 rebound_system（手册完整版）

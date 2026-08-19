@@ -38,9 +38,14 @@ _SINA_PREFIX_MAP: dict[str, str] = {
     "3": "0",  # 创业板
     "5": "1",  # 沪市基金/ETF（510xxx/511xxx/512xxx/513xxx/588xxx）
     "6": "1",  # 沪市主板
-    "8": "0",  # 北交所
-    "9": "1",  # 沪市B股
+    "8": "0",  # 北交所（老代码段 83/87/88，语义由 _BSE_PREFIXES 特判接管）
+    "9": "1",  # 沪市B股（900xxx；920xxx 北交所新代码段由 _BSE_PREFIXES 特判接管）
 }
+
+# 北交所代码段（与 risk/manager.py _BSE_PREFIXES 保持一致）：
+# 43/83/87/88 为老代码，920 为 2024-10 起启用的新代码段。
+# 注意：920xxx 在映射表中会被 "9"→"1"（沪市B股）误判，必须在查表前特判。
+_BSE_PREFIXES: tuple[str, ...] = ("43", "83", "87", "88", "920")
 
 
 def _to_sina_code(code: str) -> str:
@@ -51,6 +56,10 @@ def _to_sina_code(code: str) -> str:
         return f"sh{code}"
     if code in BaseCollector.SZ_INDEX_CODES:
         return f"sz{code}"
+    # v0.9.12：北交所代码段特判——新浪 K 线用 bj 前缀（实测 bj920068/bj430047 可用，
+    # 而 sh920068 返回 null）。必须放在查表之前，否则 920xxx 被 "9"→"1" 误判为沪市B股。
+    if code.startswith(_BSE_PREFIXES):
+        return f"bj{code}"
     prefix = _SINA_PREFIX_MAP.get(code[0], "0")
     exchange = "sh" if prefix == "1" else "sz"
     return f"{exchange}{code}"
@@ -160,6 +169,10 @@ class SinaCollector(BaseCollector):
 
     def _try_netease_history(self, code: str, sina_code: str, days: int) -> pd.DataFrame | None:
         """尝试网易财经历史 CSV 接口（备用）。失败返回 None。"""
+        # v0.9.12：网易 chddata 不支持北交所（bj）代码（实测 920xxx 恒 502），
+        # 直接短路跳过，避免浪费一次 HTTP 请求并刷 WARNING 日志。
+        if code.startswith(_BSE_PREFIXES):
+            return None
         url = SINA_HISTORY_URL.format(
             sina_code=sina_code,
             start="20200101",

@@ -11,6 +11,7 @@ from pathlib import Path
 import yaml
 
 from gugu.config import get_config
+from gugu.strategies.registry import get_runtime_strategy_names
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -28,17 +29,17 @@ class TestEnabledStrategySources:
 
     def test_backtest_all_reads_current_enabled_strategies(self):
         script = _load_script("backtest_all_strategies", "scripts/backtest_all_strategies.py")
-        expected = get_config().strategy.get_all_enabled_unique()
+        expected = get_runtime_strategy_names()
         assert script.get_enabled_strategies() == expected
 
     def test_verify_enabled_reads_current_enabled_strategies(self):
         script = _load_script("verify_enabled_strategies", "scripts/verify_enabled_strategies.py")
-        expected = get_config().strategy.get_all_enabled_unique()
+        expected = get_runtime_strategy_names()
         assert script.get_enabled_strategies() == expected
 
     def test_regime_backtest_default_uses_current_enabled_strategies(self):
         script = _load_script("backtest_by_regime", "scripts/backtest_by_regime.py")
-        expected = get_config().strategy.get_all_enabled_unique()
+        expected = get_runtime_strategy_names()
         assert script.resolve_strategy_names(None) == expected
 
 
@@ -86,7 +87,7 @@ class TestStrategyGateScript:
                 "avg_sharpe": 0.35,
                 "max_drawdown": 0.12,
                 "profitable_ratio": 0.56,
-                "param_stability": 0.6,
+                "param_stability": 0.8,
                 "paper_signals": 35,
                 "paper_return": 0.02,
             },

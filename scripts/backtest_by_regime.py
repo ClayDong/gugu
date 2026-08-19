@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
 import time
 from datetime import date
 from pathlib import Path
@@ -27,7 +28,7 @@ import pandas as pd
 
 from gugu.backtest import BacktestEngine
 from gugu.config import get_config
-from gugu.strategies.registry import get_strategy
+from gugu.strategies.registry import get_runtime_strategy_names, get_strategy
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -245,8 +246,7 @@ def resolve_strategy_names(raw: str | None) -> list[str]:
     """解析待回测策略；未指定时读取 settings.yaml 的实际启用策略。"""
     if raw:
         return [name.strip() for name in raw.split(",") if name.strip()]
-    cfg = get_config().strategy
-    return cfg.get_all_enabled_unique() if cfg.enabled_by_regime else list(cfg.enabled)
+    return get_runtime_strategy_names()
 
 
 def main() -> None:
@@ -258,7 +258,8 @@ def main() -> None:
         default=None,
         help="逗号分隔的策略名（默认读取 settings.yaml 实际启用策略）",
     )
-    parser.add_argument("--output", type=str, default="/tmp/bt_regime.json", help="输出 JSON 路径")
+    default_output = str(Path(tempfile.gettempdir()) / "gugu-bt-regime.json")
+    parser.add_argument("--output", type=str, default=default_output, help="输出 JSON 路径")
     args = parser.parse_args()
 
     t0 = time.time()

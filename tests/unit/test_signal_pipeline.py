@@ -188,6 +188,7 @@ class TestSignalPipeline:
         self, pipeline, sample_df, budget, mock_portfolio, mock_account, rt_all
     ):
         """非 fresh 买入候选必须进入观察/阻断状态。"""
+        pipeline._exec_mode = "track_live"
         pipeline._scan_with_perspectives = True
         pipeline._perspective_engine = MagicMock()
         pipeline._perspective_engine.analyze.return_value = MagicMock(
@@ -222,6 +223,37 @@ class TestSignalPipeline:
 
         assert signal["decision"]["status"] == "blocked"
         assert signal["decision"]["action"] == "observe"
+        assert signal["observation_only"] is True
+        assert signal["data_quality"] == "stale_degraded"
+
+    @pytest.mark.asyncio
+    async def test_paper_stale_buy_is_blocked_before_execution(
+        self, pipeline, sample_df, budget, mock_portfolio, mock_account, rt_all
+    ):
+        """paper 模式下非新鲜买入不得进入后续执行链。"""
+        pipeline._exec_mode = "paper"
+        pipeline._router.route.return_value = {
+            "symbol": "600519",
+            "direction": "buy",
+            "strategy": "turtle",
+            "strategies": ["turtle"],
+            "confidence": 0.8,
+            "data_quality": "stale",
+        }
+
+        signal = await pipeline.process(
+            "600519",
+            sample_df,
+            {"name": "茅台"},
+            budget,
+            rt_all,
+            [],
+            mock_portfolio,
+            mock_account,
+        )
+
+        assert signal is None
+        pipeline._wisdom.advise_async.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_failed_perspective_is_blocked(

@@ -5,7 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-DataQuality = Literal["fresh", "stale", "partial", "invalid", "unavailable"]
+DataQuality = Literal[
+    "fresh",
+    "fresh_valid",
+    "stale",
+    "stale_degraded",
+    "partial",
+    "invalid",
+    "unavailable",
+]
 DecisionStatus = Literal[
     "candidate",
     "blocked",
@@ -96,16 +104,24 @@ def evaluate_entry_gate(signal: Any, perspective_result: Any = None) -> Decision
     data_quality = _get_value(nested_decision, "data_quality", None)
     if data_quality is None:
         data_quality = _get_value(signal, "data_quality", "unavailable")
-    if data_quality not in {"fresh", "stale", "partial", "invalid", "unavailable"}:
+    if data_quality not in {
+        "fresh",
+        "fresh_valid",
+        "stale",
+        "stale_degraded",
+        "partial",
+        "invalid",
+        "unavailable",
+    }:
         data_quality = "invalid"
 
     contract = DecisionContract(symbol=symbol, data_quality=data_quality)
     if direction != "buy":
         return contract
 
-    if data_quality != "fresh":
+    if data_quality not in {"fresh", "fresh_valid"}:
         contract.status = "blocked"
-        contract.block_reasons.append("数据状态不是 fresh")
+        contract.block_reasons.append("数据状态不是 fresh_valid")
         return contract
 
     if perspective_result is None:

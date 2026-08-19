@@ -53,7 +53,15 @@ def test_signal_gate_blocks_bad_data_quality_before_perspective() -> None:
     )
     assert decision.status == "blocked"
     assert decision.data_quality == "stale"
-    assert "数据状态不是 fresh" in decision.block_reasons
+    assert "数据状态不是 fresh_valid" in decision.block_reasons
+
+
+def test_signal_gate_accepts_fresh_valid_alias() -> None:
+    decision = evaluate_entry_gate(
+        {"symbol": "600519", "direction": "buy", "data_quality": "fresh_valid"},
+        {"passed": True, "error_count": 0},
+    )
+    assert decision.status == "approved"
 
 
 def test_signal_gate_blocks_perspective_error_or_failure() -> None:

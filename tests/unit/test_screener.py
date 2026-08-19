@@ -7,6 +7,7 @@ from unittest import mock
 
 import pytest
 
+from gugu.screener.params import ScreenerParams
 from gugu.screener.terminal_screener import ScreeningResult, _symbol_prefix
 from gugu.screener.report import (
     _build_card,
@@ -439,7 +440,7 @@ def test_hard_filter_snapshot_filters_by_change_pct():
             },  # 跌幅过深
         ]
     )
-    screener = TerminalScreener()
+    screener = TerminalScreener(params=ScreenerParams())
     result = screener._hard_filter_snapshot(spot)
     assert len(result) == 1
     assert result.iloc[0]["代码"] == "000001"
@@ -474,7 +475,7 @@ def test_hard_filter_snapshot_filters_by_volume_ratio():
             },  # 量比过高（放量）
         ]
     )
-    screener = TerminalScreener()
+    screener = TerminalScreener(params=ScreenerParams())
     result = screener._hard_filter_snapshot(spot)
     assert len(result) == 1
     assert result.iloc[0]["代码"] == "000001"
@@ -519,7 +520,7 @@ def test_hard_filter_snapshot_filters_by_turnover():
             },  # 换手率过高
         ]
     )
-    screener = TerminalScreener()
+    screener = TerminalScreener(params=ScreenerParams())
     result = screener._hard_filter_snapshot(spot)
     assert len(result) == 1
     assert result.iloc[0]["代码"] == "000001"
@@ -564,7 +565,7 @@ def test_hard_filter_snapshot_filters_by_market_cap():
             },  # 过大（800亿）
         ]
     )
-    screener = TerminalScreener()
+    screener = TerminalScreener(params=ScreenerParams())
     result = screener._hard_filter_snapshot(spot)
     assert len(result) == 1
     assert result.iloc[0]["代码"] == "000001"
@@ -609,7 +610,7 @@ def test_hard_filter_snapshot_excludes_st_and_bj():
             },  # 北交所
         ]
     )
-    screener = TerminalScreener()
+    screener = TerminalScreener(params=ScreenerParams())
     result = screener._hard_filter_snapshot(spot)
     assert len(result) == 1
     assert result.iloc[0]["代码"] == "000001"
@@ -635,7 +636,7 @@ def test_hard_filter_snapshot_normalizes_column_names():
             }
         ]
     )
-    screener = TerminalScreener()
+    screener = TerminalScreener(params=ScreenerParams())
     result = screener._hard_filter_snapshot(spot)
     assert len(result) == 1
     # 标准化后应有中文列名
@@ -650,7 +651,7 @@ async def test_scan_returns_empty_when_snapshot_fails():
     from unittest.mock import AsyncMock, patch
     from gugu.screener.terminal_screener import TerminalScreener
 
-    screener = TerminalScreener()
+    screener = TerminalScreener(params=ScreenerParams())
     with patch.object(screener, "_fetch_market_snapshot", return_value=None):
         result = await screener.scan()
     assert result.results == []
@@ -663,7 +664,7 @@ async def test_scan_returns_empty_when_no_candidates():
     import pandas as pd
     from gugu.screener.terminal_screener import TerminalScreener
 
-    screener = TerminalScreener()
+    screener = TerminalScreener(params=ScreenerParams())
     # 所有股票涨幅都过高（被涨幅 -2%~+1% 过滤）
     empty_spot = pd.DataFrame(
         [
@@ -691,7 +692,7 @@ async def test_scan_total_timeout_returns_empty():
     import asyncio
     from gugu.screener.terminal_screener import TerminalScreener
 
-    screener = TerminalScreener()
+    screener = TerminalScreener(params=ScreenerParams())
 
     # 让 _scan_internal 在被取消时正常返回空列表（模拟被超时中断后的行为）
     async def hang(*args, **kwargs):
@@ -721,7 +722,7 @@ async def test_concurrent_check_circuit_breaker():
     import time
     from gugu.screener.terminal_screener import TerminalScreener
 
-    screener = TerminalScreener()
+    screener = TerminalScreener(params=ScreenerParams())
 
     # 构造 10 只候选股
     candidates = pd.DataFrame(
@@ -759,7 +760,7 @@ async def test_concurrent_check_returns_results_on_success():
     import time
     from gugu.screener.terminal_screener import TerminalScreener, ScreeningResult
 
-    screener = TerminalScreener()
+    screener = TerminalScreener(params=ScreenerParams())
 
     candidates = pd.DataFrame(
         [

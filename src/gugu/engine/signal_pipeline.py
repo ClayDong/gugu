@@ -61,6 +61,7 @@ from gugu.analysis.regime_detector import MultiPeriodRegimeDetector
 from gugu.analysis.sector_rotation import SectorRotation
 from gugu.analysis.stage_detector import StageDetector
 from gugu.data.manager import DataManager
+from gugu.data.quality_state import resolve_signal_data_quality, should_block_buy
 from gugu.data.stock_names import lookup_stock_name
 from gugu.detectors.divergence_detector import DivergenceDetector
 from gugu.engine.signal_router import SignalRouter
@@ -269,27 +270,35 @@ class SignalPipeline:
             ):
                 return None
 
-            # 初始化数据质量和市场上下文
-            # P1 数据质量戳三级：fresh(绿)/degraded(黄)/stale(红)
-            # - fresh:    实时价 + 数据源正常
-            # - degraded: 数据源降级（部分数据缺失，信号仍推送但标注）
-            # - stale:    非实时价（用收盘价兜底，信号仅供观察）
-            if "data_quality" not in signal:
-                if signal.get("price_is_realtime") and not self._dm.is_degraded:
-                    signal["data_quality"] = "fresh"
-                elif signal.get("price_is_realtime") or not self._dm.is_degraded:
-                    signal["data_quality"] = "degraded"
-                else:
-                    signal["data_quality"] = "stale"
-            # 降级时"观而不发"标记：数据源降级产生的信号标注 observation_only
-            # （利弗莫尔原则：无信息时唯一正确动作是不做，而非做方向假设）
-            if signal.get("data_quality") in ("degraded", "stale"):
+            # 初始化统一三态数据质量和市场上下文。
+            # fresh_valid 才允许新增买入；stale_degraded 只观察；unavailable 阻断。
+            quality_state = resolve_signal_data_quality(
+                signal,
+                dm_degraded=bool(self._dm.is_degraded),
+            )
+            signal["data_quality"] = quality_state.value
+            if quality_state.value != "fresh_valid":
                 signal["observation_only"] = True
                 signal["data_quality_note"] = (
-                    "数据源降级，信号仅供观察，建议人工核实实时行情后再决策"
-                    if signal["data_quality"] == "degraded"
-                    else "使用收盘价兜底（非实时），信号可靠性低，仅作参考"
+                    "数据源降级或非实时，信号仅供观察，禁止新增买入"
+                    if quality_state.value == "stale_degraded"
+                    else "关键数据不可用，禁止新增买入"
                 )
+            if signal["direction"] == "buy":
+                blocked, reason = should_block_buy(
+                    signal,
+                    dm_degraded=bool(self._dm.is_degraded),
+                )
+                if blocked:
+                    self._inc_filter("data_quality_buy_gate")
+                    signal["wisdom_filtered"] = True
+                    signal["filter_reason"] = reason
+                    signal["rejected"] = True
+                    signal["reject_reason"] = reason
+                    signal["observation_only"] = True
+                    # 提醒模式保留审计信号；paper/live 不允许新增买入继续流转。
+                    if self._exec_mode not in ("signal_only", "track_live"):
+                        return None
             signal["data_timestamp"] = signal.get("data_timestamp", pd.Timestamp.now().isoformat())
             signal["data_sources"] = signal.get(
                 "data_sources", ["realtime"] if signal.get("price_is_realtime") else ["history"]
@@ -613,11 +622,11 @@ class SignalPipeline:
         portfolio: dict[str, Any],
         perspective_result: Any,
     ) -> dict[str, Any]:
-        """signal_only 模式的过滤链：仅附加数据，不拦截信号。
+        """提醒模式的过滤链：保留信号用于观察，不产生新增买入执行资格。
 
         特点：
-        - 不对买入信号做硬过滤（让用户自行判断）
-        - 但保留危险信号标记，用于通知时提醒用户
+        - signal_only/track_live 保留候选信号，供通知和人工判断
+        - 数据质量、危险信号和过滤结果明确写入信号，不得被当作可执行买入
         - 买入和卖出信号都附加基本面数据，保证通知卡片数据完整
         - P0 修复：调用 Wisdom 硬编码 fallback 获取止损价/止盈价/仓位建议
         - v0.7.5 P0-2修复：signal_only 模式下十大视角不拦截信号
@@ -780,8 +789,7 @@ class SignalPipeline:
 
         原则：
         - 保留安全保护过滤（ST/停牌/危险信号/四阶段）
-        - 放宽数据依赖和分析类过滤，让更多信号到达执行层
-        - 数据缺失时默认放行（实盘交易优先）
+        - 数据依赖过滤统一 fail-closed：缺失/过期数据不得新增买入
         """
         # 3.5 十大视角（仅附加数据，不过滤信号）
         if self._scan_with_perspectives:
@@ -811,20 +819,18 @@ class SignalPipeline:
                     signal["wisdom_filtered"] = True
                     signal["filter_reason"] = "十大视角分析失败，缺少可信视角评分"
 
-        # 1. 基本面过滤（仅买入信号，数据不足时放行）
+        # 1. 基本面过滤（仅买入信号，数据缺失也必须阻断）
         if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
             fund_result = self._fundamental_filter.check(symbol)
             signal["fundamental"] = fund_result
-            if not fund_result["pass"]:
-                if fund_result.get("data_missing"):
-                    logger.debug("{} 基本面数据缺失，默认放行（实盘交易优先）", symbol)
-                else:
-                    logger.info("{} 基本面过滤: {}", symbol, ", ".join(fund_result["reasons"]))
-                    self._inc_filter("fundamental")
-                    signal["wisdom_filtered"] = True
-                    signal["filter_reason"] = f"基本面: {', '.join(fund_result['reasons'])}"
+            if not fund_result.get("pass", False):
+                reasons = ", ".join(fund_result.get("reasons", [])) or "基本面数据不可用"
+                logger.info("{} 基本面过滤: {}", symbol, reasons)
+                self._inc_filter("fundamental")
+                signal["wisdom_filtered"] = True
+                signal["filter_reason"] = f"基本面: {reasons}"
 
-        # 2. 资金流过滤（仅买入信号，数据不足时放行）
+        # 2. 资金流过滤（仅买入信号，数据缺失也必须阻断）
         if signal["direction"] == "buy" and not signal.get("wisdom_filtered"):
             flow_result = await self._money_flow_filter.check(symbol)
             signal["money_flow"] = flow_result

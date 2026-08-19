@@ -134,6 +134,11 @@ def calc_param_perturbation_stability(
 
     if perturbation_pcts is None:
         perturbation_pcts = [-0.5, -0.2, -0.1, 0.1, 0.2, 0.5]
+    # 基准参数必须单独回测，不能用扰动结果均值冒充基准。
+    # 即使调用方自定义扰动列表，也强制补入 0%，避免稳定性口径漂移。
+    perturbation_pcts = list(perturbation_pcts)
+    if 0.0 not in perturbation_pcts:
+        perturbation_pcts.append(0.0)
 
     results = []
 
@@ -159,16 +164,25 @@ def calc_param_perturbation_stability(
                 perturbations.append({"pct": pct, "value": perturbed_value, "return": None})
 
         valid_returns = [p["return"] for p in perturbations if p["return"] is not None]
-        base_return = next(
-            (p["return"] for p in perturbations if p["pct"] == 0),
-            sum(valid_returns) / len(valid_returns) if valid_returns else 0.0,
-        )
+        base_result = next((p for p in perturbations if p["pct"] == 0.0), None)
+        base_return = base_result["return"] if base_result is not None else None
 
-        if valid_returns and base_return != 0:
-            max_change = max(abs(r - base_return) / abs(base_return) for r in valid_returns)
+        if base_return is None:
+            stability_score = 0.0
+        elif valid_returns and base_return != 0:
+            max_change = max(
+                abs(r - base_return) / abs(base_return) for r in valid_returns if r is not None
+            )
             stability_score = max(0.0, 1.0 - min(max_change, 1.0))
+        elif valid_returns:
+            # 基准收益为 0 时，用绝对收益差异评估；不能把零基准误判为稳定。
+            max_abs_change = max(abs(r - base_return) for r in valid_returns)
+            stability_score = max(0.0, 1.0 - min(max_abs_change, 1.0))
         else:
-            stability_score = 1.0
+            stability_score = 0.0
+
+        if base_return is None:
+            base_return = 0.0
 
         results.append(
             PerturbationResult(
@@ -245,67 +259,98 @@ def calc_rolling_window_validation(
     df: pd.DataFrame,
     window_months: int = 3,
     step_months: int = 1,
+    param_grid: dict[str, list] | None = None,
 ) -> RollingWindowResult:
-    """计算滚动窗口验证。"""
+    """按真实日期做严格的滚动 train/test 验证。
+
+    每个窗口先在过去 ``window_months`` 的 train 数据上选择参数，随后只在
+    紧接着的 ``step_months`` test 数据上统计收益。汇总指标只来自 test。
+    """
     from gugu.backtest.engine import BacktestEngine
 
-    if len(df) < window_months * 30:
+    if window_months <= 0 or step_months <= 0 or df.empty:
         return RollingWindowResult([], 0.0, 0.0, 0.0, 0.0)
 
     df_indexed = df.copy()
     if "date" in df_indexed.columns:
         df_indexed["date"] = pd.to_datetime(df_indexed["date"])
         df_indexed = df_indexed.set_index("date")
-
     if not isinstance(df_indexed.index, pd.DatetimeIndex):
         df_indexed.index = pd.to_datetime(df_indexed.index)
+    df_indexed = df_indexed.sort_index()
 
-    start_idx = window_months * 30
-    end_idx = len(df_indexed) - window_months * 30
+    train_delta = pd.DateOffset(months=window_months)
+    test_delta = pd.DateOffset(months=step_months)
+    test_start = df_indexed.index[0] + train_delta
+    last_date = df_indexed.index[-1]
+    windows: list[dict] = []
 
-    if start_idx >= end_idx:
-        return RollingWindowResult([], 0.0, 0.0, 0.0, 0.0)
-
-    start_dates_idx = range(start_idx, end_idx, step_months * 21)
-
-    windows = []
-    for idx in start_dates_idx:
-        end_i = idx + window_months * 21
-        if end_i > len(df_indexed):
-            end_i = len(df_indexed)
-
-        window_df = df_indexed.iloc[idx:end_i].reset_index(drop=True)
-
-        if len(window_df) < window_months * 20:
+    while test_start <= last_date:
+        train_start = test_start - train_delta
+        test_end = test_start + test_delta
+        train_df = df_indexed[(df_indexed.index >= train_start) & (df_indexed.index < test_start)]
+        test_df = df_indexed[(df_indexed.index >= test_start) & (df_indexed.index < test_end)]
+        if len(train_df) < max(window_months * 20, 20) or len(test_df) < 5:
+            test_start = test_end
             continue
+
+        best_params: dict[str, Any] = {}
+        train_sharpe = 0.0
+        if param_grid:
+            import itertools
+
+            best_train_sharpe = float("-inf")
+            for values in itertools.product(*param_grid.values()):
+                params = dict(zip(param_grid, values, strict=True))
+                try:
+                    train_result = BacktestEngine(initial_capital=100000.0).run(
+                        strategy_class(params), train_df.reset_index(drop=True)
+                    )
+                    sharpe = float(train_result.metrics.get("sharpe", 0.0))
+                    if sharpe > best_train_sharpe:
+                        best_train_sharpe = sharpe
+                        best_params = params
+                except Exception as exc:
+                    logger.debug("滚动窗口 train 参数评估失败: {}", exc)
+            train_sharpe = best_train_sharpe if best_train_sharpe != float("-inf") else 0.0
+        else:
+            try:
+                train_result = BacktestEngine(initial_capital=100000.0).run(
+                    strategy_class(), train_df.reset_index(drop=True)
+                )
+                train_sharpe = float(train_result.metrics.get("sharpe", 0.0))
+            except Exception as exc:
+                logger.debug("滚动窗口 train 诊断失败: {}", exc)
 
         try:
-            strategy = strategy_class()
-            engine = BacktestEngine(initial_capital=100000.0)
-            result = engine.run(strategy, window_df)
-
+            test_result = BacktestEngine(initial_capital=100000.0).run(
+                strategy_class(best_params), test_df.reset_index(drop=True)
+            )
             windows.append(
                 {
-                    "start": str(df_indexed.index[idx])[:10],
-                    "end": str(df_indexed.index[min(end_i - 1, len(df_indexed) - 1)])[:10],
-                    "return": result.metrics.get("total_return", 0.0),
-                    "sharpe": result.metrics.get("sharpe", 0.0),
-                    "trades": result.metrics.get("total_trades", 0),
+                    "train_start": str(train_df.index[0])[:10],
+                    "train_end": str(train_df.index[-1])[:10],
+                    "test_start": str(test_df.index[0])[:10],
+                    "test_end": str(test_df.index[-1])[:10],
+                    "train_sharpe": train_sharpe,
+                    "best_params": best_params,
+                    "return": test_result.metrics.get("total_return", 0.0),
+                    "sharpe": test_result.metrics.get("sharpe", 0.0),
+                    "trades": test_result.metrics.get("total_trades", 0),
                 }
             )
-        except Exception:
-            continue
+        except Exception as exc:
+            logger.warning("滚动窗口 test 评估失败，跳过该窗口: {}", exc)
+        test_start = test_end
 
     if not windows:
         return RollingWindowResult([], 0.0, 0.0, 0.0, 0.0)
 
     returns = [w["return"] for w in windows]
     sharpes = [w["sharpe"] for w in windows]
-
     avg_return = sum(returns) / len(returns)
     avg_sharpe = sum(sharpes) / len(sharpes)
-    win_rate = sum(1 for r in returns if r > 0) / len(returns)
-
+    win_rate = sum(1 for value in returns if value > 0) / len(returns)
     return_std = pd.Series(returns).std() if len(returns) > 1 else max(abs(avg_return), 1e-6)
     consistency_score = max(0.0, min(1.0, abs(avg_return) / (return_std + 1e-6)))
 

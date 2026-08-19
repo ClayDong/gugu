@@ -14,6 +14,7 @@ from typing import Any
 
 import pandas as pd
 
+from gugu.data.evidence import set_evidence
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -51,6 +52,9 @@ class AltAlphaCollector:
     _min_interval: float = 0.5  # 500ms 限流
     _cache_ttl_hours: float = 12.0  # 12小时缓存
     _data_type: str = "base"  # 子类覆盖
+    _data_source: str = "akshare"  # 证据链数据源，直连 Collector 覆盖
+    _period: str = "event_or_daily"
+    _unit: str = ""
 
     def __init__(self, cache_dir: Path | str | None = None) -> None:
         self._cache_dir = Path(cache_dir) if cache_dir else _DEFAULT_CACHE_DIR
@@ -130,6 +134,47 @@ class AltAlphaCollector:
         except Exception as e:
             logger.warning(f"{self._data_type} 缓存写入失败: {e}")
 
+    def _cache_hit(self, df: pd.DataFrame) -> pd.DataFrame:
+        """给缓存命中结果补齐证据链，保留原有采集时间（若存在）。"""
+        return set_evidence(
+            df,
+            data_source=str(df.attrs.get("data_source", self._data_source)),
+            period=str(df.attrs.get("period", self._period)),
+            unit=str(df.attrs.get("unit", self._unit)),
+            quality_status=str(df.attrs.get("quality_status", "validated")),
+            fetch_timestamp=df.attrs.get("fetch_timestamp"),
+            data_stale=False,
+            data_available=not df.empty,
+        )
+
+    def _stale_or_unavailable(self, cache_key: str) -> pd.DataFrame:
+        """上游失败时返回显式 stale 缓存，否则返回显式不可用结果。"""
+        stale = self._read_cache(ignore_ttl=True, cache_key=cache_key)
+        if stale is not None:
+            stale = set_evidence(
+                stale,
+                data_source=str(stale.attrs.get("data_source", self._data_source)),
+                period=str(stale.attrs.get("period", self._period)),
+                unit=str(stale.attrs.get("unit", self._unit)),
+                quality_status="stale",
+                fetch_timestamp=stale.attrs.get("fetch_timestamp"),
+                data_stale=True,
+                data_available=True,
+                data_error="api_failed_using_stale_cache",
+            )
+            return stale
+
+        unavailable = pd.DataFrame()
+        return set_evidence(
+            unavailable,
+            data_source=self._data_source,
+            period=self._period,
+            unit=self._unit,
+            quality_status="unavailable",
+            data_available=False,
+            data_error="api_failed_no_cache",
+        )
+
     # ---- 限流 ----
 
     async def _rate_limit(self) -> None:
@@ -156,7 +201,7 @@ class AltAlphaCollector:
         # 1. 先查缓存
         cached = self._read_cache(cache_key=cache_key)
         if cached is not None:
-            return cached
+            return self._cache_hit(cached)
 
         # 2. 限流
         await self._rate_limit()
@@ -167,7 +212,16 @@ class AltAlphaCollector:
             if df is not None and not df.empty:
                 # 4. 数据质量校验（子类可覆盖 _validate）
                 df = self._validate(df)
-                # 5. 写入缓存
+                # 5. 统一证据链：另类数据默认为日/事件周期，具体单位由子类覆盖。
+                df = set_evidence(
+                    df,
+                    data_source=self._data_source,
+                    period=self._period,
+                    unit=self._unit,
+                    quality_status="validated",
+                    data_available=True,
+                )
+                # 6. 写入缓存
                 self._write_cache(df, cache_key=cache_key)
                 logger.info(f"{self._data_type} 采集成功: {len(df)} 行")
                 return df
@@ -176,12 +230,10 @@ class AltAlphaCollector:
             logger.error(f"{self._data_type} 采集失败: {e}")
 
         # 6. 降级：返回过期缓存
-        stale = self._read_cache(ignore_ttl=True, cache_key=cache_key)
-        if stale is not None:
-            logger.info(f"{self._data_type} 使用过期缓存兜底: {len(stale)} 行")
-            return stale
-
-        return pd.DataFrame()
+        fallback = self._stale_or_unavailable(cache_key)
+        if not fallback.empty:
+            logger.info(f"{self._data_type} 使用过期缓存兜底: {len(fallback)} 行")
+        return fallback
 
     def _validate(self, df: pd.DataFrame) -> pd.DataFrame:
         """数据质量校验（子类可覆盖）。"""

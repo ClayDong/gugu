@@ -797,8 +797,11 @@ class SchedulerJobsMixin:
             return
         try:
             from gugu.engine.signal_router import SignalRouter
-            from gugu.strategies.registry import get_strategy
+            from gugu.strategies.registry import get_runtime_strategy_names, get_strategy
 
+            if "rsi_reversal" not in get_runtime_strategy_names():
+                logger.info("RSI 专项扫描跳过：rsi_reversal 未通过当前执行模式准入")
+                return
             rsi_strategy = get_strategy("rsi_reversal")
             rsi_router = SignalRouter([rsi_strategy])
 

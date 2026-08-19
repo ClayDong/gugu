@@ -11,7 +11,7 @@
 - 复用引擎已有管线，不重复实现策略逻辑
 - 信号去重：同一 (symbol, direction) 30 分钟内不重复推送（与聚合配置联动）
 - 性能自适应：由 IntradayMonitor 的性能模式控制扫描频率
-- 安全：默认 signal_only 模式只推荐不下单；live 模式默认人工确认
+- 安全：signal_only/track_live 只推送观察信号；paper 才允许模拟下单；live 默认人工确认
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ class RealtimeSignalScanner:
         self._scan_interval_sec = scan_interval_sec or self.DEFAULT_SCAN_INTERVAL_SEC
         self._last_scan_ts: float = 0.0
         self._last_push: dict[tuple[str, str], float] = {}
-        self._paper_broker: Any = None  # 独立模拟盘（track_live 模式并行验证用）
+        self._paper_broker: Any = None  # 保留兼容字段；提醒模式不使用模拟盘
         # auto_trade: None=跟随配置（execution.mode=live 且 confirm_required=False）
         self._auto_trade = auto_trade
 
@@ -156,16 +156,34 @@ class RealtimeSignalScanner:
     async def _maybe_execute(self, signal: dict[str, Any], execution_mode: str) -> None:
         """按运行模式执行信号。
 
+        已被标记为 observation_only/rejected 的买入信号不得进入任何执行器，
+        这是流水线门禁之外的第二道防线。
+
         安全分层：
-        - signal_only / track_live：飞书推送 + 并行记入独立模拟盘（验证信号效果）
+        - signal_only / track_live：只推送观察信号，不执行委托
         - paper：走引擎完整管线（风控 + PaperBroker 模拟下单 + 通知）
                  —— 模拟盘验证信号效果，不上真钱
         - live + confirm_required=True：只推送，等待人工确认（由外部确认流程下单）
         - live + confirm_required=False：直接委托 QMT
         """
+        if signal.get("direction") == "buy" and (
+            signal.get("observation_only") or signal.get("rejected")
+        ):
+            logger.info(
+                "实时信号: 买入信号被门禁标记为不可执行: {} {}",
+                signal.get("symbol"),
+                signal.get("reject_reason") or signal.get("filter_reason", ""),
+            )
+            return
+
         if execution_mode in ("signal_only", "track_live"):
-            # 并行模拟盘验证：真实持仓保护不变，信号效果用独立模拟盘追踪
-            await self._execute_sidecar_paper(signal)
+            # 提醒模式只推送，不进入任何模拟或实盘执行路径。
+            logger.info(
+                "实时信号: {} 模式仅观察，不执行委托: {} {}",
+                execution_mode,
+                signal.get("direction"),
+                signal.get("symbol"),
+            )
             return
 
         if execution_mode == "paper":
@@ -228,48 +246,12 @@ class RealtimeSignalScanner:
         return self._paper_broker
 
     async def _execute_sidecar_paper(self, signal: dict[str, Any]) -> None:
-        """并行模拟盘验证：信号记入独立 PaperBroker（track_live/signal_only 模式）。
-
-        真实持仓保护（LivePositionTracker）不变，信号效果用独立模拟盘追踪。
-        只记买入/卖出委托，不干预真实持仓。
-        """
-        broker = self._get_sidecar_paper_broker()
-        if broker is None:
-            return
-
-        direction = signal.get("direction", "")
-        symbol = signal.get("symbol", "")
-        # 建议仓位 → 股数（默认 1 手起步）
-        suggested_qty = signal.get("suggested_quantity") or signal.get("quantity") or 0
-        if suggested_qty <= 0:
-            suggested_qty = 100
-        price = signal.get("suggested_price") or signal.get("price") or None
-
-        try:
-            # 模拟盘不接 realtime scanner 的自动风控，但 PaperBroker 自身有
-            # 资金/持仓约束 + 涨跌停硬阻断 + T+1，足够验证信号效果
-            result = broker.order(symbol, direction, int(suggested_qty), price)
-            logger.info(
-                "实时信号模拟盘(并行): {} {} {}股 -> {}",
-                direction,
-                symbol,
-                suggested_qty,
-                "成交" if result.success else f"未成交: {result.message}",
-            )
-            notifier = getattr(self._engine, "_notifier", None)
-            if notifier is not None:
-                paper_signal = dict(signal)
-                paper_signal["execution_mode"] = "paper_sidecar"
-                paper_signal["order_result"] = {
-                    "success": result.success,
-                    "price": result.price,
-                    "quantity": result.quantity,
-                    "commission": result.commission,
-                    "message": result.message,
-                }
-                await notifier.notify_signal(paper_signal)
-        except Exception as e:
-            logger.error("实时信号模拟盘(并行)异常: {} {} {}", direction, symbol, e)
+        """遗留兼容入口：提醒模式禁止使用 sidecar 模拟盘。"""
+        logger.info(
+            "忽略遗留 sidecar 模拟执行入口: {} {}",
+            signal.get("direction"),
+            signal.get("symbol"),
+        )
 
     async def _execute_paper(self, signal: dict[str, Any]) -> None:
         """paper 模式：走引擎完整信号处理管线（风控+模拟下单+通知）。

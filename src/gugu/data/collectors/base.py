@@ -14,6 +14,7 @@ from typing import Literal
 
 import pandas as pd
 
+from gugu.data.evidence import set_evidence
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -80,10 +81,13 @@ class BaseCollector(ABC):
         return df
 
     def _set_attrs(self, df: pd.DataFrame) -> pd.DataFrame:
-        df.attrs["data_source"] = self.source
-        df.attrs["adjust_type"] = self.adjust_type
-        df.attrs.setdefault("fetch_timestamp", pd.Timestamp.now().isoformat())
-        return df
+        return set_evidence(
+            df,
+            data_source=self.source,
+            adjust_type=self.adjust_type,
+            quality_status="validated" if not df.empty else "empty",
+            data_available=not df.empty,
+        )
 
     @abstractmethod
     def fetch_stock_history(self, symbol: str, days: int = 90) -> pd.DataFrame:
@@ -169,6 +173,6 @@ class BaseCollector(ABC):
             return f"sh{code}"
         if code.startswith(("00", "30", "12")):
             return f"sz{code}"
-        if code.startswith(("43", "83", "87", "88")):
+        if code.startswith(("43", "83", "87", "88", "920")):
             return f"bj{code}"
         return code

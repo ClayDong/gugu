@@ -13,7 +13,7 @@
     # 优化并写回 strategy_defaults.yaml（必须通过 4 项解锁条件）
     python scripts/optimize_params.py --symbol 600519 --days 500 --write
 
-    # 强制写回（跳过解锁条件，仅紧急情况使用）
+    # --force 仅保留命令兼容性，不得绕过生产参数写回门禁。
     python scripts/optimize_params.py --symbol 600519 --days 500 --write --force
 
 P1 修复：参数写回解锁条件（防止过拟合参数污染生产）
@@ -54,6 +54,7 @@ from gugu.config import PROJECT_ROOT  # noqa: E402
 from gugu.data import data_manager  # noqa: E402
 from gugu.strategies.registry import get_strategy, list_strategies  # noqa: E402
 from gugu.utils.log import get_logger  # noqa: E402
+from gugu.validation.gate_policy import GatePolicy  # noqa: E402
 
 logger = get_logger()
 
@@ -520,8 +521,8 @@ async def run_optimization(
     """对单个策略运行 Walk-Forward 优化。
 
     P1 修复：参数写回解锁条件门控
-    - write=True 时必须通过 4 项解锁条件，否则拒绝写回
-    - force=True 跳过解锁检查（仅紧急情况使用，需在 PR 评审中说明理由）
+    - write=True 时必须通过统一 GatePolicy，否则拒绝写回
+    - force=True 仅保留命令兼容性，不得绕过生产写回门禁
     """
     from gugu.strategies.registry import get_strategy_cls
 
@@ -621,14 +622,9 @@ async def run_optimization(
             param_votes=param_votes,
         )
 
-        if unlock_report["unlocked"] or force:
-            if force and not unlock_report["unlocked"]:
-                print(
-                    f"\n⚠️  --force 强制写回（跳过 {len(unlock_report['failed_checks'])} 项解锁条件）"
-                )
-                logger.warning(
-                    f"强制写回 {strategy_name} 参数，跳过解锁检查: {unlock_report['failed_checks']}"
-                )
+        if unlock_report["unlocked"]:
+            # --force 保留为兼容参数，但不得绕过生产参数写回门禁。
+            # 只有 GatePolicy 全部通过时才允许更新 strategy_defaults.yaml。
             # 更新 defaults 并写回
             if strategy_name not in defaults:
                 defaults[strategy_name] = {}
@@ -646,7 +642,7 @@ async def run_optimization(
             print(f"\n建议:")
             print(f"  1. 扩大样本（当前 {symbol} 单股优化易过拟合，建议多股聚合）")
             print(f"  2. 增加数据量（--days 1000+）")
-            print(f"  3. 紧急情况可用 --force 强制写回（需 PR 评审说明理由）")
+            print("  3. --force 不再绕过生产参数写回门禁；如需研究实验，请使用隔离输出目录")
 
         # 闭环修复：输出优化报告 + 更新 manifest validation 字段
         report_path = write_optimization_report(
@@ -689,112 +685,69 @@ def _check_unlock_conditions(
     avg_max_dd: float,
     param_votes: dict[str, dict],
 ) -> dict:
-    """P1 修复：4 项参数写回解锁条件检查。
-
-    基于对抗性审查，每项条件都对应一类典型过拟合陷阱：
-    1. 样本外 Sharpe > 0 — 防止"训练神勇、测试亏损"的过拟合
-    2. 参数稳定性 — 防止"每个窗口最优参数都不同"的偶然性
-    3. 最大回撤可控 — 防止"高收益但破产风险"的赌徒参数
-    4. 收益非负 — 防止"系统性亏损参数"被写回
-
-    Returns:
-        {
-            "unlocked": bool,        # 是否全部通过
-            "checks": [...],         # 4 项检查详情
-            "failed_checks": [str],  # 失败的检查名称
-        }
-    """
-    checks: list[dict] = []
-    failed: list[str] = []
-
-    # 检查1：样本外 Sharpe > 0
-    sharpe_passed = avg_sharpe > 0
-    checks.append(
-        {
-            "name": "样本外 Sharpe > 0",
-            "passed": sharpe_passed,
-            "detail": f"avg_test_sharpe={avg_sharpe:.4f} ({'通过' if sharpe_passed else '失败'})",
-        }
-    )
-    if not sharpe_passed:
-        failed.append("样本外 Sharpe ≤ 0")
-
-    # 检查2：参数稳定性 — 同一参数在 ≥80% 窗口被选中（v0.8.1 从 50% 上调）
-    stability_passed = True
-    stability_details: list[str] = []
+    """使用统一 GatePolicy 检查参数写回解锁条件。"""
     n_windows = len(results)
-    for param_name, votes in param_votes.items():
-        if not votes:
-            continue
-        max_votes = max(votes.values())
-        stability_ratio = max_votes / n_windows if n_windows > 0 else 0
-        if stability_ratio < 0.8:
-            stability_passed = False
-            stability_details.append(f"{param_name} 一致性 {stability_ratio:.0%}")
-    checks.append(
-        {
-            "name": "参数稳定性 ≥80%",
-            "passed": stability_passed,
-            "detail": (
-                f"全部参数一致性 ≥80% ({'通过' if stability_passed else '失败: ' + ', '.join(stability_details)})"
-            ),
-        }
-    )
-    if not stability_passed:
-        failed.append("参数稳定性 <80%")
+    stability_ratios = {
+        param_name: max(votes.values()) / n_windows
+        for param_name, votes in param_votes.items()
+        if votes and n_windows > 0
+    }
+    param_stability = min(stability_ratios.values(), default=1.0)
 
-    # 检查3：最大回撤可控（avg_max_dd < 25%）
-    dd_threshold = 0.25
-    dd_passed = avg_max_dd < dd_threshold
-    checks.append(
-        {
-            "name": f"最大回撤 < {dd_threshold:.0%}",
-            "passed": dd_passed,
-            "detail": f"avg_max_dd={avg_max_dd:.2%} ({'通过' if dd_passed else '失败'})",
-        }
-    )
-    if not dd_passed:
-        failed.append(f"最大回撤 ≥ {dd_threshold:.0%}")
-
-    # 检查4：收益非负
-    return_passed = avg_return >= 0
-    checks.append(
-        {
-            "name": "平均样本外收益 ≥ 0",
-            "passed": return_passed,
-            "detail": f"avg_return={avg_return:.2%} ({'通过' if return_passed else '失败'})",
-        }
-    )
-    if not return_passed:
-        failed.append("平均样本外收益 < 0")
-
-    # 检查5（v0.8.1 新增）：样本外交易次数 ≥ 30，防止小样本过拟合
-    # 从 results 中统计：优先读取 test_trades 字段，否则尝试从窗口 trades 长度派生
     total_test_trades = 0
-    for r in results:
-        tt = r.get("test_trades")
-        if tt is None:
-            trades = r.get("trades")
-            tt = len(trades) if isinstance(trades, (list, tuple)) else 0
+    for result in results:
+        trades = result.get("test_trades")
+        if trades is None:
+            raw_trades = result.get("trades")
+            trades = len(raw_trades) if isinstance(raw_trades, (list, tuple)) else 0
         try:
-            total_test_trades += int(tt or 0)
+            total_test_trades += int(trades or 0)
         except (TypeError, ValueError):
-            total_test_trades += 0
-    trades_passed = total_test_trades >= 30
-    checks.append(
+            continue
+
+    gate = GatePolicy.evaluate_writeback(
         {
-            "name": "样本外交易次数 ≥ 30",
-            "passed": trades_passed,
-            "detail": f"total_test_trades={total_test_trades} ({'通过' if trades_passed else '失败：样本不足，存在过拟合风险'})",
+            "avg_sharpe": avg_sharpe,
+            "param_stability": param_stability,
+            "max_drawdown": avg_max_dd,
+            "avg_return": avg_return,
+            "oos_trades": total_test_trades,
         }
     )
-    if not trades_passed:
-        failed.append("样本外交易次数 < 30")
-
+    detail_values = {
+        "avg_sharpe": f"avg_test_sharpe={avg_sharpe:.4f}",
+        "param_stability": f"最低参数一致性={param_stability:.0%}",
+        "max_drawdown": f"avg_max_dd={avg_max_dd:.2%}",
+        "avg_return": f"avg_return={avg_return:.2%}",
+        "oos_trades": f"total_test_trades={total_test_trades}",
+    }
+    names = {
+        "avg_sharpe": "样本外 Sharpe > 0",
+        "param_stability": "参数稳定性 ≥80%",
+        "max_drawdown": "最大回撤 < 25%",
+        "avg_return": "平均样本外收益 ≥ 0",
+        "oos_trades": "样本外交易次数 ≥ 30",
+    }
+    checks = [
+        {
+            "name": names[key],
+            "passed": item["passed"],
+            "detail": f"{detail_values[key]} ({'通过' if item['passed'] else '失败'})",
+        }
+        for key, item in gate["checks"].items()
+    ]
+    legacy_failed_names = {
+        "avg_sharpe": "样本外 Sharpe ≤ 0",
+        "param_stability": "参数稳定性 <80%",
+        "max_drawdown": "最大回撤 ≥ 25%",
+        "avg_return": "平均样本外收益 < 0",
+        "oos_trades": "样本外交易次数 < 30",
+    }
     return {
-        "unlocked": len(failed) == 0,
+        "unlocked": gate["passed"],
+        "version": gate["version"],
         "checks": checks,
-        "failed_checks": failed,
+        "failed_checks": [legacy_failed_names[key] for key in gate["failed_checks"]],
     }
 
 
@@ -841,7 +794,7 @@ def write_optimization_report(
         recommended_action = (
             f"未通过 {len(unlock_report['failed_checks'])} 项解锁条件"
             f"（{'; '.join(unlock_report['failed_checks'])}），"
-            "建议扩大样本/增加数据量，或紧急情况用 --force 强制写回（需 PR 评审说明理由）"
+            "建议扩大样本/增加数据量；--force 不得绕过生产参数写回门禁"
         )
 
     report = {
@@ -1075,12 +1028,8 @@ async def run_heuristic_optimization(
             param_votes=param_votes,
         )
 
-        if unlock_report["unlocked"] or force:
-            if force and not unlock_report["unlocked"]:
-                print(
-                    f"\n⚠️  --force 强制写回（跳过 {len(unlock_report['failed_checks'])} 项解锁条件）"
-                )
-                logger.warning(f"强制写回 {strategy_name} 参数: {unlock_report['failed_checks']}")
+        if unlock_report["unlocked"]:
+            # --force 仅保留命令兼容性，不能绕过 GatePolicy 写入生产默认参数。
             if strategy_name not in defaults:
                 defaults[strategy_name] = {}
             for k, v in best_params.items():
@@ -1147,8 +1096,8 @@ async def run_multi_stock_optimization(
         symbols: 股票代码列表（建议 5-10 只）
         days: 每只股票的历史数据天数
         n_splits: Walk-Forward 窗口数
-        write: 是否写回参数（需通过 4 项解锁条件）
-        force: 是否强制写回
+        write: 是否写回参数（需通过统一 GatePolicy）
+        force: 兼容旧命令的参数，不得绕过生产写回门禁
     """
     from gugu.strategies.registry import get_strategy_cls
 
@@ -1264,12 +1213,8 @@ async def run_multi_stock_optimization(
             param_votes=param_votes,
         )
 
-        if unlock_report["unlocked"] or force:
-            if force and not unlock_report["unlocked"]:
-                print(
-                    f"\n⚠️  --force 强制写回（跳过 {len(unlock_report['failed_checks'])} 项解锁条件）"
-                )
-                logger.warning(f"强制写回 {strategy_name} 参数: {unlock_report['failed_checks']}")
+        if unlock_report["unlocked"]:
+            # --force 仅保留命令兼容性，不能绕过 GatePolicy 写入生产默认参数。
             if strategy_name not in defaults:
                 defaults[strategy_name] = {}
             for k, v in best_params.items():
@@ -1286,7 +1231,7 @@ async def run_multi_stock_optimization(
             print(f"\n建议:")
             print(f"  1. 扩大样本（当前 {len(stock_dfs)} 只，建议 10+ 只不同行业代表股）")
             print(f"  2. 增加数据量（--days 1000+）")
-            print(f"  3. 紧急情况可用 --force 强制写回（需 PR 评审说明理由）")
+            print("  3. --force 不再绕过生产参数写回门禁；如需研究实验，请使用隔离输出目录")
 
         # 闭环修复：输出优化报告 + 更新 manifest validation 字段
         report_path = write_optimization_report(
@@ -1363,9 +1308,8 @@ async def main(
             print(f"股票池: {symbols}")
             if write:
                 if force:
-                    print("⚠️  --force 强制写回（跳过解锁条件检查）")
-                else:
-                    print("写回前将执行 4 项解锁条件检查")
+                    print("--force 仅保留兼容性，不绕过生产参数写回门禁")
+                print("写回前将执行统一 GatePolicy 解锁条件检查")
             print()
             for s_name in enabled:
                 try:
@@ -1529,9 +1473,8 @@ async def main(
         print(f"基准: {symbol}, 数据量: {days} 天, 窗口: {n_splits}")
         if write:
             if force:
-                print("⚠️  --force 强制写回（跳过解锁条件检查）")
-            else:
-                print("写回前将执行 4 项解锁条件检查（Sharpe>0/参数稳定性/回撤可控/收益非负）")
+                print("--force 仅保留兼容性，不绕过生产参数写回门禁")
+            print("写回前将执行统一 GatePolicy 解锁条件检查")
         print()
 
         for s_name in enabled:
@@ -1557,7 +1500,9 @@ if __name__ == "__main__":
         help="将最优参数写回 strategy_defaults.yaml（需通过解锁条件）",
     )
     parser.add_argument(
-        "--force", action="store_true", help="强制写回，跳过解锁条件检查（紧急情况使用）"
+        "--force",
+        action="store_true",
+        help="兼容旧命令参数；不得绕过生产参数写回门禁",
     )
     parser.add_argument(
         "--multi-stock",

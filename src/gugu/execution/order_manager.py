@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import date
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -133,18 +134,43 @@ class OrderManager:
         from gugu.engine.signal_pipeline import record_signal_history
 
         symbol = signal["symbol"]
-        direction = signal["direction"]
+        direction = str(signal["direction"]).strip().lower()
         price = signal.get("price", 0)
 
-        # 使用 wisdom 调整后的仓位比例
+        # 执行入口必须再次阻断未通过流水线的新增买入，防止调用方绕过
+        # SignalPipeline 直接调用本类执行观察信号或被拒绝信号。
+        if direction == "buy" and (
+            signal.get("observation_only")
+            or signal.get("rejected")
+            or signal.get("wisdom_filtered")
+            or signal.get("data_quality") != "fresh_valid"
+        ):
+            logger.warning(
+                "{} 买入信号未通过执行层门禁（observation_only={}, rejected={}, "
+                "wisdom_filtered={}, data_quality={}），跳过下单",
+                symbol,
+                signal.get("observation_only", False),
+                signal.get("rejected", False),
+                signal.get("wisdom_filtered", False),
+                signal.get("data_quality"),
+            )
+            return None
+
+        # 卖出/止损不依赖买入仓位预算；先获取数量，再交给风控检查。
+        # 这样不会因缺少 suggested_position_ratio 而静默跳过退出路径。
         suggested_ratio = signal.get("suggested_position_ratio", 0.0)
-        if suggested_ratio <= 0:
+        if direction == "buy" and suggested_ratio <= 0:
             # 0 或负预算（总仓位满/市场禁买/熔断），跳过下单
             return None
 
-        # ATR 波动率调整仓位（风险平价）
+        # ATR 波动率调整仓位（风险平价），只影响新增买入。
         df_for_sizing = signal.get("_df")
-        if df_for_sizing is not None and not df_for_sizing.empty and price > 0:
+        if (
+            direction == "buy"
+            and df_for_sizing is not None
+            and not df_for_sizing.empty
+            and price > 0
+        ):
             try:
                 from gugu.analysis.technical import atr as calc_atr
 
@@ -164,8 +190,15 @@ class OrderManager:
                 pass
 
         account = broker.get_account()
-        target_value = account.total_value * suggested_ratio
-        quantity = int(target_value / price / 100) * 100 if price > 0 else 0
+        if direction == "sell":
+            position = broker.get_position(symbol)
+            requested_quantity = signal.get("quantity") or signal.get("suggested_quantity")
+            if requested_quantity is None and position is not None:
+                requested_quantity = getattr(position, "available", 0)
+            quantity = int(float(requested_quantity or 0) // 100) * 100
+        else:
+            target_value = account.total_value * suggested_ratio
+            quantity = int(target_value / price / 100) * 100 if price > 0 else 0
 
         # 价格合法性校验前置
         if price <= 0:
@@ -177,7 +210,8 @@ class OrderManager:
                         "level": "warn",
                         "message": f"{symbol} 信号价格异常 price={price}，已跳过下单",
                         "suggestion": "检查数据源是否返回异常价格（0/负值）",
-                    }
+                    },
+                    dedup_key=f"order_price_anomaly_{symbol}_{date.today().isoformat()}",
                 )
                 if not notify_alert_ok:
                     logger.error("{} 价格异常告警通知失败", symbol)
@@ -188,7 +222,7 @@ class OrderManager:
         # 最低1手保底
         max_ratio = get_config().risk.max_position_ratio
         one_lot_value = price * 100
-        if quantity <= 0 and account.cash >= one_lot_value:
+        if direction == "buy" and quantity <= 0 and account.cash >= one_lot_value:
             if one_lot_value / account.total_value <= max_ratio:
                 quantity = 100
                 logger.info("{} 试仓比例过小，使用最低1手保底: 100股", symbol)
@@ -212,7 +246,8 @@ class OrderManager:
                             f"（price={price}, ratio={suggested_ratio:.2%}, cash={account.cash:.0f}），已跳过"
                         ),
                         "suggestion": "检查仓位比例配置或资金是否充足",
-                    }
+                    },
+                    dedup_key=f"order_zero_qty_{symbol}_{date.today().isoformat()}",
                 )
                 if not notify_alert_ok:
                     logger.error("{} 数量为0告警通知失败", symbol)
@@ -243,7 +278,8 @@ class OrderManager:
                         "level": "warn",
                         "message": f"{symbol} {direction} 被风控拦截: {risk_result.message}",
                         "suggestion": "检查仓位/日亏/涨跌停",
-                    }
+                    },
+                    dedup_key=f"order_risk_blocked_{symbol}_{direction}_{date.today().isoformat()}",
                 )
                 if not notify_alert_ok:
                     logger.error("{} 风控拦截告警通知失败", symbol)
@@ -257,6 +293,18 @@ class OrderManager:
                 "order_result": None,
                 "notify_ok": False,
             }
+
+        # 将信号中的真实前收传入支持市场上下文的模拟盘，供涨跌停检查使用。
+        # 缺失或非法前收不应被猜测为可交易事实，由 PaperBroker fail-closed。
+        set_market_context = getattr(broker, "set_market_context", None)
+        prev_close = signal.get("prev_close")
+        if callable(set_market_context) and prev_close is not None:
+            try:
+                set_market_context(symbol, prev_close=float(prev_close))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "{} 前收无效 prev_close={}，交由 broker 拒绝交易", symbol, prev_close
+                )
 
         # 下单
         result = broker.order(symbol, direction, quantity, price)

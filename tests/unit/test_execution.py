@@ -11,7 +11,9 @@ from gugu.execution import PaperBroker
 def broker(tmp_path, monkeypatch) -> PaperBroker:
     """每个测试用独立状态文件，避免持久化干扰。"""
     monkeypatch.setattr("gugu.execution.paper.STATE_FILE", tmp_path / "state.json")
-    return PaperBroker(initial_capital=1_000_000)
+    broker = PaperBroker(initial_capital=1_000_000)
+    broker.set_market_context("600519", prev_close=1490.0)
+    return broker
 
 
 def test_buy_and_get_account(broker):
@@ -25,6 +27,17 @@ def test_buy_and_get_account(broker):
     assert account.cash < 1_000_000
     assert "600519" in account.positions
     assert account.positions["600519"].quantity == 100
+
+
+def test_buy_without_prev_close_is_rejected(tmp_path, monkeypatch):
+    """缺少真实前收时，模拟盘不得绕过涨跌停检查。"""
+    monkeypatch.setattr("gugu.execution.paper.STATE_FILE", tmp_path / "state.json")
+    broker = PaperBroker(initial_capital=1_000_000)
+
+    result = broker.order("600519", "buy", 100, 1500.0)
+
+    assert result.success is False
+    assert "前收" in result.message
 
 
 def test_buy_invalid_quantity(broker):

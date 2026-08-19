@@ -122,10 +122,17 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _is_board_ok(code: str) -> bool:
-    """检查板块是否允许（主板/中小板，排除创业板/科创板/北交所/ST）。"""
-    if code.startswith(("sh688", "sh689", "bj", "sh8")):
+    """检查板块是否允许（主板/中小板，排除创业板/科创板/北交所）。"""
+    normalized = str(code).strip().lower()
+    if normalized.startswith(("sh688", "sh689", "bj", "sh8")):
         return False
-    return not code.startswith(("sz300", "sz301", "sz4"))
+    return not normalized.startswith(("sz300", "sz301", "sz4"))
+
+
+def _is_st_name(name: str | None) -> bool:
+    """检查股票名称是否为 ST/*ST。"""
+    normalized = str(name or "").strip().upper()
+    return normalized.startswith("ST") or normalized.startswith("*ST") or " ST" in normalized
 
 
 def _check_today_gap(open_pct: float) -> bool:
@@ -218,10 +225,13 @@ def check_red_lines(
     """
     result = RedLineResult(passed=True, reasons=[])
 
-    # 红线1：ST/*ST（由扫描器层通过 name 判断，代码层面做板块排除）
+    # 红线1：板块和 ST/*ST 过滤必须在规则层执行，不能只依赖扫描器。
     if not _is_board_ok(code):
         result.passed = False
-        result.reasons.append("红线1: ST板块或科创板/创业板")
+        result.reasons.append("红线1: 科创板/创业板/北交所")
+    if _is_st_name(name):
+        result.passed = False
+        result.reasons.append("红线1: ST/*ST")
 
     # 红线2：立案/问询（需要在数据层传入 extra 信息，此处仅提供检查接口）
     # 实际应用中需传入 extra 数据
@@ -651,6 +661,7 @@ def detect_yizi_fanbao(
     float_mv: float | None = None,
     is_hot_topic: bool = False,
     skip_checks: bool = False,
+    today_open: float | None = None,
 ) -> FanbaoSignal | None:
     """检测一字涨停板反包（模式三）。"""
     ddf = enrich(df)
@@ -668,8 +679,9 @@ def detect_yizi_fanbao(
     vols = ddf["volume"].values
     last = n - 1
 
-    # 今日必须高开
-    if not _check_today_gap(open_pct[last]):
+    # 今日必须高开；优先使用实时/竞价输入，避免把历史最后一根 K 线误当成今日。
+    today_open_pct = today_open if today_open is not None else open_pct[last]
+    if not _check_today_gap(today_open_pct):
         return None
 
     # 今日有放量迹象
@@ -719,14 +731,14 @@ def detect_yizi_fanbao(
         score=score,
         reason=(
             f"前{days_since_yizi}日出现一字板，断板整理{days_since_yizi}天，"
-            f"今日高开({open_pct[last]*100:.1f}%)放量({ddf['vol_ratio'].iloc[-1]:.1f}x)"
+            f"今日高开({today_open_pct*100:.1f}%)放量({ddf['vol_ratio'].iloc[-1]:.1f}x)"
         ),
         operation="高开放量确认后买入，止损设涨停前平台低点",
         risk_note="一字板后若长时间不启动则放弃，注意是否是第3板后加速一字",
         meta={
             "yizi_idx": int(last_yizi_idx),
             "days_since_yizi": int(days_since_yizi),
-            "today_open_pct": round(open_pct[last] * 100, 2),
+            "today_open_pct": round(today_open_pct * 100, 2),
             "vol_ratio": round(ddf["vol_ratio"].iloc[last], 2),
         },
     )
@@ -746,6 +758,7 @@ def detect_callback_fanbao(
     float_mv: float | None = None,
     is_hot_topic: bool = False,
     skip_checks: bool = False,
+    today_open: float | None = None,
 ) -> FanbaoSignal | None:
     """检测反包回调战法（模式四）。"""
     ddf = enrich(df)
@@ -764,8 +777,9 @@ def detect_callback_fanbao(
     ddf["date"].values
     last = n - 1
 
-    # 今日必须高开（统一进场信号）
-    if not _check_today_gap(open_pct[last]):
+    # 今日必须高开；优先使用显式竞价/开盘输入。
+    today_open_pct = today_open if today_open is not None else open_pct[last]
+    if not _check_today_gap(today_open_pct):
         return None
 
     # 今日有放量迹象
@@ -852,7 +866,7 @@ def detect_callback_fanbao(
         reason=(
             f"前{last_fanbao_idx}日反包涨停后回调{days_since_fanbao}天，"
             f"回调幅度{callback_max_drop*100:.1f}%，"
-            f"出现企稳阳星，今日高开({open_pct[last]*100:.1f}%)放量"
+            f"出现企稳阳星，今日高开({today_open_pct*100:.1f}%)放量"
         ),
         operation="高开放量突破回调平台时买入",
         risk_note="回调幅度不宜超过5%，若跌破反包涨停日最低价则放弃",
@@ -860,7 +874,7 @@ def detect_callback_fanbao(
             "fanbao_idx": int(last_fanbao_idx),
             "days_since_fanbao": int(days_since_fanbao),
             "callback_max_drop": round(callback_max_drop * 100, 2),
-            "today_open_pct": round(open_pct[last] * 100, 2),
+            "today_open_pct": round(today_open_pct * 100, 2),
             "vol_ratio": round(ddf["vol_ratio"].iloc[last], 2),
         },
     )
@@ -880,6 +894,7 @@ def detect_tiaokong_fanbao(
     float_mv: float | None = None,
     is_hot_topic: bool = False,
     skip_checks: bool = False,
+    today_open: float | None = None,
 ) -> FanbaoSignal | None:
     """检测跳空涨停式反包（模式五）。"""
     ddf = enrich(df)
@@ -898,8 +913,9 @@ def detect_tiaokong_fanbao(
     ddf["volume"].values
     last = n - 1
 
-    # 今日必须高开
-    if not _check_today_gap(open_pct[last]):
+    # 今日必须高开；优先使用显式竞价/开盘输入。
+    today_open_pct = today_open if today_open is not None else open_pct[last]
+    if not _check_today_gap(today_open_pct):
         return None
 
     yesterday = last - 1
@@ -943,13 +959,13 @@ def detect_tiaokong_fanbao(
         score=score,
         reason=(
             f"昨日跳空高开涨停(开盘>{highs[day_before]:.2f})，"
-            f"今日断板但高开({open_pct[last]*100:.1f}%)，资金合力强劲"
+            f"今日断板但高开({today_open_pct*100:.1f}%)，资金合力强劲"
         ),
         operation="高开确认后买入，大市值跳空反包优先",
         risk_note="一板断后若持续低开则放弃，说明资金接力不足",
         meta={
             "yesterday_gap_open": round(open_pct[yesterday] * 100, 2),
-            "today_open_pct": round(open_pct[last] * 100, 2),
+            "today_open_pct": round(today_open_pct * 100, 2),
             "yesterday_high": round(highs[yesterday], 2),
         },
     )
@@ -970,6 +986,7 @@ def detect_baoli_xipan(
     float_mv: float | None = None,
     is_hot_topic: bool = True,
     skip_checks: bool = False,
+    today_open: float | None = None,
 ) -> FanbaoSignal | None:
     """检测暴力洗盘战法（补充模式）。"""
     ddf = enrich(df)
@@ -990,8 +1007,9 @@ def detect_baoli_xipan(
     ddf["date"].values
     last = n - 1
 
-    # 今日必须高开
-    if not _check_today_gap(open_pct[last]):
+    # 今日必须高开；优先使用显式竞价/开盘输入。
+    today_open_pct = today_open if today_open is not None else open_pct[last]
+    if not _check_today_gap(today_open_pct):
         return None
 
     yesterday = last - 1
@@ -1036,13 +1054,13 @@ def detect_baoli_xipan(
         score=score,
         reason=(
             f"前期涨停后昨日暴力急跌({pct[yesterday]*100:.1f}%)，"
-            f"主流题材热门股，今日高开({open_pct[last]*100:.1f}%)弱转强"
+            f"主流题材热门股，今日高开({today_open_pct*100:.1f}%)弱转强"
         ),
         operation="高开确认后买入，暴力洗盘后反弹力度大",
         risk_note="如果不是主流题材股，暴力急跌可能是真出货；大市值暴力下跌更能确认是洗盘",
         meta={
             "yesterday_pct": round(pct[yesterday] * 100, 2),
-            "today_open_pct": round(open_pct[last] * 100, 2),
+            "today_open_pct": round(today_open_pct * 100, 2),
             "has_recent_limit": bool(has_recent_limit),
         },
     )

@@ -127,23 +127,20 @@ class TestRealtimeScanner:
         scanner = RealtimeSignalScanner(engine, cooldown_sec=1800)
         pushed = await scanner.run_cycle()
         assert len(pushed) == 1
-        assert engine._notifier.notify_signal.await_count == 2
-        assert (
-            engine._notifier.notify_signal.await_args_list[1].args[0]["execution_mode"]
-            == "paper_sidecar"
-        )
+        assert engine._notifier.notify_signal.await_count == 1
+        assert engine._broker.order.assert_not_called() is None
 
         # 冷却期内再次扫描同一信号 → 不重复推送（重置节流计时以触发真实扫描）
         scanner._last_scan_ts = 0
         pushed2 = await scanner.run_cycle()
         assert pushed2 == []
-        assert engine._notifier.notify_signal.await_count == 2
+        assert engine._notifier.notify_signal.await_count == 1
 
     @pytest.mark.asyncio
     @patch("gugu.engine.realtime_scanner.is_trading_day", return_value=True)
     @patch("gugu.engine.realtime_scanner.is_trading_time", return_value=True)
-    async def test_signal_only_mode_sidecar_paper(self, mock_time, mock_day):
-        """signal_only 模式：飞书推送 + 并行模拟盘下单（不下真实单）。"""
+    async def test_signal_only_mode_only_notifies(self, mock_time, mock_day):
+        """signal_only 模式：只推送观察信号，不进入模拟盘或实盘执行。"""
         from gugu.engine.realtime_scanner import RealtimeSignalScanner
 
         engine = self._make_engine()
@@ -164,13 +161,38 @@ class TestRealtimeScanner:
         with patch("gugu.engine.realtime_scanner.get_config") as mock_cfg:
             mock_cfg.return_value.execution.mode = "signal_only"
             await scanner.run_cycle()
-        # 飞书推送 + 模拟盘下单
-        assert engine._notifier.notify_signal.await_count == 2
-        paper_notification = engine._notifier.notify_signal.await_args_list[1].args[0]
-        assert paper_notification["execution_mode"] == "paper_sidecar"
-        assert paper_notification["order_result"]["success"] is True
-        mock_paper.order.assert_called_once()
-        # 不下真实单
+        # 只推送原始观察信号，不模拟成交
+        assert engine._notifier.notify_signal.await_count == 1
+        mock_paper.order.assert_not_called()
+        engine._broker.order.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("gugu.engine.realtime_scanner.is_trading_day", return_value=True)
+    @patch("gugu.engine.realtime_scanner.is_trading_time", return_value=True)
+    async def test_observation_buy_never_executes_in_paper_mode(self, mock_time, mock_day):
+        """被数据门禁标记的买入不能绕过流水线进入 paper 执行器。"""
+        from gugu.engine.realtime_scanner import RealtimeSignalScanner
+
+        engine = self._make_engine()
+        engine._process_signal = AsyncMock(return_value=None)
+        engine._scan_signals = AsyncMock(
+            return_value=[
+                {
+                    "symbol": "sh600000",
+                    "direction": "buy",
+                    "price": 10.5,
+                    "observation_only": True,
+                    "rejected": True,
+                    "reject_reason": "数据状态为 stale_degraded",
+                }
+            ]
+        )
+        scanner = RealtimeSignalScanner(engine)
+        with patch("gugu.engine.realtime_scanner.get_config") as mock_cfg:
+            mock_cfg.return_value.execution.mode = "paper"
+            await scanner.run_cycle()
+
+        engine._process_signal.assert_not_awaited()
         engine._broker.order.assert_not_called()
 
     @pytest.mark.asyncio
@@ -277,7 +299,7 @@ class TestRealtimeScanner:
         pushed3 = await scanner.run_cycle()
         assert pushed3 == []
         assert engine._scan_signals.await_count == 2  # 再次调用
-        assert engine._notifier.notify_signal.await_count == 2  # 信号+模拟盘回执，冷却期未重复推送
+        assert engine._notifier.notify_signal.await_count == 1  # 只推送一次，冷却期不重复通知
 
     @pytest.mark.asyncio
     @patch("gugu.engine.realtime_scanner.is_trading_day", return_value=True)

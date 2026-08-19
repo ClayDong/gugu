@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>断板反包真实性与语义化研究报告</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+:root{--ink:#18212f;--muted:#667085;--line:#dfe5ec;--bg:#f7f9fc;--card:#fff;--red:#d14b4b;--green:#24936f;--amber:#b7791f;--blue:#356ae6}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;line-height:1.65}main{max-width:1180px;margin:0 auto;padding:36px 28px 64px}.eyebrow{color:var(--blue);font-weight:700;letter-spacing:.08em;font-size:13px}.title{font-size:34px;line-height:1.2;margin:8px 0 10px}.subtitle{color:var(--muted);margin:0 0 24px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;box-shadow:0 4px 18px rgba(20,40,80,.04)}.kpi{font-size:29px;font-weight:750;margin:2px 0}.kpi.red{color:var(--red)}.kpi.green{color:var(--green)}.kpi.amber{color:var(--amber)}.label{font-size:13px;color:var(--muted)}section{margin-top:28px}h2{font-size:22px;margin:0 0 12px}h3{font-size:17px;margin:18px 0 8px}.callout{border-left:4px solid var(--blue);background:#eef4ff;padding:15px 18px;border-radius:8px;margin:14px 0}.warning{border-left-color:var(--amber);background:#fff8e8}.danger{border-left-color:var(--red);background:#fff1f1}.columns{display:grid;grid-template-columns:1.05fr .95fr;gap:16px}table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:14px}th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:#f0f4f9;font-weight:700}tr:last-child td{border-bottom:0}.tag{display:inline-block;padding:2px 8px;border-radius:999px;background:#edf2ff;color:#315cc9;font-size:12px;margin:2px}.tag.red{background:#fff0f0;color:#b53c3c}.tag.green{background:#ecfbf4;color:#167653}.tag.amber{background:#fff7e6;color:#9a6815}.chart{width:100%;height:340px}.small{font-size:13px;color:var(--muted)}code{background:#f1f4f8;padding:2px 5px;border-radius:4px;font-size:12px}ol,ul{padding-left:22px}.footer{font-size:12px;color:var(--muted);border-top:1px solid var(--line);margin-top:36px;padding-top:16px}@media(max-width:850px){.grid{grid-template-columns:repeat(2,1fr)}.columns{grid-template-columns:1fr}}@media(max-width:520px){main{padding:24px 16px}.grid{grid-template-columns:1fr 1fr}.title{font-size:28px}}
+</style>
+</head>
+<body>
+<main>
+<div class="eyebrow">GUGU · 2026-08-18 · 研究结论先行</div>
+<h1 class="title">断板反包：博主可能有效，但当前代码没有复刻“真实交易系统”</h1>
+<p class="subtitle">基于项目现有代码、事件研究、闭环持仓结果、前视审计和真实样本文件的复核。本文不把博主的长期实战经验直接等同于可自动化 alpha。</p>
+<div class="grid">
+  <div class="card"><div class="label">主形态事件研究</div><div class="kpi red">5日 -0.86%</div><div class="small">买点A，N=112，p=0.044（显著为负）</div></div>
+  <div class="card"><div class="label">闭环买点A</div><div class="kpi red">-2.89%</div><div class="small">N=19，胜率31.6%，破位止损10笔</div></div>
+  <div class="card"><div class="label">闭环买点C</div><div class="kpi green">+3.49%</div><div class="small">N=9，胜率55.6%，样本极小</div></div>
+  <div class="card"><div class="label">生产结论</div><div class="kpi amber">保持禁用</div><div class="small">只允许研究/前向观察，不进入 verified</div></div>
+</div>
+<section>
+<div class="callout danger"><b>核心判断：</b>当前“断板反包”不是一个已经被证实的独立自动化策略。问题不是简单的“多加几个指标”就能修复，而是博主的交易对象更接近“高辨识度标的 + 盘中承接/资金状态 + 题材情绪 + 执行纪律”的条件组合；项目当前主要用日线 OHLCV 近似，复刻了形状，尚未复刻决策信息。</div>
+<div class="callout warning"><b>重要纠偏：</b>项目历史材料曾把“高活跃老妖”视为唯一正因子，但后续 500d 长历史审计已将该结论降级为“微弱且不显著”；较稳定的增量线索反而是入场时点/次日开盘溢价过滤，但其 Walk-Forward 仍不显著，不能直接写入生产策略。</div>
+</section>
+<section>
+<h2>一、为什么当前效果不合适</h2>
+<div class="columns">
+<div class="card">
+<h3>1. 策略身份发生了漂移</h3>
+<p>项目里至少存在三种“陈学长”实现：<span class="tag">chenxuezhang</span>六类均线/量价规则；<span class="tag">rebound_system</span>完整断板反包手册；<span class="tag">breakout_rebound</span>旧版反包实现。它们不是同一个策略，不能用一个名称下的回测结果证明博主方法有效或无效。</p>
+<h3>2. 代码只观察日线收盘形态</h3>
+<p>博主口中的“承接、砸盘、护盘、盘口强弱、板块助攻、资金来了没有”，都可能在盘中完成。当前实现把它们压缩为收盘价、最高最低价、成交量和均线，信息损失不是参数问题，而是观测变量缺失。</p>
+<h3>3. 买入价格存在不可交易近似</h3>
+<p>事件研究常用“事件日收盘价近似可成交”，而完整脚本注释明确承认无法模拟分钟、盘口和涨停队列。反包日可能买不到，次日开盘可能高开透支，低吸也可能只在盘中瞬间触价。形态收益不等于可实现收益。</p>
+</div>
+<div class="card">
+<h3>4. 研究样本与生产策略不一致</h3>
+<p>历史报告使用67只主板活跃题材股、约2.5年；闭环文件只有28笔交易；生产持仓审计则是1105只主板中抽样100只、500d。不同股票池、不同入场、不同出场、不同持仓模型混在一起，结论不能直接横向比较。</p>
+<h3>5. 失败并非只来自“规则太松”</h3>
+<p>当前规则在不断收紧：一字板、连板、前20日涨停、实体阴线、首板成交额、护盘破位等都已加入。但 <b>rebound_full_results.csv</b> 仍显示买点A闭环均值为负，说明至少有一部分损失来自买点本身和不可见的市场语境，而不只是误检。</p>
+<h3>6. 统计显著不代表交易可赚</h3>
+<p>项目审计已经验证：事件研究看起来显著的策略，进入标准持仓回测后可能转负。陈学长主策略持仓审计为均值 -0.22%、Sharpe -0.24、最大回撤 -20.23%。这条审计经验必须优先于单一 p 值。</p>
+</div>
+</div>
+</section>
+<section>
+<h2>二、已有真实结果：不要被“漂亮子集”带偏</h2>
+<div class="columns">
+<div class="card"><div id="chart1" class="chart"></div><div class="small">闭环结果来自 data/rebound_full_results.csv；收益已包含脚本中的成本设定。A 的19笔、C 的9笔不是充分样本。</div></div>
+<div class="card"><div id="chart2" class="chart"></div><div class="small">项目验证报告的152事件结果：买点A 112笔，买点C 40笔；这是裸持有事件研究，不等于同一批样本的闭环结果。</div></div>
+</div>
+<table style="margin-top:16px"><thead><tr><th>证据层</th><th>结果</th><th>应如何解释</th></tr></thead><tbody>
+<tr><td>断板反包事件研究</td><td>买点A 5日 -0.86%，N=112，p=0.044；买点C 5日 -0.67%，N=40，p=0.480</td><td>A 的负向证据较强；C 不是“有效”，只是当前样本下未检出稳定优势。</td></tr>
+<tr><td>闭环持仓文件</td><td>A N=19、均值 -2.89%；C N=9、均值 +3.49%</td><td>C 的正收益不能抵消样本过小；A 的止损触发占比高，买点和执行需要重做。</td></tr>
+<tr><td>高活跃子集</td><td>历史报告中“涨停≥20 + 买点2”16例，5日 +4.08%，p=0.357</td><td>漂亮但不显著，且收益依赖2024；只能作为研究假设，不能作为生产条件。</td></tr>
+<tr><td>Walk-Forward / 优化报告</td><td>breakout_rebound 样本外 Sharpe=0，passed=false</td><td>未通过准入门禁，不能启用。</td></tr>
+<tr><td>陈学长持仓审计</td><td>13,430笔，均值 -0.22%，SharPE -0.24，最大回撤 -20.23%</td><td>当前六类规则混合实现不足以复刻博主的正收益；“保持 enabled”的旧结论应重新审查。</td></tr>
+</tbody></table>
+</section>
+<section>
+<h2>三、先把“博主方法”拆成四层</h2>
+<div class="columns">
+<div class="card">
+<h3><span class="tag green">硬条件</span> 可以直接量化</h3>
+<ul><li>连续涨停/断板的定义、断板距首板的交易日数</li><li>收盘是否跌破首板开盘价、是否出现实体阴线</li><li>成交量相对首板量、MA5/MA20 的比例</li><li>反包是否突破洗盘日高点、涨幅和成交额</li><li>次日开盘溢价、买入可成交性、涨跌停限制</li></ul>
+<h3><span class="tag amber">软条件</span> 应做评分而非一票否决</h3>
+<ul><li>“有辨识度”“强承接”“洗得干净”“位置舒服”</li><li>板块联动强度、龙头/中军/跟风层级</li><li>市场情绪处于分歧、修复、高潮还是退潮</li></ul>
+</div>
+<div class="card">
+<h3><span class="tag red">语境条件</span> 需要额外数据</h3>
+<ul><li>公告/新闻发布时间与题材是否真实扩散</li><li>集合竞价金额、开盘后5/15/30分钟成交结构</li><li>封单、撤单、炸板、回封、主动买卖方向</li><li>板块当日涨停家数、核心股表现和负反馈</li></ul>
+<h3><span class="tag">事后解释</span> 不能直接回填成规则</h3>
+<ul><li>“主力洗盘”“主力护盘”“这里有人在做”</li><li>只在成功案例出现的“某个细节”</li><li>无法在当时刻观察、只能收盘后确认的叙述</li></ul>
+</div>
+</div>
+<p class="small">判断标准：如果一个条件无法在交易时刻冻结、无法给出原始数据字段、无法被另一位研究员复算，就不能直接成为生产因子。</p>
+</section>
+<section>
+<h2>四、LLM + Prompt 能不能做？能，但只能放在“语义抽取/审计层”</h2>
+<div class="callout"><b>推荐边界：</b>LLM 不输出“买/卖”，不输出仓位，不改变阈值；LLM 只把当时可获得的文本和结构化行情转成固定枚举标签，最终由规则引擎和 Walk-Forward 数据裁决。</div>
+<table><thead><tr><th>用途</th><th>可行性</th><th>正确用法</th><th>风险</th></tr></thead><tbody>
+<tr><td>新闻/公告题材归因</td><td><span class="tag green">较适合</span></td><td>输入发布时间≤T的文本，输出题材类别、直接性、扩散证据、时效性。</td><td>不能让模型看到T之后的标题、涨幅或结果。</td></tr>
+<tr><td>板块语境标签</td><td><span class="tag amber">可研究</span></td><td>先由确定性程序统计涨停/跌停/连板/核心股，再让LLM解释标签。</td><td>“主线/退潮”容易受措辞影响，需固定枚举与人工抽样。</td></tr>
+<tr><td>分时形态描述</td><td><span class="tag amber">依赖分钟数据</span></td><td>输入冻结的5/15/30分钟摘要或图像快照，输出承接/冲高回落等标签。</td><td>当前项目缺少完整分钟/盘口数据，不能先假设可做。</td></tr>
+<tr><td>直接生成交易规则</td><td><span class="tag red">不推荐</span></td><td>只能作为研究假设生成器；生成后必须人工固化、版本化、独立样本验证。</td><td>容易把博主事后叙事过拟合成条件，且历史重复调用可能不稳定。</td></tr>
+</tbody></table>
+<h3>建议的冻结 JSON</h3>
+<pre class="card" style="white-space:pre-wrap;font-size:12px">{
+  "asof": "T 盘中/收盘时刻",
+  "source_ids": ["公告/新闻ID"],
+  "theme_state": "主线|支线|孤立|未知",
+  "theme_strength": "强|中|弱|未知",
+  "board_role": "核心|中军|跟风|未知",
+  "intraday_acceptance": "强|中|弱|未知",
+  "wash_quality": "有效|存疑|无效|未知",
+  "uncertainty": 0.0,
+  "evidence_spans": ["原文片段或字段引用"],
+  "model_version": "固定版本",
+  "prompt_version": "固定版本"
+}</pre>
+<p>任何标签都必须同时记录：输入数据截止时间、模型版本、Prompt 版本、原文证据、置信度和“未知”状态。缺数据不能默认“中性通过”。</p>
+</section>
+<section>
+<h2>五、推荐的验证路线</h2>
+<ol>
+<li><b>策略身份归一化：</b>把 <code>chenxuezhang</code> 六规则、<code>rebound_system</code> 断板反包手册、<code>breakout_rebound</code> 旧实现分别命名，禁止再共用“陈学长策略”总称。</li>
+<li><b>纯量化基线：</b>只用 T 日及以前的日线，统一次日开盘/收盘成交口径，加入涨停买不到、低开、高开、滑点、佣金、印花税和 T+1。</li>
+<li><b>样本扩展与事件去重：</b>覆盖至少3-5年、主板全市场，按股票和事件链去重；报告原始事件数、可交易事件数、最终成交事件数。</li>
+<li><b>先验证硬条件：</b>对首板、洗盘、支撑、反包、开盘溢价逐个做 IC、分层收益和事件研究；不以组合整体的漂亮结果替代单因子证据。</li>
+<li><b>做真实持仓回测：</b>以策略真实信号串联交易，不能只看独立 5/10 日窗口；报告收益、Sharpe、回撤、胜率、盈亏比、交易容量。</li>
+<li><b>再引入语义标签：</b>先人工标注一小批 T 时刻样本，LLM 做离线抽取；测试重复调用一致性、人工一致性、不同市场状态稳定性和信息泄漏。</li>
+<li><b>Walk-Forward 冻结：</b>Prompt、标签字典、阈值、权重都在训练期冻结；验证期只运行，不允许根据结果改 Prompt。</li>
+<li><b>生产门禁：</b>只有独立样本外超额为正、成本后期望值为正、回撤可接受、参数/标签稳定、纸面盘达到规定信号数后，才可进入 experimental；未通过就保持 disabled。</li>
+</ol>
+</section>
+<section>
+<h2>六、当前项目的最终建议</h2>
+<div class="columns">
+<div class="card"><h3>保留</h3><ul><li>破位止损作为风险纪律，继续单独验证。</li><li>板上减半作为持仓管理假设，不当作入场 alpha。</li><li>开盘溢价作为研究因子，但暂不生产化。</li><li>完整证据链：规则版本、数据截止时间、成交假设、结果文件。</li></ul></div>
+<div class="card"><h3>暂不做</h3><ul><li>不把“老妖股+反包追涨”16例正收益当成已证实策略。</li><li>不把LLM生成的规则直接写入策略。</li><li>不使用项目里暴露的 DeepSeek API key；该密钥已出现在源码中，应立即轮换并从代码移除。</li><li>不恢复 disabled 策略，不产生自动下单。</li></ul></div>
+</div>
+<div class="callout"><b>一句话结论：</b>陈学长可能确实有能力，但“他能做”与“当前日线代码能复刻他的决策”是两件事。最合理的工程路线不是让 LLM 直接猜买点，而是用 LLM 把“题材、承接、辨识度、情绪”等隐含判断变成可审计标签，再让数据和样本外验证决定它有没有价值。</div>
+</section>
+<div class="footer">来源与口径：项目本地文件 docs/validation/断板反包验证报告.md、docs/validation/策略持仓回测审计报告_20260815.md、docs/AUDIT_LOOKAHEAD_20260807.md、src/gugu/strategies/rebound/rules.py、src/gugu/strategies/rebound_system.py、scripts/backtest_rebound_full.py、data/rebound_full_results.csv、data/rebound_factor_events.csv、data/optimization_report_breakout_rebound_20260726.json。关键结果均为项目已有研究结果，不代表未来收益。</div>
+</main>
+<script>
+const chart1 = echarts.init(document.getElementById('chart1'));
+chart1.setOption({
+  title:{text:'闭环交易：A vs C',left:'center',textStyle:{fontSize:15,color:'#18212f'}},
+  tooltip:{trigger:'axis'},
+  legend:{data:['平均收益','胜率'],bottom:0},
+  grid:{left:55,right:55,top:55,bottom:48},
+  xAxis:{type:'category',data:['A 回踩低吸','C 放量反包']},
+  yAxis:[{type:'value',name:'收益%',axisLabel:{formatter:'{value}%'}},{type:'value',name:'胜率%',axisLabel:{formatter:'{value}%'}}],
+  series:[
+    {name:'平均收益',type:'bar',data:[-2.89,3.49],itemStyle:{color:'#d14b4b'}},
+    {name:'胜率',type:'line',yAxisIndex:1,data:[31.6,55.6],itemStyle:{color:'#356ae6'},lineStyle:{width:3}}
+  ]
+});
+const chart2 = echarts.init(document.getElementById('chart2'));
+chart2.setOption({
+  title:{text:'事件研究：5日收益',left:'center',textStyle:{fontSize:15,color:'#18212f'}},
+  tooltip:{trigger:'axis'},
+  grid:{left:55,right:20,top:55,bottom:45},
+  xAxis:{type:'category',data:['买点A\nN=112','买点C\nN=40']},
+  yAxis:{type:'value',name:'收益%',axisLabel:{formatter:'{value}%'}},
+  series:[{type:'bar',data:[-0.86,-0.67],itemStyle:{color:'#d14b4b'},label:{show:true,position:'top',formatter:'{c}%'}}]
+});
+window.addEventListener('resize',()=>{chart1.resize();chart2.resize()});
+</script>
+</body>
+</html>

@@ -173,6 +173,7 @@ async def test_process_signal_risk_blocked(
         "strategies": ["turtle"],
         "strategy": "turtle",
         "suggested_position_ratio": 0.15,
+        "data_quality": "fresh_valid",
     }
     await engine._process_signal(signal)
     engine._broker.order.assert_not_called()
@@ -193,6 +194,7 @@ async def test_process_signal_success(
         "strategies": ["turtle"],
         "strategy": "turtle",
         "suggested_position_ratio": 0.15,
+        "data_quality": "fresh_valid",
     }
     await engine._process_signal(signal)
     mock_broker.order.assert_called_once()
@@ -330,6 +332,8 @@ def test_paper_broker_direction_normalization(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr("gugu.execution.paper.STATE_FILE", tmp_path / "state.json")
     broker = PaperBroker(initial_capital=1_000_000)
+    broker.set_market_context("600519", prev_close=10.0)
+    broker.set_market_context("000858", prev_close=10.0)
     # 传入 "Buy"（大写）应正常买入
     result = broker.order("600519", "Buy", 100, price=10.0)
     assert result.success is True
@@ -378,6 +382,7 @@ async def test_process_signal_respects_wisdom_position_ratio(
         "strategies": ["turtle"],
         "strategy": "turtle",
         "suggested_position_ratio": 0.20,  # wisdom 调整后的试仓比例
+        "data_quality": "fresh_valid",
     }
     await engine._process_signal(signal)
     mock_broker.order.assert_called_once()
