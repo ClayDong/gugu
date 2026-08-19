@@ -131,8 +131,10 @@ def get_runtime_strategy_names(
     """返回经过配置、manifest 和注册表三重过滤的运行时策略名。
 
     这是所有运行入口和验证脚本的唯一策略准入入口。未传执行模式时，
-    使用当前配置；``paper`` 可加载 ``conditional_pass``，其余安全运行模式
-    只能加载 manifest 状态为 ``enabled`` 的策略。
+    使用当前配置；``paper`` 可加载 ``conditional_pass``；
+    生产模式（track_live/signal_only/live）以 settings.yaml 的
+    ``verified_strategies`` 开发者白名单为最终准入（v0.9.29 P0 修复，
+    见下方 2026-08-19 注释）。
     """
     from gugu.config import get_config
 
@@ -140,8 +142,17 @@ def get_runtime_strategy_names(
     mode = execution_mode or cfg.execution.mode
     candidates = cfg.strategy.get_enabled_for_regime(regime, mode)
     if mode in ("track_live", "signal_only", "live"):
+        # P0 修复（2026-08-19）：生产模式不以 manifest validation_gate.status 为硬门禁。
+        # 原因：manifest 全表无 status=enabled 策略（9 conditional_pass / 19 backtest_failed /
+        # 9 pending / 2 in_review / 1 failed），若生产模式叠加该门禁，settings.yaml 中开发者
+        # 确认的 verified_strategies 白名单（box_breakout/rsi_reversal）会被清空 →
+        # 引擎 0 策略 → 全市场信号黑屏，并触发 ZeroSignal watchdog 升级（当日 09:55 实发）。
+        # verified_strategies 由开发者人工维护（v0.7.5 起），本身就是生产准入闸门；
+        # manifest 严格门禁（status=enabled）继续约束 paper/回测/研究链路。
         candidates = [name for name in candidates if name in cfg.strategy.verified_strategies]
-    runtime_enabled = set(get_manifest().list_runtime_enabled(mode, set(candidates)))
+        runtime_enabled = set(candidates)
+    else:
+        runtime_enabled = set(get_manifest().list_runtime_enabled(mode, set(candidates)))
     return [name for name in candidates if name in runtime_enabled and name in _REGISTRY]
 
 

@@ -82,6 +82,19 @@ class DataConfig(BaseModel):
         return self.fetch_interval_seconds
 
 
+class LeopardUniverseFilterConfig(BaseModel):
+    """豹哥三要素选股池过滤器配置（v0.4.6+，settings.yaml strategy.leopard_universe_filter）。
+
+    三要素是「选股池准入」非「择时信号」，默认关闭：换手率≥15% 的高度活跃要求
+    与 pullback_low/double_yin 缩量低吸逻辑冲突，适合与 box_breakout（突破追势）配合。
+    """
+
+    enabled: bool = Field(default=False, description="是否启用（默认关闭）")
+    turnover_min: float = Field(default=15.0, description="换手率下限（%）")
+    amount_min: float = Field(default=1_000_000_000, description="成交额下限（元，10亿）")
+    circ_mv_min: float = Field(default=7_000_000_000, description="流通市值下限（元，70亿）")
+
+
 class StrategyConfig(BaseModel):
     """策略配置."""
 
@@ -113,6 +126,11 @@ class StrategyConfig(BaseModel):
     auto_select: bool = Field(default=False, description="是否启用自动选股")
     select_top_n: int = Field(default=50, ge=1, description="全市场资金流排序取前 N")
     select_max_candidates: int = Field(default=10, ge=1, description="最大选股数量")
+    # v0.4.6: 豹哥三要素选股池过滤器（默认关闭）
+    leopard_universe_filter: LeopardUniverseFilterConfig = Field(
+        default_factory=LeopardUniverseFilterConfig,
+        description="豹哥三要素选股池过滤器配置（默认关闭）",
+    )
     # v0.7.5 P0-1修复：策略分组管理
     # verified_strategies: 通过 Walk-Forward 验证的策略（无条件启用）
     verified_strategies: list[str] = Field(
@@ -209,21 +227,6 @@ class StrategyConfig(BaseModel):
         for strategies in self.enabled_by_regime.values():
             all_strategies.update(strategies)
         return sorted(all_strategies)
-
-
-class LeopardUniverseConfig(BaseModel):
-    """豹哥三要素选股池过滤器配置.
-
-    来源：豹哥战法（微信公众号文章）
-    三要素是选股池准入，不是择时信号。默认关闭，因为：
-    - 三要素要求换手率≥15%（高度活跃），与 pullback_low/double_yin 缩量低吸逻辑冲突
-    - 适合与 box_breakout（突破追势）配合，趋势市手动开启
-    """
-
-    enabled: bool = Field(default=False, description="是否启用三要素选股池预筛")
-    turnover_min: float = Field(default=15.0, ge=0, description="换手率下限(%)")
-    amount_min: float = Field(default=1_000_000_000, ge=0, description="成交额下限(元，10亿)")
-    circ_mv_min: float = Field(default=7_000_000_000, ge=0, description="流通市值下限(元，70亿)")
 
 
 class PaperConfig(BaseModel):
@@ -672,6 +675,12 @@ def flatten_config(app_config: AppConfig) -> dict[str, Any]:
             "auto_select": app_config.strategy.auto_select,
             "select_top_n": app_config.strategy.select_top_n,
             "select_max_candidates": app_config.strategy.select_max_candidates,
+            "leopard_universe_filter": {
+                "enabled": app_config.strategy.leopard_universe_filter.enabled,
+                "turnover_min": app_config.strategy.leopard_universe_filter.turnover_min,
+                "amount_min": app_config.strategy.leopard_universe_filter.amount_min,
+                "circ_mv_min": app_config.strategy.leopard_universe_filter.circ_mv_min,
+            },
         },
         "risk": {
             "max_position_ratio": app_config.risk.max_position_ratio,

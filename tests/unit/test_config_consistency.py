@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from gugu.config import get_config
+from gugu.config import LeopardUniverseFilterConfig, get_config
 from gugu.strategies.registry import _REGISTRY
 
 # 策略清单文件路径（从测试文件位置推算项目根目录，与 test_manifest.py 一致）
@@ -73,6 +73,26 @@ def settings_enabled_set() -> set[str]:
 def registry_keys() -> set[str]:
     """获取 _REGISTRY 中已注册的策略名称集合。"""
     return set(_REGISTRY.keys())
+
+
+class TestLeopardUniverseFilterConfig:
+    """豹哥三要素选股池配置链路测试。"""
+
+    def test_config_loads_and_flattens(self):
+        cfg = get_config().strategy.leopard_universe_filter
+        assert isinstance(cfg, LeopardUniverseFilterConfig)
+        assert cfg.enabled is False
+        assert cfg.turnover_min == 15.0
+        assert cfg.amount_min == 1_000_000_000
+        assert cfg.circ_mv_min == 7_000_000_000
+
+        flat = get_config().flatten()["strategy"]["leopard_universe_filter"]
+        assert flat == {
+            "enabled": cfg.enabled,
+            "turnover_min": cfg.turnover_min,
+            "amount_min": cfg.amount_min,
+            "circ_mv_min": cfg.circ_mv_min,
+        }
 
 
 class TestWatchlistMonitoringConfig:
@@ -188,6 +208,31 @@ class TestManifestSettingsConsistency:
             if info.get("validation_gate", {}).get("status") == "conditional_pass":
                 assert manifest.is_runtime_enabled(key, "paper") is True
                 assert manifest.is_runtime_enabled(key, "track_live") is False
+
+    def test_production_runtime_strategies_not_empty_and_within_verified_whitelist(self):
+        """P0 回归（2026-08-19）：生产模式运行时策略不得为空，且 ⊆ verified_strategies。
+
+        背景：commit 60247c8 统一策略准入时，生产模式叠加 manifest
+        validation_gate.status == "enabled" 硬门禁；而 manifest 全表无 status=enabled
+        策略（conditional_pass/pending/backtest_failed...），导致 verified 白名单
+        （box_breakout/rsi_reversal）被清空 → 引擎 0 策略 → 全市场信号黑屏，
+        ZeroSignal watchdog 升级（09:55 实发）。修复后生产模式以
+        verified_strategies（开发者白名单）为最终准入。
+        """
+        from gugu.strategies.registry import get_runtime_strategy_names
+
+        cfg = get_config()
+        verified = set(cfg.strategy.verified_strategies)
+        for mode in ("track_live", "signal_only", "live"):
+            names = get_runtime_strategy_names(execution_mode=mode)
+            assert (
+                set(names) <= verified
+            ), f"{mode} 模式运行时策略 {names} 超出 verified_strategies 白名单 {sorted(verified)}"
+        # 开发者确认了生产白名单时，生产模式不允许出现"0 策略"黑屏
+        if verified:
+            assert get_runtime_strategy_names(
+                execution_mode="track_live"
+            ), "track_live 模式运行时策略为空（verified_strategies 非空却被门禁清空）"
 
     def test_settings_enabled_by_regime_exists_and_enabled_in_manifest(
         self, signal_strategies: dict

@@ -1,4 +1,44 @@
-## 2026-08-19 — 修复 fallback 任务未取消导致 asyncio 异常泄漏 + 分诊评估
+## 2026-08-19 — v0.9.32 防护：重启风暴同因升级当日去重（与 ZeroSignal v0.9.30/31 同模式）
+
+### 变更：`src/gugu/health/watchdog.py` check_scheduler_health 重启风暴当日同因只升级一次
+- **问题**：auto-fix 路径无任何去重，restart_storm 检测也无状态记忆 → 2026-08-19 上午为部署 v0.9.29-31 修复连续启动 4 次（均为 launchd kickstart/部署重启，crash_clue=无崩溃线索，历史常态 3-4 次/日），12:45:08 首次升级后 13:45:57 对同一根因（"今日启动 4 次"）重复升级——与 zero-signal 09:55→10:55 重复升级同类噪音（该问题 v0.9.30/31 已修，restart_storm 漏网）
+- **修复**：当日首次升级持久化 `data/watchdog_restart_storm_state.json` 的 `last_escalated_date`；同日后续轮次降为 ok=True/severity=medium（保留 restarts_today 计数留痕，message 注明"同因不重复升级"），跨天自动重置（新一天首次达到阈值仍正常升级）。真正的崩溃循环仍会被心跳陈旧检查（独立指纹）捕获，无盲区
+- **验证**：`pytest tests/unit/test_health_watchdog.py tests/unit/test_auto_recover.py tests/unit/test_p0_first_batch_guard.py` 62 passed（新增"当日首轮升级→次轮静默→跨天重置"3 用例）；`ruff check` 通过；真实数据路径验证：首跑升级并写入 last_escalated_date=2026-08-19，二跑同日静默。状态已预置今日（12:45/13:45 已升级过），今晚例行检查不再重复升级
+- **注意**：watchdog/auto_recover 以独立进程运行（每次冷加载最新代码），无需重启调度器即生效
+
+## 2026-08-19 — v0.9.31 修复：ZeroSignal 当日去重标记防覆盖丢失（v0.9.30 补丁）
+
+### 变更：`src/gugu/health/watchdog.py` check_zero_signal_streak 持久化保留 last_escalated_date
+- **问题**：v0.9.30 的 `last_escalated_date` 仅在 `escalated_today=True`（首次升级）时写入 payload；"同因不重复升级"轮次（当日已升级、escalated_today=False）覆盖写包含 streak/updated_at 但**不带 last_escalated_date** → 字段被覆盖丢失 → 下一轮判定"当日未升级" → 再次升级。2026-08-19 实证：09:55 首次升级（streak=3）后 10:55 二次升级（streak=12）同一根因——去重只生效一轮
+- **修复**：非升级轮次覆盖写时保留 state 中已有的 `last_escalated_date`（elif 分支回填），保证当日标记跨轮次存活；跨天重置逻辑不变（次日 last_escalated_date 为昨天 → 仍走升级分支）
+- **验证**：`pytest tests/unit/test_p0_first_batch_guard.py tests/unit/test_health_watchdog.py tests/unit/test_auto_recover.py` 60 passed；回归测试新增"第 4 轮不重复升级后字段保留、第 5 轮仍静默"断言；`ruff check` + `ruff format` 通过
+- **注意**：watchdog/auto_recover 以独立进程运行（每次冷加载最新代码），无需重启调度器即生效
+
+## 2026-08-19 — v0.9.30 防护：ZeroSignal 同因升级当日去重（防重复打扰）
+
+### 变更：`src/gugu/health/watchdog.py` check_zero_signal_streak 当日同因只升级一次
+- **问题**：2026-08-19 黑屏根因修复后 streak 状态未重置（持续累计），冷却 60 分钟到期后 10:55:53 再次升级同一根因（连续 12 轮 0 信号）——用户在 1 小时内收到 2 次同一根因的升级，重复打扰且无新信息量
+- **修复**：首次升级持久化 `last_escalated_date`；当日已达阈值的后续轮次降为 ok=True/severity=medium（保留 streak 计数与留痕，不再升级/推送），跨天自动重置（新一天首次达到阈值仍正常升级）
+- **验证**：`pytest tests/unit/test_health_watchdog.py tests/unit/test_auto_recover.py` 全绿；11:25 起独立 watchdog/分诊进程（agent cron）已加载新逻辑，`data/watchdog_zero_signal_streak.json` 已写入 `last_escalated_date: 2026-08-19`
+- **注意**：watchdog/auto_recover 以独立进程运行（每次冷加载最新代码），无需重启调度器即生效
+
+## 2026-08-19 — v0.9.29 P0 修复：策略准入门禁导致生产模式 0 策略（信号黑屏）
+
+### 变更：`src/gugu/strategies/registry.py` get_runtime_strategy_names 生产模式准入恢复 verified 白名单语义
+- **问题**：commit 60247c8（09:49 统一策略准入）为 track_live/signal_only/live 叠加 manifest `validation_gate.status == "enabled"` 硬门禁；但 strategy_manifest.yaml 全表**无任何策略 status=enabled**（9 conditional_pass / 19 backtest_failed / 9 pending / 2 in_review / 1 failed）。settings.yaml `verified_strategies` 白名单（box_breakout/rsi_reversal，开发者人工维护）被门禁清空 → 09:40:38/09:43:07 两次重启后引擎"0 策略" → 全市场 18 只全部"0 只策略无信号" → 信号黑屏 25 分钟，随后触发 ZeroSignal watchdog 升级（09:55:15，连续 3 轮 0 信号）
+- **修复**：生产模式（track_live/signal_only/live）以 `verified_strategies` 开发者白名单为最终准入（恢复 v0.9.7 语义，昨天 2 策略正常运行的路径）；manifest 严格门禁（status=enabled / conditional_pass）继续约束 paper/回测/研究链路。`cfg.strategy.get_enabled_for_regime()` 本身已含 verified ∩ enabled_by_regime ∩ 模式（experimental 排除）过滤，白名单即准入
+- **回归测试**：`tests/unit/test_config_consistency.py` 新增 `test_production_runtime_strategies_not_empty_and_within_verified_whitelist`（生产模式运行时策略非空且 ⊆ verified_strategies）
+- **验证**：`pytest tests/unit/test_config_consistency.py tests/unit/test_manifest_runtime_gate.py tests/unit/test_strategy_validation_workflow.py tests/unit/test_p0_p1_repairs.py` 46 passed；`ruff check` 通过；调度器 kickstart 重启后 10:10:31 引擎初始化 2 策略，10:10:54 扫描恢复策略评估（box_breakout v2 信号统计正常输出）
+
+### 变更：`src/gugu/config/models.py` 补全 StrategyConfig.leopard_universe_filter 字段（pre-existing 缺口）
+- **问题**：settings.yaml 声明 `strategy.leopard_universe_filter` 段（v0.4.6 豹哥三要素过滤器），但 StrategyConfig 模型缺失该字段 → 每次引擎/选股初始化打"豹哥三要素过滤器初始化失败，跳过预筛" WARNING（08-17/18 每日 3 次），且即使手动 `enabled: true` 也无法生效
+- **修复**：新增 `LeopardUniverseFilterConfig`（enabled/turnover_min/amount_min/circ_mv_min，默认值与 settings.yaml 一致），挂到 StrategyConfig；`enabled: false` 时行为不变（跳过预筛），消除误报警告
+- **验证**：`pytest tests/unit/test_config_consistency.py tests/unit/test_selector.py` 18 passed；`ruff check` 通过；`get_config().strategy.leopard_universe_filter` 正常读取（False/15.0/1e9/7e9）
+
+### 分诊评估（2026-08-19 10:00 扫描）
+- **该修**：ZeroSignal 升级（连续 3 轮 0 信号）——根因即上述策略准入黑屏，非市场/数据问题；已修复并重启生效
+- **放过**：东财个股资金流 7 条 ERROR（09:30-09:41 瞬时 ConnectionError/RemoteDisconnected，今日失败率 2% <50%，四级冗余缓存兜底 + 1800s 熔断自恢复；09:44 后同链路已按 v0.9.25/28 约定降为 WARNING 日志）
+- **放过（pre-existing，非本轮引入）**：stock_selector 豹哥三要素过滤器初始化失败（`StrategyConfig` 缺 `leopard_universe_filter` 字段，settings.yaml 中 enabled: false，跳过预筛属默认关闭路径，08-17/18 已存在）
 
 ### 变更：`src/gugu/data/manager.py` _call_with_fallback 全分支 finally 取消 pending 任务
 - **问题**：08:00-09:30 期间 akshare/eastmoney 资金流源持续 ConnectionError（上游限流/瞬时网络问题），降级链路中 tencent `fetch_stock_flow` 抛 NotImplementedError、pending 任务未取消 → `ERROR:asyncio:Task exception was never retrieved`（scheduler_launchd.err.log 出现 2 段完整 traceback），并伴随 `gugu.data.manager:282 主源 fetch_stock_history 异常 RetryError` ERROR 计数

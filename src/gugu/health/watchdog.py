@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from gugu.utils.atomic import atomic_write_json
+
 # 默认阈值
 HEARTBEAT_STALE_MINUTES = 15  # 心跳超过 15 分钟未更新视为挂死
 SIGNAL_HISTORY_STALE_DAYS = 2  # 交易日信号历史超过 2 天未写入视为失忆
@@ -32,6 +34,8 @@ DEFAULT_SCAN_FILE = "signal_scan.json"
 # 告警去重（2026-08-01 P2）：同一问题在抑制窗口内不重复推送，防 cron 刷屏
 DEFAULT_ALERT_STATE_FILE = "watchdog_alert_state.json"
 DEFAULT_SUPPRESS_MINUTES = 120  # 同一问题默认 2 小时内只告警一次
+# 重启风暴当日同因去重（v0.9.32）：记录当日首次升级日期，跨天自动重置
+DEFAULT_RESTART_STORM_STATE_FILE = "watchdog_restart_storm_state.json"
 
 
 @dataclass
@@ -285,6 +289,38 @@ def check_scheduler_health(
             restarts_today += 1
 
     if restarts_today > max_restarts_per_day:
+        # v0.9.32：重启风暴当日同因只升级一次（与 ZeroSignal v0.9.30/31 同款模式）。
+        # 背景：2026-08-19 上午为部署 v0.9.29-31 修复连续启动 4 次（均为
+        # launchd kickstart/部署重启，crash_clue=无崩溃线索，历史常态 3-4 次/日），
+        # auto-fix 路径无任何去重 → 12:45 首次升级后 13:45 对同一根因重复升级
+        # （"今日启动 4 次"），噪音全天重复。修复：当日首次升级持久化
+        # last_escalated_date，后续轮次降为 ok=True/severity=medium 静默留痕，
+        # 跨天自动重置（新一天首次达到阈值仍正常升级）。
+        # 注意：真正的崩溃循环仍会被心跳陈旧检查（独立指纹）捕获，无盲区。
+        storm_state_path = data_dir / DEFAULT_RESTART_STORM_STATE_FILE
+        storm_state = _read_json(storm_state_path) or {}
+        today = datetime.now().date().isoformat()
+        storm_state_payload = {
+            "last_escalated_date": today,
+            "restarts_today": restarts_today,
+            "updated_at": datetime.now().isoformat(),
+        }
+        if storm_state.get("last_escalated_date") == today:
+            with contextlib.suppress(OSError):
+                atomic_write_json(storm_state_path, storm_state_payload, ensure_ascii=False)
+            return SchedulerHealthResult(
+                ok=True,
+                severity="medium",
+                message=(
+                    f"调度器今日已重启 {restarts_today} 次，但今日已升级过"
+                    f"重启风暴告警（{today}），同因不重复升级"
+                ),
+                heartbeat_age_min=round(hb_age, 1),
+                restarts_today=restarts_today,
+                details={"max_restarts": max_restarts_per_day},
+            )
+        with contextlib.suppress(OSError):
+            atomic_write_json(storm_state_path, storm_state_payload, ensure_ascii=False)
         return SchedulerHealthResult(
             ok=False,
             severity="high",
@@ -630,6 +666,8 @@ def check_zero_signal_streak(
     # 读取当前 streak 状态
     state = _read_json(streak_path) or {}
     streak = int(state.get("streak", 0) or 0)
+    # v0.9.30：当日是否发生 0 信号升级（首次升级置 True，持久化 last_escalated_date）
+    escalated_today = False
 
     signals_count = int(scan.get("signals_count", 0) or 0)
     if signals_count > 0:
@@ -667,17 +705,35 @@ def check_zero_signal_streak(
         else:
             streak += 1
             if streak >= threshold:
-                result = ZeroSignalResult(
-                    ok=False,
-                    severity="high",
-                    message=(
-                        f"⚠️ 连续 {streak} 轮扫描 0 信号（{threshold} 轮阈值）——"
-                        "择时降级/置信度过滤/数据源故障都可能导致此现象"
-                        "（8/5 四根因链事故同款），请排查！"
-                    ),
-                    streak=streak,
-                    last_scan_at=scan.get("last_scan_at", ""),
-                )
+                today = datetime.now().date().isoformat()
+                if state.get("last_escalated_date") == today:
+                    # v0.9.30：当日已升级过一次 0 信号（根因已上报），同因不重复升级。
+                    # 背景：2026-08-19 黑屏根因修复后 streak 未重置（持续累计），
+                    # 冷却 60 分钟到期后 10:55 再次升级同一根因 → 用户每小时收到
+                    # 重复升级。保留首次升级的信息价值，同日后续轮次静默（跨天重置）。
+                    result = ZeroSignalResult(
+                        ok=True,
+                        severity="medium",
+                        message=(
+                            f"连续 {streak} 轮 0 信号，但今日已升级过 0 信号告警"
+                            f"（{today}），同因不重复升级"
+                        ),
+                        streak=streak,
+                        last_scan_at=scan.get("last_scan_at", ""),
+                    )
+                else:
+                    escalated_today = True
+                    result = ZeroSignalResult(
+                        ok=False,
+                        severity="high",
+                        message=(
+                            f"⚠️ 连续 {streak} 轮扫描 0 信号（{threshold} 轮阈值）——"
+                            "择时降级/置信度过滤/数据源故障都可能导致此现象"
+                            "（8/5 四根因链事故同款），请排查！"
+                        ),
+                        streak=streak,
+                        last_scan_at=scan.get("last_scan_at", ""),
+                    )
             else:
                 result = ZeroSignalResult(
                     ok=True,
@@ -688,8 +744,17 @@ def check_zero_signal_streak(
 
     # 持久化 streak（写失败不阻塞告警）
     with contextlib.suppress(OSError):
+        payload: dict = {"streak": streak, "updated_at": datetime.now().isoformat()}
+        if escalated_today:
+            payload["last_escalated_date"] = datetime.now().date().isoformat()
+        elif state.get("last_escalated_date"):
+            # v0.9.31：保留已有 last_escalated_date，防覆盖丢失。
+            # 背景：v0.9.30 仅在 escalated_today=True 时写入该字段，"同因不重复升级"
+            # 轮次（escalated_today=False）覆盖写不带它 → 字段丢失 → 下一轮再次升级
+            # （2026-08-19 实证：09:55 首次升级后 10:55 二次升级同一根因）。
+            payload["last_escalated_date"] = state["last_escalated_date"]
         streak_path.write_text(
-            json.dumps({"streak": streak, "updated_at": datetime.now().isoformat()}),
+            json.dumps(payload, ensure_ascii=False),
             encoding="utf-8",
         )
     return result

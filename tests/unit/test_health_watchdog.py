@@ -177,6 +177,83 @@ def test_restart_boom_alerts(tmp_path: Path):
     assert "重启" in res.message
 
 
+def test_restart_storm_escalates_once_per_day(tmp_path: Path):
+    """v0.9.32：重启风暴当日首次升级后，同日后续轮次静默（同因不重复升级）。
+
+    2026-08-19 实证：部署导致 4 次启动（无崩溃线索），12:45 升级后
+    13:45 对同一根因重复升级。修复后首轮仍升级（新信息），同日后缀
+    轮次降为 ok=True（保留计数留痕，不产生升级记录），跨天重置。
+    """
+    now = datetime.now().replace(microsecond=0)
+    hb = tmp_path / "heartbeat.json"
+    hb.write_text(
+        json.dumps({"last_cycle_at": now.isoformat(), "status": "alive"}),
+        encoding="utf-8",
+    )
+    boot = tmp_path / "scheduler_boot.json"
+    boots = [
+        {"boot_time": (now - timedelta(minutes=m)).isoformat(), "pid": 100 + i}
+        for i, m in enumerate([1, 2, 3, 5, 8])
+    ]
+    boot.write_text(json.dumps({"history": boots}), encoding="utf-8")
+
+    # 首轮：无状态文件 → 升级，并持久化当日标记
+    res1 = check_scheduler_health(
+        heartbeat_path=hb,
+        boot_path=boot,
+        data_dir=tmp_path,
+        max_restarts_per_day=3,
+    )
+    assert res1.ok is False
+    assert "重启风暴" in res1.message
+    state_path = tmp_path / "watchdog_restart_storm_state.json"
+    assert state_path.exists(), "首次升级应持久化当日标记"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["last_escalated_date"] == now.date().isoformat()
+
+    # 同日第二轮：同根因 → 静默（ok=True，message 说明已升级过）
+    res2 = check_scheduler_health(
+        heartbeat_path=hb,
+        boot_path=boot,
+        data_dir=tmp_path,
+        max_restarts_per_day=3,
+    )
+    assert res2.ok is True, f"同日同因不应重复升级: {res2}"
+    assert res2.severity == "medium"
+    assert "不重复升级" in res2.message
+    assert res2.restarts_today == 5
+
+
+def test_restart_storm_dedup_resets_next_day(tmp_path: Path):
+    """v0.9.32：昨日已升级过重启风暴 → 今日首次达到阈值仍正常升级（跨天重置）。"""
+    now = datetime.now().replace(microsecond=0)
+    hb = tmp_path / "heartbeat.json"
+    hb.write_text(
+        json.dumps({"last_cycle_at": now.isoformat(), "status": "alive"}),
+        encoding="utf-8",
+    )
+    boot = tmp_path / "scheduler_boot.json"
+    boots = [
+        {"boot_time": (now - timedelta(minutes=m)).isoformat(), "pid": 100 + i}
+        for i, m in enumerate([1, 2, 3, 5, 8])
+    ]
+    boot.write_text(json.dumps({"history": boots}), encoding="utf-8")
+    # 状态文件标记为昨天 → 今天应视为首次升级
+    state_path = tmp_path / "watchdog_restart_storm_state.json"
+    yesterday = (now - timedelta(days=1)).date().isoformat()
+    state_path.write_text(json.dumps({"last_escalated_date": yesterday}), encoding="utf-8")
+    res = check_scheduler_health(
+        heartbeat_path=hb,
+        boot_path=boot,
+        data_dir=tmp_path,
+        max_restarts_per_day=3,
+    )
+    assert res.ok is False
+    assert "重启风暴" in res.message
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["last_escalated_date"] == now.date().isoformat(), "标记应刷新为今日"
+
+
 def test_group_alerts_exclude_restart_storm():
     from scripts.health_watchdog import group_alert_messages
 
