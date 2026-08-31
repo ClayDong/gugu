@@ -45,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from gugu.backtest.engine import walk_forward_optimize_multi_stock  # noqa: E402
 from gugu.config import PROJECT_ROOT  # noqa: E402
+from gugu.research.ledger import append_record, build_record  # noqa: E402
 from gugu.strategies.registry import get_strategy_cls  # noqa: E402
 from gugu.utils.log import get_logger  # noqa: E402
 
@@ -274,6 +275,8 @@ async def run_offline_optimization(
             )
 
     # 解锁条件检查
+    unlock_report: dict | None = None
+    writeback_applied = False
     if write:
         unlock_report = _check_unlock_conditions(
             strategy_name=strategy_name,
@@ -290,6 +293,7 @@ async def run_offline_optimization(
             for k, v in best_params.items():
                 defaults[strategy_name][k] = v
             write_defaults(defaults)
+            writeback_applied = True
             print(f"\n✅ 优化参数已写回 config/strategy_defaults.yaml")
         else:
             print(
@@ -302,6 +306,34 @@ async def run_offline_optimization(
             print(f"  1. 检查策略是否真的有效（box_breakout 已通过全市场回测验证）")
             print(f"  2. 增加股票数（当前 {len(stock_dfs)} 只）")
             print("  3. --force 仅保留兼容性，不得绕过 GatePolicy gate-v1")
+
+    append_record(
+        build_record(
+            kind="offline_walk_forward",
+            entrypoint="scripts/walk_forward_offline.py:run_offline_optimization",
+            strategy=strategy_name,
+            symbols=list(symbols),
+            requested_n_splits=n_splits,
+            effective_symbols=list(stock_dfs),
+            excluded_symbols=sorted(set(symbols) - set(stock_dfs)),
+            data_ranges={
+                symbol: {
+                    "row_count": len(df),
+                    "data_start": str(df["date"].min()) if "date" in df else None,
+                    "data_end": str(df["date"].max()) if "date" in df else None,
+                }
+                for symbol, df in stock_dfs.items()
+            },
+            parameter_grid=param_grid,
+            parameter_grid_size=len(legal_combos),
+            best_params=best_params,
+            results=results,
+            gate_status=(unlock_report.get("version") if unlock_report else "not_evaluated"),
+            gate=unlock_report,
+            write_requested=write,
+            writeback_applied=writeback_applied,
+        )
+    )
 
     return {
         "strategy": strategy_name,

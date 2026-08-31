@@ -67,6 +67,124 @@ def test_format_signal_buy():
     assert "header" in card["card"]
 
 
+def test_format_signal_buy_marks_experimental_validation_status():
+    """实验信号必须显式标记为仅供观察。"""
+    signal = {
+        "symbol": "600519",
+        "direction": "buy",
+        "strategy": "box_breakout",
+        "strategies": ["box_breakout"],
+        "reason": "测试",
+        "price": 100.0,
+        "confidence": 0.7,
+        "capability": {"validation_status": "experimental"},
+    }
+    assert "未验证·仅供观察" in str(format_signal(signal))
+
+
+def test_format_signal_buy_marks_unknown_validation_status():
+    """没有验证元数据时，卡片必须明确显示未知且仅供观察。"""
+    signal = {
+        "symbol": "600519",
+        "direction": "buy",
+        "strategy": "unknown_strategy",
+        "strategies": ["unknown_strategy"],
+        "reason": "测试",
+        "price": 100.0,
+        "confidence": 0.7,
+    }
+    assert "验证状态未知·仅供观察" in str(format_signal(signal))
+
+
+def test_format_signal_buy_shows_conservative_max_loss():
+    """买入卡显示计划数量和止损触发时的估算亏损。"""
+    signal = {
+        "symbol": "600519",
+        "name": "贵州茅台",
+        "direction": "buy",
+        "strategy": "turtle",
+        "strategies": ["turtle"],
+        "reason": "突破上轨",
+        "price": 100.0,
+        "stop_loss_price": 90.0,
+        "quantity": 200,
+        "total_value": 100_000.0,
+        "confidence": 0.7,
+    }
+    card = format_signal(signal)
+    text = str(card)
+    assert "约亏 ￥2,000.00" in text
+    assert "约占账户 2.00%" in text
+    assert "实际损失可能更高" in text
+
+
+def test_format_signal_buy_missing_loss_inputs_does_not_show_zero_loss():
+    """缺少止损或数量时应明确无法估算，不伪造 0 元亏损。"""
+    signal = {
+        "symbol": "600519",
+        "direction": "buy",
+        "strategy": "turtle",
+        "strategies": ["turtle"],
+        "reason": "测试",
+        "price": 100.0,
+        "confidence": 0.7,
+    }
+    text = str(format_signal(signal))
+    assert "暂无法估算最大亏损" in text
+    assert "约亏 ￥0.00" not in text
+
+
+def test_format_signal_buy_prefers_actual_fill_for_loss_estimate():
+    """已成交信号优先使用实际成交价和数量。"""
+    signal = {
+        "symbol": "600519",
+        "direction": "buy",
+        "strategy": "turtle",
+        "strategies": ["turtle"],
+        "reason": "测试",
+        "price": 100.0,
+        "stop_loss_price": 90.0,
+        "suggested_position_ratio": 0.2,
+        "total_value": 100_000.0,
+        "confidence": 0.7,
+        "order_result": {"success": True, "price": 105.0, "quantity": 100},
+    }
+    text = str(format_signal(signal))
+    assert "入场 ￥105.00" in text
+    assert "约亏 ￥1,500.00" in text
+
+
+def test_format_signal_sell_does_not_show_buy_max_loss():
+    """卖出卡不把退出价误当成新建仓止损。"""
+    signal = {
+        "symbol": "600519",
+        "direction": "sell",
+        "strategy": "turtle",
+        "strategies": ["turtle"],
+        "reason": "测试",
+        "price": 100.0,
+        "stop_loss_price": 100.0,
+        "confidence": 0.7,
+    }
+    text = str(format_signal(signal))
+    assert "最大亏损" not in text
+
+
+def test_format_signal_performance_uses_total_signals_alias():
+    """历史绩效字段 total_signals 也必须展示真实样本量。"""
+    signal = {
+        "symbol": "600519",
+        "direction": "buy",
+        "strategy": "turtle",
+        "strategies": ["turtle"],
+        "reason": "测试",
+        "price": 100.0,
+        "confidence": 0.7,
+        "performance_summary": {"total_signals": 17, "win_rate": 0.5, "avg_return_5d": 0.01},
+    }
+    assert "n=17" in str(format_signal(signal))
+
+
 def test_format_signal_sell():
     """测试卖出信号卡片颜色为绿色（A 股惯例：绿跌）。"""
     signal = {

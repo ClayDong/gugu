@@ -13,6 +13,7 @@ Submodules:
 
 from __future__ import annotations
 
+import math
 from functools import lru_cache
 from typing import Any
 
@@ -227,6 +228,71 @@ def _ratio_text(value: Any) -> str:
     return f"{float(value):.0%}" if value is not None else "—"
 
 
+def estimate_max_loss(signal: dict[str, Any]) -> str:
+    """Estimate planned stop-loss loss conservatively for a long buy signal."""
+    if str(signal.get("direction", "buy")).lower() != "buy":
+        return ""
+    try:
+        order_result = signal.get("order_result") or {}
+        fill_price = float(order_result.get("price", 0) or 0)
+        entry = (
+            fill_price
+            if order_result.get("success") and fill_price > 0
+            else float(signal.get("price"))
+        )
+        stop = float(signal.get("stop_loss_price"))
+        if (
+            not math.isfinite(entry)
+            or not math.isfinite(stop)
+            or entry <= 0
+            or stop <= 0
+            or stop >= entry
+        ):
+            return "⚠️ 暂无法估算最大亏损：缺少有效入场价或止损价"
+
+        quantity = order_result.get("quantity") if order_result.get("success") else None
+        if quantity is None:
+            quantity = signal.get("quantity")
+        if quantity is None:
+            capital = float(signal.get("total_value"))
+            ratio = float(signal.get("suggested_position_ratio"))
+            if capital <= 0 or ratio <= 0 or ratio > 1:
+                raise ValueError
+            quantity = int(capital * ratio / entry / 100) * 100
+        quantity = int(quantity)
+        if quantity <= 0:
+            raise ValueError
+
+        loss = (entry - stop) * quantity
+        if not math.isfinite(loss) or loss <= 0:
+            raise ValueError
+        account_ratio = None
+        total_value = signal.get("total_value")
+        if total_value is not None and float(total_value) > 0:
+            account_ratio = loss / float(total_value)
+        account_text = f"（约占账户 {account_ratio:.2%}）" if account_ratio is not None else ""
+        return (
+            f"⚠️ **按计划 {quantity} 股、入场 ￥{entry:.2f}、止损 ￥{stop:.2f}："
+            f"触发止损约亏 ￥{loss:,.2f}{account_text}**\n"
+            "不含跳空、跌停无法成交、滑点和手续费，实际损失可能更高。"
+        )
+    except (TypeError, ValueError, OverflowError):
+        return "⚠️ 暂无法估算最大亏损：缺少有效止损、数量或账户规模"
+
+
+def _validation_status_label(signal: dict[str, Any]) -> str:
+    """Return the most conservative validation label available on a signal."""
+    capability = signal.get("capability") or {}
+    status = str(capability.get("validation_status") or signal.get("validation_status") or "")
+    labels = {
+        "verified": "✅ 已验证",
+        "conditional": "🟡 条件通过",
+        "experimental": "🧪 未验证·仅供观察",
+        "in_review": "🔍 审查中·仅供观察",
+    }
+    return labels.get(status, "🔍 验证状态未知·仅供观察")
+
+
 def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     """Format a trade signal into a Feishu card."""
     direction = str(signal.get("direction", "buy")).lower()
@@ -320,7 +386,7 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
         if take_profit:
             tp_pct = take_profit.get("target_1_pct", 0)
             if tp_pct:
-                summary_parts.append(f"止盈目标 +{tp_pct:.0f}%")
+                summary_parts.append(f"止盈目标 +{tp_pct:.0%}")
         summary_line = " | ".join(summary_parts)
 
     title = f"{action}信号 · {name}({symbol})"
@@ -374,6 +440,9 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     cap_line = _format_capability_line(signal)
     if cap_line:
         sections.append(f"**能力圈**：{cap_line}")
+    if is_buy:
+        sections.append(f"**验证等级**：{_validation_status_label(signal)}")
+        sections.append(estimate_max_loss(signal))
 
     conflict = signal.get("conflict_detail")
     if conflict:
@@ -397,8 +466,9 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
 
     perf = signal.get("performance_summary")
     if perf:
+        sample_count = perf.get("sample_count", perf.get("total_signals", 0))
         perf_lines = [
-            f"📈 **同类信号历史表现（{perf.get('sample_count', 0)} 条）**",
+            f"📈 **同类信号历史表现（n={sample_count}）**",
             f"胜率：{perf.get('win_rate', 0):.0%}",
             f"5日平均收益：{perf.get('avg_return_5d', 0):.1%}",
         ]

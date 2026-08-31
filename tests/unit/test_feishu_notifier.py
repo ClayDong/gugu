@@ -26,6 +26,7 @@ import httpx
 import pytest
 
 from gugu.notifier.feishu import TOKEN_URL, FeishuNotifier
+from gugu.notifier.notification_policy import DigestBuffer
 
 
 @pytest.fixture
@@ -480,14 +481,34 @@ async def test_notify_daily_report_sends_report(mock_env):
         result = await notifier.notify_daily_report("close", data)
 
         assert result is True
+        assert requests == []
+        aggregate_key = f"daily_report:close:{time.strftime('%Y-%m-%d')}"
+        flushed = await notifier.flush_digest(aggregate_key)
+        assert flushed is True
         assert len(requests) == 2
 
         msg_req = requests[1]
         body = json.loads(msg_req.content)
         content = json.loads(body["content"])
-        assert "收盘" in content["header"]["title"]["content"]
+        assert "gugu 汇总提醒" in content["header"]["title"]["content"]
+        assert any("收盘" in str(element) for element in content["elements"])
     finally:
         await mock_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_digest_flush_failure_keeps_buffered_cards(mock_env, tmp_path):
+    """Digest 外部发送失败时，缓冲桶必须保留等待下一次刷新。"""
+    notifier = FeishuNotifier()
+    notifier._digest_buffer = DigestBuffer(tmp_path / "digest.json")
+    card = {"msg_type": "interactive", "card": {"elements": []}}
+    assert notifier._digest_buffer.add(
+        card, event_type="daily_report", aggregate_key="close", target="chat"
+    )
+    with patch.object(notifier, "send_card", new_callable=AsyncMock, return_value=False):
+        assert await notifier.flush_digest("close") is False
+    assert notifier._digest_buffer.peek("close") == [card]
+    await notifier.close()
 
 
 # ========== webhook URL validation ==========

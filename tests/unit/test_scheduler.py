@@ -54,9 +54,9 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     # + 1 screener_auto_tune + 2 range_watchlist + 1 report_close + 1 retry
     # + 1 cache_cleanup + 1 weekly_optimize + 1 heuristic_optimize + 1 weekly_review
     # + 1 intraday_monitor + 1 config_hot_reload
-    # + 1 portfolio_report + 1 signal_daily_validation + 1 signal_weekly = 22
-    # 当前 settings 的四个宏观开关均为 false，因此宏观任务不注册。
-    assert len(jobs) == 22
+    # + 1 portfolio_report + 1 signal_daily_validation + 1 signal_weekly
+    # + 2 Digest flush = 24；当前 settings 的四个宏观开关均为 false。
+    assert len(jobs) == 24
     job_ids = {j.id for j in jobs}
     assert "intraday_monitor" in job_ids
     assert "scan_1" in job_ids
@@ -70,6 +70,8 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     assert "screener_auto_tune_1510" in job_ids
     assert "report_close" in job_ids
     assert "retry_notify" in job_ids
+    assert "digest_flush_0912" in job_ids
+    assert "digest_flush_1540" in job_ids
     assert "macro_early" not in job_ids
     assert "macro_morning" not in job_ids
     assert "macro_noon" not in job_ids
@@ -100,6 +102,16 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     assert "perspective_report_0830" not in job_ids  # perspective_daily: false
     assert "sentiment_daily_2030" not in job_ids  # sentiment_daily: false
     assert "signal_performance_1520" not in job_ids  # signal_performance: false
+
+
+@pytest.mark.asyncio
+async def test_safe_flush_digest_delegates_to_notifier(
+    scheduler: TradingScheduler, mock_engine: mock.AsyncMock
+) -> None:
+    """Digest 刷新任务应委托给 notifier 并吞掉异常。"""
+    mock_engine.notifier.flush_all_digests = mock.AsyncMock(return_value=2)
+    await scheduler._safe_flush_digest()
+    mock_engine.notifier.flush_all_digests.assert_awaited_once()
 
 
 @pytest.mark.asyncio

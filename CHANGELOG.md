@@ -1,3 +1,14 @@
+## 2026-08-31 — v0.9.39 研究证据、通知治理与新手风险卡
+
+### 变更：研究账本 + 调度开关 + Action/Digest/Archive + 保守最大亏损估算
+- **研究证据**：回测指标新增 `trade_legs` 与 `closed_trade_count`，Gate 只消费闭合 round-trip 样本数；单股、多股、启发式 Walk-Forward 结果统一输出 `closed_trade_count/test_trades`，避免把买卖腿或缺失字段当作样本量。
+- **研究账本**：新增 `src/gugu/research/ledger.py`，独立写入 `data/research_ledger.jsonl`，带 UUID run_id、git 上下文、实际数据范围、参数空间、Gate verdict、写回状态；POSIX 文件锁 + 原子替换；NaN/Infinity 规范化为 null。已接入单股/在线批量/离线批量/离线 Walk-Forward 和三类优化入口。
+- **调度矩阵**：`scan_open/mid/afternoon/close`、宏观四时段开关现在真正控制任务注册；新增 `digest_flush`，09:12/15:40 刷新延迟汇总。
+- **通知治理**：新增 `NotificationTier`、语义去重键、`notification_archive.jsonl` 和持久化 Digest 聚合桶；信号/风控/止损/严重系统告警即时 Action，日报/选股/观察/持仓/T+1 验证进入 Digest，发送失败保留重试。
+- **新手卡片**：买入卡展示按计划数量、入场价和止损价估算的最大亏损及账户占比；缺数据时明确无法估算，不显示伪造的 0 元损失；绩效样本统一显示 `n=`，验证状态未知时明确“仅供观察”。
+- **文案修正**：止盈摘要正确显示 `+10%`；能力圈验证状态优先读取当前 settings 的 verified/experimental 角色。
+- **验证**：本轮定向测试 107 passed / 2 warnings；最终全量测试 `2092 passed / 152 skipped / 0 failed`；Ruff、编译和 `git diff --check` 通过。
+
 ## 2026-08-31 — v0.9.38 对抗性优化：新手决策安全默认值与证据边界
 
 ### 变更：Web 仪表盘 fail-closed + bear 语义统一 + 买入增强器取消置信度加成

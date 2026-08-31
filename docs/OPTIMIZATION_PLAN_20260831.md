@@ -18,10 +18,10 @@
 
 | # | 事项 | 状态 | 说明 |
 |---|------|------|------|
-| P1-1 | 通知分级制（Action/Digest/Archive 三档） | ⬜ | 止损/风控/熔断=Action 独立通道；宏观+温度计+资金流+绩效合并为早报/收盘两张 Digest；其余只入库存。交易日 15+ 卡片 → 2-3 张 |
-| P1-2 | 卡片新手化 | ⬜ | 买入卡固定显示"这单看错最多亏 ¥X"（仓位×止损距离）；命中率带样本量 n=；verified/experimental 颜色徽章区分，experimental 标题写"未验证策略，仅供观察" |
+| P1-1 | 通知分级制（Action/Digest/Archive 三档） | ✅ | `NotificationTier` + 语义去重键 + `notification_archive.jsonl`；普通日报/选股/观察/持仓报告进入持久化 Digest，09:12/15:40 flush；Action 信号/风控/止损即时发送，失败保留重试队列 |
+| P1-2 | 卡片新手化 | ✅ | 买入卡显示按计划数量/入场价/止损价估算的最大亏损与账户占比；缺失数据明确“暂无法估算”；绩效兼容 `sample_count/total_signals` 并显示 `n=`；验证等级未知时明确仅供观察 |
 | P1-3 | 增强过滤器只降不升 | ✅ | 移除 3 处买入侧加成（signal_only 另类因子、筹码潜伏者、生产路径另类因子）；量价背离卖出加成保留，因为它只强化退出/避险方向 |
-| P1-4 | 研究账本最小版 | 🔄 | 已新增独立 `src/gugu/research/ledger.py`（原子/加锁/严格 JSON），并接入三类优化入口；单股/批量回测入口与完整 artifact metadata 仍待接入 |
+| P1-4 | 研究账本最小版 | ✅ | 独立 `src/gugu/research/ledger.py` 使用原子/加锁/严格 JSON；已接入单股、在线批量、离线批量、离线 Walk-Forward 和三类优化入口，记录数据范围、参数空间、Gate verdict 与写回状态 |
 | P1-5 | 保命模块分支覆盖 | ⬜ | risk/manager、quality_state、track_live、registry 过滤四模块补分支测试；质量叙事从"总通过数"改为"关键不变量清单" |
 
 ## P2（有空再做）

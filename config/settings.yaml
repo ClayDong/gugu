@@ -324,6 +324,7 @@ scheduler:
     weekly_review: true        # 周日 20:00 周复盘（保留）
     intraday_monitor: true     # 每分钟 盘中实时盯盘（保留）
     perspective_afternoon: false # 15:30 收盘后十大视角二次分析（默认关闭）
+    digest_flush: true          # 09:12/15:40 刷新延迟汇总通知（覆盖15:35持仓报告）
 
 # ========== 交易智慧 ==========
 wisdom:

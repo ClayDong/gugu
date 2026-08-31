@@ -178,6 +178,24 @@ def get_profile(strategy_name: str) -> StrategyProfile:
     return STRATEGY_PROFILES.get(strategy_name, DEFAULT_PROFILE)
 
 
+def _runtime_validation_status(strategy_names: list[str]) -> str | None:
+    """Resolve a conservative runtime role from settings, then manifest evidence."""
+    try:
+        from gugu.config import get_config
+
+        strategy_cfg = get_config().strategy
+        verified = set(strategy_cfg.verified_strategies)
+        experimental = set(strategy_cfg.experimental_strategies)
+        names = set(strategy_names)
+        if names and names <= verified:
+            return VERIFIED
+        if names & experimental:
+            return EXPERIMENTAL
+    except Exception:
+        pass
+    return None
+
+
 def annotate_signal(signal: dict) -> dict:
     """给信号添加能力圈标注。
 
@@ -197,6 +215,7 @@ def annotate_signal(signal: dict) -> dict:
 
     # 取触发策略中最保守的画像（仓位上限取最小，验证等级取最低）
     profiles = [get_profile(s) for s in strategies]
+    runtime_status = _runtime_validation_status(strategies)
     min_cap = min(p.position_cap for p in profiles)
     # 验证等级优先级：experimental < in_review < conditional < verified
     _severity = {EXPERIMENTAL: 0, IN_REVIEW: 1, CONDITIONAL: 2, VERIFIED: 3}
@@ -213,7 +232,7 @@ def annotate_signal(signal: dict) -> dict:
     signal["capability"] = {
         "explainability": lowest_exp.explainability,
         "explainability_label": EXPLAINABILITY_LABELS[lowest_exp.explainability],
-        "validation_status": lowest.validation_status,
+        "validation_status": runtime_status or lowest.validation_status,
         "position_cap": min_cap,
         "strategy_names": strategies,
         "notes": [p.note for p in profiles if p.note],

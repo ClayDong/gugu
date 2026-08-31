@@ -298,6 +298,16 @@ class TradingScheduler(SchedulerJobsMixin):
             name="通知重试队列",
         )
 
+        # Digest 汇总刷新：盘前一次、收盘全部业务报告完成后一次；Action 告警不延迟。
+        if self._task_enabled("digest_flush"):
+            for hour, minute, label in ((9, 12, "盘前"), (15, 40, "收盘")):
+                self._scheduler.add_job(
+                    self._safe_flush_digest,
+                    CronTrigger(hour=hour, minute=minute, day_of_week="mon-fri"),
+                    id=f"digest_flush_{hour:02d}{minute:02d}",
+                    name=f"{label}Digest汇总刷新-{hour:02d}:{minute:02d}",
+                )
+
         # 宏观日报推送
         from gugu.macro.scheduler import register_macro_jobs
 
@@ -542,6 +552,15 @@ class TradingScheduler(SchedulerJobsMixin):
                 )
             except Exception as notify_err:
                 logger.error("信号汇总异常通知发送失败: {}", notify_err)
+
+    async def _safe_flush_digest(self) -> None:
+        """刷新延迟 Digest；发送失败时保留缓冲等待下一次刷新。"""
+        try:
+            count = await self._engine.notifier.flush_all_digests()
+            if count:
+                logger.info("Digest 汇总通知刷新: {} 张", count)
+        except Exception as exc:
+            logger.warning("Digest 汇总刷新失败: {}", exc)
 
     async def _safe_retry_notify(self) -> None:
         """重试失败的通知队列。"""

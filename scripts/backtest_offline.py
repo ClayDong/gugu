@@ -28,6 +28,7 @@ from pathlib import Path
 import pandas as pd
 
 from gugu.backtest import BacktestEngine
+from gugu.research.ledger import append_record, build_record
 from gugu.strategies.registry import get_runtime_strategy_names, get_strategy
 from gugu.utils.log import get_logger
 
@@ -355,6 +356,20 @@ def main() -> None:
         encoding="utf-8",
     )
     logger.info(f"报告已保存: {output_path}")
+
+    append_record(
+        build_record(
+            kind="offline_batch_backtest",
+            entrypoint="scripts/backtest_offline.py:main",
+            strategies=strategies,
+            symbols=[code for code, _ in stocks],
+            requested_min_days=args.min_days,
+            effective_symbol_count=len(stocks),
+            output_artifact=str(output_path),
+            elapsed_sec=elapsed,
+            summaries=all_summaries,
+        )
+    )
 
     # 7. 飞书通知（v0.7.1 新增）
     if args.notify:

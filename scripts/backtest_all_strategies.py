@@ -34,6 +34,7 @@ from gugu.backtest import BacktestEngine
 from gugu.backtest.metrics import calc_metrics
 from gugu.config import get_config
 from gugu.data.manager import data_manager
+from gugu.research.ledger import append_record, build_record
 from gugu.strategies.registry import get_runtime_strategy_names, get_strategy, list_strategies
 from gugu.utils.log import get_logger
 
@@ -435,6 +436,25 @@ async def main_async(args: argparse.Namespace) -> None:
         encoding="utf-8",
     )
     logger.info(f"逐股票原始结果已保存: {per_symbol_path}")
+
+    effective_symbols = [symbol for symbol, results in per_symbol_results.items() if results]
+    append_record(
+        build_record(
+            kind="batch_backtest",
+            entrypoint="scripts/backtest_all_strategies.py:main_async",
+            strategies=strategies,
+            symbols=symbols,
+            requested_days=args.days,
+            effective_symbols=effective_symbols,
+            excluded_symbols=sorted(set(symbols) - set(effective_symbols)),
+            output_artifact=str(output_path),
+            raw_artifact=str(per_symbol_path),
+            report_artifact=(report_path if args.report else None),
+            elapsed_sec=elapsed,
+            summaries=all_summaries,
+            strict_confirmation=args.strict,
+        )
+    )
 
 
 def main() -> None:

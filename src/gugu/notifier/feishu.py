@@ -42,6 +42,15 @@ from gugu.notifier.formatter import (
     format_take_profit_alert,
     format_validation_report,
 )
+from gugu.notifier.notification_policy import (
+    DigestBuffer,
+    NotificationTier,
+    archive_notification,
+    build_digest_card,
+    classify_signal_tier,
+    classify_tier,
+    semantic_dedup_key,
+)
 from gugu.screener.report import format_screener_report
 from gugu.utils.log import get_logger
 
@@ -132,6 +141,8 @@ class FeishuNotifier:
 
         # PR1：通知发送审计日志路径（只追加，区分 sent/deduped/failed）
         self._audit_path: Path = self._queue_path.parent / "notification_audit.jsonl"
+        self._archive_path: Path = self._queue_path.parent / "notification_archive.jsonl"
+        self._digest_buffer = DigestBuffer(self._queue_path.parent / "notification_digest.json")
 
         # 读取通知开关配置
         feishu_cfg = get_config().feishu
@@ -249,7 +260,17 @@ class FeishuNotifier:
             raise RuntimeError(f"Feishu API error: {data.get('msg')}")
 
     async def send_card(
-        self, card: dict[str, Any], receive_id: str | None = None, dedup_key: str | None = None
+        self,
+        card: dict[str, Any],
+        receive_id: str | None = None,
+        dedup_key: str | None = None,
+        *,
+        event_type: str = "generic",
+        severity: str = "",
+        tier: NotificationTier | str | None = None,
+        aggregate_key: str = "",
+        defer_digest: bool = False,
+        queue_on_failure: bool = True,
     ) -> bool:
         """Send an interactive card to the configured chat.
 
@@ -281,6 +302,33 @@ class FeishuNotifier:
         if not target_chat_id:
             logger.warning("Feishu target chat not configured, skip card send")
             return False
+
+        resolved_tier = tier or classify_tier(event_type, severity=severity)
+        archive_key = dedup_key or ""
+        archive_notification(
+            self._archive_path,
+            card=card,
+            event_type=event_type,
+            tier=resolved_tier,
+            target=target_chat_id,
+            dedup_key=archive_key,
+            aggregate_key=aggregate_key,
+        )
+
+        if defer_digest and resolved_tier == NotificationTier.DIGEST:
+            if not aggregate_key:
+                logger.warning("Digest 延迟发送缺少 aggregate_key，拒绝入缓冲")
+                return False
+            queued = self._digest_buffer.add(
+                card,
+                event_type=event_type,
+                aggregate_key=aggregate_key,
+                target=target_chat_id,
+                dedup_key=archive_key,
+            )
+            if queued:
+                self._audit("queued", target=target_chat_id, event=aggregate_key)
+            return queued
 
         # PR1：卡片指纹去重检查（支持语义化 dedup_key）
         import hashlib
@@ -336,7 +384,15 @@ class FeishuNotifier:
                 )
                 # 入队等待后续重试（P1-4: 使用异步加锁版本，避免与 retry_queued 并发写文件）
                 # 必须携带 receive_id，保证重试时发回原目标群（P0: 业务/系统路由保真）
-                await self._enqueue_async(card, receive_id=target_chat_id)
+                if queue_on_failure:
+                    await self._enqueue_async(
+                        card,
+                        receive_id=target_chat_id,
+                        event_type=event_type,
+                        tier=resolved_tier,
+                        dedup_key=archive_key,
+                        aggregate_key=aggregate_key,
+                    )
                 return False
 
     def _get_card_fingerprint(self, card: dict[str, Any]) -> str:
@@ -551,7 +607,16 @@ class FeishuNotifier:
         except Exception as e:
             logger.warning("标记信号已通知失败: {}", e)
 
-    def _enqueue(self, card: dict[str, Any], receive_id: str | None = None) -> None:
+    def _enqueue(
+        self,
+        card: dict[str, Any],
+        receive_id: str | None = None,
+        *,
+        event_type: str = "generic",
+        tier: NotificationTier | str = NotificationTier.DIGEST,
+        dedup_key: str = "",
+        aggregate_key: str = "",
+    ) -> None:
         """失败通知入队，持久化到 data/notify_queue.jsonl。
 
         记录 receive_id（目标会话），保证重试时发回原目标群，
@@ -564,6 +629,10 @@ class FeishuNotifier:
                 "card": card,
                 "receive_id": receive_id or "",
                 "retry_count": 0,
+                "event_type": event_type,
+                "tier": str(tier),
+                "dedup_key": dedup_key,
+                "aggregate_key": aggregate_key,
             }
             with self._queue_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
@@ -571,10 +640,26 @@ class FeishuNotifier:
         except Exception as e:
             logger.error("通知入队失败: {}", e)
 
-    async def _enqueue_async(self, card: dict[str, Any], receive_id: str | None = None) -> None:
+    async def _enqueue_async(
+        self,
+        card: dict[str, Any],
+        receive_id: str | None = None,
+        *,
+        event_type: str = "generic",
+        tier: NotificationTier | str = NotificationTier.DIGEST,
+        dedup_key: str = "",
+        aggregate_key: str = "",
+    ) -> None:
         """异步入队（线程安全，与 retry_queued 互斥）。"""
         async with self._get_queue_lock():
-            self._enqueue(card, receive_id=receive_id)
+            self._enqueue(
+                card,
+                receive_id=receive_id,
+                event_type=event_type,
+                tier=tier,
+                dedup_key=dedup_key,
+                aggregate_key=aggregate_key,
+            )
 
     async def retry_queued(self) -> int:
         """重试队列中的失败通知（per-item 追加模式，防丢失）。
@@ -993,13 +1078,39 @@ class FeishuNotifier:
             },
         }
         dedup_key = f"stop_loss_upgrade_{symbol}_{level}_{date.today().isoformat()}"
-        return await self.send_card(card, receive_id=self._business_chat_id, dedup_key=dedup_key)
+        return await self.send_card(
+            card,
+            receive_id=self._business_chat_id,
+            dedup_key=dedup_key,
+            event_type="stop_loss",
+            severity="critical",
+            tier=NotificationTier.ACTION,
+        )
 
-    async def _send_business_card(self, card: dict[str, Any], dedup_key: str | None = None) -> bool:
+    async def _send_business_card(
+        self,
+        card: dict[str, Any],
+        dedup_key: str | None = None,
+        *,
+        event_type: str = "generic",
+        severity: str = "",
+        tier: NotificationTier | str | None = None,
+        aggregate_key: str = "",
+        defer_digest: bool = False,
+    ) -> bool:
         if not self._business_chat_id:
             logger.warning("Feishu business chat not configured, skip business notification")
             return False
-        return await self.send_card(card, receive_id=self._business_chat_id, dedup_key=dedup_key)
+        return await self.send_card(
+            card,
+            receive_id=self._business_chat_id,
+            dedup_key=dedup_key,
+            event_type=event_type,
+            severity=severity,
+            tier=tier,
+            aggregate_key=aggregate_key,
+            defer_digest=defer_digest,
+        )
 
     async def send_business_card(self, card: dict[str, Any]) -> bool:
         """公开方法：发送业务卡片到业务群（开悟之路）。
@@ -1009,15 +1120,33 @@ class FeishuNotifier:
         """
         return await self._send_business_card(card)
 
-    async def _send_system_card(self, card: dict[str, Any]) -> bool:
-        return await self.send_card(card, receive_id=self._chat_id)
+    async def _send_system_card(
+        self,
+        card: dict[str, Any],
+        *,
+        event_type: str = "system",
+        severity: str = "",
+        tier: NotificationTier | str | None = None,
+    ) -> bool:
+        return await self.send_card(
+            card,
+            receive_id=self._chat_id,
+            event_type=event_type,
+            severity=severity,
+            tier=tier,
+        )
 
     async def send_system_card(self, card: dict[str, Any]) -> bool:
         """公开方法：发送系统卡片到系统对话（Hermes 对话）。
 
         系统内容（错误/健康/基础设施告警）统一走此通道。
         """
-        return await self._send_system_card(card)
+        return await self._send_system_card(
+            card,
+            event_type="system",
+            severity="high",
+            tier=NotificationTier.ACTION,
+        )
 
     async def notify_cxbr_signal(self, signal: dict[str, Any]) -> bool:
         """发送 CXBR 研究/模拟盘通知，不复用生产策略信号门禁。"""
@@ -1087,21 +1216,56 @@ class FeishuNotifier:
         strategy = signal.get("strategy", "")
         strategies_list = signal.get("strategies", [])
         is_cloud_trend = strategy == "cloud_trend" or "cloud_trend" in strategies_list
+        signal_tier = classify_signal_tier(signal)
         if is_cloud_trend:
-            return await self._send_business_card(format_cloud_trend_signal(signal))
+            return await self._send_business_card(
+                format_cloud_trend_signal(signal),
+                event_type="signal",
+                severity="action" if signal_tier == NotificationTier.ACTION else "info",
+                tier=signal_tier,
+                defer_digest=signal_tier == NotificationTier.DIGEST,
+                aggregate_key=f"signal_observation:{time.strftime('%Y-%m-%d')}",
+            )
 
         # 游资策略信号使用专属卡片格式
         is_hot_money = strategy == "hot_money" or "hot_money" in strategies_list
         if is_hot_money:
-            return await self._send_business_card(format_hot_money_signal(signal))
+            return await self._send_business_card(
+                format_hot_money_signal(signal),
+                event_type="signal",
+                severity="action" if signal_tier == NotificationTier.ACTION else "info",
+                tier=signal_tier,
+                defer_digest=signal_tier == NotificationTier.DIGEST,
+                aggregate_key=f"signal_observation:{time.strftime('%Y-%m-%d')}",
+            )
 
-        return await self._send_business_card(format_signal(signal))
+        return await self._send_business_card(
+            format_signal(signal),
+            event_type="signal",
+            severity="action" if signal_tier == NotificationTier.ACTION else "info",
+            tier=signal_tier,
+            dedup_key=semantic_dedup_key(
+                "signal",
+                symbol=str(signal.get("symbol", "")),
+                direction=str(signal.get("direction", "")),
+                strategy=str(signal.get("strategy", "")),
+                business_date=time.strftime("%Y-%m-%d"),
+            ),
+            defer_digest=signal_tier == NotificationTier.DIGEST,
+            aggregate_key=f"signal_observation:{time.strftime('%Y-%m-%d')}",
+        )
 
     async def notify_daily_report(self, period: str, data: dict[str, Any]) -> bool:
         """Format and send a daily report notification."""
         if not self._daily_report_enabled:
             return False
-        return await self._send_business_card(format_daily_report(period, data))
+        return await self._send_business_card(
+            format_daily_report(period, data),
+            event_type="daily_report",
+            tier=NotificationTier.DIGEST,
+            aggregate_key=f"daily_report:{period}:{time.strftime('%Y-%m-%d')}",
+            defer_digest=True,
+        )
 
     async def notify_risk_alert(self, alert: dict[str, Any], dedup_key: str | None = None) -> bool:
         """Format and send a risk alert notification.
@@ -1115,19 +1279,34 @@ class FeishuNotifier:
         """
         if not self._risk_alert_enabled:
             return False
-        return await self._send_business_card(format_risk_alert(alert), dedup_key=dedup_key)
+        level = str(alert.get("level", alert.get("severity", "")))
+        return await self._send_business_card(
+            format_risk_alert(alert),
+            dedup_key=dedup_key,
+            event_type="risk_alert",
+            severity=level,
+            tier=NotificationTier.ACTION,
+        )
 
     async def notify_backtest(self, report: dict[str, Any]) -> bool:
         """Format and send a backtest report notification."""
         if not self._backtest_enabled:
             return False
-        return await self._send_business_card(format_backtest_report(report))
+        return await self._send_business_card(
+            format_backtest_report(report),
+            event_type="backtest",
+            tier=NotificationTier.DIGEST,
+        )
 
     async def notify_validation(self, report: dict[str, Any]) -> bool:
         """Format and send a strategy validation/gate report notification."""
         if not self._backtest_enabled:
             return False
-        return await self._send_business_card(format_validation_report(report))
+        return await self._send_business_card(
+            format_validation_report(report),
+            event_type="validation",
+            tier=NotificationTier.DIGEST,
+        )
 
     async def notify_screener(
         self,
@@ -1147,7 +1326,13 @@ class FeishuNotifier:
             status=status,
             data_errors=data_errors,
         )
-        return await self._send_business_card(card)
+        return await self._send_business_card(
+            card,
+            event_type="screener",
+            tier=NotificationTier.DIGEST,
+            aggregate_key=f"screener:{time.strftime('%Y-%m-%d')}",
+            defer_digest=True,
+        )
 
     async def notify_screener_validation(self, results: list) -> bool:
         """发送尾盘选股次日验证结果。"""
@@ -1156,7 +1341,13 @@ class FeishuNotifier:
         from gugu.screener.report import format_screener_validation
 
         card = format_screener_validation(results)
-        return await self._send_business_card(card)
+        return await self._send_business_card(
+            card,
+            event_type="screener_validation",
+            tier=NotificationTier.DIGEST,
+            aggregate_key=f"screener_validation:{time.strftime('%Y-%m-%d')}",
+            defer_digest=True,
+        )
 
     async def notify_range_watchlist(self, candidates: list, market_regime: str) -> bool:
         """P1-1: 震荡市盘中扫描推送观察列表（非买入建议）。
@@ -1169,7 +1360,13 @@ class FeishuNotifier:
         from gugu.screener.report import format_range_watchlist
 
         card = format_range_watchlist(candidates, market_regime)
-        return await self._send_business_card(card)
+        return await self._send_business_card(
+            card,
+            event_type="range_watchlist",
+            tier=NotificationTier.DIGEST,
+            aggregate_key=f"range_watchlist:{time.strftime('%Y-%m-%d')}",
+            defer_digest=True,
+        )
 
     async def notify_error(self, error: dict[str, Any]) -> bool:
         """Format and send a system error notification.
@@ -1195,7 +1392,12 @@ class FeishuNotifier:
         if friendly_msg != msg:
             error["suggestion"] = error.get("suggestion", "") or friendly_msg
         error["message"] = msg
-        return await self._send_system_card(format_system_error(error))
+        return await self._send_system_card(
+            format_system_error(error),
+            event_type="critical_system",
+            severity=str(error.get("level", "high")),
+            tier=NotificationTier.ACTION,
+        )
 
     async def notify_flow_report(self, period: str, data: dict[str, Any]) -> bool:
         """Format and send a capital flow report.
@@ -1205,11 +1407,22 @@ class FeishuNotifier:
             data: Result from run_morning_report() / run_afternoon_report() / run_close_report().
         """
         card = data["card"]
-        return await self._send_business_card(card)
+        return await self._send_business_card(
+            card,
+            event_type="flow_report",
+            tier=NotificationTier.DIGEST,
+            aggregate_key=f"flow_report:{period}:{time.strftime('%Y-%m-%d')}",
+            defer_digest=True,
+        )
 
     async def notify_holdings_sell_alert(self, stocks: list[dict]) -> bool:
         """Format and send a holdings sell signal alert."""
-        return await self._send_business_card(format_holdings_sell_alert(stocks))
+        return await self._send_business_card(
+            format_holdings_sell_alert(stocks),
+            event_type="holdings_sell",
+            severity="critical",
+            tier=NotificationTier.ACTION,
+        )
 
     async def notify_intraday_alert(self, alerts: list) -> bool:
         """推送盘中异动告警卡片。
@@ -1270,7 +1483,16 @@ class FeishuNotifier:
             from gugu.notifier.intraday_alert import build_intraday_alert_card
 
             card = build_intraday_alert_card(new_alerts)
-            sent = await self._send_business_card(card)
+            critical = any(
+                str(getattr(alert, "severity", "")).lower() in {"critical", "high"}
+                for alert in new_alerts
+            )
+            sent = await self._send_business_card(
+                card,
+                event_type="critical_intraday" if critical else "intraday_alert",
+                severity="critical" if critical else "info",
+                tier=NotificationTier.ACTION if critical else NotificationTier.DIGEST,
+            )
             if sent:
                 dedup_path.parent.mkdir(parents=True, exist_ok=True)
                 tmp_path = dedup_path.with_suffix(".tmp")
@@ -1298,7 +1520,18 @@ class FeishuNotifier:
             state: 可选的 TakeProfitState dict，用于展示减仓历史。
         """
 
-        return await self._send_business_card(format_take_profit_alert(symbol, name, signal, state))
+        return await self._send_business_card(
+            format_take_profit_alert(symbol, name, signal, state),
+            event_type="take_profit",
+            severity="critical",
+            tier=NotificationTier.ACTION,
+            dedup_key=semantic_dedup_key(
+                "take_profit",
+                symbol=symbol,
+                business_date=time.strftime("%Y-%m-%d"),
+                stage=str(signal.get("trigger_step", "")),
+            ),
+        )
 
     async def notify_strategy_dashboard(self) -> bool:
         """发送策略注册中心全景看板卡片。"""
@@ -1427,7 +1660,13 @@ class FeishuNotifier:
             from gugu.notifier.formatter import _card
 
             card = _card("🧠 持仓认知分析报告", "indigo", sections, note="明策 · gugu · 每日15:35")
-            return await self._send_business_card(card)
+            return await self._send_business_card(
+                card,
+                event_type="portfolio_report",
+                tier=NotificationTier.DIGEST,
+                aggregate_key=f"portfolio_report:{time.strftime('%Y-%m-%d')}",
+                defer_digest=True,
+            )
         except Exception as e:
             logger.warning("发送持仓认知报告失败: {}", e)
             return False
@@ -1440,7 +1679,13 @@ class FeishuNotifier:
             from gugu.notifier.formatter import build_signal_daily_validation_card
 
             card = build_signal_daily_validation_card(report)
-            return await self._send_business_card(card)
+            return await self._send_business_card(
+                card,
+                event_type="signal_daily_validation",
+                tier=NotificationTier.DIGEST,
+                aggregate_key=f"signal_validation:{time.strftime('%Y-%m-%d')}",
+                defer_digest=True,
+            )
         except Exception as e:
             logger.warning("发送信号次日验证报告失败: {}", e)
             return False
@@ -1457,6 +1702,62 @@ class FeishuNotifier:
         except Exception as e:
             logger.warning("发送信号绩效周报失败: {}", e)
             return False
+
+    async def queue_digest(
+        self,
+        card: dict[str, Any],
+        *,
+        event_type: str,
+        aggregate_key: str,
+    ) -> bool:
+        """Persist a Digest card for a later explicit flush."""
+        if not self._business_chat_id:
+            return False
+        archive_notification(
+            self._archive_path,
+            card=card,
+            event_type=event_type,
+            tier=NotificationTier.DIGEST,
+            target=self._business_chat_id,
+            aggregate_key=aggregate_key,
+        )
+        return self._digest_buffer.add(
+            card,
+            event_type=event_type,
+            aggregate_key=aggregate_key,
+            target=self._business_chat_id,
+        )
+
+    async def flush_digest(self, aggregate_key: str, *, title: str = "📋 gugu 汇总提醒") -> bool:
+        """Send one buffered Digest and remove it only after successful delivery."""
+        cards = self._digest_buffer.peek(aggregate_key)
+        if not cards:
+            return False
+        card = build_digest_card(cards, title=title)
+        sent = await self.send_card(
+            card,
+            receive_id=self._business_chat_id,
+            event_type="digest",
+            tier=NotificationTier.DIGEST,
+            dedup_key=semantic_dedup_key(
+                "digest", business_date=time.strftime("%Y-%m-%d"), stage=aggregate_key
+            ),
+            queue_on_failure=False,
+        )
+        if sent:
+            self._digest_buffer.remove_first(aggregate_key, len(cards))
+        return sent
+
+    async def flush_all_digests(self) -> int:
+        """Flush every buffered Digest bucket, retaining failed buckets for retry."""
+        discarded = self._digest_buffer.discard_expired()
+        if discarded:
+            logger.warning("Digest 丢弃过期汇总: {} 个", discarded)
+        sent_count = 0
+        for aggregate_key in self._digest_buffer:
+            if await self.flush_digest(aggregate_key):
+                sent_count += 1
+        return sent_count
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""

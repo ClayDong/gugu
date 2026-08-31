@@ -370,6 +370,7 @@ class SchedulerTasksConfig(BaseModel):
     perspective_afternoon: bool = Field(
         default=False, description="15:30 收盘后十大视角二次分析（默认关闭）"
     )
+    digest_flush: bool = Field(default=True, description="09:12/15:40 汇总通知刷新")
 
 
 class SchedulerConfig(BaseModel):

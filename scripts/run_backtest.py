@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from gugu.backtest import BacktestEngine, format_report  # noqa: E402
 from gugu.data import data_manager  # noqa: E402
 from gugu.notifier import FeishuNotifier  # noqa: E402
+from gugu.research.ledger import append_record, build_record  # noqa: E402
 from gugu.strategies.registry import get_strategy  # noqa: E402
 from gugu.utils.log import get_logger  # noqa: E402
 
@@ -54,6 +55,27 @@ async def main(symbol: str, strategy_name: str, days: int, notify: bool) -> None
             notifier = FeishuNotifier()
             await notifier.notify_backtest(format_report_dict(result))
             logger.info("回测报告已推送到飞书")
+
+        append_record(
+            build_record(
+                kind="backtest",
+                entrypoint="scripts/run_backtest.py:main",
+                strategy=strategy_name,
+                symbols=[symbol],
+                requested_days=days,
+                effective_symbols=[symbol],
+                data_ranges={
+                    symbol: {
+                        "row_count": len(df),
+                        "data_start": str(df["date"].min()) if "date" in df else None,
+                        "data_end": str(df["date"].max()) if "date" in df else None,
+                    }
+                },
+                metrics=result.metrics,
+                closed_trade_count=result.metrics.get("closed_trade_count", 0),
+                notify_requested=notify,
+            )
+        )
     finally:
         if notifier is not None:
             await notifier.close()
