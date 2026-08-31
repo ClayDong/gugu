@@ -1,3 +1,44 @@
+## 2026-08-28 — v0.9.37 修复：生产空策略池下 0 信号每日误升级（空策略池豁免）
+
+### 变更：`src/gugu/health/watchdog.py` check_zero_signal_streak 新增空策略池豁免
+- **问题**：2026-08-26 settings.yaml 收紧 gate-v1 后 production `verified_strategies` 白名单为空（暂无通过 gate 的生产策略），生产模式扫描按配置加载 **0 只策略** → 每日 09:40 准时升级"连续 3 轮 0 信号"噪音（08-25~08-28 连续 4 个交易日实证升级 4 次，根因均为 0 只策略；signal_router 日志实证 `所有策略无信号（0 只策略）——非过滤，是策略未触发`）。0 信号是**配置预期**，非链路故障，但 watchdog 无法区分 → 每日打扰用户。
+- **修复**：`runtime_strategies` 提供且为空列表（生产 verified 白名单为空）→ 0 信号为配置预期，不累计不告警；`runtime_strategies=None`（未提供/解析失败）→ 不豁免，保持旧行为（8/5 黑屏事故检测能力完整保留：策略池非空时 0 信号照常累计告警）。
+- **验证**：`pytest tests/unit/test_p0_first_batch_guard.py tests/unit/test_health_watchdog.py` 52 passed（新增 2 用例：空策略池豁免返回 ok=True / None 兼容性不豁免）；`ruff check` 通过；当前配置实测 `_resolve_runtime_strategies()=[]` → 检查返回 `ok=True，"扫描加载 0 策略 → 0 信号为配置预期，不告警"`
+- **注意**：watchdog/auto_recover 以独立进程运行（每次冷加载最新代码），下一轮即生效，无需重启调度器。残留的 `watchdog_zero_signal_streak.json`（streak=24, last_escalated_date=2026-08-28）无害：下个交易日 streak_date 不匹配自动归零重计。
+- **补充（08-28 评估会话）**：空池豁免单元测试落地 `tests/unit/test_health_watchdog.py`（`test_zero_signal_streak_empty_pool_exempt` 旧 streak=49 也不告警/不污染状态 + `test_zero_signal_streak_nonempty_pool_no_exemption` 非空池黑屏检测保留），30 passed + ruff 通过。
+
+## 2026-08-26 — v0.9.36 修复：调度器僵尸进程（心跳新鲜但任务停摆，信号扫描 498 分钟无更新）
+
+### 变更：scheduler 优雅关闭路径补全（取消心跳任务 + 主循环退出），并重启生效
+- **问题**：告警分诊发现 `signal_scan.last_scan_at=02:42:59` 距今 498 分钟（09:30/10:30 盘中扫描全部错过），但心跳新鲜（last_cycle_at=11:00:53）、进程存活、当日日志无 ERROR → watchdog 被"心跳新鲜"欺骗，auto_recover 不触发。根因是**僵尸调度器**：02:05:02 收到 SIGTERM 后旧代码 `shutdown()` 只执行 `_scheduler.shutdown(wait=False)` 并停止 APScheduler，**但未取消心跳任务**，且主循环 `while True: await asyncio.sleep(3600)` 不检查 `_shutdown_requested` → 进程永远存活、心跳每 60s 照写（伪装"alive"），而所有定时任务（扫描/宏观/日报）全部停摆
+- **修复**：本次重启加载了已在工作区的 scheduler.py 重构（EngineProtocol 解耦 v0.9.33+，mtime 02:09）——新 `shutdown()` 先 `_heartbeat_task.cancel()` 再停 APScheduler，主循环改为 `while not self._shutdown_requested`——彻底消除僵尸路径；`launchctl kickstart -k gui/$(id -u)/com.gugu.scheduler` 重启生效
+- **验证**：`pytest tests/unit/test_scheduler.py tests/unit/test_health_watchdog.py` 35 passed（含 `test_start_and_shutdown_lifecycle` 断言 shutdown 后 `_heartbeat_task.done()`）；重启后新 PID 69307 启动即执行盘中扫描 18 只（last_scan_at=11:23:15, data_health=ok）、心跳新鲜、`alert_triage.py` 输出 HEALTHY
+- **注意**：僵尸态根源是进程虽死循环但 launchd 认为存活不会拉起，心脏检测（watchdog 心跳年龄）对该场景盲区——后续可考虑 watchdog 增加"心跳新鲜但信号扫描陈旧"联动检查（当前 alert_triage 已覆盖该信号）
+
+## 2026-08-24 — v0.9.35 修复：参数优化任务在 launchd 下依赖 uv 失败（PATH 无 uv）
+
+### 变更：`src/gugu/engine/scheduler_jobs.py` 优化任务子进程改用 sys.executable
+- **问题**：`_safe_optimize_params`（周日 03:00 周参数 Walk-Forward 优化）与 `_safe_heuristic_optimize`（每半月 04:00 GA/PSO 优化）通过 `subprocess.run(["uv", "run", "python", ...])` 调用脚本，但 launchd 托管环境 PATH 不含 uv → **实证 2026-08-23 03:00 每周静默失败**（`[Errno 2] No such file or directory: 'uv'`，见 scheduler_launchd.err.log，每周日必现）
+- **修复**：改用 `sys.executable`（即调度器所在 `.venv/bin/python`，依赖环境完全一致）直接调用 `scripts/optimize_params.py`，消除 uv/PATH 依赖。已确认 optimize_params.py 无 uv/subprocess 内部依赖，调用等价
+- **验证**：`pytest tests/unit/test_scheduler.py` 7 passed（新增回归用例 `test_optimize_params_uses_sys_executable_not_uv`：断言 cmd[0]==sys.executable 且 cmd 不含 uv）；`ruff check` 通过
+- **注意**：scheduler 运行时修复需重启生效 → 已 `launchctl kickstart -k gui/$(id -u)/com.gugu.scheduler` 并验证心跳新鲜
+
+## 2026-08-24 — v0.9.34 修复：ZeroSignal streak 跨交易日重置（消除每日开盘误升级）
+
+### 变更：`src/gugu/health/watchdog.py` check_zero_signal_streak streak 归属交易日
+- **问题**：streak 跨交易日持续累计（无跨天重置，v0.9.30 仅做当日限频缓解）。08-21（周五）盘中 48 轮 0 信号留下的 streak 被 08-24（周一）开盘继承 → 周一 09:30:30 首轮检查即达 49 ≥ 阈值 3 → 开盘 6 分钟必升级人工。auto_recover 历史实证 7 次（08-11×3 / 08-19×2 / 08-21 / 08-24）全部开盘即报；而周一开盘后策略仍基于上周五收盘 bar（当日 bar 收盘后才生成），判断与周五完全一致，继承的 streak 无新信息量
+- **修复**：streak 状态持久化 `streak_date`（归属交易日）；新交易日首次检查时 streak 归零重计（同日正常累计）。8/5 黑屏事故检测能力不变：盘中连续 3 轮（15 分钟）0 信号仍照常告警；v0.9.30/31 当日限升（last_escalated_date 保留）逻辑不受影响
+- **验证**：`pytest tests/unit/test_health_watchdog.py tests/unit/test_auto_recover.py tests/unit/test_p0_first_batch_guard.py` 67 passed（新增 3 用例：跨交易日重置 / 同日累计至阈值仍升级 / 当日限升+字段保留回归）；`ruff check` + `ruff format` 通过
+- **注意**：watchdog/auto_recover 以独立进程运行（每次冷加载最新代码），下一轮 agent cron 即生效，无需重启调度器。现有 `watchdog_zero_signal_streak.json` 无 streak_date 字段 → 首查自动归零迁移
+
+## 2026-08-24 — v0.9.33 修复：signal_history 周末误报驱动 7 次无效重启（交易日历对齐豁免）
+
+### 变更：`src/gugu/health/watchdog.py` check_signal_history_freshness 新增交易日历对齐豁免
+- **问题**：检测器用墙钟天数（stale_days=2）判断"信号历史失忆"，不懂交易日历。周五 15:10 收盘尾扫后进入周末，周六日 + 周一盘前 `signal_scan.last_scan_at` 自然停留在周五（墙钟 2.7 天 > 2 天），被误报"信号历史失忆"→ auto_recover 每小时 launchctl kickstart 重启 scheduler，但**非交易日本来就没有扫描任务，重启不产生扫描**，根因永不变化、验证（心跳新鲜）恒真 → 8/23 18:15 → 8/24 04:05 实证 7 次无效重启循环。每周末必现。
+- **修复**：在"扫描正常"豁免之后、最终告警之前，新增日历对齐判定：若 `last_scan_at >= last_trading_day()（不含今天，周一→上周五）15:00 收盘` → 扫描与交易日历对齐，0 信号不落盘属正常，不告警。真故障路径不受影响：盘中停摆时 scan_ts 必然早于最近交易日收盘（如周五 09:25 < 周五 15:00）→ 不豁免 → 仍走 age_days 告警（模拟验证：周一盘前周五 15:10 扫描 → 豁免；周五 09:25 停摆 → 仍 high 告警）。
+- **验证**：`pytest tests/unit/test_health_watchdog.py tests/unit/test_auto_recover.py tests/unit/test_p0_first_batch_guard.py` 64 passed（新增 2 用例：周末对齐不告警 / 盘中停摆仍告警）；`ruff check` + `ruff format` 通过；真实场景模拟（周五 15:10 vs 周五 09:25 双路径）符合预期。
+- **注意**：watchdog/auto_recover 以独立进程运行（每次冷加载最新代码），下一轮 agent cron 即生效，无需重启调度器。
+
 ## 2026-08-19 — v0.9.32 防护：重启风暴同因升级当日去重（与 ZeroSignal v0.9.30/31 同模式）
 
 ### 变更：`src/gugu/health/watchdog.py` check_scheduler_health 重启风暴当日同因只升级一次

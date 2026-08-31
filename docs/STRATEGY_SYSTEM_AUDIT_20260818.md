@@ -12,7 +12,7 @@
 
 - 安全边界目前是可信的：`config/settings.yaml:250-269` 将执行模式设为 `track_live`，`src/gugu/engine/engine_mixin.py:432-478` 明确只通知、不自动下单；已有测试也禁止默认 `live` 模式。
 - 研究流程已经具备正确方向：连续持仓回测、`shift(1)`、多股 Walk-Forward、前视偏差测试、manifest 证伪档案和数据证据链都已存在。
-- 但当前不能说“策略系统已验证可靠”：核心生产策略中，`box_breakout` 与 `rsi_reversal` 在配置上仍属于 verified，但 manifest 又明确标注为 `conditional_pass`；`double_yin` 的样本外 Sharpe 为负且参数稳定性仅 40%，却仍在 bull/rally/sideways 的 regime 列表中作为观察策略；准入门槛存在至少三套实现，且 paper/live 对部分数据缺失采取放行。
+- 但当前不能说“策略系统已验证可靠”：`box_breakout`、`rsi_reversal`、`double_yin` 均缺少满足 gate-v1 且证据完整的生产准入依据；当前配置已将它们放入 experimental，生产 `track_live` 不加载策略信号，仅跟踪真实持仓。历史准入门槛和 paper/live 数据缺失语义仍需持续审计。
 - 当前策略被禁用较多，不是系统失灵，而是连续持仓审计正在揭露事件研究和小样本回测的高估。这个方向是正确的，但状态机还没有彻底把“研究、观察、条件通过、核心生产”隔离开。
 
 ### 1.2 为什么好多策略被禁用
@@ -56,15 +56,14 @@ regime_cycle_four
 
 ## 3. 已证实问题
 
-### P0：准入门槛存在多套口径
+### P0：准入门槛存在多套口径（历史问题，部分已修复）
 
 证据：
 
-- `scripts/validate_strategy_gate.py:19-29`：`param_stability >= 0.50`、`total_trades >= 100`，要求 paper 指标。
+- `scripts/validate_strategy_gate.py:19-29`：当前已统一读取 `GatePolicy gate-v1`，但历史报告仍可能保留旧门槛字段，需按报告版本审计。
 - `scripts/optimize_params.py:722-792`：参数稳定性 `>=80%`、样本外交易次数 `>=30`。
 - `src/gugu/strategy_consistency.py:132-137`：同样采用 80% 和 30 笔。
-- `config/settings.yaml:57`：注释仍写参数稳定性 `>=50%`。
-- `scripts/walk_forward_offline.py:27-31`：文档仍写 50%，但实际调用的是 80% 检查。
+- `config/settings.yaml` 和 `scripts/walk_forward_offline.py` 当前已同步为 gate-v1 的 80% 与样本外交易次数门槛。
 
 影响：同一策略可能被一个脚本判定通过，被另一个脚本判定失败；审计记录无法复现；生产准入依赖调用者选择了哪条命令。
 
@@ -74,8 +73,8 @@ regime_cycle_four
 
 证据：
 
-- `config/settings.yaml:103-112` 已注明 `box_breakout`、`rsi_reversal` 实际均为 conditional，但仍放入 `verified_strategies`。
-- `config/settings.yaml:114-120` 将 `double_yin` 放入 experimental，但 `enabled_by_regime:91-95` 又把它放进所有 bull/rally/sideways 列表。
+- 历史版本的 `config/settings.yaml` 曾将 `box_breakout`、`rsi_reversal` 放入 `verified_strategies`，但 manifest 均为 `conditional_pass`；当前配置已将二者移入 experimental。
+- `double_yin` 已放入 experimental；`enabled_by_regime` 保留它只供 paper/观察模式使用，生产模式由 verified 白名单过滤。
 - `src/gugu/config/models.py:157-189` 的 regime 过滤只按列表与 verified/experimental 集合求交，没有检查 manifest 的 `validation_gate.status`。
 - `src/gugu/engine/signal_pipeline.py:225-232` 负责标注能力和验证等级，但不是强制准入门禁。
 
@@ -83,11 +82,11 @@ regime_cycle_four
 
 修复：运行时只允许 `gate.status=enabled` 进入核心融合；`conditional_pass` 只能进入独立 paper/observation 通道；`experimental` 不能改变核心策略权重；`backtest_failed/pending/in_review` 不得进入交易信号路径。
 
-### P0：参数优化存在 `--force` 绕过准入写回
+### P0：参数优化存在 `--force` 绕过准入写回（已修复，需回归防止复发）
 
 证据：`scripts/walk_forward_offline.py:267-300` 和 `scripts/optimize_params.py` 的同名逻辑允许 `--write --force` 在解锁失败时写回 `strategy_defaults.yaml`。
 
-影响：即使样本外 Sharpe、参数稳定性、收益或交易次数失败，仍可把参数污染到后续回测和生产默认值。日志有告警，但防线不是强制的。
+影响（修复前）：即使样本外 Sharpe、参数稳定性、收益或交易次数失败，仍可把参数污染到后续回测和生产默认值。当前两个优化入口均只在 GatePolicy 通过时写回，`--force` 仅保留兼容性。
 
 修复：删除生产路径中的 `--force`；如确需研究写回，写入隔离的 `data/research_overrides/`，必须带 `research_only=true`、操作者、原因、过期时间，且配置加载器拒绝将其用于 `track_live/live`。
 
@@ -349,7 +348,7 @@ OOS Sharpe、收益、回撤、胜率
 ### 11.1 已落地变更
 
 - 运行时策略列表统一经过 `get_runtime_strategy_names()`：候选配置、manifest 验证状态和 Python 注册表三重过滤，验证脚本不再直接把配置并集当作生产可运行策略。
-- `conditional_pass` 仅允许进入 `paper`；`track_live`、`signal_only` 和 `live` 只接受 manifest 状态为 `enabled` 的策略。
+- `conditional_pass` 仅允许进入 `paper`；`track_live`、`signal_only` 和 `live` 只接受 settings `verified_strategies` 白名单中的已注册策略。当前白名单为空，因此生产模式不加载策略信号。
 - RSI 专项调度在当前执行模式未通过准入时直接跳过，不再通过 `get_strategy()` 旁路加载策略。
 - 滚动验证改为按真实日期构造独立 `train`/`test` 区间，测试指标只来自 test；支持在 train 区间选择参数，并输出 `train_start/train_end/test_start/test_end`。
 - 参数扰动稳定性强制包含 0% 原始参数基准；原始参数回测失败时稳定性为 0，不再用扰动均值冒充基准。

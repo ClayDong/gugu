@@ -43,11 +43,11 @@
 
 | 分组 | 策略 | 说明 |
 |------|------|------|
-| 已验证 | box_breakout | 达尔文箱体突破（Walk-Forward 通过，样本外最稳） |
-| 已验证 | double_yin | 双阴钱袋子（主力洗盘结束+倍量反转，收益稳定为正） |
-| 已验证 | rsi_reversal | RSI 超买超卖反弹（震荡市专用） |
-| 实验性 | hot_money | 游资三数交易法（7 日内涨停 + 缩量买入/放量卖出） |
-| 实验性 | ma5_momentum | MA5 动量突破（待 Walk-Forward 验证） |
+| 实验性 | box_breakout | 达尔文箱体突破；最新 Walk-Forward 未通过，保留 paper 复验 |
+| 实验性 | double_yin | 双阴钱袋子；样本外 Sharpe 为负，保留 paper 观察 |
+| 实验性 | rsi_reversal | RSI 超买超卖反弹；现有参数稳定性 66.7%，未达到 gate-v1 的 80% 要求 |
+| 已禁用/研究 | hot_money | 游资三数交易法；已归档，禁止进入运行时策略链路 |
+| 已禁用/研究 | ma5_momentum | MA5 动量突破；已归档，禁止进入运行时策略链路 |
 | 已禁用/研究 | chenxuezhang | 陈学长不吃面规则策略；持仓回测 Sharpe -0.24，语义标签研究专用 |
 | 实验性 | linjudaye | 邻居大爷规则策略（8 大量价规则组合） |
 | 已禁用/研究 | ml_gradient_boost | ML GradientBoosting 5 日收益预测（需滚动重训和样本外复验） |
@@ -73,7 +73,7 @@
 - `chenxuezhang`、`breakout_rebound`、`rebound_elite`、`rebound_system`：disabled / research-only，不参与信号融合
 - `bear`：候选数 ×0.4（熊市也出选股，MA5<MA10 弱势市候选数再减半），不空仓
 - `crash`：保护性空仓（系统性崩盘日不接飞刀）
-- `conditional_pass` 仅允许进入 `paper`；`track_live/signal_only/live` 只加载 manifest 状态为 `enabled` 的策略。当前配置保持 `track_live`，未达到严格 `enabled` 的策略不会进入生产信号列表
+- `conditional_pass` 仅允许进入 `paper`；`track_live/signal_only/live` 只加载 settings `verified_strategies` 白名单中的策略，并要求策略已注册。当前配置保持 `track_live`，因暂无完整 gate-v1 通过证据，生产运行时不加载策略信号，仅跟踪真实持仓
 
 **策略池动态权重（v0.7.10+）**：`StrategyPool` 根据近 20 笔交易表现动态调整策略权重，连续亏损 5 次大幅降权但保留策略（不删除），连续盈利 3 次逐步恢复；权重持久化到 `data/strategy_pool_weights.json`，进程重启不丢失。
 

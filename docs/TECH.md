@@ -797,7 +797,7 @@ v0.6.2 新增两只主力跟随策略，均继承 `Strategy` 基类、在 `strat
 #### 自动调参与启发式优化集成（v0.7.3）
 
 - **参数网格**：`scripts/optimize_params.py` 中已为两只策略注册完整参数网格（`STRATEGY_PARAM_GRIDS`）、配置键（`STRATEGY_CONFIG_KEYS`）和语义约束（`STRATEGY_PARAM_CONSTRAINTS`）。
-- **解锁条件**：优化结果写回 `strategy_defaults.yaml` 必须通过 4 项门控：样本外 Sharpe > 0、参数稳定性 ≥ 50%、最大回撤 < 25%、平均收益 ≥ 0。
+- **解锁条件**：优化结果写回 `strategy_defaults.yaml` 必须通过 `GatePolicy gate-v1` 门控：样本外 Sharpe > 0、参数稳定性 ≥ 80%、最大回撤 < 25%、平均收益 ≥ 0、样本外交易次数 ≥ 30。
 - **策略专用股票池（v0.7.10+）**：
   - 新增 `analysis/optimization_pools.py` 集中管理策略→股票池映射
   - 突破类（box_breakout / dual_thrust）：活跃中小盘（603501, 002371, 002472, 300033, 002230）
