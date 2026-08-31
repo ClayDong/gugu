@@ -95,7 +95,7 @@ strategy:
       - rsi_reversal
       # death_valley_rebound 已移除：2026-08-15 持仓回测审计证伪
       # bollinger_oversold_rebound 已移除：2026-08-15 持仓回测审计证伪
-    # 熊市/暴跌：空仓观察，不启用任何买入策略
+    # 信号策略：熊市/崩盘不启用买入策略；选股器的 bear 候选缩减规则见 screener/params.py
     bear: []
     crash: []
   # v0.5.0 P0-1修复：策略分组管理

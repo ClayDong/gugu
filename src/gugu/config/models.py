@@ -444,11 +444,17 @@ class WebConfig(BaseModel):
 
     admin_api_key: str = Field(
         default="",
-        description="Web 管理接口 API Key。为空时不拒绝请求（仅本地开发），生产环境务必配置。",
+        description=(
+            "Web 管理接口 API Key。为空时敏感接口直接禁用（fail-closed），"
+            "不支持无 Key 放行；可通过环境变量 GUGU_ADMIN_API_KEY 注入。"
+        ),
     )
     require_auth_for_sensitive: bool = Field(
-        default=False,
-        description="是否对敏感接口（下单、解除熔断等）强制 API Key 认证。",
+        default=True,
+        description=(
+            "是否对敏感接口（下单、解除熔断等）强制 API Key 认证。"
+            "默认 True（安全）；设为 False 仅限本机开发显式豁免。"
+        ),
     )
 
 

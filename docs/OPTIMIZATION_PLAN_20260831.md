@@ -10,9 +10,9 @@
 
 | # | 事项 | 状态 | 说明 |
 |---|------|------|------|
-| P0-1 | 提交存量清理（拆分 commit，不 push） | 🔄 | 130 文件/-15715 行僵尸策略清理已测试全绿（2068 passed），拆为：策略删除+注册同步 / 门禁回测修复 / 测试同步 / 文档 |
-| P0-2 | Web 安全默认值加固 | ⬜ | `run_web.py --host` 默认 `0.0.0.0`→`127.0.0.1`；`WebConfig.require_auth_for_sensitive` 默认 False→True（fail-closed）；API Key 比较改 `secrets.compare_digest`（防时序侧信道）；补"未配置 key 时敏感端点必须 401"回归测试 |
-| P0-3 | 统一 bear 语义 | ⬜ | settings.yaml 注释"熊市/暴跌空仓"与 PRODUCT.md:76 "bear 候选×0.4 不空仓"矛盾。实际是两个子系统（信号策略 enabled_by_regime vs 选股器 screener/params.py:68 bear 0.4），两处文档改齐并互相引用 |
+| P0-1 | 提交存量清理（拆分 commit，不 push） | ✅ | 代码/配置/测试：`e6dfe9a`；文档与本计划：`4048ed3`。130 文件/-15726 行；本轮最终回归 2070 passed / 152 skipped |
+| P0-2 | Web 安全默认值加固 | ✅ | `run_web.py --host` 默认 `127.0.0.1`；`WebConfig.require_auth_for_sensitive` 默认 True；无管理 key 时敏感接口 503 禁用；API Key 使用 `secrets.compare_digest`；新增回归测试 |
+| P0-3 | 统一 bear 语义 | ✅ | settings.yaml 与 PRODUCT.md 明确区分信号策略（bear/crash 不买入）和选股器（bear 候选×0.4，仅观察） |
 
 ## P1（1-2 月，聚焦新手价值）
 
@@ -20,7 +20,7 @@
 |---|------|------|------|
 | P1-1 | 通知分级制（Action/Digest/Archive 三档） | ⬜ | 止损/风控/熔断=Action 独立通道；宏观+温度计+资金流+绩效合并为早报/收盘两张 Digest；其余只入库存。交易日 15+ 卡片 → 2-3 张 |
 | P1-2 | 卡片新手化 | ⬜ | 买入卡固定显示"这单看错最多亏 ¥X"（仓位×止损距离）；命中率带样本量 n=；verified/experimental 颜色徽章区分，experimental 标题写"未验证策略，仅供观察" |
-| P1-3 | 增强过滤器只降不升 | ⬜ | 移除 signal_pipeline 4 处置信度加成（551 量价背离卖出加成、696 signal_only 另类因子、896 筹码潜伏者、921 另类因子）；保留降权/拦截 |
+| P1-3 | 增强过滤器只降不升 | ✅ | 移除 3 处买入侧加成（signal_only 另类因子、筹码潜伏者、生产路径另类因子）；量价背离卖出加成保留，因为它只强化退出/避险方向 |
 | P1-4 | 研究账本最小版 | ⬜ | 每次回测/优化追加一行 JSONL（run_id、git commit、参数网格大小、数据范围、结果），让"试了多少次"可审计 |
 | P1-5 | 保命模块分支覆盖 | ⬜ | risk/manager、quality_state、track_live、registry 过滤四模块补分支测试；质量叙事从"总通过数"改为"关键不变量清单" |
 

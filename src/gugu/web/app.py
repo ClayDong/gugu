@@ -95,20 +95,33 @@ def _get_web_admin_api_key() -> str:
 
 
 def _require_admin_auth(x_api_key: str | None = Header(None, alias="X-API-Key")) -> None:
-    """敏感接口依赖：校验管理 API Key。"""
+    """敏感接口依赖：校验管理 API Key（fail-closed）。
+
+    语义（v0.9.38 安全加固）：
+    - 未配置管理 Key → 敏感端点一律 503 禁用（不再有放行旁路）；
+    - 已配置 Key + require_auth_for_sensitive=False（显式本地开发选择）→ 放行；
+    - 已配置 Key + require_auth_for_sensitive=True（默认）→ 必须携带正确 X-API-Key。
+    """
+    import secrets
+
     cfg_key = _get_web_admin_api_key()
+    if not cfg_key:
+        logger.warning("Web 敏感接口被拒绝：未配置管理 API Key（GUGU_ADMIN_API_KEY）")
+        raise HTTPException(
+            status_code=503,
+            detail="服务未配置管理 API Key（GUGU_ADMIN_API_KEY），敏感接口已禁用",
+        )
+
     cfg = get_config()
-    require_auth = False
+    require_auth = True
     with contextlib.suppress(Exception):
         require_auth = cfg.web.require_auth_for_sensitive
-
-    # 未配置 key 且未强制认证时放行（仅本地开发）
-    if not cfg_key and not require_auth:
+    if not require_auth:
         return
 
     if not x_api_key:
         raise HTTPException(status_code=401, detail="缺少 API Key（请求头 X-API-Key）")
-    if x_api_key != cfg_key:
+    if not secrets.compare_digest(x_api_key, cfg_key):
         logger.warning("Web 敏感接口收到无效 API Key")
         raise HTTPException(status_code=403, detail="无效的 API Key")
     return
@@ -383,7 +396,7 @@ def create_app() -> FastAPI:
         # 资金流数据源状态
         flow_source_status = "unknown"
         try:
-            from gugu.notifier.flow_report import _FLOW_CACHE_FILE
+            from gugu.notifier.flow_collector import _FLOW_CACHE_FILE
 
             if _FLOW_CACHE_FILE.exists():
                 import json as _json

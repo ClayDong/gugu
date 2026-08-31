@@ -7,9 +7,10 @@ from unittest import mock
 
 import pandas as pd
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from gugu.web.app import create_app
+from gugu.web.app import _require_admin_auth, create_app
 
 
 class TestHealthEndpoint:
@@ -272,6 +273,24 @@ class TestEquityEndpoint:
             MockPath.return_value = Path(tmp_path)
             resp = client.get("/api/equity/history")
             assert resp.status_code == 200
+
+
+class TestAdminAuth:
+    """敏感接口鉴权默认值与 fail-closed 行为测试。"""
+
+    def test_missing_key_disables_sensitive_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """未配置管理 key 时，敏感端点依赖必须拒绝请求。"""
+        monkeypatch.setattr("gugu.web.app._get_web_admin_api_key", lambda: "")
+        with pytest.raises(HTTPException) as exc_info:
+            _require_admin_auth()
+        assert exc_info.value.status_code == 503
+        assert "敏感接口已禁用" in str(exc_info.value.detail)
+
+    def test_sensitive_auth_is_enabled_by_default(self) -> None:
+        """新配置默认开启敏感接口认证。"""
+        from gugu.config.models import WebConfig
+
+        assert WebConfig().require_auth_for_sensitive is True
 
 
 class TestHaltEndpoint:

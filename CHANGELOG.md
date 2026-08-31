@@ -1,3 +1,14 @@
+## 2026-08-31 — v0.9.38 对抗性优化：新手决策安全默认值与证据边界
+
+### 变更：Web 仪表盘 fail-closed + bear 语义统一 + 买入增强器取消置信度加成
+- **Web 安全默认值**：`run_web.py` 默认只监听 `127.0.0.1`；`WebConfig.require_auth_for_sensitive` 默认 `true`；未配置 `GUGU_ADMIN_API_KEY` 时敏感接口直接返回 503，不再因默认配置而放行；API Key 比较使用 `secrets.compare_digest`。
+- **回归防线**：新增未配置管理 key 时敏感接口必须拒绝的测试；保留正确 key、错误 key 和非 paper 模式拒绝测试。
+- **bear 语义统一**：文档明确区分信号策略（bear/crash 不启用买入）与选股器（bear 候选数 ×0.4，仅观察，不等于买入许可）。
+- **买入置信度边界**：另类 Alpha 与筹码“潜伏者”只作为辅助证据展示，不再单向提高买入置信度；量价背离卖出加成保留为保守退出信号。
+- **优化计划**：新增 `docs/OPTIMIZATION_PLAN_20260831.md`，记录 P0/P1/P2 路线及红线。
+- **存量清理**：删除 32 个未通过验证或待验证策略模块，130 文件变更已提交为 `e6dfe9a`；文档同步提交为 `4048ed3`。
+- **验证**：全量测试 `2070 passed / 152 skipped / 0 failed`；Ruff 通过；本轮触及的 Web/配置/健康结果模块 Mypy 通过。
+
 ## 2026-08-28 — v0.9.37 修复：生产空策略池下 0 信号每日误升级（空策略池豁免）
 
 ### 变更：`src/gugu/health/watchdog.py` check_zero_signal_streak 新增空策略池豁免

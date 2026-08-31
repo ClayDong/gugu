@@ -685,16 +685,10 @@ class SignalPipeline:
                     signal["holder_concentration"] = hc_result
                 except Exception as e:
                     logger.debug("signal_only 筹码检查失败 {}: {}", symbol, e)
-            # 另类 Alpha 因子（仅附加数据）
+            # 另类 Alpha 因子仅附加证据，不提高买入置信度。
             if self._altalpha_filter is not None:
                 try:
-                    aa_result = await self._altalpha_filter.check(symbol)
-                    signal["altalpha"] = aa_result
-                    if aa_result.get("confidence_boost", 0) > 0:
-                        signal["confidence"] = min(
-                            1.0,
-                            float(signal.get("confidence", 0.5)) + aa_result["confidence_boost"],
-                        )
+                    signal["altalpha"] = await self._altalpha_filter.check(symbol)
                 except Exception as e:
                     logger.debug("signal_only 另类因子检查失败 {}: {}", symbol, e)
             # 向下摊平检查（仅附加数据）
@@ -869,7 +863,7 @@ class SignalPipeline:
         # 2.4 筹码集中度过滤（v0.5.0 新增，仅买入信号）
         # 股东户数季度披露，作为慢变量过滤器：
         # - 避雷针信号（户数增 > 30%）→ 拒绝买入
-        # - 潜伏者信号（户数降 > 20%）→ 置信度加成
+        # - 潜伏者信号（户数降 > 20%）→ 仅作辅助证据，不调整置信度
         if (
             signal["direction"] == "buy"
             and not signal.get("wisdom_filtered")
@@ -892,10 +886,8 @@ class SignalPipeline:
                         f"{', '.join(hc_result.get('reasons', []))}"
                     )
                 elif hc_result.get("label") == "潜伏者":
-                    # 潜伏者信号：置信度加成
-                    boost = 0.15
-                    signal["confidence"] = min(1.0, float(signal.get("confidence", 0.5)) + boost)
-                    logger.info("{} 筹码潜伏者信号：置信度 +{:.2f}", symbol, boost)
+                    # 潜伏者只作为可解释证据展示，不提高买入置信度。
+                    logger.info("{} 筹码潜伏者信号：作为辅助证据保留", symbol)
             except Exception as e:
                 logger.debug("筹码集中度检查失败 {}: {}", symbol, e)
 
@@ -918,9 +910,8 @@ class SignalPipeline:
                     signal["wisdom_filtered"] = True
                     signal["filter_reason"] = f"另类因子: {', '.join(aa_result.get('reasons', []))}"
                 elif aa_result.get("confidence_boost", 0) > 0:
-                    boost = aa_result["confidence_boost"]
-                    signal["confidence"] = min(1.0, float(signal.get("confidence", 0.5)) + boost)
-                    logger.info("{} 另类因子支撑：置信度 +{:.2f}", symbol, boost)
+                    # 增强因子只作为证据展示；置信度只由策略本身和风险门禁决定。
+                    logger.info("{} 另类因子支撑：保留为辅助证据，不调整置信度", symbol)
             except Exception as e:
                 logger.debug("另类因子检查失败 {}: {}", symbol, e)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -12,7 +13,7 @@ class HealthCheckResult:
     ok: bool
     severity: str = "info"
     message: str = ""
-    details: dict = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
         return self.ok

@@ -71,7 +71,8 @@
 - `bull/rally`：配置中保留 box_breakout、double_yin、rsi_reversal、linjudaye、price_volume_signal、regime_cycle_four；实验性信号仅按配置和运行模式观察，不能据此宣称已验证
 - `sideways`：配置中保留 box_breakout、double_yin、rsi_reversal
 - `chenxuezhang`、`breakout_rebound`、`rebound_elite`、`rebound_system`：disabled / research-only，不参与信号融合
-- `bear`：候选数 ×0.4（熊市也出选股，MA5<MA10 弱势市候选数再减半），不空仓
+- **信号策略**：`bear/crash` 均不启用买入策略（`settings.yaml:enabled_by_regime`），系统进入观察/防守状态
+- **选股器**：`bear` 仍可输出缩减后的观察候选（候选数 ×0.4；MA5<MA10 时再减半），仅供研究，不等于买入许可
 - `crash`：保护性空仓（系统性崩盘日不接飞刀）
 - `conditional_pass` 仅允许进入 `paper`；`track_live/signal_only/live` 只加载 settings `verified_strategies` 白名单中的策略，并要求策略已注册。当前配置保持 `track_live`，因暂无完整 gate-v1 通过证据，生产运行时不加载策略信号，仅跟踪真实持仓
 
