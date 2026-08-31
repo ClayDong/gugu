@@ -55,16 +55,12 @@ class TestSignalGenerationBenchmark:
     @pytest.mark.parametrize(
         "strategy_name",
         [
-            "turtle",
-            "dual_ma",
-            "bollinger",
             "rsi_reversal",
-            "chen_jiangting",
             "box_breakout",
-            "kdj",
             "double_yin",
-            "pullback_low",
-            "money_flow_follow",
+            "linjudaye",
+            "price_volume_signal",
+            "regime_cycle_four",
         ],
     )
     def test_strategy_generation_speed(self, strategy_name: str) -> None:
@@ -90,7 +86,7 @@ class TestSignalGenerationBenchmark:
         from gugu.strategies.registry import get_strategy
 
         df = _make_kline_df(120)  # 120 天短周期
-        strategy = get_strategy("turtle")
+        strategy = get_strategy("box_breakout")
 
         # 模拟 50 只股票
         start = time.perf_counter()

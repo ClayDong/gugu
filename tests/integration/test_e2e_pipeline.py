@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pandas as pd
 import pytest
 
 # ──────────────────────────────────────────────────────────
@@ -64,7 +65,7 @@ async def test_imports() -> None:
 
     # 策略层
     from gugu.strategies.base import Strategy  # noqa: F811
-    from gugu.strategies.trend import TurtleStrategy  # noqa: F811
+    from gugu.strategies.breakout import BoxBreakoutStrategy  # noqa: F811
     from gugu.strategies.mean_revert import BollingerStrategy  # noqa: F811
 
     # 分析层
@@ -244,6 +245,98 @@ async def test_signal_pipeline_construction() -> None:
     assert pipeline._wisdom is wisdom
     assert pipeline._regime_detector is regime
     assert pipeline._position_controller is pos_ctrl
+
+
+@pytest.mark.asyncio
+async def test_signal_pipeline_processes_real_router_chain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """真实 SignalRouter 与 SignalPipeline.process 应能组合产出观察信号。"""
+    from gugu.analysis.position_controller import PositionBudget
+    from gugu.engine.signal_pipeline import SignalPipeline
+    from gugu.engine.signal_router import SignalRouter
+
+    dates = pd.bdate_range("2024-01-01", periods=60)
+    close = pd.Series([100.0 + i * 0.2 for i in range(60)], dtype=float)
+    df = pd.DataFrame(
+        {
+            "date": dates,
+            "open": close * 0.999,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "volume": [1_000_000] * 60,
+            "amount": close * 1_000_000,
+        }
+    )
+
+    strategy = MagicMock()
+    strategy.name = "fixture_strategy"
+    strategy.generate_signals.return_value = df.assign(
+        signal=[0] * 59 + [1], confidence=[0.0] * 59 + [0.8]
+    )
+
+    dm = MagicMock()
+    dm.is_degraded = False
+    wisdom = MagicMock()
+    wisdom.advise_fallback.return_value = {
+        "wisdom_filtered": False,
+        "suggested_position_ratio": 0.2,
+        "stop_loss_price": 95.0,
+        "take_profit": {"price": 110.0},
+    }
+    fundamental = MagicMock()
+    fundamental.check.return_value = {"pass": True, "industry": "测试行业"}
+    money_flow = MagicMock()
+    money_flow.check = AsyncMock(return_value={"pass": True, "reasons": []})
+    industry = MagicMock()
+    industry.check_buy.return_value = {"allowed": True, "reason": "ok"}
+    regime_detector = MagicMock()
+    position_controller = MagicMock()
+
+    pipeline = SignalPipeline(
+        data_manager=dm,
+        signal_router=SignalRouter([strategy], fusion_rule="any", min_confidence=0.0),
+        wisdom_advisor=wisdom,
+        regime_detector=regime_detector,
+        position_controller=position_controller,
+        fundamental_filter=fundamental,
+        money_flow_filter=money_flow,
+        industry_constraint=industry,
+        exec_mode="signal_only",
+    )
+    pipeline._scan_with_perspectives = False
+    pipeline._holder_concentration_filter = None
+    pipeline._altalpha_filter = None
+    pipeline._check_sector_rotation = AsyncMock(return_value={"allowed": True, "reason": "ok"})
+    monkeypatch.setattr(pipeline, "_detect_stage_and_danger", MagicMock())
+
+    signal = await pipeline.process(
+        symbol="600519",
+        df=df,
+        meta={"name": "测试股票", "is_st": False, "is_suspended": False},
+        budget=PositionBudget(0.8, 0.3, 800_000, 5, "test"),
+        rt_all=pd.DataFrame(
+            {
+                "symbol": ["600519"],
+                "price": [111.0],
+            }
+        ),
+        watchlist=["600519"],
+        portfolio={},
+        account=MagicMock(total_value=1_000_000, cash=800_000),
+        regime="bull",
+    )
+
+    assert signal is not None
+    assert signal["symbol"] == "600519"
+    assert signal["direction"] == "buy"
+    assert signal["strategy"] == "fixture_strategy"
+    assert signal["price"] == 111.0
+    assert signal["price_is_realtime"] is True
+    assert signal["data_quality"] == "fresh_valid"
+    assert signal["stop_loss_price"] == 95.0
+    strategy.generate_signals.assert_called_once()
+    wisdom.advise_fallback.assert_called_once()
+    money_flow.check.assert_awaited_once_with("600519")
 
 
 # ──────────────────────────────────────────────────────────

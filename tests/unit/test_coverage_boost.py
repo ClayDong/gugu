@@ -159,10 +159,10 @@ class TestWisdomAdvisorMethods:
             mock_env.return_value = env_cfg
             yield WisdomAdvisor()
 
-    def test_close_no_client(self, advisor):
+    @pytest.mark.asyncio
+    async def test_close_no_client(self, advisor):
         """close() with no async client should not raise."""
-        advisor.close()  # sync version — but actually it's async
-        # Just verify it doesn't crash. The method is async, so we'll test separately.
+        await advisor.close()
 
     @pytest.mark.asyncio
     async def test_close_async_no_client(self, advisor):

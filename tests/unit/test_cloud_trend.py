@@ -16,7 +16,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gugu.strategies.cloud_trend import CloudTrendStrategy
+try:
+    from gugu.strategies.cloud_trend import CloudTrendStrategy
+except ModuleNotFoundError:
+    CloudTrendStrategy = None  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skip(reason="依赖已归档策略（cloud_trend）")
 
 
 def _make_uptrend_df(days: int = 120, seed: int = 42) -> pd.DataFrame:

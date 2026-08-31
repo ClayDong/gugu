@@ -183,6 +183,29 @@ def test_zero_signal_escalates_when_scan_running(tmp_path: Path):
     assert "无自动修复方案" in f.action
 
 
+def test_probe_data_sources_closes_temporary_manager(monkeypatch, tmp_path: Path):
+    """数据源探测结束后必须关闭临时 DataManager。"""
+    import gugu.data.manager as manager_module
+
+    class FakeDataManager:
+        closed = False
+
+        async def fetch_stock_history(self, symbol: str, days: int = 5):
+            return None
+
+        def close(self):
+            self.closed = True
+
+    fake = FakeDataManager()
+    monkeypatch.setattr(manager_module, "DataManager", lambda: fake)
+    rec = AutoRecover(data_dir=tmp_path, test_mode=True)
+
+    result = rec._probe_data_sources()
+
+    assert result == {"ok": False, "detail": "全部探测样本不可用"}
+    assert fake.closed is True
+
+
 def test_unknown_alert_type_escalates(rec: AutoRecover):
     """未知告警类型 → 升级人工（fail-safe）。"""
     from gugu.health.watchdog import HealthCheckResult

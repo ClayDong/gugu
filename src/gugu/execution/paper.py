@@ -59,6 +59,7 @@ class PaperBroker(BaseBroker):
         stamp_tax: float | None = None,
         slippage: float | None = None,
         state_file: Path | None = None,
+        random_seed: int | None = None,
     ) -> None:
         cfg = get_config().execution.paper
         self._cash = float(initial_capital or cfg.initial_capital)
@@ -71,6 +72,9 @@ class PaperBroker(BaseBroker):
         # 部分成交状态缓存 {symbol: market_value_in_billions}
         self._market_value_cache: dict[str, float] = {}
         self._market_context: dict[str, dict[str, float]] = {}
+        # 部分成交随机源：默认使用模块级 random（保持历史行为），
+        # 传入 random_seed 时用独立 Random 实例，使 paper 结果可复现（审计/回放用）。
+        self._rng = random.Random(random_seed) if random_seed is not None else random
         # P1 修复：线程安全锁，保护 _cash / _positions / _trades
         self._lock = threading.RLock()
         # P1-1 修复（2026-08-05）：GUGU_TEST_MODE 下隔离状态文件——
@@ -126,11 +130,11 @@ class PaperBroker(BaseBroker):
             (实际成交数量, 成交价)
             部分成交时价格按比例偏移（模拟抢筹/砸盘效应）
         """
-        if partial_prob <= 0 or random.random() > partial_prob:
+        if partial_prob <= 0 or self._rng.random() > partial_prob:
             return quantity, fill_price
 
         # 部分成交比例在 30%-80% 之间随机
-        fill_ratio = random.uniform(0.3, 0.8)
+        fill_ratio = self._rng.uniform(0.3, 0.8)
         partial_qty = int(math.floor(quantity * fill_ratio / 100) * 100)
         if partial_qty < 100:
             partial_qty = 100 if quantity >= 100 else 0
@@ -450,6 +454,7 @@ class PaperBroker(BaseBroker):
         self._trades.append(
             {
                 "date": date.today().isoformat(),
+                "datetime": datetime.now().isoformat(timespec="seconds"),
                 "symbol": symbol,
                 "direction": direction,
                 "price": result.price,

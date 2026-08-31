@@ -95,6 +95,12 @@ class SinaCollector(BaseCollector):
             )
         return self._client
 
+    def close(self) -> None:
+        """关闭新浪 HTTP Session。"""
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=4))
     def fetch_stock_history(self, symbol: str, days: int = 90) -> pd.DataFrame:
         code = self.normalize_symbol(symbol)

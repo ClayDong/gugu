@@ -16,9 +16,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gugu.strategies.capital_flow_alert import CapitalFlowAlertStrategy
+try:
+    from gugu.strategies.capital_flow_alert import CapitalFlowAlertStrategy
+except ModuleNotFoundError:
+    CapitalFlowAlertStrategy = None  # type: ignore[assignment]
 from gugu.strategies.registry import _REGISTRY
 
+pytestmark = pytest.mark.skip(reason="依赖已归档策略（capital_flow_alert）")
 
 # ── 测试数据构造 ──────────────────────────────────────────────
 

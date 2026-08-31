@@ -1,6 +1,5 @@
-"""博主规则策略包：陈学长不吃面、邻居大爷。"""
+"""博主规则策略包：邻居大爷。"""
 
-from gugu.strategies.blogger_rules.chenxuezhang import ChenXueZhangStrategy
 from gugu.strategies.blogger_rules.linjudaye import LinJuDaYeStrategy
 
-__all__ = ["ChenXueZhangStrategy", "LinJuDaYeStrategy"]
+__all__ = ["LinJuDaYeStrategy"]

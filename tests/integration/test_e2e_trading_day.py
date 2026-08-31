@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -51,7 +52,7 @@ class TestE2ESignalFlow:
         from gugu.strategies.registry import get_strategy
 
         df = _make_kline_df(60)
-        strategy = get_strategy("turtle")
+        strategy = get_strategy("box_breakout")
         result = strategy.generate_signals(df)
 
         assert "signal" in result.columns
@@ -70,14 +71,14 @@ class TestE2ESignalFlow:
             direction="buy",
             price=1800.0,
             name="贵州茅台",
-            strategy="turtle",
+            strategy="box_breakout",
             confidence=0.85,
             suggested_position_ratio=0.15,
             stop_loss_price=1656.0,
         )
         d = s.to_dict()
         assert d["symbol"] == "600519"
-        assert d["strategy"] == "turtle"
+        assert d["strategy"] == "box_breakout"
 
         s2 = Signal.from_dict(d)
         assert s2.symbol == s.symbol
@@ -158,6 +159,17 @@ class TestE2ESignalFlow:
 class TestE2ERiskFlow:
     """端到端风控流程测试。"""
 
+    def test_production_runtime_uses_verified_strategy_whitelist(self) -> None:
+        """生产模式策略必须来自 settings.yaml 的 verified 白名单。"""
+        from gugu.config import get_config
+        from gugu.strategies.registry import get_runtime_strategy_names
+
+        cfg = get_config()
+        names = get_runtime_strategy_names(execution_mode="track_live")
+
+        assert set(names) <= set(cfg.strategy.verified_strategies)
+        assert names == []
+
     def test_l2_halt_persists_to_file(self, tmp_path) -> None:
         """L2 熔断状态应持久化到文件。"""
         import json
@@ -169,6 +181,45 @@ class TestE2ERiskFlow:
         loaded = json.loads(state_file.read_text(encoding="utf-8"))
         assert loaded["halted"] is True
         assert loaded["halt_date"] == "2026-07-07"
+
+    def test_track_live_rejects_order_without_mutating_state(self, tmp_path) -> None:
+        """track_live 下单必须失败，且不得修改用户维护的持仓文件。"""
+        from gugu.execution.track_live import LivePositionTracker
+
+        state_file = tmp_path / "live_positions.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "mode": "track_live",
+                    "cash": 500_000,
+                    "positions": {
+                        "600519": {
+                            "symbol": "600519",
+                            "name": "贵州茅台",
+                            "quantity": 100,
+                            "available": 100,
+                            "avg_cost": 150.0,
+                            "current_price": 155.0,
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        before = state_file.read_bytes()
+        tracker = LivePositionTracker(state_file=state_file)
+
+        result = tracker.order("600519", "buy", 100, 155.0)
+
+        assert result.success is False
+        assert result.quantity == 0
+        assert "track_live" in result.message
+        position = tracker.get_position("600519")
+        assert position is not None
+        assert position.quantity == 100
+        assert position.avg_cost == 150.0
+        assert state_file.read_bytes() == before
 
     def test_position_controller_calculate_budget(self) -> None:
         """仓位控制器应能计算预算。"""
@@ -196,7 +247,7 @@ class TestE2ENotificationFlow:
             "symbol": "600519",
             "name": "贵州茅台",
             "direction": "buy",
-            "strategy": "turtle",
+            "strategy": "box_breakout",
             "price": 150.0,
             "confidence": 0.85,
             "suggested_position_ratio": 0.15,

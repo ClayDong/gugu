@@ -25,10 +25,9 @@ from gugu.engine.event_engine import (
 )
 from gugu.execution import OrderManager, PaperBroker, StopLossManager
 from gugu.risk import RiskManager
+from gugu.strategies.breakout import BoxBreakoutStrategy
 from gugu.strategies.mean_revert import BollingerStrategy
-from gugu.strategies.trend import TurtleStrategy
 from gugu.wisdom import BookPerspectiveRouter, WisdomAdvisor
-
 
 # =============================================================================
 # 测试数据构造（复用 test_e2e_pipeline.py 的 fixture 风格）
@@ -62,8 +61,8 @@ def make_bollinger_buy_df(days: int = 60, base_price: float = 100.0) -> pd.DataF
     )
 
 
-def make_turtle_sell_df(days: int = 60, base_price: float = 100.0) -> pd.DataFrame:
-    """触发海龟卖出信号的数据。"""
+def make_breakout_sell_df(days: int = 60, base_price: float = 100.0) -> pd.DataFrame:
+    """触发箱体突破策略卖出数据的数据构造器。"""
     np.random.seed(43)
     dates = pd.bdate_range("2024-01-01", periods=days)
     up = [base_price * (1.003**i) for i in range(40)]
@@ -170,17 +169,17 @@ class TestBacktestReportE2E:
         symbols = {
             "600519": make_bollinger_buy_df(60, 100.0),
             "000858": make_sideways_df(120, 50.0),
-            "002415": make_turtle_sell_df(60, 200.0),
+            "002415": make_breakout_sell_df(60, 200.0),
         }
 
         # ── 2. 用 BacktestEngine 跑 2 个策略 ──
         engine = BacktestEngine(initial_capital=1_000_000)
         bollinger = BollingerStrategy()
-        turtle = TurtleStrategy()
+        breakout = BoxBreakoutStrategy()
 
         results: list[BacktestResult] = []
         for symbol, df in symbols.items():
-            for strategy in [bollinger, turtle]:
+            for strategy in [bollinger, breakout]:
                 result = engine.run(strategy, df, symbol)
                 results.append(result)
 
@@ -194,7 +193,7 @@ class TestBacktestReportE2E:
         # ── 4. 验证报告内容 ──
         # 4a. 包含策略名
         assert "bollinger" in md or "Bollinger" in md
-        assert "turtle" in md or "Turtle" in md
+        assert "box_breakout" in md or "BoxBreakout" in md or "箱体" in md
         assert "双均线" not in md  # 确保没有无关策略名
 
         # 4b. 包含核心指标表头
@@ -796,6 +795,11 @@ class TestStopLossManagerE2E:
         # ── 1. 买入建仓 ──
         broker = PaperBroker(initial_capital=1_000_000)
         broker.set_market_context("000858", prev_close=148.0)
+        monkeypatch.setattr(
+            broker,
+            "_simulate_partial_fill",
+            lambda quantity, fill_price, partial_prob: (quantity, fill_price),
+        )
         risk = RiskManager()
         notifier = make_mock_notifier()
         event_engine = EventEngine()
@@ -956,8 +960,8 @@ class TestMultiPerspectiveSignalE2E:
             "name": "贵州茅台",
             "direction": "buy",
             "confidence": 0.8,
-            "strategy": "turtle",
-            "strategies": ["turtle"],
+            "strategy": "box_breakout",
+            "strategies": ["box_breakout"],
             "reason": "趋势突破",
             "suggested_position_ratio": 0.20,
             "price": 1500.0,
@@ -1025,8 +1029,8 @@ class TestMultiPerspectiveSignalE2E:
             "name": "五粮液",
             "direction": "sell",
             "confidence": 0.8,
-            "strategy": "turtle",
-            "strategies": ["turtle"],
+            "strategy": "box_breakout",
+            "strategies": ["box_breakout"],
             "reason": "趋势破位",
             "suggested_position_ratio": 0.0,
             "price": 140.0,

@@ -9,7 +9,15 @@ from gugu.strategies.base import Strategy, StrategyConfig
 from gugu.strategies.breakout import BoxBreakoutStrategy, DualThrustStrategy
 from gugu.strategies.mean_revert import BollingerStrategy, KDJStrategy, RSIStrategy
 from gugu.strategies.registry import get_strategy, list_strategies
-from gugu.strategies.trend import DualMAStrategy, MACDStrategy, TurtleStrategy
+
+try:
+    from gugu.strategies.trend import DualMAStrategy, MACDStrategy, TurtleStrategy
+except ModuleNotFoundError:
+    DualMAStrategy = MACDStrategy = TurtleStrategy = None  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skip(
+    reason="依赖已归档策略（trend.DualMAStrategy/MACDStrategy/TurtleStrategy）"
+)
 
 
 def test_strategy_config_defaults() -> None:

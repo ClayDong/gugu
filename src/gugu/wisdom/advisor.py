@@ -699,11 +699,25 @@ class WisdomAdvisor:
             )
             resp.raise_for_status()
             resp_data = resp.json()
-            content = resp_data["choices"][0]["message"]["content"]
+            choices = resp_data.get("choices", [])
+            if not choices:
+                logger.warning("[wisdom-LLM] 持仓认知报告无 choices: {}", resp_data)
+                return ""
+            content = choices[0].get("message", {}).get("content")
+            if not content:
+                logger.warning(
+                    "[wisdom-LLM] 持仓认知报告 content 为空: finish_reason={}",
+                    choices[0].get("finish_reason"),
+                )
+                return ""
             logger.info("[wisdom-LLM] 持仓认知报告生成成功: {} 字", len(content))
             return content.strip()
         except Exception as e:
-            logger.warning("[wisdom-LLM] 持仓认知报告生成失败: {}", e)
+            logger.warning(
+                "[wisdom-LLM] 持仓认知报告生成失败: {} (type={})",
+                e,
+                type(e).__name__,
+            )
             return ""
 
     def _build_book_context(self, signal: dict[str, Any]) -> str:

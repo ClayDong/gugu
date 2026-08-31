@@ -664,7 +664,33 @@ class TestAdvisePortfolioAsync:
         assert len(messages) == 2
         assert "牧原股份" in messages[1]["content"]
 
-    def test_portfolio_handles_llm_failure(self, monkeypatch):
+    def test_portfolio_handles_empty_llm_content(self, monkeypatch):
+        """LLM 返回 200 但 content 为空时应安全返回空字符串。"""
+
+        async def fake_get_client(self):
+            client = AsyncMock()
+
+            class FakeResp:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {"choices": [{"message": {"content": None}, "finish_reason": "stop"}]}
+
+            client.post = AsyncMock(return_value=FakeResp())
+            return client
+
+        monkeypatch.setattr(WisdomAdvisor, "_get_async_client", fake_get_client)
+        advisor = WisdomAdvisor()
+        advisor._llm_available = True
+
+        result = asyncio.run(
+            advisor.advise_portfolio_async(
+                positions=[{"symbol": "002714", "name": "牧原股份", "current_price": 39.22}]
+            )
+        )
+        assert result == ""
+
         """LLM 异常时应返回空字符串。"""
 
         async def fake_get_client(self):

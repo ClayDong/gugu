@@ -290,46 +290,11 @@ class TestMLFactorModel:
         assert all(v >= 0 for v in importance.values())
 
 
-class TestMLFactorStrategy:
-    """ML 策略信号生成测试。"""
+class TestMLFactorResearchBoundary:
+    """已归档 ML 策略不再作为运行时策略测试。"""
 
-    def test_strategy_registered(self) -> None:
-        """策略已注册。"""
+    def test_strategy_is_not_in_runtime_registry(self) -> None:
+        """ML 因子研究代码与生产策略注册表保持隔离。"""
         from gugu.strategies.registry import list_strategies
 
-        assert "ml_factor" in list_strategies()
-
-    def test_strategy_generates_signals(self, sample_ohlcv: pd.DataFrame) -> None:
-        """策略能生成信号列。"""
-        from gugu.strategies.ml_factor import MLFactorStrategy
-
-        strategy = MLFactorStrategy()
-        result = strategy.generate_signals(sample_ohlcv, is_backtest=True)
-
-        assert "signal" in result.columns
-        assert "confidence" in result.columns
-        assert len(result) == len(sample_ohlcv)
-        # 信号值只能是 1, -1, 0
-        assert set(result["signal"].unique()).issubset({1, -1, 0})
-        # 置信度在 0-1
-        assert result["confidence"].max() <= 1.0
-        assert result["confidence"].min() >= 0.0
-
-    def test_strategy_with_insufficient_data(self) -> None:
-        """数据不足时不产生信号。"""
-        from gugu.strategies.ml_factor import MLFactorStrategy
-
-        strategy = MLFactorStrategy()
-        short_df = pd.DataFrame(
-            {
-                "date": pd.date_range("2025-01-01", periods=10, freq="B"),
-                "open": np.random.randn(10) + 10,
-                "high": np.random.randn(10) + 11,
-                "low": np.random.randn(10) + 9,
-                "close": np.random.randn(10) + 10,
-                "volume": np.random.randint(100000, 500000, 10).astype(float),
-                "amount": np.random.randint(100000, 500000, 10).astype(float),
-            }
-        )
-        result = strategy.generate_signals(short_df, is_backtest=True)
-        assert (result["signal"] == 0).all()
+        assert "ml_factor" not in list_strategies()

@@ -83,7 +83,7 @@ class DataSourceHealthMonitor:
         )
         with self._buffer_lock:
             self._buffer.append(evt)
-            # 每累计 20 条或 60 秒写入一次，降低 IO
+            # 每累计 20 条写入一次；关闭或生成日报时由调用方显式 flush。
             should_flush = len(self._buffer) >= 20
         if should_flush:
             self.flush()

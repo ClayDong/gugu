@@ -5,6 +5,7 @@ signal_strategies:
     class: CloudTrendStrategy
     source: 用户自研（趋势跟踪+共振确认+严格风控）
     enabled: false
+    archived: true
     summary: 三维趋势判定（均线多头+高低点抬升+量价配合）→ 两类入场（回踩低吸/放量突破）→ 分层仓位（初期4成/确认6-7成/末期2成）→ 严格止损（单笔≤2%/跌破MA20清仓）
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0; 参数稳定性 <50%; 平均样本外收益
@@ -39,6 +40,7 @@ signal_strategies:
     class: HotMoneyStrategy
     source: 游资内部交易心法（涨停筛选+缩倍量入场+放倍量离场）
     enabled: false
+    archived: true
     # 2026-08-01 样本外证伪：15股×600日事件研究（510信号）全样本超额+1.00%(p=0.014)，
     # 但 sh688041 单股占36%信号；剔除后验证期(2025-02~2026-07)超额5d -0.50%/10d -0.77% 转负，
     # 2025(-0.43%)/2026(-0.85%)逐年恶化。训练期有效验证期失效 = 过拟合特征，集中度超标不可信。
@@ -103,6 +105,7 @@ signal_strategies:
     class: TurtleStrategy
     source: 《海龟交易法则》唐奇安通道
     enabled: false
+    archived: true
     summary: 通道突破买入，跌破 exit_low 卖出，ATR 动态止损 + 量比确认
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0; 平均样本外收益 < 0
@@ -125,6 +128,7 @@ signal_strategies:
     class: DualMAStrategy
     source: 经典技术分析
     enabled: false
+    archived: true
     summary: 短均线上穿长均线买入、下穿卖出
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0
@@ -147,6 +151,7 @@ signal_strategies:
     class: BollingerStrategy
     source: 约翰·布林格《布林带》
     enabled: false
+    archived: true
     summary: 触及下轨买入、触及上轨卖出
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 参数稳定性 <50%
@@ -190,6 +195,7 @@ signal_strategies:
     class: MACDStrategy
     source: 利弗莫尔"安坐不动"+ MACD 指标
     enabled: false
+    archived: true
     summary: 金叉买、死叉卖，附加顶/底背离检测
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0; 参数稳定性 <50%; 平均样本外收益
@@ -214,6 +220,7 @@ signal_strategies:
     class: KDJStrategy
     source: 乔治·莱恩 KDJ 指标
     enabled: false
+    archived: true
     summary: K 在超卖区金叉 D 买入、超买区死叉卖出
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 参数稳定性 <50%
@@ -236,6 +243,7 @@ signal_strategies:
     class: DualThrustStrategy
     source: 《Dual Thrust》期货经典策略
     enabled: false
+    archived: true
     summary: N 日 HH-LC/HC-LL 计算上下轨，开盘价 ± k 系数触发
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0
@@ -259,6 +267,7 @@ signal_strategies:
     class: MoneyFlowFollowStrategy
     source: 实战笔记（跟随资金强度 + 创新高回踩 + 放量确认）
     enabled: false
+    archived: true
     summary: 5步复盘流程：热点涨幅 + 均线多头排列 + 非天量 + 创新高回踩不破MA20 + 缩量后放量确认
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0
@@ -288,6 +297,7 @@ signal_strategies:
     class: ChenJiangtingStrategy
     source: 《炒股的智慧》陈江挺
     enabled: false
+    archived: true
     summary: 阻力突破 + 量能确认 + 阶段过滤（不追疯狂段），与 money_flow_follow 互补
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0
@@ -319,6 +329,7 @@ signal_strategies:
     class: LeopardThreeFactorsStrategy
     source: 豹哥战法（微信公众号文章 https://mp.weixin.qq.com/s/guNx28XZgrjSpPy2Ug6x7Q）
     enabled: false
+    archived: true
     summary: 已禁用。三要素本身是选股池准入，不产生 alpha，绑定放量突破后回测无效（v0.4.2 禁用）
     params_entry: strategy_defaults.yaml
     validation: v0.4.2 全市场回测无效（收益+0.59%/夏普-0.11/盈利比42%）已禁用
@@ -358,6 +369,7 @@ signal_strategies:
     class: PullbackLowStrategy
     source: 《炒股的智慧》陈江挺"回调不破支撑才买" + 尾盘选股器实战逻辑
     enabled: false
+    archived: true
     summary: 缩量回踩不破 MA20 的低吸策略（震荡市专用），与 box_breakout 互补
     params_entry: strategy_defaults.yaml
     validation: v0.4.8 禁用（大样本回测不通过）
@@ -423,6 +435,7 @@ signal_strategies:
     class: CapitalFlowAlertStrategy
     source: 豆包AI「龙头股散户化」分析 + 实战派资金流监控
     enabled: false
+    archived: true
     summary: 4卖出特征识别主力出逃 + 3买入特征捕捉洗盘结束
     params_entry: strategy_defaults.yaml
     validation: v0.5.0 单元测试通过，待回测验证
@@ -456,6 +469,7 @@ signal_strategies:
     class: BreakoutReboundStrategy
     source: 陈学长不吃面 229 条视频转写文本系统化整理
     enabled: false
+    archived: true
     summary: 主力完整周期（吸筹→异动首板→洗盘大阴线→护盘缩量横盘→反包再介入）的短线信号系统
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0；2026-07-31 事件研究证实整体负期望
@@ -503,6 +517,7 @@ signal_strategies:
     class: ReboundEliteStrategy
     source: 陈学长不吃面 226 条视频转写 + 2026-07-31 事件研究验证（67股/152事件）
     enabled: false  # 2026-08-01 Walk-Forward 样本外证伪，已从 settings 移除
+    archived: true
     summary: ❌ 样本外证伪（2026-08-01）：43信号全部年份负超额，验证期10日-5.40%/超额-6.95% p=0.035显著为负。当初"高活跃+反包追涨+9.99%"是16个小样本+2024牛市beta，非真alpha
     params_entry: strategy_defaults.yaml
     validation: 2026-07-31 事件研究 高活跃子集10日+9.99%/盈亏比2.76（小样本16）→ 2026-08-01 Walk-Forward 证伪
@@ -526,6 +541,7 @@ signal_strategies:
     class: ReboundSystemStrategy
     source: 陈学长不吃面「断板反包实战体系」系统提示词最终版（2026-08-12 用户手册逐条量化）
     enabled: false  # experimental：历史裁决 edge 未证实（买点A p=0.53 存疑/买点C证伪），实盘前向验证中
+    archived: true
     summary: 手册完整版四阶段形态（吸筹首板→暴力洗盘→护盘→反包）+ 三买点（A缩量回踩/B底背离/C放量追击）+ 六卖出（TP1反包减仓/TP2顶背离/TP3涨停未遂/TP4压力位/SL1破位/SL2次日不及预期）+ 成交额体系（流通市值×1%/1.5-2%/0.5%）。买点C历史证伪默认禁用；买点A优化四条件默认启用（回测+3.78%/p=0.0504）
     params_entry: strategy_defaults.yaml
     validation: 2026-08-11 裁决——市值50-150亿维持；买点A动态池+0.73%/笔 p=0.53 conditional_pass；买点C显著为负禁用；优化四条件探索性正（+3.78% p=0.0504 N=41）
@@ -550,6 +566,7 @@ signal_strategies:
     class: MLFactorStrategy
     source: 机器学习多因子模型（LightGBM + PCA 正交化）
     enabled: false
+    archived: true
     summary: 用 26 个 Alpha 因子预测涨跌方向，LightGBM 二分类，Walk-Forward 训练
     params_entry: strategy_defaults.yaml
     validation: v0.7.0 单元测试通过，待全市场回测验证
@@ -573,6 +590,7 @@ signal_strategies:
     class: NorthForceLongStrategy
     source: 实战派「主力资金跟随」战法（北向/公募长线行为近似）
     enabled: false
+    archived: true
     summary: 趋势向上+缩量回踩MA20+近期有资金关注，模拟长线主力吸筹形态
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0
@@ -603,6 +621,7 @@ signal_strategies:
     class: DragonTigerShortStrategy
     source: A股实战派「涨停断板反包」战法（短线主力行为学）
     enabled: false
+    archived: true
     summary: 涨停+断板+反包+趋势支撑，模拟机构/游资短线反包行为
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-07-26 - 样本外 Sharpe ≤ 0
@@ -633,6 +652,7 @@ signal_strategies:
     class: FirstBoardStrategy
     source: 北京炒家首板战法（公开信息整理）
     enabled: false
+    archived: true
     summary: 首板套利 + 极致风控 + 机械执行，只做个股首次涨停，次日冲高即卖
     params_entry: strategy_defaults.yaml
     validation: v0.6.3 新增策略，待回测验证
@@ -670,6 +690,7 @@ signal_strategies:
     class: MA20TrendStrategy
     source: 用户自研（MA20趋势跟随+量价关系+机械执行）
     enabled: false
+    archived: true
     summary: 趋势为王（仅做MA20向上个股）+ 回踩低吸（首选买点）+ 放量突破（次选买点）+ 乖离率>30%无条件止盈 + 跌破MA20无条件止损
       + 拒绝摊平亏损
     params_entry: strategy_defaults.yaml
@@ -710,6 +731,7 @@ signal_strategies:
     class: ZhenDahuStrategy
     source: 珍大户投资策略系统（AI量化决策文档）
     enabled: false
+    archived: true
     summary: 价值回归（发现低估资产）+ 行业优先（先选景气行业）+ 护城河筛选（物理垄断/网络效应/品牌/规模经济）+ 估值判断（PE/PB/股息率）+
       筹码分析 + 技术确认 + 安全边际
     params_entry: strategy_defaults.yaml
@@ -745,6 +767,7 @@ signal_strategies:
     class: MA5MomentumStrategy
     source: 用户自研交易心法（放量大阳线启动 + 5日均线趋势跟踪）
     enabled: false
+    archived: true
     # 2026-08-01 事件研究证伪：15股×600日 63信号（train 31/val 32），
     # 验证期超额 5d +0.01%(p=0.993)/10d -0.33%(p=0.791) 全部不显著，信号过于稀疏无统计力。
     # 代码保留，禁止参与信号融合；优化信号密度后再重走 Walk-Forward。
@@ -774,6 +797,7 @@ signal_strategies:
     class: WeeklyComboStrategy
     source: 经典周线选股法则（倍量+金叉+回踩+三连阳）
     enabled: false
+    archived: true
     summary: 将日K转周K后执行四因子共振评分：倍量因子(30%)+MACD金叉(30%)+回踩20周均线(25%)+周线三连阳(15%)，综合评分≥0.5产生买入信号
     params_entry: strategy_defaults.yaml
     validation: v0.7.5 多股聚合回测未通过（平均收益-1.99%/夏普-1.22），暂不启用
@@ -833,6 +857,7 @@ signal_strategies:
     class: ChenXueZhangStrategy
     source: 陈学长不吃面系列视频转写（6大独特规则）
     enabled: false  # 2026-08-15 持仓回测审计证伪：事件研究+1.02%→持仓回测-0.22%，Sharpe-0.24
+    archived: true
     summary: 假调整+尾盘骗线+涨停中继+趋势回踩+量价背离+突破回踩，6个高胜率规则组合触发
     params_entry: strategy_defaults.yaml
     # 2026-08-01 出场端优化（exit_mode=optimized，A/B 验证）：
@@ -897,6 +922,7 @@ signal_strategies:
     class: MLGradientBoostStrategy
     source: mulan-quant v11 模型迁移（sklearn GradientBoosting + 83 特征）
     enabled: false
+    archived: true
     # 2026-08-01 复活：修复模块级 @staticmethod bug（train_and_save 不可导入）+ 训练模型
     # （800日K线，训练截止2025-01-31防前视偏差，6550样本/39特征）。
     # 事件研究：验证期超额 5d +0.44%(p=0.000)/10d +0.56%(p=0.002) 显著，集中度健康(最大11%)；
@@ -925,6 +951,7 @@ signal_strategies:
     class: IndustryCapitalMomentumStrategy
     source: 行业资金强度+动量确认策略框架（四层架构：资金监控+动量确认+入场触发+退出风控）
     enabled: false
+    archived: true
     summary: 让资金先投票（量价趋势+资金动量），用动量确认（MA5/MA20金叉+量能放大），在趋势早期介入（RSI 45-65区间），在资金退潮前退出（跌破MA10/移动止盈/硬止损10%）
     params_entry: strategy_defaults.yaml
     validation: v2.4 回测表现仍为负收益（总收益-3.05%，夏普-1.97），禁用待进一步优化
@@ -963,6 +990,7 @@ signal_strategies:
     class: HuamulanTailPickStrategy
     source: 战神花木兰系列文档整理（尾盘选股六步法）
     enabled: false  # P0-1: 0回测数据，待Walk-Forward验证通过后再启用
+    archived: true
     summary: 尾盘半小时定乾坤：涨幅3-5% + 量比>1 + 换手5-10% + 市值50-200亿 + 均线多头 + 量能阶梯放大 → 寻找次日冲高机会
     params_entry: strategy_defaults.yaml
     validation: v0.7.7 新增策略，待回测验证
@@ -1004,6 +1032,7 @@ signal_strategies:
     class: HuamulanCrashLayoutStrategy
     source: 战神花木兰系列文档整理（空仓等暴跌布局法）
     enabled: false  # P0-1: 0回测数据，待Walk-Forward验证通过后再启用
+    archived: true
     summary: 空仓等暴跌是顶级策略：指数单日暴跌3% + 行业龙头（市值>200亿）+ 被错杀（跌幅>指数）+ 估值合理（PE<30）+ 企稳信号 → 分批买入
     params_entry: strategy_defaults.yaml
     validation: v0.7.7 新增策略，待回测验证
@@ -1044,6 +1073,7 @@ signal_strategies:
     class: HuamulanFakeDipStrategy
     source: 战神花木兰系列文档整理（视频16，2026-07-04《记住这个信号，不亏！》早盘假摔低吸战法）
     enabled: false  # P0-1: 0回测数据，待Walk-Forward验证通过后再启用
+    archived: true
     summary: 假摔识别（长下影线>2%+收红+缩量<0.8×5日均量）→ 低吸介入；跌破买入基准5%离场（v0.8.0参数校准：40只×600日 p=0.015）
     params_entry: strategy_defaults.yaml
     validation: v0.8.0 重构+参数校准（下影2%+缩量0.8×+10日，事件研究383事件 p=0.015），待Walk-Forward验证
@@ -1152,6 +1182,7 @@ signal_strategies:
     class: DeathValleyReboundStrategy
     source: 公众号《八月，来了~~》（幻灭期个股修复反弹）
     enabled: false  # 2026-08-15 持仓回测审计：事件研究+3.02%→持仓回测-0.57%，Sharpe-5.33，信号低频(1185笔/100股)无正超额，从enabled降级
+    archived: true
     summary: 幻灭期(MA5<MA60空头排列)+20日累计跌幅>10%超跌 + 3日不创新低 + KDJ金叉状态 + 站上5日线 → 修复性反弹买入；跌破5日线/持有超限 → 卖出
     params_entry: strategy_defaults.yaml
     # 2026-08-15 持仓回测审计：1105只主板500d，100只抽样回测。总收益均值-0.57%，Sharpe -5.33，胜率27.85%。
@@ -1177,6 +1208,7 @@ signal_strategies:
     class: BollingerOversoldReboundStrategy
     source: 公众号《八月，来了~~》（一路砸盘跌出布林下轨才有报复性反弹）
     enabled: false  # 2026-08-15 持仓回测审计：事件研究+3.65%→持仓回测-2.24%，Sharpe-1.78，从enabled降级
+    archived: true
     summary: 20日累计跌幅>12%超跌 + 收盘跌破布林下轨 → 超跌反弹买入；反弹到中轨（目标位）/持有超限 → 卖出。站不上中轨没拐点
     params_entry: strategy_defaults.yaml
     # 2026-08-15 持仓回测审计：1105只主板500d，100只抽样回测。总收益均值-2.24%，Sharpe -1.78，胜率52.52%。
@@ -1201,6 +1233,7 @@ signal_strategies:
     class: AssetComboStrategy
     source: 首板入场 + risk_rules 五条认知资产 + HS300 regime 过滤（三层架构验证载体）
     enabled: false
+    archived: true
     summary: 涨停首板入场 + entry_gap_filter(0-3%开盘溢价) + regime_filter(弱势期入场) + support_break_stop(破位止损) + detect_lock_profit_days(板上减半)。非独立盈利策略，Sharpe全负；gap+regime 弱势可作为风控工具嵌入其他策略
     params_entry: strategy_defaults.yaml
     validation: conditional_pass（2026-08-15 三轮验证：512只主板500d 事件研究 WF 5d +0.82%/p=0.36；持仓回测595只 A组合+0.31%/Sharpe-37.84/B +0.57%/-37.99/D +0.76%/-0.93。真alpha来源=弱势+gap过滤，破位止损=回撤控制，板上减半=无效，位置/活跃度=幸存者偏差）
@@ -1240,6 +1273,7 @@ signal_strategies:
     class: FanbaoStrategy
     source: 小圈圈儿《反包策略》广东经济出版社，2025年6月，原书完整修正版 V2.0
     enabled: false  # V2.0 重构完成，待全市场回测验证
+    archived: true
     summary: 5+1战法：①跌停板战法（高位/低位连板跌停次日高开）②炸板反包（涨停→炸板→>6%→次日高开）③一字涨停板反包（一字板断板整理后高开）④反包回调战法（有反包基因的股票回调企稳再进）⑤跳空涨停式反包（跳空缺口涨停断板后高开）+⑥暴力洗盘（主流题材急跌次日高开）。统一进场信号=次日高开。含情绪周期/风险红线/性价比评分
     params_entry: strategy_defaults.yaml
     # 2026-08-15 升级到 V2.0 原书完整修正版：

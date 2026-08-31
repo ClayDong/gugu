@@ -145,6 +145,46 @@ def test_weight_persistence(mock_strategy_config, tmp_path, monkeypatch):
     assert MIN_WEIGHT <= restored <= MAX_WEIGHT
 
 
+def test_production_pool_excludes_experimental_weights(tmp_path, monkeypatch):
+    """生产权重池只能包含 verified 策略。"""
+    monkeypatch.setattr(
+        "gugu.analysis.strategy_pool.StrategyPool._WEIGHTS_FILE", tmp_path / "production.json"
+    )
+    cfg = mock.MagicMock()
+    cfg.enabled = []
+    cfg.weights = {"rsi_reversal": 1.0}
+    cfg.verified_strategies = ["rsi_reversal"]
+    cfg.experimental_strategies = ["box_breakout", "double_yin"]
+    cfg.experimental_weights = {"box_breakout": 0.9, "double_yin": 0.8}
+    with mock.patch("gugu.analysis.strategy_pool.get_config") as mock_cfg:
+        mock_cfg.return_value.strategy = cfg
+        pool = StrategyPool(execution_mode="track_live")
+
+    assert set(pool.get_weights()) == {"rsi_reversal"}
+    assert pool.get_weights()["rsi_reversal"] == pytest.approx(1.0)
+
+
+def test_paper_pool_uses_separate_weight_file(tmp_path, monkeypatch):
+    """paper 权重池可包含实验策略，但不读取生产权重文件。"""
+    production_file = tmp_path / "production.json"
+    paper_file = tmp_path / "paper.json"
+    production_file.write_text(json.dumps({"weights": {"rsi_reversal": 1.0}}), encoding="utf-8")
+    monkeypatch.setattr("gugu.analysis.strategy_pool.StrategyPool._WEIGHTS_FILE", production_file)
+    monkeypatch.setattr("gugu.analysis.strategy_pool.StrategyPool._PAPER_WEIGHTS_FILE", paper_file)
+    cfg = mock.MagicMock()
+    cfg.enabled = []
+    cfg.weights = {"rsi_reversal": 1.0}
+    cfg.verified_strategies = ["rsi_reversal"]
+    cfg.experimental_strategies = ["box_breakout"]
+    cfg.experimental_weights = {"box_breakout": 0.2}
+    with mock.patch("gugu.analysis.strategy_pool.get_config") as mock_cfg:
+        mock_cfg.return_value.strategy = cfg
+        pool = StrategyPool(execution_mode="paper")
+
+    assert set(pool.get_weights()) == {"rsi_reversal", "box_breakout"}
+    assert not paper_file.exists()
+
+
 def test_weighted_fusion_ignores_unknown_strategy(mock_strategy_config, tmp_path, monkeypatch):
     """加权融合应忽略没有权重的策略信号。"""
     monkeypatch.setattr(

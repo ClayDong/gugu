@@ -329,6 +329,48 @@ class TradingEngine(EngineOpsMixin):
         except Exception:
             return False
 
+    # ========== 协议属性（供调度器/外部访问） ==========
+
+    @property
+    def notifier(self) -> Any:
+        return self._notifier
+
+    @property
+    def data_manager(self) -> Any:
+        return self._dm
+
+    @property
+    def broker(self) -> Any:
+        return self._broker
+
+    @property
+    def router(self) -> Any:
+        return self._router
+
+    @router.setter
+    def router(self, value: Any) -> None:
+        self._router = value
+
+    @property
+    def market_filter(self) -> Any:
+        return self._market_filter
+
+    @property
+    def watchlist(self) -> list[str]:
+        return self._watchlist
+
+    async def scan_signals(self, extra_symbols: list[str] | None = None) -> list[dict[str, Any]]:
+        """公有版 _scan_signals。"""
+        return await self._scan_signals(extra_symbols)
+
+    async def process_signal(self, signal: dict[str, Any]) -> None:
+        """公有版 _process_signal。"""
+        await self._process_signal(signal)
+
+    def write_heartbeat(self, status: str = "alive") -> None:
+        """公有版 _write_heartbeat。"""
+        self._write_heartbeat(status)
+
     def _load_watchlist(self) -> list[str]:
         """加载自选股列表。"""
         try:
@@ -616,6 +658,8 @@ class TradingEngine(EngineOpsMixin):
 
     async def shutdown(self) -> None:
         """关闭引擎资源。"""
+        with contextlib.suppress(Exception):
+            self._dm.close()
         await self._notifier.close()
         self._write_heartbeat("shutdown")
 

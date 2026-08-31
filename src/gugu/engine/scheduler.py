@@ -22,6 +22,11 @@
 
 子模块：
 - scheduler_jobs: 各定时任务的安全执行方法（_split from scheduler.py for maintainability）
+
+解耦说明（v0.9.33+）：
+TradingScheduler 接受 engine 注入（EngineProtocol），不再硬编码依赖 TradingEngine 类。
+引擎实例由启动入口（main/scheduler_runner）构造并传入，scheduler 只负责定时调度，
+不负责引擎的构造和生命周期管理。
 """
 
 from __future__ import annotations
@@ -32,13 +37,13 @@ import logging
 import os
 import signal
 from datetime import datetime
+from typing import Any, Protocol
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from gugu.config import get_config
-from gugu.engine.main import TradingEngine
 from gugu.engine.scheduler_jobs import SchedulerJobsMixin
 from gugu.utils.atomic import atomic_write_json
 from gugu.utils.calendar import is_trading_day, is_trading_time
@@ -62,18 +67,70 @@ SCAN_TIMES = [
 ]
 
 
-class TradingScheduler(SchedulerJobsMixin):
-    """交易调度器。"""
+class EngineProtocol(Protocol):
+    """调度器对交易引擎的最小依赖协议。
 
-    def __init__(self) -> None:
+    定义 TradingScheduler 需要的引擎接口，不绑定具体实现类。
+    使得 scheduler 可被独立测试，无需实例化 TradingEngine。
+    """
+
+    async def run_daily_cycle(self) -> None: ...
+
+    async def send_daily_report(self, period: str) -> None: ...
+
+    async def shutdown(self) -> None: ...
+
+    @property
+    def notifier(self) -> Any: ...
+
+    @property
+    def data_manager(self) -> Any: ...
+
+    @property
+    def broker(self) -> Any: ...
+
+    @property
+    def router(self) -> Any: ...
+
+    @property
+    def market_filter(self) -> Any: ...
+
+    @property
+    def watchlist(self) -> list[Any]: ...
+
+    def write_heartbeat(self, status: str = "alive") -> None: ...
+
+    async def scan_signals(self, watchlist: list[Any] | None = None) -> list[Any]: ...
+
+    async def process_signal(self, signal: Any) -> Any: ...
+
+
+class TradingScheduler(SchedulerJobsMixin):
+    """交易调度器。
+
+    Args:
+        engine: 交易引擎实例。None 时通过延迟导入构造默认 TradingEngine
+            （保持向后兼容，推荐生产入口显式传入）。
+    """
+
+    def __init__(self, engine: EngineProtocol | None = None) -> None:
         cfg = get_config()
         tz = cfg.scheduler.timezone
         self._scheduler = _ConfiguredAsyncIOScheduler(timezone=tz)
         self._shutdown_requested = False
+        self._heartbeat_task: asyncio.Task[None] | None = None
+        self._main_task: asyncio.Task[None] | None = None
         self._install_signal_handlers()
-        self._engine = TradingEngine()
+        self._engine = engine if engine is not None else self._default_engine()
         self._intraday_monitor = self._build_intraday_monitor()
         self._realtime_scanner = self._build_realtime_scanner()
+
+    @staticmethod
+    def _default_engine() -> Any:
+        """延迟导入构造默认 TradingEngine，避免模块级耦合。"""
+        from gugu.engine.main import TradingEngine
+
+        return TradingEngine()
 
     def _build_realtime_scanner(self):
         """构建 RealtimeSignalScanner 单例（v0.9.0 实时推荐）。
@@ -112,8 +169,8 @@ class TradingScheduler(SchedulerJobsMixin):
             thresholds = getattr(im_cfg, "alert_thresholds", None) if im_cfg else None
 
             return IntradayMonitor(
-                data_manager=self._engine._dm,
-                watchlist=self._engine._watchlist,
+                data_manager=self._engine.data_manager,
+                watchlist=self._engine.watchlist,
                 portfolio_symbols=[],
                 performance_mode=mode,
                 alert_thresholds=thresholds,
@@ -238,7 +295,7 @@ class TradingScheduler(SchedulerJobsMixin):
         # 宏观日报推送
         from gugu.macro.scheduler import register_macro_jobs
 
-        register_macro_jobs(self._scheduler, broker=self._engine._broker)
+        register_macro_jobs(self._scheduler, broker=self._engine.broker)
 
         # 另类因子数据盘后批量采集：18:00
         if self._task_enabled("altalpha_fetch"):
@@ -400,7 +457,7 @@ class TradingScheduler(SchedulerJobsMixin):
             return
 
         try:
-            market_status = await self._engine._market_filter.check_market()
+            market_status = await self._engine.market_filter.check_market()
             regime = market_status.get("regime", "unknown")
             now = datetime.now()
             current_hour_min = (now.hour, now.minute)
@@ -416,7 +473,7 @@ class TradingScheduler(SchedulerJobsMixin):
         except Exception as e:
             logger.exception("交易循环异常: {}", e)
             try:
-                await self._engine._notifier.notify_error(
+                await self._engine.notifier.notify_error(
                     {
                         "message": f"交易循环异常: {e}",
                         "level": "error",
@@ -436,15 +493,15 @@ class TradingScheduler(SchedulerJobsMixin):
 
         try:
             portfolio_symbols = (
-                list(self._engine._broker.positions.keys())
-                if hasattr(self._engine._broker, "positions")
+                list(self._engine.broker.positions.keys())
+                if hasattr(self._engine.broker, "positions")
                 else []
             )
             self._intraday_monitor._portfolio_symbols = portfolio_symbols
 
             alerts = await self._intraday_monitor.run_cycle()
             if alerts:
-                await self._engine._notifier.notify_intraday_alert(alerts)
+                await self._engine.notifier.notify_intraday_alert(alerts)
 
             # v0.9.0 实时推荐：盘中策略信号持续扫描（分钟级）
             if self._realtime_scanner is not None:
@@ -466,7 +523,7 @@ class TradingScheduler(SchedulerJobsMixin):
         except Exception as e:
             logger.exception("信号汇总推送异常: {}", e)
             try:
-                await self._engine._notifier.notify_error(
+                await self._engine.notifier.notify_error(
                     {
                         "message": f"信号汇总推送异常: {e}",
                         "level": "error",
@@ -479,13 +536,13 @@ class TradingScheduler(SchedulerJobsMixin):
     async def _safe_retry_notify(self) -> None:
         """重试失败的通知队列。"""
         try:
-            count = await self._engine._notifier.retry_queued()
+            count = await self._engine.notifier.retry_queued()
             if count > 0:
                 logger.info("通知重试: {} 条成功", count)
         except Exception as e:
             logger.debug("通知重试异常: {}", e)
         try:
-            await self._engine._notifier.check_queue_health()
+            await self._engine.notifier.check_queue_health()
         except Exception as e:
             logger.debug("队列健康检查异常: {}", e)
 
@@ -552,15 +609,16 @@ class TradingScheduler(SchedulerJobsMixin):
             """每 60 秒写入心跳。"""
             while True:
                 with contextlib.suppress(Exception):
-                    self._engine._write_heartbeat("alive")
+                    self._engine.write_heartbeat("alive")
                 await asyncio.sleep(60)
+
+        self._shutdown_event = asyncio.Event()
+        self._heartbeat_task = asyncio.create_task(_heartbeat_loop())
 
         # 心跳循环必须先于启动扫描创建（2026-08-10 修复实证）：数据源降级时
         # run_daily_cycle 可能耗时 5-10 分钟（当日两次重启均 ~6 分钟无心跳），
         # 若心跳循环在其后创建，watchdog 心跳阈值(15min)可能在慢扫描下误判挂死
         # 而触发 auto-recover 重启 → 重启风暴风险。先启动心跳，扫描期间心跳照常新鲜。
-        hb_task = asyncio.create_task(_heartbeat_loop())
-
         if is_trading_day() and is_trading_time():
             logger.info("启动后立即执行一次盘中扫描（交易时段内）...")
             try:
@@ -570,18 +628,18 @@ class TradingScheduler(SchedulerJobsMixin):
         elif is_trading_day():
             logger.info("启动时为交易日但非交易时段，跳过立即扫描")
 
+        self._main_task = asyncio.current_task()
         try:
-            while True:
+            while not self._shutdown_requested:
                 await asyncio.sleep(3600)
         except (KeyboardInterrupt, SystemExit):
-            hb_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await hb_task
             await self.shutdown()
+        except asyncio.CancelledError:
+            if not self._shutdown_requested:
+                await self.shutdown()
+            return
         except BaseException:
-            hb_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await hb_task
+            await self.shutdown()
             raise
 
     def _record_boot(self) -> None:
@@ -630,6 +688,17 @@ class TradingScheduler(SchedulerJobsMixin):
         if self._shutdown_requested:
             return
         self._shutdown_requested = True
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._heartbeat_task
+        current_task = asyncio.current_task()
+        if (
+            self._main_task is not None
+            and self._main_task is not current_task
+            and not self._main_task.done()
+        ):
+            self._main_task.cancel()
         self._scheduler.shutdown(wait=False)
         await self._engine.shutdown()
         logger.info("调度器已停止")

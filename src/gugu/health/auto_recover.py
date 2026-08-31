@@ -503,6 +503,7 @@ class AutoRecover:
 
     def _probe_data_sources(self) -> dict:
         """探测数据源连通性：真实拉取一只股票的历史行情。"""
+        dm = None
         try:
             from gugu.data.manager import DataManager
 
@@ -517,6 +518,10 @@ class AutoRecover:
                     }
         except Exception as e:
             return {"ok": False, "detail": f"探测异常: {e}"}
+        finally:
+            if dm is not None:
+                with contextlib.suppress(Exception):
+                    dm.close()
         return {"ok": False, "detail": "全部探测样本不可用"}
 
     def _cleanup_safe_files(self) -> int:

@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 
 from gugu.backtest.engine import walk_forward_optimize_multi_stock
-from gugu.strategies import DualMAStrategy
+from gugu.strategies import BoxBreakoutStrategy
 
 
 def _make_stock_df(symbol: str, n: int = 200, seed: int = 42, trend: str = "up") -> pd.DataFrame:
@@ -63,9 +63,9 @@ class TestMultiStockWalkForwardBasic:
         }
 
         results = walk_forward_optimize_multi_stock(
-            strategy_cls=DualMAStrategy,
+            strategy_cls=BoxBreakoutStrategy,
             stock_dfs=stock_dfs,
-            param_grid={"short_window": [5, 10], "long_window": [20, 30]},
+            param_grid={"box_window": [5, 10], "volume_confirm": [False]},
             train_ratio=0.6,
             n_splits=3,
         )
@@ -104,9 +104,9 @@ class TestMultiStockWalkForwardBasic:
         }
 
         results = walk_forward_optimize_multi_stock(
-            strategy_cls=DualMAStrategy,
+            strategy_cls=BoxBreakoutStrategy,
             stock_dfs=stock_dfs,
-            param_grid={"short_window": [5], "long_window": [20]},
+            param_grid={"box_window": [5], "volume_confirm": [False]},
             n_splits=2,
         )
 
@@ -125,9 +125,9 @@ class TestMultiStockWalkForwardEdgeCases:
     def test_empty_stock_dfs_returns_error(self) -> None:
         """空股票字典应返回错误。"""
         results = walk_forward_optimize_multi_stock(
-            strategy_cls=DualMAStrategy,
+            strategy_cls=BoxBreakoutStrategy,
             stock_dfs={},
-            param_grid={"short_window": [5]},
+            param_grid={"box_window": [5]},
         )
         assert len(results) == 1
         assert "error" in results[0]
@@ -140,9 +140,9 @@ class TestMultiStockWalkForwardEdgeCases:
         }
 
         results = walk_forward_optimize_multi_stock(
-            strategy_cls=DualMAStrategy,
+            strategy_cls=BoxBreakoutStrategy,
             stock_dfs=stock_dfs,
-            param_grid={"short_window": [5]},
+            param_grid={"box_window": [5]},
         )
         assert len(results) == 1
         assert "error" in results[0]
@@ -155,7 +155,7 @@ class TestMultiStockWalkForwardEdgeCases:
         }
 
         results = walk_forward_optimize_multi_stock(
-            strategy_cls=DualMAStrategy,
+            strategy_cls=BoxBreakoutStrategy,
             stock_dfs=stock_dfs,
             param_grid={},
             n_splits=2,
@@ -172,9 +172,9 @@ class TestMultiStockWalkForwardEdgeCases:
         stock_dfs = {"600519": first, "000858": second}
 
         results = walk_forward_optimize_multi_stock(
-            strategy_cls=DualMAStrategy,
+            strategy_cls=BoxBreakoutStrategy,
             stock_dfs=stock_dfs,
-            param_grid={"short_window": [5], "long_window": [20]},
+            param_grid={"box_window": [5], "volume_confirm": [False]},
             n_splits=2,
         )
         assert "error" not in results[0]
@@ -188,12 +188,12 @@ class TestMultiStockWalkForwardEdgeCases:
         duplicate = _make_stock_df("000858", n=150, seed=2, trend="up")
         duplicate.loc[1, "date"] = duplicate.loc[0, "date"]
         results = walk_forward_optimize_multi_stock(
-            strategy_cls=DualMAStrategy,
+            strategy_cls=BoxBreakoutStrategy,
             stock_dfs={
                 "600519": _make_stock_df("600519", n=150, seed=1, trend="up"),
                 "000858": duplicate,
             },
-            param_grid={"short_window": [5], "long_window": [20]},
+            param_grid={"box_window": [5], "volume_confirm": [False]},
             n_splits=2,
         )
         assert results == [{"error": "000858 存在重复交易日，无法做 walk-forward"}]
@@ -218,9 +218,9 @@ class TestMultiStockVsSingleStock:
 
         # 多股聚合
         multi_results = walk_forward_optimize_multi_stock(
-            strategy_cls=DualMAStrategy,
+            strategy_cls=BoxBreakoutStrategy,
             stock_dfs={"strong": strong_df, "flat": flat_df},
-            param_grid={"short_window": [5, 10], "long_window": [20, 30]},
+            param_grid={"box_window": [5, 10], "volume_confirm": [False]},
             n_splits=2,
         )
 

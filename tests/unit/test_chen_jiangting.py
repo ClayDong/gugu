@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import pytest
+
 import numpy as np
 import pandas as pd
 
-from gugu.strategies.chen_jiangting import ChenJiangtingStrategy
+try:
+    from gugu.strategies.chen_jiangting import ChenJiangtingStrategy
+except ModuleNotFoundError:
+    ChenJiangtingStrategy = None  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skip(reason="依赖已归档策略（chen_jiangting）")
 
 # 固定随机种子，保证测试可复现
 np.random.seed(42)

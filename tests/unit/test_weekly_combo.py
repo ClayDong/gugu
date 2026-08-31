@@ -4,7 +4,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gugu.strategies.weekly_combo import WeeklyComboStrategy
+try:
+    from gugu.strategies.weekly_combo import WeeklyComboStrategy
+except ModuleNotFoundError:
+    WeeklyComboStrategy = None  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skip(reason="依赖已归档策略（weekly_combo）")
 
 
 @pytest.fixture

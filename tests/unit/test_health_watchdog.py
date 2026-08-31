@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 import pytest
@@ -18,6 +18,7 @@ import pytest
 from gugu.health.watchdog import (
     check_scheduler_health,
     check_signal_history_freshness,
+    check_zero_signal_streak,
     dedupe_alerts,
     SchedulerHealthResult,
     SignalHistoryResult,
@@ -101,6 +102,71 @@ def test_signal_history_stale_but_recent_scan_is_healthy(tmp_path: Path):
     )
     assert res.ok is True
     assert "扫描正常" in res.message
+
+
+def test_signal_history_weekend_stale_scan_aligned_no_alert(tmp_path: Path, monkeypatch):
+    """(v0.9.33) 周五收盘后跨周末：last_scan_at 停留在周五 15:10（墙钟超 2 天），
+    但扫描与最近交易日收盘对齐 → 不应报"信号历史失忆"。
+
+    2026-08-24 实证：周末 + 周一盘前被误报 7 次，驱动 auto_recover 7 次
+    无意义重启 scheduler（非交易日无扫描任务，重启不产生扫描）。
+    """
+    hist = tmp_path / "signals_history.jsonl"
+    hist.write_text(
+        json.dumps({"timestamp": (datetime.now() - timedelta(days=4)).isoformat()}) + "\n",
+        encoding="utf-8",
+    )
+    scan = tmp_path / "signal_scan.json"
+    # 模拟：last_scan_at = 上个交易日 15:10（收盘后尾扫已跑，之后进入周末）
+    last_session = (datetime.now() - timedelta(days=3)).date()
+    scan.write_text(
+        json.dumps({"last_scan_at": datetime.combine(last_session, time(15, 10)).isoformat()}),
+        encoding="utf-8",
+    )
+    boot = tmp_path / "scheduler_boot.json"
+    boot.write_text(
+        json.dumps({"boot_time": (datetime.now() - timedelta(days=5)).isoformat(), "pid": 123}),
+        encoding="utf-8",
+    )
+    # last_trading_day 返回上个交易日 → 扫描对齐（15:10 ≥ 15:00）
+    monkeypatch.setattr(
+        "gugu.utils.calendar.last_trading_day",
+        lambda ref=None, max_lookback=15: last_session,
+    )
+    res = check_signal_history_freshness(
+        history_path=hist, boot_path=boot, scan_path=scan, data_dir=tmp_path
+    )
+    assert res.ok is True, f"周末扫描对齐不应误报失忆: {res}"
+    assert res.details.get("calendar_aligned") is True
+
+
+def test_signal_history_scan_before_last_close_still_alerts(tmp_path: Path, monkeypatch):
+    """(v0.9.33) 最近扫描早于最近交易日收盘（如周五 09:25 盘中停摆）→
+    日历对齐豁免不适用 → 仍告警（真故障路径不被豁免掩盖）。"""
+    hist = tmp_path / "signals_history.jsonl"
+    hist.write_text(
+        json.dumps({"timestamp": (datetime.now() - timedelta(days=3)).isoformat()}) + "\n",
+        encoding="utf-8",
+    )
+    scan = tmp_path / "signal_scan.json"
+    last_session = (datetime.now() - timedelta(days=3)).date()
+    scan.write_text(
+        json.dumps({"last_scan_at": datetime.combine(last_session, time(9, 25)).isoformat()}),
+        encoding="utf-8",
+    )
+    boot = tmp_path / "scheduler_boot.json"
+    boot.write_text(
+        json.dumps({"boot_time": datetime.now().isoformat(), "pid": 123}), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        "gugu.utils.calendar.last_trading_day",
+        lambda ref=None, max_lookback=15: last_session,
+    )
+    res = check_signal_history_freshness(
+        history_path=hist, boot_path=boot, scan_path=scan, data_dir=tmp_path
+    )
+    assert res.ok is False, f"盘中停摆（扫描早于收盘）应仍告警: {res}"
+    assert res.severity == "high"
 
 
 # ========== 调度器心跳 ==========
@@ -464,3 +530,153 @@ def test_dedupe_suppress_minutes_zero_always_push(tmp_path: Path):
     dedupe_alerts([result], state_path=state, suppress_minutes=0)
     to_push = dedupe_alerts([result], state_path=state, suppress_minutes=0)
     assert len(to_push) == 1, "suppress=0 时不应抑制"
+
+
+# ========== 连续 0 信号 streak（v0.9.34 跨交易日重置） ==========
+
+
+def _make_zero_signal_scan(tmp_path: Path, signals_count: int = 0) -> Path:
+    """构造交易时段内的 0 信号扫描现场（扫描新鲜 + 链路健康 + 当日无信号产出）。"""
+    scan = tmp_path / "signal_scan.json"
+    scan.write_text(
+        json.dumps(
+            {
+                "last_scan_at": datetime.now().isoformat(),
+                "signals_count": signals_count,
+                "scanned_count": 18,
+                "data_health": "ok",
+                "data_errors": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    hist = tmp_path / "signals_history.jsonl"
+    # 无当日信号产出 → 链路健康豁免不生效 → 走 streak 累计分支
+    hist.write_text(
+        json.dumps({"timestamp": (datetime.now() - timedelta(days=3)).isoformat()}) + "\n",
+        encoding="utf-8",
+    )
+    return scan
+
+
+def test_zero_signal_streak_resets_on_new_trading_day(tmp_path: Path, monkeypatch):
+    """v0.9.34：昨日遗留 streak（48 轮）不应继承到新交易日——开盘首轮归零重计。
+
+    2026-08-24 实证：08-21 周五 48 轮 0 信号 + 周一开盘首轮 → 09:30:30 即升级人工
+    （streak=49），而周一策略仍基于周五收盘 bar 判断，信息量为零。
+    修复后：跨交易日首查 streak 归零 → 本轮 streak=1（<阈值 3）→ 不告警。
+    """
+    monkeypatch.setattr("gugu.utils.calendar.is_trading_day", lambda ref=None: True)
+    monkeypatch.setattr("gugu.utils.calendar.is_trading_time", lambda now=None: True)
+    _make_zero_signal_scan(tmp_path)
+    yesterday = (datetime.now() - timedelta(days=1)).date().isoformat()
+    streak_path = tmp_path / "watchdog_zero_signal_streak.json"
+    streak_path.write_text(json.dumps({"streak": 48, "streak_date": yesterday}), encoding="utf-8")
+
+    res = check_zero_signal_streak(
+        scan_path=tmp_path / "signal_scan.json",
+        streak_path=streak_path,
+        history_path=tmp_path / "signals_history.jsonl",
+    )
+    assert res.ok is True, f"跨交易日首轮不应因昨日 streak 误升级: {res}"
+    assert res.streak == 1, f"streak 应从 0 重新累计为 1，实际 {res.streak}"
+    # 持久化：streak_date 推进到今天
+    state = json.loads(streak_path.read_text(encoding="utf-8"))
+    assert state["streak_date"] == datetime.now().date().isoformat()
+    assert state["streak"] == 1
+
+
+def test_zero_signal_streak_accumulates_within_same_day(tmp_path: Path, monkeypatch):
+    """v0.9.34：同一交易日 streak 正常累计——第 3 轮 0 信号仍照常升级（8/5 检测能力保留）。"""
+    monkeypatch.setattr("gugu.utils.calendar.is_trading_day", lambda ref=None: True)
+    monkeypatch.setattr("gugu.utils.calendar.is_trading_time", lambda now=None: True)
+    _make_zero_signal_scan(tmp_path)
+    today = datetime.now().date().isoformat()
+    streak_path = tmp_path / "watchdog_zero_signal_streak.json"
+    streak_path.write_text(json.dumps({"streak": 2, "streak_date": today}), encoding="utf-8")
+
+    res = check_zero_signal_streak(
+        scan_path=tmp_path / "signal_scan.json",
+        streak_path=streak_path,
+        history_path=tmp_path / "signals_history.jsonl",
+    )
+    assert res.ok is False, f"同日累计达阈值应升级: {res}"
+    assert res.streak == 3
+    state = json.loads(streak_path.read_text(encoding="utf-8"))
+    assert state["streak_date"] == today
+    assert state["streak"] == 3
+
+
+def test_zero_signal_streak_escalated_once_per_day_kept(tmp_path: Path, monkeypatch):
+    """v0.9.34 不破坏 v0.9.30/31：当日已升级 → 同日后续轮次静默且 last_escalated_date 保留。"""
+    monkeypatch.setattr("gugu.utils.calendar.is_trading_day", lambda ref=None: True)
+    monkeypatch.setattr("gugu.utils.calendar.is_trading_time", lambda now=None: True)
+    _make_zero_signal_scan(tmp_path)
+    today = datetime.now().date().isoformat()
+    streak_path = tmp_path / "watchdog_zero_signal_streak.json"
+    streak_path.write_text(
+        json.dumps({"streak": 49, "streak_date": today, "last_escalated_date": today}),
+        encoding="utf-8",
+    )
+
+    res = check_zero_signal_streak(
+        scan_path=tmp_path / "signal_scan.json",
+        streak_path=streak_path,
+        history_path=tmp_path / "signals_history.jsonl",
+    )
+    assert res.ok is True, "当日已升级过 → 同因不重复升级"
+    assert res.severity == "medium"
+    state = json.loads(streak_path.read_text(encoding="utf-8"))
+    assert state["last_escalated_date"] == today, "last_escalated_date 不得丢失"
+    assert state["streak_date"] == today
+
+
+def test_zero_signal_streak_empty_pool_exempt(tmp_path: Path, monkeypatch):
+    """v0.9.37：生产配置 verified_strategies 白名单为空 → 0 策略 0 信号是配置预期，不告警。
+
+    2026-08-26 settings.yaml 收紧 gate-v1 后 production 空池，watchdog 每日 09:40
+    准时升级"连续 3 轮 0 信号"噪音（08-25~08-28 连续 4 个交易日实证）。策略池非空时
+    （黑屏检测）行为不变——由 test_zero_signal_streak_accumulates_within_same_day 覆盖。
+    """
+    monkeypatch.setattr("gugu.utils.calendar.is_trading_day", lambda ref=None: True)
+    monkeypatch.setattr("gugu.utils.calendar.is_trading_time", lambda now=None: True)
+    _make_zero_signal_scan(tmp_path)
+    today = datetime.now().date().isoformat()
+    streak_path = tmp_path / "watchdog_zero_signal_streak.json"
+    # 即使昨日遗留 streak 高达 49，空策略池也必须豁免（不得继承/累计）
+    streak_path.write_text(json.dumps({"streak": 49, "streak_date": today}), encoding="utf-8")
+
+    res = check_zero_signal_streak(
+        scan_path=tmp_path / "signal_scan.json",
+        streak_path=streak_path,
+        history_path=tmp_path / "signals_history.jsonl",
+        runtime_strategies=[],
+    )
+    assert res.ok is True, f"空策略池 0 信号应为配置预期，不告警: {res}"
+    assert res.streak == 0, f"空策略池不得累计 streak，实际 {res.streak}"
+    # 豁免路径不得污染 streak 持久化状态
+    state = json.loads(streak_path.read_text(encoding="utf-8"))
+    assert state["streak"] == 49, "豁免路径不得改写 streak 状态"
+
+
+def test_zero_signal_streak_nonempty_pool_no_exemption(tmp_path: Path, monkeypatch):
+    """v0.9.37 反向约束：runtime_strategies 非空（策略池有策略）→ 黑屏检测保留，照常升级。
+
+    传 None 与传非空列表语义一致：None 为保守默认（不豁免），[] 才触发豁免。
+    """
+    monkeypatch.setattr("gugu.utils.calendar.is_trading_day", lambda ref=None: True)
+    monkeypatch.setattr("gugu.utils.calendar.is_trading_time", lambda now=None: True)
+    _make_zero_signal_scan(tmp_path)
+    today = datetime.now().date().isoformat()
+    streak_path = tmp_path / "watchdog_zero_signal_streak.json"
+    streak_path.write_text(json.dumps({"streak": 2, "streak_date": today}), encoding="utf-8")
+
+    # 策略池非空：第 3 轮仍升级（None 默认路径由 accumulate 测试覆盖，此处验证显式非空池）
+    res = check_zero_signal_streak(
+        scan_path=tmp_path / "signal_scan.json",
+        streak_path=streak_path,
+        history_path=tmp_path / "signals_history.jsonl",
+        runtime_strategies=["box_breakout"],
+    )
+    assert res.ok is False, f"非空策略池 0 信号应照常累计告警: {res}"
+    assert res.streak == 3

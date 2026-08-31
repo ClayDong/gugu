@@ -451,6 +451,67 @@ def test_zero_signal_alerts_when_data_degraded_with_today_signal(tmp_path: Path)
             assert result.ok is expected_ok, f"数据降级不应豁免: {result}"
 
 
+def test_zero_signal_exempt_when_runtime_pool_empty(tmp_path: Path):
+    """空策略池豁免（v0.9.37）：runtime_strategies=[]（生产 verified 白名单为空）→
+    0 信号是配置预期（扫描加载 0 策略），不累计不告警。
+
+    背景：2026-08-26 settings.yaml 收紧 gate-v1 后 production 空池，watchdog 每日
+    09:40 准时升级"连续 3 轮 0 信号"噪音（08-25~08-28 实证 4 次），
+    全部因 0 只策略——链路健康但无策略可触发，非 8/5 黑屏故障。
+    """
+    scan = tmp_path / "signal_scan.json"
+    scan.write_text(
+        json.dumps(
+            {
+                "last_scan_at": datetime.now().isoformat(),
+                "signals_count": 0,
+                "scanned_count": 18,
+                "data_health": "ok",
+                "data_errors": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with (
+        patch("gugu.utils.calendar.is_trading_day", return_value=True),
+        patch("gugu.utils.calendar.is_trading_time", return_value=True),
+    ):
+        for _ in range(5):
+            result = check_zero_signal_streak(
+                data_dir=tmp_path, threshold=3, fresh_minutes=30, runtime_strategies=[]
+            )
+            assert result.ok is True, f"空策略池应豁免: {result}"
+            assert result.streak == 0
+            assert "配置预期" in result.message
+
+
+def test_zero_signal_no_exempt_when_runtime_pool_unset(tmp_path: Path):
+    """兼容性（v0.9.37）：runtime_strategies=None（未提供）→ 不豁免，保持旧行为。
+
+    保证既有调用方（未感知新参数）的黑屏检测能力不变。
+    """
+    scan = tmp_path / "signal_scan.json"
+    scan.write_text(
+        json.dumps(
+            {
+                "last_scan_at": datetime.now().isoformat(),
+                "signals_count": 0,
+                "scanned_count": 18,
+                "data_health": "ok",
+                "data_errors": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with (
+        patch("gugu.utils.calendar.is_trading_day", return_value=True),
+        patch("gugu.utils.calendar.is_trading_time", return_value=True),
+    ):
+        for expected_ok in (True, True, False):
+            result = check_zero_signal_streak(data_dir=tmp_path, threshold=3, fresh_minutes=30)
+            assert result.ok is expected_ok, f"未传策略池不应豁免: {result}"
+
+
 def test_run_all_checks_contains_all_five(tmp_path: Path):
     """run_all_checks 包含全部五项检查。"""
     results = run_all_checks(data_dir=tmp_path)

@@ -95,8 +95,7 @@ def test_experimental_strategies_are_filtered_by_execution_mode(
 
 def test_scheduler_jobs_have_serialized_execution_defaults() -> None:
     engine = mock.AsyncMock()
-    with mock.patch("gugu.engine.scheduler.TradingEngine", return_value=engine):
-        scheduler = TradingScheduler()
+    scheduler = TradingScheduler(engine=engine)
     scheduler.setup()
     for job in scheduler._scheduler.get_jobs():
         assert job.max_instances == 1

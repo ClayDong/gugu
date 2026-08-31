@@ -6,8 +6,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gugu.strategies.money_flow_follow import MoneyFlowFollowStrategy
+try:
+    from gugu.strategies.money_flow_follow import MoneyFlowFollowStrategy
+except ModuleNotFoundError:
+    MoneyFlowFollowStrategy = None  # type: ignore[assignment]
 from gugu.strategies.registry import get_strategy
+
+pytestmark = pytest.mark.skip(reason="依赖已归档策略（money_flow_follow）")
 
 
 def _make_df(n: int = 150, seed: int = 42) -> pd.DataFrame:

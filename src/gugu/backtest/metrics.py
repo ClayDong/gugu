@@ -106,15 +106,24 @@ def _total_return(equity: pd.Series) -> float:
 
 
 def _annual_return(equity: pd.Series, periods: int = _TRADING_DAYS) -> float:
-    """Annualized return using compound rate."""
+    """Annualized return using the actual elapsed date span when available."""
     if len(equity) < 2:
         return 0.0
     initial = float(equity.iloc[0])
     final = float(equity.iloc[-1])
     if initial <= 0 or final <= 0:
         return 0.0
-    n = len(equity)
-    return float((final / initial) ** (periods / n) - 1)
+
+    index = equity.index
+    if isinstance(index, pd.DatetimeIndex):
+        elapsed_days = (index[-1] - index[0]).days
+        if elapsed_days <= 0:
+            return 0.0
+        return float((final / initial) ** (365.0 / elapsed_days) - 1)
+
+    # 保持无日期索引调用的兼容性；正式回测权益曲线必须带日期索引。
+    observations = len(equity) - 1
+    return float((final / initial) ** (periods / observations) - 1)
 
 
 def _win_rate(trades: list[Any]) -> float:

@@ -116,7 +116,9 @@ class CXBRSignal:
     conditional_stop_price: float | None = None
     suggested_position: float | None = None
     data_quality: str = "fresh_valid"
+    strategy_name: str = "cxbr_v1"
     rule_version: str = "cxbr-v1"
+    entry_assumption: str = "next_session_open"
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

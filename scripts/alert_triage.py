@@ -118,7 +118,7 @@ def main() -> int:
             for e in recent[-5:]:
                 mark = "❌升级" if e.get("escalation") else ("✅自愈" if e.get("ok") else "⚠️")
                 lines.append(
-                    f"  {mark} [{e.get('fingerprint')}] {e.get('ts','')[:19]} 根因: {str(e.get('root_cause'))[:120]}"
+                    f"  {mark} [{e.get('fingerprint')}] {e.get('ts', '')[:19]} 根因: {str(e.get('root_cause'))[:120]}"
                 )
             if escd:
                 issues.append("自愈升级了问题")
@@ -186,7 +186,24 @@ def main() -> int:
                 if now.hour == 9 and now.minute < 40:
                     parts.append("(开盘首轮扫描进行中，跳过停摆判定)")
                 else:
-                    issues.append("信号扫描停摆(>30分钟)")
+                    # 午休间隔（11:30-13:00）设计不扫描，从 gap 中扣除午休时长后
+                    # 再判定是否真正停摆（2026-08-26 修复：消除午休后瞬态误报）。
+                    # 如扫描覆盖跨日（如周末后首日），也一并考虑。
+                    effective_age = scan_age_min
+                    if scan_ts:
+                        try:
+                            scan_dt = datetime.fromisoformat(scan_ts)
+                            LUNCH_START = time(11, 30)
+                            LUNCH_END = time(13, 0)
+                            # 午休时长：扫描后到午休开始 + 午休结束到现在的完整 90 分钟
+                            if scan_dt.time() <= LUNCH_START and now.time() >= LUNCH_END:
+                                effective_age -= 90.0
+                        except (ValueError, TypeError):
+                            pass
+                    if effective_age > 30:
+                        issues.append("信号扫描停摆(>30分钟)")
+                    else:
+                        parts.append("(午休间隔，非停摆)")
         sections.append("5. 信号扫描: " + "; ".join(parts))
     else:
         sections.append("5. 信号扫描: 无记录")

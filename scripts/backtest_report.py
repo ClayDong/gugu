@@ -32,34 +32,30 @@ def generate_markdown_report(data: dict[str, Any]) -> str:
     for sname, summary in strategies_data.items():
         if not summary:
             continue
-        # 从分布统计重建 metric values（使用 raw_values 如果是够小）
-        # 否则从分布统计生成模拟数据
+        # 报告统计必须基于真实的逐样本值，不能从均值伪造样本。
         metrics_list: list[dict[str, float]] = []
         sample_count = summary.get("_sample_count", 0) or summary.get("total_return", {}).get(
             "n", 0
         )
+        metric_keys = [
+            "total_return",
+            "annual_return",
+            "sharpe",
+            "max_drawdown",
+            "win_rate",
+            "profit_factor",
+            "total_trades",
+            "avg_hold_days",
+        ]
+        raw_by_key = {key: summary.get(key, {}).get("raw_values") for key in metric_keys}
+        if sample_count <= 0 or any(
+            not isinstance(values, list) or len(values) < sample_count
+            for values in raw_by_key.values()
+        ):
+            raise ValueError(f"策略 {sname} 缺少完整逐样本 raw_values，拒绝生成显著性报告")
         for i in range(sample_count):
-            m = {}
-            for key in [
-                "total_return",
-                "annual_return",
-                "sharpe",
-                "max_drawdown",
-                "win_rate",
-                "profit_factor",
-                "total_trades",
-                "avg_hold_days",
-            ]:
-                dist = summary.get(key, {})
-                raw_values = dist.get("raw_values", [])
-                if raw_values and i < len(raw_values):
-                    m[key] = raw_values[i]
-                else:
-                    # 用均值作为回退
-                    m[key] = dist.get("mean", 0.0)
-            metrics_list.append(m)
-        if metrics_list:
-            per_strategy_metrics[sname] = metrics_list
+            metrics_list.append({key: raw_by_key[key][i] for key in metric_keys})
+        per_strategy_metrics[sname] = metrics_list
 
     return generate_report_from_metrics_dict(per_strategy_metrics)
 

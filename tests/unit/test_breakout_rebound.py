@@ -15,7 +15,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gugu.strategies.breakout_rebound import BreakoutReboundStrategy
+try:
+    from gugu.strategies.breakout_rebound import BreakoutReboundStrategy
+except ModuleNotFoundError:
+    BreakoutReboundStrategy = None  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skip(reason="依赖已归档策略（breakout_rebound）")
 
 
 def _make_df(

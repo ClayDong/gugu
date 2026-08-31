@@ -51,9 +51,17 @@ def test_cxbr_uses_independent_state_and_records_fill(tmp_path: Path) -> None:
     assert result is not None
     assert result.success
     assert result.event_type == "order_filled"
+    assert result.strategy_name == "cxbr_v1"
+    assert result.rule_version == "cxbr-v1"
+    assert result.entry_assumption == "next_session_open"
     assert result.quantity == 100
     assert result.fill_price > 10.0
     assert result.commission >= 5.0
+    assert result.fill_time == result.order_time
+    assert result.gross_amount == round(result.fill_price * result.quantity, 2)
+    assert result.net_cash_flow < 0
+    assert result.total_fees == round(result.commission + result.stamp_tax + result.transfer_fee, 2)
+    assert result.realized_pnl is None
     assert executor.broker.get_position("600001") is not None
     assert len(executor.executions) == 1
 
@@ -92,6 +100,44 @@ def test_cxbr_enforces_t_plus_1_and_deduplicates(tmp_path: Path) -> None:
     assert sell_after_settle is not None
     assert sell_after_settle.success
     assert sell_after_settle.stamp_tax > 0
+    assert sell_after_settle.fill_time == sell_after_settle.order_time
+    assert sell_after_settle.gross_amount == round(
+        sell_after_settle.fill_price * sell_after_settle.quantity, 2
+    )
+    assert sell_after_settle.net_cash_flow > 0
+    assert sell_after_settle.total_fees == round(
+        sell_after_settle.commission + sell_after_settle.stamp_tax + sell_after_settle.transfer_fee,
+        2,
+    )
+    assert sell_after_settle.realized_pnl is not None
+    assert sell_after_settle.cost_basis_consumed is not None
+    assert sell_after_settle.realized_pnl == round(
+        sell_after_settle.net_cash_flow - sell_after_settle.cost_basis_consumed, 2
+    )
+
+
+def test_cost_basis_is_rebuilt_from_ledger_after_restart(tmp_path: Path) -> None:
+    first = _executor(tmp_path)
+    bought = first.execute_signal(
+        _buy_signal(), CXBRMarketSnapshot(price=10.0, prev_close=9.5), 100
+    )
+    assert bought is not None and bought.success
+
+    restarted = _executor(tmp_path)
+    restarted.settle_t_plus_1()
+    sold = restarted.execute_signal(
+        _sell_signal(), CXBRMarketSnapshot(price=10.5, prev_close=10.0), 100
+    )
+    assert sold is not None and sold.success
+    assert sold.realized_pnl is not None
+    assert sold.realized_pnl > 0
+    summary = restarted.summarize_performance()
+    assert summary["filled_orders"] == 2
+    assert summary["closed_trades"] == 1
+    assert summary["open_quantity"] == 0
+    assert summary["realized_pnl"] == sold.realized_pnl
+    assert summary["closed_win_rate"] == 1.0
+    assert summary["total_fees"] > 0
 
 
 def test_observe_signal_does_not_create_order(tmp_path: Path) -> None:

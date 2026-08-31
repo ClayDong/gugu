@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
+from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
@@ -21,6 +24,46 @@ def dm() -> DataManager:
 
 class TestDataManagerDegradation:
     """降级与恢复逻辑测试。"""
+
+    def test_close_closes_each_collector_once(self, dm: DataManager) -> None:
+        primary = MagicMock()
+        fallback = MagicMock()
+        dm._primary = primary
+        dm._fallbacks = [fallback, primary]
+
+        dm.close()
+        dm.close()
+
+        primary.close.assert_called_once()
+        fallback.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_fallback_expected_exception_is_consumed(self, dm: DataManager) -> None:
+        primary = MagicMock()
+        fallback = MagicMock()
+        primary.source = "sina"
+        fallback.source = "tencent"
+        primary.adjust_type = "none"
+        fallback.adjust_type = "qfq"
+        primary.fetch_stock_history.side_effect = RuntimeError("primary failed")
+        fallback.fetch_stock_history.side_effect = NotImplementedError("unsupported")
+        dm._primary = primary
+        dm._fallbacks = [fallback]
+        dm._fallback_semaphore = asyncio.Semaphore(1)
+        dm._fail_threshold = 1
+        dm._parquet_cache = MagicMock()
+        dm._parquet_cache.get.return_value = pd.DataFrame()
+
+        loop = asyncio.get_running_loop()
+        errors: list[dict] = []
+        loop.set_exception_handler(lambda _, context: errors.append(context))
+        try:
+            result = await dm.fetch_stock_history("600519", days=2)
+        finally:
+            loop.set_exception_handler(None)
+
+        assert result.empty
+        assert errors == []
 
     @pytest.mark.asyncio
     async def test_not_degraded_initially(self, dm: DataManager) -> None:
@@ -208,3 +251,53 @@ class TestDataManagerConcurrentFallback:
         with patch.object(dm, "_call_with_fallback", wraps=dm._call_with_fallback) as wrapped:
             pass  # 验证方法签名存在
         assert hasattr(dm, "_call_with_fallback")
+
+    @pytest.mark.asyncio
+    async def test_cancelled_fallback_exceptions_are_retrieved(self, dm: DataManager) -> None:
+        """快速降级成功后，慢速源的异常必须被消费而不泄漏到事件循环。"""
+        sample_df = pd.DataFrame(
+            {
+                "date": [date.today().isoformat()],
+                "open": [10.0],
+                "high": [11.0],
+                "low": [9.0],
+                "close": [10.0],
+                "volume": [1_000_000],
+            }
+        )
+
+        class FastCollector:
+            source = "fast"
+            adjust_type = "none"
+
+            def fetch_stock_history(self, symbol: str, days: int = 60) -> pd.DataFrame:
+                return sample_df
+
+        class SlowFailCollector:
+            source = "slow-fail"
+            adjust_type = "none"
+
+            def fetch_stock_history(self, symbol: str, days: int = 60) -> pd.DataFrame:
+                time.sleep(0.05)
+                raise RuntimeError("slow fallback failed")
+
+        dm._fail_threshold = 1
+        dm._primary.fetch_stock_history = MagicMock(side_effect=RuntimeError("primary failed"))
+        dm._fallbacks = [FastCollector(), SlowFailCollector()]
+        dm._fallback_semaphore = asyncio.Semaphore(2)
+        dm._parquet_cache.get = MagicMock(return_value=pd.DataFrame())
+
+        loop = asyncio.get_running_loop()
+        errors: list[dict] = []
+        previous_handler = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, context: errors.append(context))
+        try:
+            result = await dm._call_with_fallback("fetch_stock_history", "600519", 1)
+            await asyncio.sleep(0.1)
+        finally:
+            loop.set_exception_handler(previous_handler)
+
+        assert not result.empty
+        assert not any(
+            context.get("message") == "Task exception was never retrieved" for context in errors
+        )

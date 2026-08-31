@@ -6,7 +6,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gugu.strategies.ma5_momentum import MA5MomentumStrategy
+try:
+    from gugu.strategies.ma5_momentum import MA5MomentumStrategy
+except ModuleNotFoundError:
+    MA5MomentumStrategy = None  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skip(reason="依赖已归档策略（ma5_momentum）")
 
 
 def _make_df(

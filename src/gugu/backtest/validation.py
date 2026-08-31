@@ -284,6 +284,7 @@ def calc_rolling_window_validation(
     test_start = df_indexed.index[0] + train_delta
     last_date = df_indexed.index[-1]
     windows: list[dict] = []
+    test_state: dict[str, Any] | None = None
 
     while test_start <= last_date:
         train_start = test_start - train_delta
@@ -304,7 +305,7 @@ def calc_rolling_window_validation(
                 params = dict(zip(param_grid, values, strict=True))
                 try:
                     train_result = BacktestEngine(initial_capital=100000.0).run(
-                        strategy_class(params), train_df.reset_index(drop=True)
+                        strategy_class(params), train_df.reset_index()
                     )
                     sharpe = float(train_result.metrics.get("sharpe", 0.0))
                     if sharpe > best_train_sharpe:
@@ -316,7 +317,7 @@ def calc_rolling_window_validation(
         else:
             try:
                 train_result = BacktestEngine(initial_capital=100000.0).run(
-                    strategy_class(), train_df.reset_index(drop=True)
+                    strategy_class(), train_df.reset_index()
                 )
                 train_sharpe = float(train_result.metrics.get("sharpe", 0.0))
             except Exception as exc:
@@ -324,8 +325,12 @@ def calc_rolling_window_validation(
 
         try:
             test_result = BacktestEngine(initial_capital=100000.0).run(
-                strategy_class(best_params), test_df.reset_index(drop=True)
+                strategy_class(best_params),
+                test_df.reset_index(),
+                symbol="",
+                initial_state=test_state,
             )
+            test_state = test_result.final_state
             windows.append(
                 {
                     "train_start": str(train_df.index[0])[:10],

@@ -24,6 +24,11 @@ def normalize_data_quality(
     data_stale: bool = False,
 ) -> DataQualityState:
     """将历史数据质量标签归一化为三态状态。"""
+    # 事实元数据优先于历史标签，避免 fresh/validated 覆盖实际不可用数据。
+    if data_available is False:
+        return DataQualityState.UNAVAILABLE
+    if data_stale:
+        return DataQualityState.STALE_DEGRADED
     if value in {DataQualityState.FRESH_VALID, "fresh", "validated"}:
         return DataQualityState.FRESH_VALID
     if value in {
@@ -35,10 +40,6 @@ def normalize_data_quality(
         return DataQualityState.STALE_DEGRADED
     if value in {DataQualityState.UNAVAILABLE, "invalid", "empty"}:
         return DataQualityState.UNAVAILABLE
-    if data_available is False:
-        return DataQualityState.UNAVAILABLE
-    if data_stale:
-        return DataQualityState.STALE_DEGRADED
     return DataQualityState.UNAVAILABLE
 
 

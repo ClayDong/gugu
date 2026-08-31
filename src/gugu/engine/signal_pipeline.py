@@ -32,7 +32,7 @@
   [步骤8]   综合入场判定（evaluate_entry_gate）
 
 P0 优化：signal_only 模式下跳过 Wisdom 决策和日内不变过滤。
-P0 优化：资金流数据缺失时默认放行。
+数据质量门禁：资金流及其他关键数据缺失时，paper/live 阻断新增买入；signal_only/track_live 仅保留观察信号。
 """
 
 from __future__ import annotations

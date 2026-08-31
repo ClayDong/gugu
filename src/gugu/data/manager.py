@@ -114,6 +114,7 @@ class DataManager:
         self._parquet_cache = persistent_cache()
         # 数据源健康监控（单例）
         self._health = DataSourceHealthMonitor()
+        self._closed = False
 
     def _get_lock(self) -> asyncio.Lock:
         if self._lock is None:
@@ -285,15 +286,22 @@ class DataManager:
 
         # 降级源：并发尝试所有 fallback，FIRST_COMPLETED 模式
         # 信号量保护整个 fallback 请求 + 等待过程，防止并发降级请求过多
+        async def _run_fallback(fb: BaseCollector) -> pd.DataFrame | None:
+            """运行单个 fallback，并在任务边界消费预期采集异常。"""
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(lambda: getattr(fb, method)(*args, **kwargs)),
+                    timeout=_COLLECTOR_TIMEOUT_SECONDS,
+                )
+                return result if isinstance(result, pd.DataFrame) else None
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                return None
+
         async with self._get_fallback_semaphore():
             tasks: dict[BaseCollector, asyncio.Task] = {
-                fb: asyncio.create_task(
-                    asyncio.wait_for(
-                        asyncio.to_thread(lambda fb=fb: getattr(fb, method)(*args, **kwargs)),
-                        timeout=_COLLECTOR_TIMEOUT_SECONDS,
-                    )
-                )
-                for fb in self._fallbacks
+                fb: asyncio.create_task(_run_fallback(fb)) for fb in self._fallbacks
             }
             done, pending = await asyncio.wait(tasks.values(), return_when=asyncio.FIRST_COMPLETED)
 
@@ -319,7 +327,7 @@ class DataManager:
                 # 快速路径：已有真实成功 → 立即返回（保持 FIRST_COMPLETED 快速语义）
                 for t, df in done_results:
                     if df is not None and not df.empty:
-                        return self._return_fallback_success(
+                        return await self._return_fallback_success(
                             t, df, tasks, method, args, adjust_type
                         )
 
@@ -350,12 +358,12 @@ class DataManager:
                     done_results += _collect(all_done)
                 for t, df in done_results:
                     if df is not None and not df.empty:
-                        return self._return_fallback_success(
+                        return await self._return_fallback_success(
                             t, df, tasks, method, args, adjust_type
                         )
             finally:
-                # 统一取消未完成任务（幂等：done/cancelled 任务为 no-op）
-                self._cancel_pending_tasks(tasks)
+                # 统一取消并等待未完成任务，消费其异常，避免 asyncio 泄漏告警。
+                await self._cancel_pending_tasks(tasks)
 
         # 所有真实 fallback 都失败（非熔断）→ 记录 all 失败 + 缓存兜底
         logger.warning("所有数据源 {} 均失败，尝试缓存兜底", method)
@@ -405,20 +413,17 @@ class DataManager:
         )
 
     @staticmethod
-    def _cancel_pending_tasks(tasks: dict[BaseCollector, asyncio.Task]) -> None:
-        """取消所有未完成的 fallback 任务，避免"Task exception was never retrieved"。
+    async def _cancel_pending_tasks(tasks: dict[BaseCollector, asyncio.Task]) -> None:
+        """取消并等待 fallback 任务，消费异常避免 asyncio 泄漏告警。"""
+        pending = [task for task in tasks.values() if not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        # 已完成任务也统一消费结果，覆盖 _collect 未纳入的异常任务。
+        await asyncio.gather(*tasks.values(), return_exceptions=True)
 
-        在 _call_with_fallback 的每个 return 前调用，确保 pending 任务被取消后
-        其 CancelledError 被 asyncio 正常处理，不会泄漏为未检索异常。
-        """
-        for t in tasks.values():
-            if not t.done():
-                t.cancel()
-            # 无论 done/pending 都检索异常，防止 done 任务异常未被 _collect 覆盖时泄漏
-            with contextlib.suppress(asyncio.CancelledError, asyncio.InvalidStateError, Exception):
-                t.exception()
-
-    def _return_fallback_success(
+    async def _return_fallback_success(
         self,
         task: asyncio.Task,
         df: pd.DataFrame,
@@ -428,7 +433,7 @@ class DataManager:
         adjust_type: str,
     ) -> pd.DataFrame:
         """降级源成功结果的统一返回路径（校验/属性/内存缓存/持久化缓存）。"""
-        self._cancel_pending_tasks(tasks)
+        await self._cancel_pending_tasks(tasks)
         success_fb = next(fb for fb, t in tasks.items() if t is task)
         self._health.record_fallback_used(success_fb.source, method)
         logger.info("降级源 {} 成功获取 {}", success_fb.source, method)
@@ -478,6 +483,22 @@ class DataManager:
 
     async def fetch_stock_flow(self, symbol: str) -> pd.DataFrame:
         return await self._call_with_fallback("fetch_stock_flow", symbol)
+
+    def close(self) -> None:
+        """关闭主源和降级源持有的同步资源。"""
+        if self._closed:
+            return
+        self._closed = True
+        collectors = [self._primary, *self._fallbacks]
+        seen: set[int] = set()
+        for collector in collectors:
+            if id(collector) in seen:
+                continue
+            seen.add(id(collector))
+            with contextlib.suppress(Exception):
+                collector.close()
+        with contextlib.suppress(Exception):
+            self._health.flush()
 
     async def fetch_stock_history_batch(
         self, symbols: list[str], days: int = 60

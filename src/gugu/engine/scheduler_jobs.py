@@ -43,7 +43,7 @@ class SchedulerJobsMixin:
         if not is_trading_day():
             return
         try:
-            screener = TerminalScreener(dm=self._engine._dm)
+            screener = TerminalScreener(dm=self._engine.data_manager)
             scan_result = await screener.scan()
             results = scan_result.results if scan_result else []
             total = scan_result.total_scanned if scan_result else 0
@@ -64,7 +64,7 @@ class SchedulerJobsMixin:
                     for r in results
                 ]
                 save_screener_records(records)
-            await self._engine._notifier.notify_screener(
+            await self._engine.notifier.notify_screener(
                 results,
                 total,
                 data_quality=scan_result.data_quality if scan_result else None,
@@ -74,7 +74,7 @@ class SchedulerJobsMixin:
         except Exception as e:
             logger.exception("尾盘选股异常: {}", e)
             try:
-                await self._engine._notifier.notify_screener([], 0)
+                await self._engine.notifier.notify_screener([], 0)
             except Exception as notify_err:
                 logger.error("尾盘选股异常通知发送失败: {}", notify_err)
 
@@ -108,14 +108,14 @@ class SchedulerJobsMixin:
                     stop_hit / n * 100,
                     sum(v.open_premium for v in results) / n,
                 )
-                await self._engine._notifier.notify_screener_validation(results)
+                await self._engine.notifier.notify_screener_validation(results)
             else:
                 logger.info("尾盘验证: 无结果（昨日无选股记录或行情获取失败）")
-                await self._engine._notifier.notify_screener_validation([])
+                await self._engine.notifier.notify_screener_validation([])
         except Exception as e:
             logger.exception("尾盘选股验证异常: {}", e)
             try:
-                await self._engine._notifier.notify_error(
+                await self._engine.notifier.notify_error(
                     {
                         "message": f"尾盘选股验证异常: {e}",
                         "level": "error",
@@ -147,7 +147,7 @@ class SchedulerJobsMixin:
                 )
         except Exception as e:
             logger.exception("尾盘收盘验证异常: {}", e)
-            await self._engine._notifier.notify_error(
+            await self._engine.notifier.notify_error(
                 {
                     "message": f"尾盘收盘验证异常: {e}",
                     "level": "error",
@@ -178,7 +178,7 @@ class SchedulerJobsMixin:
         if not is_trading_day():
             return
         try:
-            market_status = await self._engine._market_filter.check_market()
+            market_status = await self._engine.market_filter.check_market()
             regime = market_status.get("regime", "unknown")
 
             if regime == "bull":
@@ -188,20 +188,20 @@ class SchedulerJobsMixin:
             candidates = await self._scan_range_candidates()
             if candidates:
                 logger.info("盘中观察: 震荡市推送 {} 只接近 MA20 的候选", len(candidates))
-                await self._engine._notifier.notify_range_watchlist(candidates, regime)
+                await self._engine.notifier.notify_range_watchlist(candidates, regime)
             else:
-                await self._engine._notifier.notify_range_watchlist([], regime)
+                await self._engine.notifier.notify_range_watchlist([], regime)
         except Exception as e:
             logger.exception("震荡市观察列表异常: {}", e)
 
     async def _scan_range_candidates(self) -> list[dict]:
         """扫描接近 MA20 支撑位的候选股（用于震荡市观察列表）。"""
         candidates: list[dict] = []
-        watchlist = self._engine._watchlist[:20]
+        watchlist = self._engine.watchlist[:20]
 
         async def check_one(symbol: str) -> dict | None:
             try:
-                df = await self._engine._dm.fetch_stock_history(symbol, days=60)
+                df = await self._engine.data_manager.fetch_stock_history(symbol, days=60)
                 if df is None or df.empty or len(df) < 30:
                     return None
                 price = float(df["close"].iloc[-1])
@@ -215,7 +215,7 @@ class SchedulerJobsMixin:
                 main_net = None
                 main_pct = None
                 try:
-                    flow_df = await self._engine._dm.fetch_stock_flow(symbol)
+                    flow_df = await self._engine.data_manager.fetch_stock_flow(symbol)
                     if flow_df is not None and not flow_df.empty:
                         latest_flow = flow_df.iloc[-1]
                         main_net = float(latest_flow.get("main_net", 0) or 0)
@@ -259,12 +259,12 @@ class SchedulerJobsMixin:
             from gugu.notifier.flow_report import run_afternoon_report
 
             result = await run_afternoon_report()
-            await self._engine._notifier.notify_flow_report("afternoon", result)
+            await self._engine.notifier.notify_flow_report("afternoon", result)
             logger.info("盘后资金流决策报告推送完成（14:30）")
         except Exception as e:
             logger.exception("盘后资金流决策报告异常: {}", e)
             try:
-                await self._engine._notifier.notify_error(
+                await self._engine.notifier.notify_error(
                     {
                         "message": f"盘后资金流决策报告异常: {e}",
                         "level": "error",
@@ -331,7 +331,7 @@ class SchedulerJobsMixin:
             factor_scores = {}
             try:
                 for sym in symbols:
-                    df = await self._engine._dm.fetch_stock_history(sym, days=60)
+                    df = await self._engine.data_manager.fetch_stock_history(sym, days=60)
                     if df is not None and len(df) >= 30:
                         factors = factory.compute(df)
                         if factors:
@@ -376,13 +376,13 @@ class SchedulerJobsMixin:
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
             }
 
-            await self._engine._notifier.notify_alpha_summary(summary)
+            await self._engine.notifier.notify_alpha_summary(summary)
             logger.info(
                 "因子综合评分报告推送完成: {}只评分, {}个因子", len(rankings), len(top_factors)
             )
         except Exception as e:
             logger.exception("因子综合评分报告异常: {}", e)
-            await self._engine._notifier.notify_error(
+            await self._engine.notifier.notify_error(
                 {
                     "message": f"因子综合评分报告异常: {e}",
                     "level": "error",
@@ -434,13 +434,13 @@ class SchedulerJobsMixin:
                 macro_summary="",
             )
             if analysis:
-                await self._engine._notifier.notify_portfolio_report(analysis, positions)
+                await self._engine.notifier.notify_portfolio_report(analysis, positions)
                 logger.info("持仓认知分析报告推送完成: {}只持仓", len(positions))
             else:
                 logger.info("持仓认知分析报告: LLM 无输出，跳过推送")
         except Exception as e:
             logger.exception("持仓认知分析报告异常: {}", e)
-            await self._engine._notifier.notify_error(
+            await self._engine.notifier.notify_error(
                 {
                     "message": f"持仓认知分析报告异常: {e}",
                     "level": "error",
@@ -474,7 +474,7 @@ class SchedulerJobsMixin:
             except Exception as e:
                 logger.debug("KB Agent 检索概念解释失败: {}", e)
 
-            await self._engine._notifier.notify_concept(
+            await self._engine.notifier.notify_concept(
                 concept["name"], concept["definition"], explanation, citations
             )
             logger.info("每日概念推送完成: {}", concept["name"])
@@ -488,7 +488,7 @@ class SchedulerJobsMixin:
         try:
             from gugu.analysis.sentiment import SentimentSystem
 
-            notifier = self._engine._notifier
+            notifier = self._engine.notifier
             system = SentimentSystem(stock_name="自选股池")
             await system.run_and_notify(notifier)
         except Exception as e:
@@ -528,10 +528,13 @@ class SchedulerJobsMixin:
             logger.info("启动周参数优化: {} 个策略", len(enabled))
             for s_name in enabled:
                 stocks = get_strategy_stock_pool(s_name)
+                # v0.9.35：改用 sys.executable 替代 "uv run python"。
+                # launchd 环境 PATH 不含 uv（实证 2026-08-23 03:00 每周任务
+                # [Errno 2] No such file or directory: 'uv' 静默失败），而调度器
+                # 本身运行于项目 venv（sys.executable 即 .venv/bin/python），
+                # 直接调用即可，无 uv/PATH 依赖。
                 cmd = [
-                    "uv",
-                    "run",
-                    "python",
+                    sys.executable,
                     str(script),
                     "--strategy",
                     s_name,
@@ -595,9 +598,7 @@ class SchedulerJobsMixin:
             for s_name in enabled:
                 stocks = get_strategy_stock_pool(s_name)
                 cmd = [
-                    "uv",
-                    "run",
-                    "python",
+                    sys.executable,
                     str(script),
                     "--strategy",
                     s_name,
@@ -687,7 +688,7 @@ class SchedulerJobsMixin:
                 strategy_stats[strategy] = strategy_stats.get(strategy, 0) + 1
 
             try:
-                await self._engine._notifier.notify_weekly_review(
+                await self._engine.notifier.notify_weekly_review(
                     {
                         "period": f"{week_ago.isoformat()} ~ {today.isoformat()}",
                         "total_signals": total_signals,
@@ -742,7 +743,7 @@ class SchedulerJobsMixin:
             contexts: list[StockDataContext] = []
             for symbol in watchlist[:10]:
                 try:
-                    df = await self._engine._dm.fetch_stock_history(symbol, days=60)
+                    df = await self._engine.data_manager.fetch_stock_history(symbol, days=60)
                     if df is not None and len(df) >= 30:
                         name = lookup_stock_name(symbol) or symbol
                         ctx = build_context_from_kline(symbol, name, df)
@@ -757,12 +758,12 @@ class SchedulerJobsMixin:
             results = engine.analyze_batch(contexts)
 
             summary_card = build_batch_summary_card(results)
-            await self._engine._notifier.send_business_card(summary_card)
+            await self._engine.notifier.send_business_card(summary_card)
 
             for result in results:
                 try:
                     detail_card = build_perspective_card(result)
-                    await self._engine._notifier.send_business_card(detail_card)
+                    await self._engine.notifier.send_business_card(detail_card)
                     await asyncio.sleep(1.0)
                 except Exception as e:
                     logger.warning("十大视角: {} 详细卡片发送失败: {}", result.symbol, e)
@@ -786,7 +787,7 @@ class SchedulerJobsMixin:
             if card is None:
                 logger.warning("市场温度计子进程未返回卡片，跳过推送")
                 return
-            await self._engine._notifier.send_business_card(card)
+            await self._engine.notifier.send_business_card(card)
             logger.info("市场温度计推送完成（子进程隔离执行）")
         except Exception as e:
             logger.exception("市场温度计推送异常: {}", e)
@@ -806,17 +807,17 @@ class SchedulerJobsMixin:
             rsi_router = SignalRouter([rsi_strategy])
 
             original_router = getattr(self._engine, "_router", None)
-            self._engine._router = rsi_router
+            self._engine.router = rsi_router
             try:
-                signals = await self._engine._scan_signals()
+                signals = await self._engine.scan_signals()
             finally:
                 if original_router is not None:
-                    self._engine._router = original_router
+                    self._engine.router = original_router
 
             if signals:
                 logger.info("RSI 专项扫描: 产生 {} 个信号", len(signals))
                 for signal in signals:
-                    await self._engine._process_signal(signal)
+                    await self._engine.process_signal(signal)
             else:
                 logger.info("RSI 专项扫描: 无信号产生")
         except Exception as e:
@@ -833,7 +834,7 @@ class SchedulerJobsMixin:
             tracker = SignalTracker()
             report = await tracker.generate_report(days=30)
             card = build_signal_performance_card(report)
-            await self._engine._notifier.send_business_card(card)
+            await self._engine.notifier.send_business_card(card)
 
             total = report.get("total_signals", 0)
             forward_hit_rate = report.get("forward_5d_signal_hit_rate", 0)
@@ -845,7 +846,7 @@ class SchedulerJobsMixin:
         except Exception as e:
             logger.exception("信号绩效验证推送异常: {}", e)
             try:
-                await self._engine._notifier.notify_error(
+                await self._engine.notifier.notify_error(
                     {
                         "message": f"信号绩效验证异常: {e}",
                         "level": "error",
@@ -867,7 +868,7 @@ class SchedulerJobsMixin:
 
             tracker = SignalTracker()
             report = await tracker.generate_daily_validation_report()
-            await self._engine._notifier.notify_signal_daily_validation(report)
+            await self._engine.notifier.notify_signal_daily_validation(report)
 
             total = report.get("total_signals", 0)
             valid = report.get("valid_count", 0)
@@ -881,7 +882,7 @@ class SchedulerJobsMixin:
         except Exception as e:
             logger.exception("信号次日验证推送异常: {}", e)
             try:
-                await self._engine._notifier.notify_error(
+                await self._engine.notifier.notify_error(
                     {
                         "message": f"信号次日验证异常: {e}",
                         "level": "error",
@@ -898,7 +899,7 @@ class SchedulerJobsMixin:
 
             tracker = SignalTracker()
             report = await tracker.generate_weekly_report()
-            await self._engine._notifier.notify_signal_weekly(report)
+            await self._engine.notifier.notify_signal_weekly(report)
 
             total = report.get("total_signals", 0)
             win_rate = report.get("win_rate", 0)
@@ -910,7 +911,7 @@ class SchedulerJobsMixin:
         except Exception as e:
             logger.exception("信号绩效周报推送异常: {}", e)
             try:
-                await self._engine._notifier.notify_error(
+                await self._engine.notifier.notify_error(
                     {
                         "message": f"信号绩效周报异常: {e}",
                         "level": "error",

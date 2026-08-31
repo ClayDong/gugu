@@ -32,6 +32,11 @@ class TestEnabledStrategySources:
         expected = get_runtime_strategy_names()
         assert script.get_enabled_strategies() == expected
 
+    def test_backtest_offline_reads_current_runtime_strategies(self):
+        script = _load_script("backtest_offline", "scripts/backtest_offline.py")
+        expected = get_runtime_strategy_names()
+        assert script.get_enabled_strategies() == expected
+
     def test_verify_enabled_reads_current_enabled_strategies(self):
         script = _load_script("verify_enabled_strategies", "scripts/verify_enabled_strategies.py")
         expected = get_runtime_strategy_names()

@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -18,14 +20,20 @@ from gugu.engine.scheduler import TradingScheduler
 @pytest.fixture
 def mock_engine() -> mock.AsyncMock:
     """Mock TradingEngine：避免真实初始化带来的副作用。"""
-    return mock.AsyncMock()
+    engine = mock.AsyncMock()
+    engine.market_filter = mock.MagicMock()
+    engine.market_filter.check_market = mock.AsyncMock(return_value={"regime": "bull"})
+    engine.notifier = mock.AsyncMock()
+    return engine
 
 
 @pytest.fixture
 def scheduler(mock_engine: mock.AsyncMock) -> TradingScheduler:
-    """构造一个引擎被 mock 的 TradingScheduler。"""
-    with mock.patch("gugu.engine.scheduler.TradingEngine", return_value=mock_engine):
-        return TradingScheduler()
+    """构造一个引擎被 mock 的 TradingScheduler。
+
+    v0.9.33+：TradingScheduler 接受 engine 注入，不再需要 patch。
+    """
+    return TradingScheduler(engine=mock_engine)
 
 
 def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
@@ -128,7 +136,7 @@ async def test_safe_report_catches_exception(
     mock_engine.send_daily_report.assert_awaited_once()
     # 验证 period 参数被正确传递
     mock_engine.send_daily_report.assert_awaited_with("close")
-    mock_engine._notifier.notify_error.assert_awaited_once()
+    mock_engine.notifier.notify_error.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -143,7 +151,7 @@ async def test_safe_afternoon_flow_notifies_error(
         ),
     ):
         await scheduler._safe_afternoon_flow()
-    mock_engine._notifier.notify_error.assert_awaited_once()
+    mock_engine.notifier.notify_error.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -165,6 +173,51 @@ async def test_start_and_shutdown_lifecycle(
         mock.patch("gugu.engine.scheduler.is_trading_day", return_value=False),
     ):
         await scheduler.start()
-    # 验证调度器与引擎均已关闭
+    # 验证调度器与引擎均已关闭，心跳任务也已回收
     shutdown_spy.assert_called_once()
     mock_engine.shutdown.assert_awaited_once()
+    assert scheduler._heartbeat_task is not None
+    assert scheduler._heartbeat_task.done()
+
+
+@pytest.mark.asyncio
+async def test_optimize_params_uses_sys_executable_not_uv(
+    scheduler: TradingScheduler,
+) -> None:
+    """周参数优化子进程应使用 sys.executable 而非 "uv run python"（v0.9.35）。
+
+    launchd 环境 PATH 不含 uv（实证 2026-08-23 03:00 [Errno 2] 失败），
+    调度器运行于项目 venv（sys.executable = .venv/bin/python），
+    直接调用无需 uv/PATH 依赖。
+    """
+    captured: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):  # noqa: ANN001
+        captured.append(list(cmd))
+        return mock.MagicMock(returncode=0, stdout="ok", stderr="")
+
+    with (
+        mock.patch(
+            "gugu.engine.scheduler_jobs.get_enabled_strategies",
+            return_value=[mock.MagicMock(name="box_breakout")],
+        ),
+        mock.patch(
+            "gugu.analysis.optimization_pools.get_strategy_stock_pool",
+            return_value="600519,000858",
+        ),
+        mock.patch(
+            "gugu.config.PROJECT_ROOT",
+            Path(__file__).resolve().parents[2],
+        ),
+        mock.patch(
+            "gugu.engine.scheduler_jobs.subprocess.run",
+            side_effect=fake_run,
+        ),
+    ):
+        await scheduler._safe_optimize_params()
+
+    assert captured, "应至少调用一次周参数优化子进程"
+    for cmd in captured:
+        assert cmd[0] == sys.executable, f"应使用 sys.executable，实际: {cmd[0]}"
+        assert "uv" not in cmd, f"不应依赖 uv，实际 cmd: {cmd}"
+        assert "optimize_params.py" in cmd[1]

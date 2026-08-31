@@ -295,7 +295,12 @@ def _compute_strategy_summary(
     # 提取各指标值
     metric_values: dict[str, list[float]] = {}
     for m_key in _CORE_METRICS:
-        values = [r.metrics.get(m_key, 0.0) for r in results if r.metrics.get(m_key) is not None]
+        values = [
+            value
+            for r in results
+            for value in [r.metrics.get(m_key, 0.0)]
+            if value is not None and math.isfinite(float(value))
+        ]
         metric_values[m_key] = values
 
     # 计算分布统计
@@ -309,8 +314,9 @@ def _compute_strategy_summary(
 
 
 def _distribution_stats(values: list[float]) -> dict[str, float]:
-    """计算一组值的分布统计。"""
-    if not values:
+    """计算一组值的分布统计，跳过 NaN/无穷值。"""
+    finite_values = [value for value in values if math.isfinite(float(value))]
+    if not finite_values:
         return {
             "mean": 0.0,
             "median": 0.0,
@@ -321,16 +327,17 @@ def _distribution_stats(values: list[float]) -> dict[str, float]:
             "max": 0.0,
             "n": 0,
         }
-    arr = np.array(values, dtype=float)
+    arr = np.array(finite_values, dtype=float)
+    std = float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0
     return {
         "mean": float(np.mean(arr)),
         "median": float(np.median(arr)),
-        "std": float(np.std(arr, ddof=1)),
+        "std": std,
         "p25": float(np.percentile(arr, 25)),
         "p75": float(np.percentile(arr, 75)),
         "min": float(np.min(arr)),
         "max": float(np.max(arr)),
-        "n": len(values),
+        "n": len(finite_values),
     }
 
 
@@ -340,11 +347,12 @@ def _one_sample_ttest(values: list[float], popmean: float = 0.0) -> dict[str, An
     Returns:
         包含 t_stat, p_value, significant, mean 的字典。
     """
-    n = len(values)
+    finite_values = [value for value in values if math.isfinite(float(value))]
+    n = len(finite_values)
     if n < 2:
         return {"t_stat": 0.0, "p_value": 1.0, "significant": False, "mean": 0.0}
 
-    arr = np.array(values, dtype=float)
+    arr = np.array(finite_values, dtype=float)
     mean = float(np.mean(arr))
     std = float(np.std(arr, ddof=1))
 

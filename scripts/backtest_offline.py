@@ -28,42 +28,15 @@ from pathlib import Path
 import pandas as pd
 
 from gugu.backtest import BacktestEngine
-from gugu.config import get_config
-from gugu.strategies.registry import get_strategy
+from gugu.strategies.registry import get_runtime_strategy_names, get_strategy
 from gugu.utils.log import get_logger
 
 logger = get_logger()
 
 
 def get_enabled_strategies() -> list[str]:
-    """从 settings.yaml 读取启用的策略列表。
-
-    注意: config model 可能只返回部分策略（默认值），
-    这里直接读 yaml 文件确保获取全部启用策略。
-    """
-    import yaml
-    from pathlib import Path
-
-    # 优先直接读 yaml 文件（避免 config model 默认值覆盖）
-    yaml_path = Path("config/settings.yaml")
-    if yaml_path.exists():
-        try:
-            with open(yaml_path, encoding="utf-8") as f:
-                cfg = yaml.safe_load(f) or {}
-            strategies = cfg.get("strategy", {}).get("enabled", [])
-            if strategies:
-                return strategies
-        except Exception as e:
-            logger.warning(f"读取 settings.yaml 失败: {e}")
-
-    # 回退到 config model
-    try:
-        strategies = get_config().strategy.enabled
-        if strategies:
-            return strategies
-    except Exception:
-        pass
-    return ["box_breakout", "turtle", "dual_ma", "bollinger", "rsi_reversal"]
+    """读取当前执行模式经过准入门禁的信号策略。"""
+    return get_runtime_strategy_names()
 
 
 def scan_cached_stocks(cache_dir: Path, min_days: int) -> list[tuple[str, int]]:
@@ -163,9 +136,7 @@ def run_batch_backtest(
             elapsed = time.time() - t0
             rate = completed / elapsed if elapsed > 0 else 0
             logger.info(
-                f"回测进度: {completed}/{total} "
-                f"({completed/total*100:.1f}%) "
-                f"速率: {rate:.1f}/s"
+                f"回测进度: {completed}/{total} ({completed / total * 100:.1f}%) 速率: {rate:.1f}/s"
             )
 
     return all_results
@@ -222,7 +193,7 @@ def print_report(
     print()
     print("=" * 130)
     print(f"全市场策略回测对比报告（离线缓存数据）— {date.today()}")
-    print(f"股票数: {n_stocks} | 耗时: {elapsed/60:.1f} 分钟")
+    print(f"股票数: {n_stocks} | 耗时: {elapsed / 60:.1f} 分钟")
     print("=" * 130)
 
     # 表头
@@ -257,12 +228,12 @@ def print_report(
 
         print(
             f"{name:<25}{n:<8}"
-            f"{ret.get('mean', 0)*100:+.2f}/M{ret.get('median', 0)*100:+.2f}    "
-            f"{ann.get('mean', 0)*100:+.2f}      "
+            f"{ret.get('mean', 0) * 100:+.2f}/M{ret.get('median', 0) * 100:+.2f}    "
+            f"{ann.get('mean', 0) * 100:+.2f}      "
             f"{sharpe.get('mean', 0):.2f}        "
-            f"{dd.get('mean', 0)*100:.2f}        "
-            f"{wr.get('mean', 0)*100:.1f}      "
-            f"{summary.get('_profitable_ratio', 0)*100:.0f}        "
+            f"{dd.get('mean', 0) * 100:.2f}        "
+            f"{wr.get('mean', 0) * 100:.1f}      "
+            f"{summary.get('_profitable_ratio', 0) * 100:.0f}        "
             f"{tt.get('mean', 0):.0f}        "
             f"{hd.get('mean', 0):.1f}"
         )
@@ -291,7 +262,7 @@ def print_report(
         n = summary.get("_sample_count", 0)
         print(f"  #{i} {name}")
         print(
-            f"     样本={n} | 收益={ret*100:+.2f}% | 夏普={sharpe:.2f} | 胜率={wr*100:.1f}% | 盈利比={pf*100:.0f}% | 回撤={dd*100:.2f}%"
+            f"     样本={n} | 收益={ret * 100:+.2f}% | 夏普={sharpe:.2f} | 胜率={wr * 100:.1f}% | 盈利比={pf * 100:.0f}% | 回撤={dd * 100:.2f}%"
         )
 
     print()
@@ -304,11 +275,11 @@ def print_report(
         if n < 5:
             print(f"  ? {name}: 样本仅 {n} 只，数据不足以下结论")
         elif ret > 0.05 and sharpe > 0.5:
-            print(f"  ✓ {name}: 收益+{ret*100:.2f}%, 夏普{sharpe:.2f} → 建议保留（有效）")
+            print(f"  ✓ {name}: 收益+{ret * 100:.2f}%, 夏普{sharpe:.2f} → 建议保留（有效）")
         elif ret < -0.05 or sharpe < 0:
-            print(f"  ✗ {name}: 收益{ret*100:+.2f}%, 夏普{sharpe:.2f} → 建议禁用或调优（无效）")
+            print(f"  ✗ {name}: 收益{ret * 100:+.2f}%, 夏普{sharpe:.2f} → 建议禁用或调优（无效）")
         else:
-            print(f"  ? {name}: 收益{ret*100:+.2f}%, 夏普{sharpe:.2f} → 边缘，需观察")
+            print(f"  ? {name}: 收益{ret * 100:+.2f}%, 夏普{sharpe:.2f} → 边缘，需观察")
 
 
 def main() -> None:
@@ -410,9 +381,9 @@ def _send_feishu_report(full_data: dict, strategies: list[str]) -> None:
             n = s.get("_sample_count", 0)
             pf = s.get("_profitable_ratio", 0)
             summary_lines.append(
-                f"{s_name}: 样本{n} 收益{ret*100:+.2f}% "
-                f"夏普{sharpe:.2f} 回撤{dd*100:.2f}% "
-                f"胜率{wr*100:.1f}% 盈利比{pf*100:.0f}%"
+                f"{s_name}: 样本{n} 收益{ret * 100:+.2f}% "
+                f"夏普{sharpe:.2f} 回撤{dd * 100:.2f}% "
+                f"胜率{wr * 100:.1f}% 盈利比{pf * 100:.0f}%"
             )
 
         report_text = "\n".join(summary_lines)

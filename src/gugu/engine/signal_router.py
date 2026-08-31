@@ -51,9 +51,11 @@ class SignalRouter:
         self._strategies = strategies or []
         # P2 修复：集成 StrategyPool 实现加权融合（代替简单的 majority/any/unanimous）
         self._pool: StrategyPool | None = strategy_pool
-        # 当 fusion_rule 显式传入 'weighted' 且提供了 pool 时启用加权融合
+        # 当 fusion_rule 显式传入 'weighted' 且提供了 pool 时启用加权融合。
+        # 默认池按 execution.mode 隔离 verified/experimental 权重作用域。
         if self._pool is None and self._fusion_rule == "weighted":
-            self._pool = StrategyPool()
+            execution_mode = getattr(getattr(get_config(), "execution", None), "mode", None)
+            self._pool = StrategyPool(execution_mode=execution_mode)
 
     def add_strategy(self, strategy: Strategy) -> None:
         """添加策略。"""
@@ -194,7 +196,14 @@ class SignalRouter:
             # 市场状态自适应权重（在 balanced_weights 基础上调整）
             effective_weights = dict(balanced_weights)
             if regime:
-                base_weights = self._pool.get_weights()
+                # 只对本路由器实际加载的策略做 regime 调整；即使外部注入了
+                # 含实验策略的旧 StrategyPool，也不能让它稀释生产策略权重。
+                loaded_names = {strategy.name for strategy in self._strategies}
+                base_weights = {
+                    name: weight
+                    for name, weight in self._pool.get_weights().items()
+                    if name in loaded_names
+                }
                 raw_adjusted = compute_regime_weights(base_weights, regime)
                 total_raw = sum(raw_adjusted.get(n, w) for n, w in base_weights.items())
                 if total_raw > 0:

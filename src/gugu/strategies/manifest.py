@@ -28,6 +28,7 @@ import yaml
 
 from gugu.config import PROJECT_ROOT
 from gugu.utils.log import get_logger
+from gugu.validation.gate_policy import GatePolicy
 
 logger = get_logger()
 
@@ -117,13 +118,24 @@ class StrategyManifest:
         return None
 
     def is_runtime_enabled(self, key: str, execution_mode: str = "paper") -> bool:
-        """判断策略是否满足指定执行模式的运行时准入条件。"""
+        """判断策略是否满足指定执行模式的运行时准入条件。
+
+        production 模式除了 settings 白名单，还必须具备 manifest 的 ``enabled`` 标记、
+        ``status: enabled`` 和完整的 GatePolicy gate-v1 样本外证据。paper 模式仍允许
+        ``conditional_pass``，但只用于观察，不代表生产准入。
+        """
         info = self.get_strategy(key)
         if not isinstance(info, dict) or not info.get("enabled", False):
             return False
-        status = self.get_validation_status(key)
+        gate = info.get("validation_gate")
+        if not isinstance(gate, dict):
+            return False
+        status = gate.get("status")
         if execution_mode in ("track_live", "signal_only", "live"):
-            return status == "enabled"
+            metrics = gate.get("metrics")
+            if status != "enabled" or not isinstance(metrics, dict):
+                return False
+            return bool(GatePolicy.evaluate(metrics)["passed"])
         if execution_mode == "paper":
             return status in {"enabled", "conditional_pass"}
         return False

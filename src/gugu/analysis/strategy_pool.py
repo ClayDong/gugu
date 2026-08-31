@@ -59,19 +59,32 @@ class StrategyPool:
     """
 
     _WEIGHTS_FILE = Path(PROJECT_ROOT) / "data" / "strategy_pool_weights.json"
+    _PAPER_WEIGHTS_FILE = Path(PROJECT_ROOT) / "data" / "paper_strategy_pool_weights.json"
+    _PRODUCTION_MODES = {"track_live", "signal_only", "live"}
 
-    def __init__(self):
+    def __init__(self, execution_mode: str | None = None):
         self._weights: dict[str, StrategyWeight] = {}
         self._persisted_weights: dict[str, float] = {}
+        self._execution_mode = execution_mode
+        self._weights_file = self._get_weights_file()
         self._load_weights()
         self._init_weights()
 
+    def _get_weights_file(self) -> Path:
+        """选择与执行模式隔离的权重文件。"""
+        if self._execution_mode == "paper":
+            return self._PAPER_WEIGHTS_FILE
+        return self._WEIGHTS_FILE
+
+    def _is_production_mode(self) -> bool:
+        return self._execution_mode in self._PRODUCTION_MODES
+
     def _load_weights(self) -> None:
         """从文件加载持久化权重。"""
-        if not self._WEIGHTS_FILE.exists():
+        if not self._weights_file.exists():
             return
         try:
-            with self._WEIGHTS_FILE.open("r", encoding="utf-8") as f:
+            with self._weights_file.open("r", encoding="utf-8") as f:
                 data = json.load(f)
             weights = data.get("weights", {})
             self._persisted_weights = {
@@ -85,32 +98,44 @@ class StrategyPool:
     def _save_weights(self) -> None:
         """持久化当前权重到文件。"""
         try:
-            self._WEIGHTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self._weights_file.parent.mkdir(parents=True, exist_ok=True)
             data = {
                 "weights": {name: round(w.weight, 6) for name, w in self._weights.items()},
                 "updated_at": datetime.now().isoformat(),
+                "execution_mode": self._execution_mode or "legacy",
             }
-            atomic_write_json(self._WEIGHTS_FILE, data)
+            atomic_write_json(self._weights_file, data)
         except Exception as e:
             logger.warning("保存策略权重文件失败: {}", e)
 
     def _init_weights(self) -> None:
         """初始化策略权重（从配置读取，并用持久化权重覆盖）。"""
         config = get_config().strategy
-        enabled = config.enabled
+        verified = set(getattr(config, "verified_strategies", None) or [])
+        experimental = set(getattr(config, "experimental_strategies", None) or [])
         weights = getattr(config, "weights", {}) if config else {}
-        n = max(len(enabled), 1)
+        exp_weights = getattr(config, "experimental_weights", {}) if config else {}
 
-        # 收集所有需要管理的策略（enabled + verified + experimental）
-        all_names: set[str] = set(enabled)
-        if getattr(config, "verified_strategies", None):
-            all_names.update(config.verified_strategies)
-        if getattr(config, "experimental_strategies", None):
-            all_names.update(config.experimental_strategies)
+        if self._is_production_mode():
+            # 生产/监控模式只管理 verified，避免实验策略进入核心融合或污染生产持久化权重。
+            names = verified
+            initial_weights = weights
+        elif self._execution_mode == "paper":
+            # paper 使用独立权重文件，可同时观察 verified 与 experimental。
+            names = verified | experimental
+            initial_weights = {**weights, **exp_weights}
+        else:
+            # 保留未传 execution_mode 的旧调用语义，兼容独立分析和历史测试。
+            names = set(getattr(config, "enabled", None) or []) | verified | experimental
+            initial_weights = {**weights, **exp_weights}
 
-        for name in all_names:
-            initial = float(weights.get(name, 1.0 / n))
-            # 如果持久化权重存在且策略仍在配置中，则覆盖
+        if not names:
+            self._normalize_weights()
+            return
+
+        default_weight = 1.0 / len(names)
+        for name in names:
+            initial = float(initial_weights.get(name, default_weight))
             persisted = self._persisted_weights.get(name)
             weight = persisted if persisted is not None else initial
             self._weights[name] = StrategyWeight(
@@ -120,25 +145,14 @@ class StrategyPool:
                 initial_weight=initial,
             )
 
-        # 加载实验性策略权重（用于 paper 模式信号观察）
-        exp_weights = getattr(config, "experimental_weights", {}) if config else {}
-        if exp_weights:
-            for name, weight in exp_weights.items():
-                if name not in self._weights:
-                    initial = float(weight)
-                    persisted = self._persisted_weights.get(name)
-                    self._weights[name] = StrategyWeight(
-                        name=name,
-                        weight=persisted if persisted is not None else initial,
-                        enabled=True,
-                        initial_weight=initial,
-                    )
-
         self._normalize_weights()
 
     def _normalize_weights(self) -> None:
         """归一化权重，并保证下限与上限（v0.8.1 修复权重塌缩）。"""
         if not self._weights:
+            return
+        if len(self._weights) == 1:
+            next(iter(self._weights.values())).weight = 1.0
             return
         total = sum(max(v.weight, 0.0) for v in self._weights.values())
         if total <= 0:

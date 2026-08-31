@@ -262,9 +262,14 @@ async def test_update_prices_exception(
 
 
 @pytest.mark.asyncio
-async def test_shutdown(engine: TradingEngine, mock_notifier: mock.AsyncMock) -> None:
-    """shutdown 应关闭 notifier。"""
+async def test_shutdown(
+    engine: TradingEngine,
+    mock_notifier: mock.AsyncMock,
+    mock_data_manager: mock.MagicMock,
+) -> None:
+    """shutdown 应关闭数据源和 notifier。"""
     await engine.shutdown()
+    mock_data_manager.close.assert_called_once()
     mock_notifier.close.assert_called_once()
 
 

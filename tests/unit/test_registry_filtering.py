@@ -56,8 +56,8 @@ class TestIndexCodeRecognition:
 class TestEnabledStrategiesFiltering:
     """get_enabled_strategies() 按 execution_mode 过滤 experimental（P1-1）。"""
 
-    def test_track_live_uses_verified_allowlist(self):
-        """track_live 使用 verified 白名单，实验策略仍不得加载。"""
+    def test_track_live_requires_manifest_gate_evidence(self):
+        """track_live 同时要求 verified 白名单和完整 GatePolicy 证据。"""
         with patch("gugu.config.get_config") as mock_cfg:
             mock_cfg.return_value.execution.mode = "track_live"
             strategy_cfg = mock_cfg.return_value.strategy
@@ -77,7 +77,5 @@ class TestEnabledStrategiesFiltering:
             get_enabled_strategies.cache_clear()
             strategies = get_enabled_strategies()
             names = {s.name for s in strategies}
-            assert {"box_breakout", "double_yin"} <= names
-            assert "chenxuezhang" not in names
-            assert "linjudaye" not in names
+            assert names == set()
             get_enabled_strategies.cache_clear()

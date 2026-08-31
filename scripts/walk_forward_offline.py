@@ -18,17 +18,18 @@
     # 自定义股票池
     uv run python scripts/walk_forward_offline.py --symbols 600519,000858,002714
 
-    # 写回最优参数到 strategy_defaults.yaml（需通过 4 项解锁条件）
+    # 写回最优参数到 strategy_defaults.yaml（需通过 GatePolicy gate-v1）
     uv run python scripts/walk_forward_offline.py --write
 
-    # 强制写回（紧急情况，跳过解锁条件）
+    # --force 仅保留命令兼容性，不得绕过 GatePolicy gate-v1
     uv run python scripts/walk_forward_offline.py --write --force
 
 P1 解锁条件（全部满足才能写回，防止过拟合参数污染生产）：
 1. 样本外 Sharpe > 0
-2. 参数稳定性 ≥50% 窗口一致
+2. 参数稳定性 ≥80% 窗口一致
 3. 最大回撤 < 25%
 4. 平均样本外收益 ≥ 0
+5. 样本外交易次数 ≥ 30
 """
 
 from __future__ import annotations
@@ -283,12 +284,7 @@ async def run_offline_optimization(
             param_votes=param_votes,
         )
 
-        if unlock_report["unlocked"] or force:
-            if force and not unlock_report["unlocked"]:
-                print(
-                    f"\n⚠️  --force 强制写回（跳过 {len(unlock_report['failed_checks'])} 项解锁条件）"
-                )
-                logger.warning(f"强制写回 {strategy_name} 参数: {unlock_report['failed_checks']}")
+        if unlock_report["unlocked"]:
             if strategy_name not in defaults:
                 defaults[strategy_name] = {}
             for k, v in best_params.items():
@@ -305,7 +301,7 @@ async def run_offline_optimization(
             print(f"\n建议:")
             print(f"  1. 检查策略是否真的有效（box_breakout 已通过全市场回测验证）")
             print(f"  2. 增加股票数（当前 {len(stock_dfs)} 只）")
-            print(f"  3. 紧急情况可用 --force 强制写回（需 PR 评审说明理由）")
+            print("  3. --force 仅保留兼容性，不得绕过 GatePolicy gate-v1")
 
     return {
         "strategy": strategy_name,
@@ -377,10 +373,9 @@ async def main(
         print(f"\n将对 {len(enabled)} 个启用策略运行多股聚合 Walk-Forward 优化")
         print(f"股票池: {symbols}")
         if write:
+            print("写回前将执行 GatePolicy gate-v1 解锁条件检查")
             if force:
-                print("⚠️  --force 强制写回（跳过解锁条件检查）")
-            else:
-                print("写回前将执行 4 项解锁条件检查")
+                print("--force 仅保留兼容性，不绕过 GatePolicy gate-v1")
         print()
 
         for s_name in enabled:
@@ -424,7 +419,7 @@ if __name__ == "__main__":
         help="将最优参数写回 strategy_defaults.yaml（需通过解锁条件）",
     )
     parser.add_argument(
-        "--force", action="store_true", help="强制写回，跳过解锁条件检查（紧急情况使用）"
+        "--force", action="store_true", help="兼容旧命令；不得绕过 GatePolicy gate-v1"
     )
     parser.add_argument("--show", action="store_true", help="显示当前策略参数")
     parser.add_argument("--notify", action="store_true", help="优化完成后推送飞书通知")

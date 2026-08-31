@@ -17,11 +17,19 @@ from __future__ import annotations
 import contextlib
 import json
 from collections import deque
-from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from gugu.utils.atomic import atomic_write_json
+
+from .results import (
+    DataSourceHealthResult,
+    DiskHealthResult,
+    HealthCheckResult,
+    SchedulerHealthResult,
+    SignalHistoryResult,
+    ZeroSignalResult,
+)
 
 # 默认阈值
 HEARTBEAT_STALE_MINUTES = 15  # 心跳超过 15 分钟未更新视为挂死
@@ -36,35 +44,6 @@ DEFAULT_ALERT_STATE_FILE = "watchdog_alert_state.json"
 DEFAULT_SUPPRESS_MINUTES = 120  # 同一问题默认 2 小时内只告警一次
 # 重启风暴当日同因去重（v0.9.32）：记录当日首次升级日期，跨天自动重置
 DEFAULT_RESTART_STORM_STATE_FILE = "watchdog_restart_storm_state.json"
-
-
-@dataclass
-class HealthCheckResult:
-    """健康检查结果基类。"""
-
-    ok: bool
-    severity: str = "info"  # info / medium / high
-    message: str = ""
-    details: dict = field(default_factory=dict)
-
-    def __bool__(self) -> bool:
-        return self.ok
-
-
-@dataclass
-class SignalHistoryResult(HealthCheckResult):
-    """信号历史新鲜度检查结果。"""
-
-    last_write: str = ""
-    boot_time: str = ""
-
-
-@dataclass
-class SchedulerHealthResult(HealthCheckResult):
-    """调度器健康检查结果。"""
-
-    heartbeat_age_min: float = 0.0
-    restarts_today: int = 0
 
 
 # ========== 通用工具 ==========
@@ -197,6 +176,48 @@ def check_signal_history_freshness(
                 "signals_count": scan.get("signals_count", 0),
             },
         )
+
+    # 交易日历对齐豁免（v0.9.33，2026-08-24 实证）：
+    # 周末/节假日后 last_scan_at 自然停留在上一交易日收盘（如周五 15:10），
+    # 墙钟 age_days 超 2 天即触发"信号历史失忆"误报，驱动 auto_recover 每小时
+    # 无意义重启 scheduler（8/23-8/24 实证 7 次重启，根因从未变化——非交易日
+    # 本来就没有扫描任务，重启不会产生扫描）。若最近扫描时间 >= 最近一个
+    # 已完成交易日（last_trading_day 不含今天）的收盘时刻 → 扫描与交易日历对齐，
+    # 期间 0 信号不落盘属正常，不构成失忆。
+    # 真故障路径不受影响：盘中停摆时 scan_ts 必然早于最近交易日收盘（如周五
+    # 09:25 停摆 < 周五 15:00 收盘）→ 不豁免 → 仍走 age_days 告警。
+    if scan_ts is not None:
+        scan = scan or {}  # scan_ts 非空 ⇒ scan 非空（静态分析防御）
+        try:
+            from datetime import time as _time
+
+            from gugu.utils.calendar import last_trading_day
+
+            ltd = last_trading_day()
+            if ltd is not None:
+                cutoff = datetime.combine(ltd, _time(15, 0))
+                # 只豁免收盘后短时间内的尾扫；过晚的时间戳通常意味着
+                # 测试/写入链路异常，不能把它当作交易日收盘对齐。
+                if cutoff <= scan_ts <= cutoff + timedelta(hours=2):
+                    return SignalHistoryResult(
+                        ok=True,
+                        message=(
+                            f"信号扫描与最近交易日收盘对齐（{scan_ts:%m-%d %H:%M} ≥ "
+                            f"{ltd} 15:00），周末/节假日无信号落盘属正常"
+                        ),
+                        last_write=last_ts.isoformat(),
+                        boot_time=boot_latest.isoformat(),
+                        details={
+                            "age_days": round(age_days, 1),
+                            "scan_age_days": (
+                                round(scan_age_days, 1) if scan_age_days is not None else None
+                            ),
+                            "signals_count": scan.get("signals_count", 0),
+                            "calendar_aligned": True,
+                        },
+                    )
+        except Exception:
+            pass  # 日历/导入异常 → 走原有 age_days 判定（保守，宁可误报不可漏报）
 
     return SignalHistoryResult(
         ok=False,
@@ -348,6 +369,7 @@ def run_all_checks(
     heartbeat_stale_minutes: int = HEARTBEAT_STALE_MINUTES,
     signal_stale_days: int = SIGNAL_HISTORY_STALE_DAYS,
     max_restarts_per_day: int = MAX_RESTARTS_PER_DAY,
+    runtime_strategies: list[str] | None = None,
 ) -> list[HealthCheckResult]:
     """运行全部健康检查，返回结果列表（不告警的也在列）。
 
@@ -358,6 +380,8 @@ def run_all_checks(
     - 信号链路断裂 → 连续 0 信号
     """
     data_dir = data_dir or Path("data")
+    if runtime_strategies is None:
+        runtime_strategies = _resolve_runtime_strategies()
     return [
         check_scheduler_health(
             data_dir=data_dir,
@@ -367,7 +391,7 @@ def run_all_checks(
         check_signal_history_freshness(data_dir=data_dir, stale_days=signal_stale_days),
         check_disk_health(data_dir=data_dir),
         check_data_source_health(data_dir=data_dir),
-        check_zero_signal_streak(data_dir=data_dir),
+        check_zero_signal_streak(data_dir=data_dir, runtime_strategies=runtime_strategies),
     ]
 
 
@@ -375,14 +399,6 @@ def run_all_checks(
 # 事故：磁盘 100% 满（94MB 剩余）时 PaperBroker 成交但状态持久化写失败
 # （Errno 28），heartbeat.json 同步写失败 886 次累积——全部只打 WARNING，
 # 用户毫不知情。本检查将磁盘不足升级为主动告警。
-
-
-@dataclass
-class DiskHealthResult(HealthCheckResult):
-    """磁盘空间检查结果。"""
-
-    free_bytes: int = 0
-    total_bytes: int = 0
 
 
 # 磁盘剩余空间告警阈值（字节）：默认 1GB
@@ -441,15 +457,6 @@ def check_disk_health(
 # DataSourceHealthMonitor 已将 success/failure/degraded/recovered 事件
 # 持久化到 source_health_events.jsonl（按日期滚动）——本检查读取当日事件，
 # 失败率超阈值时升级告警。
-
-
-@dataclass
-class DataSourceHealthResult(HealthCheckResult):
-    """数据源健康检查结果。"""
-
-    failure_rate: float = 0.0
-    total_events: int = 0
-    failures: int = 0
 
 
 DEFAULT_EVENTS_FILE = "source_health_events.jsonl"
@@ -565,14 +572,6 @@ def check_data_source_health(
 # 注意：非交易时段/非交易日 0 信号是正常的（无扫描活动），不告警。
 
 
-@dataclass
-class ZeroSignalResult(HealthCheckResult):
-    """连续 0 信号检查结果。"""
-
-    streak: int = 0
-    last_scan_at: str = ""
-
-
 DEFAULT_SCAN_STREAK_FILE = "watchdog_zero_signal_streak.json"
 # 连续 0 信号告警阈值：连续 3 轮扫描（每轮 5 分钟 → 15 分钟）无信号
 DEFAULT_ZERO_SIGNAL_STREAK_THRESHOLD = 3
@@ -608,6 +607,21 @@ def _has_today_signal(history_path: Path) -> bool:
     return False
 
 
+def _resolve_runtime_strategies() -> list[str] | None:
+    """解析生产模式运行时策略池；解析失败返回 None（保守：不触发空池豁免）。
+
+    v0.9.37：生产模式（track_live/signal_only/live）下 verified_strategies 白名单
+    为空时（gate-v1 准入暂无通过者），运行时策略池为空是**配置预期**，
+    0 信号非链路故障。解析失败时返回 None，保守不豁免（黑屏检测完整保留）。
+    """
+    try:
+        from gugu.strategies.registry import get_runtime_strategy_names
+
+        return get_runtime_strategy_names()
+    except Exception:
+        return None
+
+
 def check_zero_signal_streak(
     data_dir: Path | None = None,
     scan_path: Path | None = None,
@@ -615,6 +629,7 @@ def check_zero_signal_streak(
     history_path: Path | None = None,
     threshold: int = DEFAULT_ZERO_SIGNAL_STREAK_THRESHOLD,
     fresh_minutes: int = DEFAULT_SCAN_FRESH_MINUTES,
+    runtime_strategies: list[str] | None = None,
 ) -> ZeroSignalResult:
     """检查交易时段内是否连续多轮扫描 0 信号。
 
@@ -627,6 +642,10 @@ def check_zero_signal_streak(
       （data_health=ok 且无 data_errors）+ 当日已有信号产出 → 0 信号是市场状态
       （震荡市策略未触发/融合无方向），非链路故障，不累计不告警。
       真故障路径（数据源挂/扫描停摆/全天 0 信号）完全保留。
+    - **空策略池豁免（v0.9.37）**：runtime_strategies 提供且为空列表（生产配置
+      verified_strategies 白名单为空，gate-v1 暂无通过策略）→ 0 信号是**配置预期**
+      （扫描按配置加载 0 策略），非链路故障，不累计不告警。
+      黑屏（8/5）检测能力保留：策略池非空时 0 信号照常累计告警。
     """
     data_dir = data_dir or Path("data")
     scan_path = scan_path or data_dir / DEFAULT_SCAN_FILE
@@ -663,9 +682,39 @@ def check_zero_signal_streak(
             last_scan_at=scan.get("last_scan_at", ""),
         )
 
+    # v0.9.37 空策略池豁免：生产配置 verified_strategies 白名单为空（gate-v1 准入
+    # 暂无通过者）→ 扫描按配置加载 0 策略，0 信号是**配置预期**，非链路故障。
+    # 背景：2026-08-26 settings.yaml 收紧 gate-v1 后 production 空池，watchdog 每日
+    # 09:40 准时升级"连续 3 轮 0 信号"噪音（08-25~08-28 连续 4 个交易日实证升级
+    # 4 次，根因均为 0 只策略）。黑屏（8/5）检测能力保留：策略池非空时照常累计告警。
+    # runtime_strategies=None（未提供）→ 不豁免，保持旧行为（默认参数兼容）。
+    if runtime_strategies is not None and not runtime_strategies:
+        return ZeroSignalResult(
+            ok=True,
+            message=(
+                "生产配置 verified_strategies 白名单为空（gate-v1 暂无通过策略），"
+                "扫描加载 0 策略 → 0 信号为配置预期，不告警"
+            ),
+            streak=0,
+            last_scan_at=scan.get("last_scan_at", ""),
+        )
+
     # 读取当前 streak 状态
     state = _read_json(streak_path) or {}
-    streak = int(state.get("streak", 0) or 0)
+    # v0.9.34：streak 按交易日重置（修复跨交易日累计失真）。
+    # 历史问题：streak 跨交易日持续累计——08-21（周五）48 轮 0 信号 + 08-24（周一）
+    # 开盘首轮即达 49 ≥ 阈值 3 → 每个"前一交易日无信号"的交易日开盘 6 分钟内必升级
+    # 人工（08-11×3 / 08-19×2 / 08-21 / 08-24 实发 7 次，均开盘即报）。而周一开盘后
+    # 策略仍基于上周五收盘 bar（当日 bar 收盘后才生成），判断与周五完全一致——
+    # 继承的 streak 无任何新信息量，纯噪音。
+    # 修复：streak 归属交易日（streak_date）非今日 → 归零重计。8/5 黑屏事故检测
+    # 能力不变：盘中连续 3 轮（15 分钟）0 信号仍会照常告警。
+    today_streak = datetime.now().date().isoformat()
+    if state.get("streak_date") != today_streak:
+        streak = 0
+        state["streak_date"] = today_streak
+    else:
+        streak = int(state.get("streak", 0) or 0)
     # v0.9.30：当日是否发生 0 信号升级（首次升级置 True，持久化 last_escalated_date）
     escalated_today = False
 
@@ -744,7 +793,11 @@ def check_zero_signal_streak(
 
     # 持久化 streak（写失败不阻塞告警）
     with contextlib.suppress(OSError):
-        payload: dict = {"streak": streak, "updated_at": datetime.now().isoformat()}
+        payload: dict = {
+            "streak": streak,
+            "streak_date": state.get("streak_date") or today_streak,
+            "updated_at": datetime.now().isoformat(),
+        }
         if escalated_today:
             payload["last_escalated_date"] = datetime.now().date().isoformat()
         elif state.get("last_escalated_date"):

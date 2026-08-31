@@ -36,6 +36,24 @@ def test_eastmoney_stock_flow_main_pct_is_unavailable_when_not_provided(monkeypa
     assert pd.isna(df.iloc[0]["main_pct"])
 
 
+def test_eastmoney_history_does_not_retry_transport_failure(monkeypatch):
+    """历史行情由 HttpTransport 统一重试，采集器不再额外套重试。"""
+    collector = EastmoneyCollector()
+    calls = 0
+
+    def fail(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise ConnectionError("upstream down")
+
+    monkeypatch.setattr(collector, "_get_json", fail)
+
+    with pytest.raises(ConnectionError, match="upstream down"):
+        collector.fetch_stock_history("600519")
+
+    assert calls == 1
+
+
 # ========== Fixture 数据 ==========
 
 
@@ -360,6 +378,28 @@ class TestSinaCollectorSource:
     def test_source_differs_from_akshare(self):
         """降级源必须与主源不同。"""
         assert SinaCollector.source != AkshareCollector.source
+
+    def test_close_releases_lazy_session(self):
+        collector = SinaCollector()
+        collector.close()
+        assert collector._client is None
+
+    def test_close_releases_created_session(self):
+        collector = SinaCollector()
+        session = collector._get_client()
+        closed = False
+        original_close = session.close
+
+        def close():
+            nonlocal closed
+            closed = True
+            original_close()
+
+        session.close = close
+        collector.close()
+        collector.close()
+        assert closed is True
+        assert collector._client is None
 
 
 class TestSinaCollectorRealtime:

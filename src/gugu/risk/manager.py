@@ -22,6 +22,7 @@ from gugu.config.models import AppConfig
 from gugu.filters.industry_constraint import IndustryConstraint
 from gugu.utils.log import get_logger
 
+from .holding_duration import HoldingDurationChecker
 from .rules import Position, RiskAction, RiskCheckResult, RiskLevel
 
 logger = get_logger()
@@ -140,6 +141,11 @@ class RiskManager:
         # P0 修复（v0.8.0）：按 scope 选择状态文件，回测与生产隔离
         self._scope = scope
         self._state_file = self._BACKTEST_STATE_FILE if scope == "backtest" else RISK_STATE_FILE
+        self._holding_duration_checker = HoldingDurationChecker(
+            self.max_holding_days_warn,
+            self.max_holding_days_halt,
+            risk_logger=self._logger,
+        )
         # P0 修复（v0.8.2）：从磁盘加载所有持久化状态（含 portfolio_peak 生产 scope）
         self._load_halt_state()
 
@@ -155,8 +161,6 @@ class RiskManager:
             self._last_halt_reset_time = 0.0
             self._last_reset_date = ""
             self._portfolio_peak = 0.0
-            self._daily_start_value = 0.0
-            self._daily_realized_pnl = 0.0
 
     def reset_halt(self) -> None:
         """Reset halt state. Call at the start of a new trading day."""
@@ -705,87 +709,8 @@ class RiskManager:
     def check_holding_duration(
         self, symbol: str, entry_date: str, current_pnl_pct: float
     ) -> RiskCheckResult:
-        """P2-5 新增：检查单股持仓时间是否超限。
-
-        防止阴跌股套牢：不触发止损（每天跌 1-2%）但持仓 3 个月亏 20%。
-
-        Args:
-            symbol: 股票代码
-            entry_date: 建仓日期（ISO 格式字符串 YYYY-MM-DD）
-            current_pnl_pct: 当前盈亏比例（如 0.05 = +5%, -0.10 = -10%）
-
-        Returns:
-            RiskCheckResult: action=HALT 强制清仓 / action=WARN 警告减半仓 / action=ALLOW 正常
-        """
-        if not entry_date:
-            return RiskCheckResult(
-                level=RiskLevel.L1_POSITION,
-                action=RiskAction.ALLOW,
-                message="无建仓日期",
-            )
-
-        try:
-            from datetime import date as _date
-
-            entry = _date.fromisoformat(entry_date)
-            today = _date.today()
-            holding_days = (today - entry).days
-        except (ValueError, TypeError):
-            return RiskCheckResult(
-                level=RiskLevel.L1_POSITION,
-                action=RiskAction.ALLOW,
-                message=f"建仓日期格式错误: {entry_date}",
-            )
-
-        # 已盈利则不强制平仓（即使持仓时间长）
-        if current_pnl_pct >= 0:
-            return RiskCheckResult(
-                level=RiskLevel.L1_POSITION,
-                action=RiskAction.ALLOW,
-                message=f"持仓 {holding_days} 天，盈利 {current_pnl_pct:+.2%}",
-            )
-
-        # 持仓 60 天未盈利 → 强制清仓
-        if holding_days >= self.max_holding_days_halt:
-            self._logger.warning(
-                "P2-5: {} 持仓 {} 天未盈利（{:.2%}），强制清仓（>={} 天）",
-                symbol,
-                holding_days,
-                current_pnl_pct,
-                self.max_holding_days_halt,
-            )
-            return RiskCheckResult(
-                level=RiskLevel.L2_DAILY_LOSS,
-                action=RiskAction.HALT,
-                message=(
-                    f"持仓 {holding_days} 天未盈利（{current_pnl_pct:+.2%}），"
-                    f"超过 {self.max_holding_days_halt} 天上限，强制清仓"
-                ),
-            )
-
-        # 持仓 30 天未盈利 → 警告减半仓
-        if holding_days >= self.max_holding_days_warn:
-            self._logger.warning(
-                "P2-5: {} 持仓 {} 天未盈利（{:.2%}），建议减半仓（>={} 天）",
-                symbol,
-                holding_days,
-                current_pnl_pct,
-                self.max_holding_days_warn,
-            )
-            return RiskCheckResult(
-                level=RiskLevel.L2_DAILY_LOSS,
-                action=RiskAction.WARN,
-                message=(
-                    f"持仓 {holding_days} 天未盈利（{current_pnl_pct:+.2%}），"
-                    f"超过 {self.max_holding_days_warn} 天，建议减半仓"
-                ),
-            )
-
-        return RiskCheckResult(
-            level=RiskLevel.L1_POSITION,
-            action=RiskAction.ALLOW,
-            message=f"持仓 {holding_days} 天，亏损 {current_pnl_pct:+.2%}",
-        )
+        """检查单股持仓时间是否超限，保留为 RiskManager 兼容入口。"""
+        return self._holding_duration_checker.check(symbol, entry_date, current_pnl_pct)
 
     @staticmethod
     async def check_correlation(

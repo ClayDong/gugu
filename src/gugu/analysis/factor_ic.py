@@ -88,6 +88,8 @@ class FactorICAnalyzer:
         aligned = pd.DataFrame({"factor": factor_values, "return": forward_returns}).dropna()
         if len(aligned) < 10:
             return 0.0
+        if aligned["factor"].nunique() <= 1 or aligned["return"].nunique() <= 1:
+            return 0.0
         ic, _p = stats.spearmanr(aligned["factor"], aligned["return"])
         return float(ic) if not np.isnan(ic) else 0.0
 

@@ -54,7 +54,7 @@ data:
 # ========== 策略 ==========
 strategy:
   # v0.7.5 P0-1修复：策略分组管理（verified / experimental）
-  # verified_strategies: 通过 Walk-Forward 4项门控（样本外Sharpe>0/参数稳定性≥50%/最大回撤<25%/平均收益≥0）
+  # verified_strategies: 通过 GatePolicy gate-v1 门控（样本外Sharpe>0/参数稳定性≥80%/最大回撤<25%/平均收益≥0/样本外交易≥30）
   # experimental_strategies: 逻辑闭环但未完成验证，仅 paper 模式参与信号融合
   # 实验性策略在 signal_only/track_live 模式下：信号标记 experimental=True，通知卡片显示警告
   enabled_by_regime:
@@ -100,18 +100,15 @@ strategy:
     crash: []
   # v0.5.0 P0-1修复：策略分组管理
   # v0.8.1 修复：验证标签统一（此前 manifest 标"未通过"但此处标"通过"，自相矛盾）
-  # 真实状态（依据 2026-07-26 Walk-Forward 报告 + 全市场回测）：
-  #   - box_breakout: conditional_pass —— Walk-Forward 未通过(oos_sharpe=-1.43)，但 300股全市场回测
-  #     150 笔夏普 0.15/胜率 55%/回撤 18%，有条件启用，需 paper 验证
-  #   - double_yin:   conditional_pass —— Walk-Forward 未通过，100股回测夏普 -0.02/胜率 48%，观察中
-  #   - rsi_reversal: conditional_pass —— Walk-Forward 通过，震荡市专用，回测最优
-  # 三个策略均为"有条件通过"，无一达到严格上线标准，权重分配已按证据强度调整
-  verified_strategies:
-    - box_breakout      # conditional_pass（回测证据支持，Walk-Forward 未完全达标）
-    - rsi_reversal      # conditional_pass（Walk-Forward 通过，震荡市专用）
-    # double_yin 已移除：2026-08-15 Sharpe -0.02 不满足条件，降为 experimental
-  # 实验性策略（仅 paper 模式参与信号融合，signal_only/track_live 仅观察）
+  # 生产准入只接受已通过当前样本外证据门槛的策略；conditional_pass 仅允许 paper 观察。
+  # 2026-07-26 的 box_breakout Walk-Forward 明确失败（oos_sharpe=-1.4297、平均收益<0、参数稳定性<80%），
+  # 且 2026-07-14 的旧全市场报告同样为负收益/负 Sharpe，不能继续放入生产 verified 白名单。
+  # 当前没有满足 gate-v1 全部门槛且证据完整的生产策略；生产模式只读持仓，不加载策略信号。
+  verified_strategies: []
+  # 实验性策略（仅 paper 模式参与信号融合，signal_only/track_live 只观察，不进入生产策略执行）
   experimental_strategies:
+    - rsi_reversal      # 现有报告参数稳定性 66.7% < gate-v1 要求的 80%，保留 paper 复验
+    - box_breakout      # 2026-07-26 Walk-Forward 失败，保留 paper 复验，不得自动交易
     # chenxuezhang 已移除：2026-08-15 持仓回测审计证伪（Sharpe -0.24），等 paper 观察 30+ 信号若改善再恢复
     - linjudaye        # 邻居大爷规则策略（2026-08-01 事件研究 conditional_pass）
     - price_volume_signal  # 换手率+量比尾盘黄金信号（大样本回测验证通过，等 paper 观察30+信号转正）
@@ -125,18 +122,17 @@ strategy:
     # ml_gradient_boost 已移除：2026-08-01 死配置（模型文件缺失）
   # 向后兼容：原 enabled 列表（当 verified_strategies + experimental_strategies 都为空时使用）
   enabled: []
-  # v0.7.5 P0-1修复：仅 verified 策略参与权重分配（总和=1.0）
-  # 权重会在 StrategyPool 中根据近期表现动态调整
-  weights:
-    box_breakout: 0.60
-    rsi_reversal: 0.40
-    # double_yin 移除：2026-08-15 Sharpe -0.02，从 verified 降级 experimental
+  # 仅 verified 策略参与生产权重分配；当前没有 verified 策略。
+  # 权重会在 StrategyPool 中根据近期表现动态调整。
+  weights: {}
   # 实验性策略权重（仅 paper 模式使用）
   experimental_weights:
-    linjudaye: 0.30
+    rsi_reversal: 1.00   # 当前 gate-v1 证据不足，仅用于纸面复验
+    box_breakout: 0.20   # Walk-Forward 失败，仅用于纸面复验
+    linjudaye: 0.25
     price_volume_signal: 0.15
     regime_cycle_four: 0.15
-    double_yin: 0.15   # 从 verified 降级，Sharpe -0.02
+    double_yin: 0.15   # Sharpe -0.02，保持观察
     # chenxuezhang 已移除：2026-08-15 持仓回测 Sharpe -0.24，建议降级 disabled
     # death_valley_rebound 已移除：2026-08-15 持仓回测审计证伪
     # bollinger_oversold_rebound 已移除：2026-08-15 持仓回测审计证伪

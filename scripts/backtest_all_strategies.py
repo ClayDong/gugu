@@ -197,9 +197,9 @@ async def run_batch_backtest(
             eta = (total - completed) / rate if rate > 0 else 0
             logger.info(
                 f"回测进度: {completed}/{total} "
-                f"({completed/total*100:.1f}%) "
+                f"({completed / total * 100:.1f}%) "
                 f"速率: {rate:.1f}/s "
-                f"ETA: {eta/60:.1f}分钟"
+                f"ETA: {eta / 60:.1f}分钟"
             )
 
     return all_results, per_symbol_results
@@ -252,7 +252,7 @@ def print_report(
     print()
     print("=" * 130)
     print(f"全市场策略回测对比报告 — {date.today()}")
-    print(f"股票数: {n_stocks} | 回测天数: {days} | 耗时: {elapsed/60:.1f} 分钟")
+    print(f"股票数: {n_stocks} | 回测天数: {days} | 耗时: {elapsed / 60:.1f} 分钟")
     print("=" * 130)
 
     # 表头
@@ -288,13 +288,13 @@ def print_report(
 
         print(
             f"{name:<25}{n:<8}"
-            f"{ret.get('mean', 0)*100:+.2f}% "
-            f"[P25:{ret.get('p25', 0)*100:+.2f} "
-            f"P75:{ret.get('p75', 0)*100:+.2f}]  "
-            f"{ann.get('mean', 0)*100:+.2f}%    "
+            f"{ret.get('mean', 0) * 100:+.2f}% "
+            f"[P25:{ret.get('p25', 0) * 100:+.2f} "
+            f"P75:{ret.get('p75', 0) * 100:+.2f}]  "
+            f"{ann.get('mean', 0) * 100:+.2f}%    "
             f"{sharpe.get('mean', 0):.2f}      "
-            f"{dd.get('mean', 0)*100:.2f}%      "
-            f"{wr.get('mean', 0)*100:.1f}%      "
+            f"{dd.get('mean', 0) * 100:.2f}%      "
+            f"{wr.get('mean', 0) * 100:.1f}%      "
             f"{pf.get('mean', 0):.2f}    "
             f"{tt.get('mean', 0):.0f}      "
             f"{hd.get('mean', 0):.1f}"
@@ -316,14 +316,14 @@ def print_report(
     worst_name, worst_summary = sorted_strategies[-1]
 
     print(f"最佳策略: {best_name}")
-    print(f"  总收益均值: {best_summary.get('_return_mean', 0)*100:+.2f}%")
+    print(f"  总收益均值: {best_summary.get('_return_mean', 0) * 100:+.2f}%")
     print(f"  夏普均值: {best_summary.get('_sharpe_mean', 0):.2f}")
     print(f"  夏普中位数: {best_summary.get('_sharpe_median', 0):.2f}")
-    print(f"  胜率均值: {best_summary.get('_win_rate_mean', 0)*100:.1f}%")
-    print(f"  盈利比: {best_summary.get('_profitable_ratio', 0)*100:.0f}%")
+    print(f"  胜率均值: {best_summary.get('_win_rate_mean', 0) * 100:.1f}%")
+    print(f"  盈利比: {best_summary.get('_profitable_ratio', 0) * 100:.0f}%")
     print()
     print(f"最差策略: {worst_name}")
-    print(f"  总收益均值: {worst_summary.get('_return_mean', 0)*100:+.2f}%")
+    print(f"  总收益均值: {worst_summary.get('_return_mean', 0) * 100:+.2f}%")
     print(f"  夏普均值: {worst_summary.get('_sharpe_mean', 0):.2f}")
     print()
     print("建议:")
@@ -332,11 +332,11 @@ def print_report(
         sharpe = summary.get("_sharpe_mean", 0)
         wr = summary.get("_win_rate_mean", 0)
         if ret > 0 and sharpe > 0.5:
-            print(f"  ✓ {name}: 收益+{ret*100:.2f}%, 夏普{sharpe:.2f} → 建议保留")
+            print(f"  ✓ {name}: 收益+{ret * 100:.2f}%, 夏普{sharpe:.2f} → 建议保留")
         elif ret < -0.05 or sharpe < 0:
-            print(f"  ✗ {name}: 收益{ret*100:+.2f}%, 夏普{sharpe:.2f} → 建议禁用或调优")
+            print(f"  ✗ {name}: 收益{ret * 100:+.2f}%, 夏普{sharpe:.2f} → 建议禁用或调优")
         else:
-            print(f"  ? {name}: 收益{ret*100:+.2f}%, 夏普{sharpe:.2f} → 边缘，需观察")
+            print(f"  ? {name}: 收益{ret * 100:+.2f}%, 夏普{sharpe:.2f} → 边缘，需观察")
 
 
 async def main_async(args: argparse.Namespace) -> None:
@@ -369,6 +369,22 @@ async def main_async(args: argparse.Namespace) -> None:
     # 5. 打印报告
     elapsed = time.time() - t0
     print_report(all_summaries, len(symbols), args.days, elapsed)
+
+    # 5b. 报告必须使用内存中的完整逐样本值，不能使用落盘截断数据。
+    if args.report:
+        from scripts.backtest_report import generate_markdown_report, save_report
+
+        report_data = {
+            "date": str(date.today()),
+            "n_stocks": len(symbols),
+            "days": args.days,
+            "elapsed_sec": elapsed,
+            "strategies": all_summaries,
+        }
+        report_md = generate_markdown_report(report_data)
+        report_path = f"docs/backtest_report_{date.today()}.md"
+        save_report(report_md, report_path)
+        logger.info(f"对比报告已生成: {report_path}")
 
     # 6. 保存 JSON 到 docs/ 目录
     today_str = str(date.today())
@@ -419,20 +435,6 @@ async def main_async(args: argparse.Namespace) -> None:
         encoding="utf-8",
     )
     logger.info(f"逐股票原始结果已保存: {per_symbol_path}")
-
-    # 7. 报告生成（如果指定 --report）
-    if args.report:
-        try:
-            from scripts.backtest_report import generate_markdown_report, save_report
-
-            report_md = generate_markdown_report(full_data)
-            report_path = f"docs/backtest_report_{today_str}.md"
-            save_report(report_md, report_path)
-            logger.info(f"对比报告已生成: {report_path}")
-        except ImportError as e:
-            logger.warning(f"报告生成模块导入失败: {e}，跳过报告生成")
-        except Exception as e:
-            logger.warning(f"报告生成失败: {e}，跳过")
 
 
 def main() -> None:

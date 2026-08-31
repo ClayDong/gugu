@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from gugu.config import get_config, settings
+from gugu.config import get_config
 from gugu.data import data_manager
 from gugu.data.stock_names import lookup_stock_name
 from gugu.execution import PaperBroker
@@ -30,7 +30,7 @@ class OrderRequest(BaseModel):
 
 def _execution_mode() -> str:
     """读取当前执行模式。Web 下单仅允许 paper 模拟盘。"""
-    return str(settings().get("execution", {}).get("mode", "signal_only")).lower().strip()
+    return str(get_config().execution.mode).lower().strip()
 
 
 # P1 修复：全局单例 Broker/RiskManager，避免每次 HTTP 请求从磁盘重载状态
@@ -406,7 +406,7 @@ def create_app() -> FastAPI:
             "data_source": "degraded" if is_degraded else "primary",
             "data_sources": data_sources,
             "flow_source_status": flow_source_status,
-            "mode": settings().get("execution", {}).get("mode", "unknown"),
+            "mode": get_config().execution.mode,
             "pid": os.getpid(),
         }
 

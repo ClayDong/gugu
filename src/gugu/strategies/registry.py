@@ -5,86 +5,23 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Any
 
-from gugu.strategies.asset_combo import AssetComboStrategy
 from gugu.strategies.base import Strategy
-from gugu.strategies.blogger_rules import ChenXueZhangStrategy, LinJuDaYeStrategy
-from gugu.strategies.breakout import BoxBreakoutStrategy, DualThrustStrategy
-from gugu.strategies.breakout_rebound import BreakoutReboundStrategy
-from gugu.strategies.capital_flow_alert import CapitalFlowAlertStrategy
-from gugu.strategies.chen_jiangting import ChenJiangtingStrategy
-from gugu.strategies.cloud_trend import CloudTrendStrategy
+from gugu.strategies.blogger_rules import LinJuDaYeStrategy
+from gugu.strategies.breakout import BoxBreakoutStrategy
 from gugu.strategies.double_yin import DoubleYinMoneyBagStrategy
-from gugu.strategies.dragon_tiger_short import DragonTigerShortStrategy
-from gugu.strategies.fanbao_strategy import FanbaoStrategy
-from gugu.strategies.first_board import FirstBoardStrategy
-from gugu.strategies.huamulan_crash_layout import HuamulanCrashLayoutStrategy
-from gugu.strategies.huamulan_fake_dip import HuamulanFakeDipStrategy
-from gugu.strategies.huamulan_tail_pick import HuamulanTailPickStrategy
-from gugu.strategies.industry_capital_momentum import IndustryCapitalMomentumStrategy
-from gugu.strategies.leopard_three_factors import LeopardThreeFactorsStrategy
-from gugu.strategies.ma5_momentum import MA5MomentumStrategy
-from gugu.strategies.ma20_trend import MA20TrendStrategy
 from gugu.strategies.manifest import get_manifest
-from gugu.strategies.mean_revert import BollingerStrategy, KDJStrategy, RSIStrategy
-from gugu.strategies.ml_factor import MLFactorStrategy
-from gugu.strategies.ml_gradient_boost import MLGradientBoostStrategy
-from gugu.strategies.money_flow_follow import MoneyFlowFollowStrategy
-from gugu.strategies.north_force_long import NorthForceLongStrategy
+from gugu.strategies.mean_revert import RSIStrategy
 from gugu.strategies.price_volume import PriceVolumeSignalStrategy
-from gugu.strategies.pullback_low import PullbackLowStrategy
-from gugu.strategies.rebound_elite import ReboundEliteStrategy
-from gugu.strategies.rebound_system import ReboundSystemStrategy
-from gugu.strategies.regime_cycle import (
-    BollingerOversoldReboundStrategy,
-    DeathValleyReboundStrategy,
-    RegimeCycleFourStrategy,
-)
-from gugu.strategies.trend import DualMAStrategy, MACDStrategy, TurtleStrategy
-from gugu.strategies.weekly_combo import WeeklyComboStrategy
-from gugu.strategies.zhen_dahu import ZhenDahuStrategy
+from gugu.strategies.regime_cycle import RegimeCycleFourStrategy
 
 # 策略注册表：name -> class
 _REGISTRY: dict[str, type[Strategy]] = {
-    "turtle": TurtleStrategy,
-    "dual_ma": DualMAStrategy,
-    "macd": MACDStrategy,
-    "bollinger": BollingerStrategy,
     "rsi_reversal": RSIStrategy,
-    "kdj": KDJStrategy,
     "box_breakout": BoxBreakoutStrategy,
-    "dual_thrust": DualThrustStrategy,
-    "money_flow_follow": MoneyFlowFollowStrategy,
-    "chen_jiangting": ChenJiangtingStrategy,
-    "leopard_three_factors": LeopardThreeFactorsStrategy,
-    "ma5_momentum": MA5MomentumStrategy,  # 5日均线动量策略（放量大阳线+回踩MA5）
-    "pullback_low": PullbackLowStrategy,  # 震荡市专用低吸回踩策略
-    "double_yin": DoubleYinMoneyBagStrategy,  # 双阴钱袋子策略（主力洗盘拐点）
-    "breakout_rebound": BreakoutReboundStrategy,  # 断板反包策略（短线主力行为）
-    "rebound_elite": ReboundEliteStrategy,  # 断板反包·精英追涨（高活跃妖股+反包追涨，验证有效形态）
-    "rebound_system": ReboundSystemStrategy,  # 断板反包·陈学长实战体系完整版（手册量化：四阶段/三买点/六卖出/成交额体系）
-    "capital_flow_alert": CapitalFlowAlertStrategy,  # 资金流异动监控
-    "ml_factor": MLFactorStrategy,  # LightGBM 多因子策略
-    "north_force_long": NorthForceLongStrategy,  # 长线主力吸筹跟随
-    "dragon_tiger_short": DragonTigerShortStrategy,  # 短线龙虎榜反包跟随
-    "cloud_trend": CloudTrendStrategy,  # 云策略：三维趋势+两类入场+分层仓位
-    # hot_money 已移除（2026-08-01 样本外证伪：集中度超标不可信，见 strategy_manifest.yaml）
-    "industry_capital_momentum": IndustryCapitalMomentumStrategy,  # 行业资金强度+动量确认
-    "first_board": FirstBoardStrategy,  # 首板战法（北京炒家）：首板套利+极致风控+机械执行
-    "ma20_trend": MA20TrendStrategy,  # 20日均线趋势跟随战法（趋势为王+回踩低吸+放量突破）
-    "zhen_dahu": ZhenDahuStrategy,  # 珍大户价值投资策略（价值回归+行业优先+护城河+安全边际）
-    "weekly_combo": WeeklyComboStrategy,  # 周线选股策略：四句心法实战化（倍量+金叉+回踩+三连阳）
-    "huamulan_tail_pick": HuamulanTailPickStrategy,  # 花木兰尾盘选股六步法（小资金复利首选）
-    "huamulan_crash_layout": HuamulanCrashLayoutStrategy,  # 花木兰空仓等暴跌布局法（大资金稳健复利）
-    "huamulan_fake_dip": HuamulanFakeDipStrategy,  # 花木兰早盘假摔低吸战法（捕捉主力洗盘）
-    "chenxuezhang": ChenXueZhangStrategy,
+    "double_yin": DoubleYinMoneyBagStrategy,
     "linjudaye": LinJuDaYeStrategy,
-    "ml_gradient_boost": MLGradientBoostStrategy,
-    "price_volume_signal": PriceVolumeSignalStrategy,  # 换手率+量比尾盘黄金信号（选股入场漏斗）
-    "regime_cycle_four": RegimeCycleFourStrategy,  # 四周期模型：银山谷买入/死亡谷卖出（公众号战法）
-    "death_valley_rebound": DeathValleyReboundStrategy,  # 幻灭期修复反弹：3日不创新低+KDJ金叉+5日线
-    "bollinger_oversold_rebound": BollingerOversoldReboundStrategy,  # 布林下轨超跌反弹（抢反弹）
-    "fanbao": FanbaoStrategy,  # 小圈圈儿《反包策略》：炸板反包+高位跌停反包
-    "asset_combo": AssetComboStrategy,  # 认知资产组合验证策略，conditional_pass（2026-08-15: 512只主板500d，WF 5d +0.82%/p=0.36，但持仓Sharpe全负；非独立盈利策略，gap+regime弱势可作为风控工具）
+    "price_volume_signal": PriceVolumeSignalStrategy,
+    "regime_cycle_four": RegimeCycleFourStrategy,
 }
 
 
@@ -142,15 +79,10 @@ def get_runtime_strategy_names(
     mode = execution_mode or cfg.execution.mode
     candidates = cfg.strategy.get_enabled_for_regime(regime, mode)
     if mode in ("track_live", "signal_only", "live"):
-        # P0 修复（2026-08-19）：生产模式不以 manifest validation_gate.status 为硬门禁。
-        # 原因：manifest 全表无 status=enabled 策略（9 conditional_pass / 19 backtest_failed /
-        # 9 pending / 2 in_review / 1 failed），若生产模式叠加该门禁，settings.yaml 中开发者
-        # 确认的 verified_strategies 白名单（box_breakout/rsi_reversal）会被清空 →
-        # 引擎 0 策略 → 全市场信号黑屏，并触发 ZeroSignal watchdog 升级（当日 09:55 实发）。
-        # verified_strategies 由开发者人工维护（v0.7.5 起），本身就是生产准入闸门；
-        # manifest 严格门禁（status=enabled）继续约束 paper/回测/研究链路。
+        # 生产模式必须同时满足 settings verified 白名单和 manifest 的 GatePolicy gate-v1。
+        # 白名单只是人工意图声明，不能替代可复核的样本外证据。
         candidates = [name for name in candidates if name in cfg.strategy.verified_strategies]
-        runtime_enabled = set(candidates)
+        runtime_enabled = set(get_manifest().list_runtime_enabled(mode, set(candidates)))
     else:
         runtime_enabled = set(get_manifest().list_runtime_enabled(mode, set(candidates)))
     return [name for name in candidates if name in runtime_enabled and name in _REGISTRY]
@@ -181,7 +113,7 @@ def get_enabled_strategies_for_regime(regime: str | None) -> list[Strategy]:
 
 
 def reload_strategies() -> None:
-    """清除策略缓存，使下次调用重新读取配置和 manifest。"""
+    """清除策略缓存，使下次调用重新读取配置。"""
     get_enabled_strategies.cache_clear()
     get_manifest.cache_clear()
     from gugu.utils.log import get_logger

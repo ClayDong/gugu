@@ -89,6 +89,10 @@ class BaseCollector(ABC):
             data_available=not df.empty,
         )
 
+    def close(self) -> None:
+        """释放采集器持有的同步资源。默认采集器无需释放资源。"""
+        return None
+
     @abstractmethod
     def fetch_stock_history(self, symbol: str, days: int = 90) -> pd.DataFrame:
         """获取个股历史行情。

@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from gugu.backtest import BacktestResult
+from scripts.backtest_report import generate_markdown_report
 from scripts.backtest_report_generator import (
     generate_report,
     generate_report_from_metrics_dict,
@@ -220,6 +221,40 @@ class TestGenerateReportFromMetricsDict:
         }
         md = generate_report_from_metrics_dict(data)
         assert "s1" in md
+
+
+class TestAggregatedReportEvidence:
+    """聚合报告必须保留真实逐样本证据。"""
+
+    def test_rejects_missing_raw_values(self):
+        with pytest.raises(ValueError, match="缺少完整逐样本 raw_values"):
+            generate_markdown_report(
+                {
+                    "strategies": {
+                        "strategy_a": {
+                            "_sample_count": 2,
+                            "total_return": {"mean": 0.1, "n": 2},
+                        }
+                    }
+                }
+            )
+
+    def test_uses_raw_values_without_reconstructing_samples(self):
+        metric_keys = [
+            "total_return",
+            "annual_return",
+            "sharpe",
+            "max_drawdown",
+            "win_rate",
+            "profit_factor",
+            "total_trades",
+            "avg_hold_days",
+        ]
+        summary = {"_sample_count": 2}
+        for key in metric_keys:
+            summary[key] = {"mean": 0.0, "raw_values": [0.01, -0.02], "n": 2}
+        report = generate_markdown_report({"strategies": {"strategy_a": summary}})
+        assert "strategy_a" in report
 
 
 class TestSaveReport:

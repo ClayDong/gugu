@@ -117,6 +117,10 @@ class EastmoneyCollector(BaseCollector):
         """兼容旧测试和少量非 JSON 调用方。"""
         return self._transport.session
 
+    def close(self) -> None:
+        """关闭东方财富 HTTP Session。"""
+        self._transport.close()
+
     def _get_json(self, url: str, params: dict[str, Any]) -> dict[str, Any]:
         """通过共享传输层取 JSON，并保留旧版测试注入点。"""
         client = self._get_client()
@@ -131,7 +135,6 @@ class EastmoneyCollector(BaseCollector):
             return payload
         return self._transport.get_json(url, params=params)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=8))
     def fetch_stock_history(self, symbol: str, days: int = 90) -> pd.DataFrame:
         """获取个股历史K线（东方财富日K接口）。"""
         code = self.normalize_symbol(symbol)

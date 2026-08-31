@@ -76,6 +76,7 @@ class BacktestResult:
         equity_curve: Daily equity values indexed by date.
         metrics: Performance metrics dict from calc_metrics.
         cognitive_log: List of cognitive engine decisions (stage/danger/trailing stop).
+        final_state: Account state for a subsequent chronological backtest window.
     """
 
     symbol: str
@@ -84,6 +85,7 @@ class BacktestResult:
     equity_curve: pd.Series
     metrics: dict[str, float]
     cognitive_log: list[dict] = field(default_factory=list)
+    final_state: dict[str, Any] = field(default_factory=dict)
 
 
 class BacktestEngine:
@@ -179,6 +181,7 @@ class BacktestEngine:
         symbol: str,
         index_df: pd.DataFrame | None = None,
         market_filter: Any = None,
+        initial_state: dict[str, Any] | None = None,
     ) -> BacktestResult:
         """Run backtest for a single symbol.
 
@@ -199,6 +202,9 @@ class BacktestEngine:
                            graduated logic as production (min_conditions not hardcoded).
                            When None, uses ``_check_market_regime`` with default
                            graduated behavior matching production.
+            initial_state: Optional state from a previous chronological window. When
+                           provided, carries cash, position quantity, cost basis, and
+                           T+1 buy date into this window.
 
         Returns:
             BacktestResult with trades, equity curve, and metrics.
@@ -212,6 +218,7 @@ class BacktestEngine:
                 trades=[],
                 equity_curve=empty_curve,
                 metrics=calc_metrics(empty_curve, []),
+                final_state=dict(initial_state or {}),
             )
 
         # P0 修复（2026-08-16）：run 是"独立回测"语义，每次 run 前必须重置风控状态。
@@ -221,10 +228,16 @@ class BacktestEngine:
         self._risk._portfolio_peak = 0.0
         self._risk._halted = False
 
-        cash = self.initial_capital
-        position_qty = 0
-        position_cost = 0.0  # total cost basis for current position
-        buy_date: pd.Timestamp | None = None  # T+1: 记录买入日期
+        state = initial_state or {}
+        cash = float(state.get("cash", self.initial_capital))
+        position_qty = int(state.get("position_qty", 0))
+        position_cost = float(
+            state.get("position_cost", 0.0)
+        )  # total cost basis for current position
+        buy_date_value = state.get("buy_date")
+        buy_date: pd.Timestamp | None = (
+            pd.Timestamp(buy_date_value) if buy_date_value is not None else None
+        )
         trades: list[Trade] = []
         equity_values: list[float] = []
         dates: list[pd.Timestamp] = []
@@ -272,6 +285,11 @@ class BacktestEngine:
         close_arr = df["close"].to_numpy(dtype=float)
         date_arr = df["date"].to_numpy()
         signal_arr = signals_df["signal"].to_numpy(dtype=int)
+        suspended_arr = (
+            df["is_suspended"].fillna(False).to_numpy(dtype=bool)
+            if "is_suspended" in df.columns
+            else None
+        )
         if "confidence" in signals_df.columns:
             confidence_arr = signals_df["confidence"].to_numpy(dtype=float)
         else:
@@ -285,6 +303,7 @@ class BacktestEngine:
 
             # 从预计算的 numpy 数组中读取第 i 行信号
             signal = int(signal_arr[i])
+            is_suspended = bool(suspended_arr[i]) if suspended_arr is not None else False
             # P0-5 修复：从信号 DataFrame 读取真实置信度，而非硬编码 1.0
             confidence = float(confidence_arr[i]) if confidence_arr is not None else 1.0
 
@@ -361,7 +380,9 @@ class BacktestEngine:
                         # 执行止损卖出
                         if buy_date is not None and pd.Timestamp(current_date) <= buy_date:
                             pass  # T+1
-                        elif self._risk.is_tradable(symbol, close, prev_close, direction="sell"):
+                        elif not is_suspended and self._risk.is_tradable(
+                            symbol, close, prev_close, direction="sell"
+                        ):
                             trade = self._execute_sell(
                                 symbol, current_date, close, position_qty, position_cost
                             )
@@ -532,8 +553,11 @@ class BacktestEngine:
                 else:
                     buy_cash = cash
 
+                # 停牌期间不允许产生任何成交；权益仍按该 bar 收盘价估值。
+                if is_suspended:
+                    self._logger.debug(f"SKIP BUY {symbol}: suspended at {current_date}")
                 # P1-m: L3 涨跌停检查（涨停时不可买入，与模拟盘一致）
-                if not self._risk.is_tradable(symbol, close, prev_close, direction="buy"):
+                elif not self._risk.is_tradable(symbol, close, prev_close, direction="buy"):
                     self._logger.debug(
                         f"SKIP BUY {symbol}: 涨停 close={close} prev_close={prev_close}"
                     )
@@ -576,6 +600,9 @@ class BacktestEngine:
                 # T+1: 买入当天不能卖出
                 if buy_date is not None and pd.Timestamp(current_date) <= buy_date:
                     pass  # 跳过当天卖出
+                # 停牌期间不允许卖出，持仓继续按该 bar 收盘价估值。
+                elif is_suspended:
+                    self._logger.debug(f"SKIP SELL {symbol}: suspended at {current_date}")
                 # P1-m: L3 涨跌停检查（跌停时不可卖出，与模拟盘一致）
                 elif not self._risk.is_tradable(symbol, close, prev_close, direction="sell"):
                     self._logger.debug(
@@ -609,6 +636,12 @@ class BacktestEngine:
 
         equity_curve = pd.Series(equity_values, index=dates, name="equity")
         metrics = calc_metrics(equity_curve, trades)
+        final_state = {
+            "cash": cash,
+            "position_qty": position_qty,
+            "position_cost": position_cost,
+            "buy_date": buy_date.isoformat() if buy_date is not None else None,
+        }
 
         self._logger.info(
             f"Backtest {symbol} / {strategy.name}: "
@@ -625,6 +658,7 @@ class BacktestEngine:
             equity_curve=equity_curve,
             metrics=metrics,
             cognitive_log=cognitive_log,
+            final_state=final_state,
         )
 
     def _check_correlation_with_portfolio(
@@ -796,7 +830,9 @@ class BacktestEngine:
         buy_price = close * (1 + self.slippage)
         transfer_fee_rate = (
             0.00001
-            if symbol.strip().zfill(6).startswith(("600", "601", "603", "605", "688", "689", "9"))
+            if symbol.strip()
+            .zfill(6)
+            .startswith(("600", "601", "603", "605", "688", "689", "9", "8", "4"))
             else 0.0
         )
         cost_per_share = buy_price * (1 + self.commission_rate + transfer_fee_rate)

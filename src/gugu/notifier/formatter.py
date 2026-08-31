@@ -189,7 +189,9 @@ def format_cxbr_signal(signal: dict[str, Any]) -> dict[str, Any]:
     sections = [
         f"**股票**：{name}({code})\n**状态**：{labels.get(action, action)}\n**阶段**：{stage}",
         f"**数据截止**：{signal.get('asof') or '未提供'}\n"
+        f"**策略**：{signal.get('strategy_name', 'cxbr_v1')}\n"
         f"**规则版本**：{signal.get('rule_version', 'cxbr-v1')}\n"
+        f"**入场假设**：{signal.get('entry_assumption', 'next_session_open')}\n"
         f"**数据质量**：{signal.get('data_quality', 'unknown')}\n"
         f"**参考价格**：{price_text}",
         f"**触发理由**：{signal.get('reason', '')}\n"

@@ -8,7 +8,8 @@ import pytest
 
 from gugu.backtest import BacktestEngine, calc_metrics
 from gugu.backtest.report import format_report, format_report_dict
-from gugu.strategies import DualMAStrategy
+from gugu.strategies import BoxBreakoutStrategy
+from gugu.strategies.base import Strategy
 
 
 @pytest.fixture
@@ -64,14 +65,72 @@ def low_vol_df() -> pd.DataFrame:
     )
 
 
+class FixedSignalStrategy(Strategy):
+    """测试用固定信号策略。"""
+
+    name = "fixed_signal_test"
+
+    def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
+        result = df.copy()
+        result["signal"] = [1, -1, -1, 0][: len(result)]
+        result["confidence"] = 1.0
+        return result
+
+
 def test_backtest_runs(trend_df):
     """回测能跑完。"""
     engine = BacktestEngine(initial_capital=100_000)
-    strategy = DualMAStrategy(params={"short_window": 5, "long_window": 10})
+    strategy = BoxBreakoutStrategy(params={"short_window": 5, "long_window": 10})
     result = engine.run(strategy, trend_df, "000001")
     assert result is not None
     assert len(result.equity_curve) == len(trend_df)
     assert result.symbol == "000001"
+
+
+def test_backtest_carries_state_between_chronological_windows():
+    """跨窗口回测应延续现金、持仓成本和 T+1 买入日期。"""
+    first_df = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=2, freq="B"),
+            "open": [10.0, 10.0],
+            "high": [10.1, 10.1],
+            "low": [9.9, 9.9],
+            "close": [10.0, 10.0],
+            "volume": [1e6, 1e6],
+            "amount": [1e7, 1e7],
+        }
+    )
+    second_df = first_df.copy()
+    second_df["date"] = pd.date_range("2026-01-05", periods=2, freq="B")
+
+    first = BacktestEngine(initial_capital=100_000).run(FixedSignalStrategy(), first_df, "000001")
+    second = BacktestEngine(initial_capital=100_000).run(
+        FixedSignalStrategy(), second_df, "000001", initial_state=first.final_state
+    )
+
+    assert first.final_state["position_qty"] > 0
+    assert second.final_state["position_qty"] > 0
+    assert second.final_state["cash"] < 100_000
+
+
+def test_backtest_blocks_buy_and_sell_on_suspended_bar():
+    """停牌 bar 不应产生买入或卖出成交。"""
+    df = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=4, freq="B"),
+            "open": [10.0] * 4,
+            "high": [10.1] * 4,
+            "low": [9.9] * 4,
+            "close": [10.0] * 4,
+            "volume": [1e6] * 4,
+            "amount": [1e7] * 4,
+            "is_suspended": [False, False, True, False],
+        }
+    )
+    result = BacktestEngine(initial_capital=100_000).run(FixedSignalStrategy(), df, "000001")
+    assert [trade.direction for trade in result.trades] == ["buy", "sell"]
+    assert result.trades[0].date == df.loc[1, "date"]
+    assert result.trades[1].date == df.loc[3, "date"]
 
 
 def test_metrics_basic():
@@ -84,10 +143,17 @@ def test_metrics_basic():
     assert metrics["max_drawdown"] > 0
 
 
+def test_annual_return_uses_elapsed_calendar_days():
+    """年化收益应使用权益曲线真实日期跨度，而不是记录条数。"""
+    equity = pd.Series([100.0, 110.0], index=pd.to_datetime(["2026-01-01", "2027-01-01"]))
+    metrics = calc_metrics(equity, [])
+    assert metrics["annual_return"] == pytest.approx(0.10, rel=0.01)
+
+
 def test_backtest_with_signals(trend_df):
     """策略触发信号后回测有交易。"""
     engine = BacktestEngine(initial_capital=100_000)
-    strategy = DualMAStrategy(params={"short_window": 3, "long_window": 8})
+    strategy = BoxBreakoutStrategy(params={"short_window": 3, "long_window": 8})
     result = engine.run(strategy, trend_df, "000001")
     assert len(result.trades) > 0
 
@@ -137,7 +203,7 @@ def test_metrics_loss_only():
 def test_format_report(trend_df):
     """文本回测报告格式化。"""
     engine = BacktestEngine(initial_capital=100_000)
-    strategy = DualMAStrategy(params={"short_window": 5, "long_window": 10})
+    strategy = BoxBreakoutStrategy(params={"short_window": 5, "long_window": 10})
     result = engine.run(strategy, trend_df, "000001")
     text = format_report(result)
     assert "Backtest Report" in text
@@ -147,10 +213,10 @@ def test_format_report(trend_df):
 def test_format_report_dict(trend_df):
     """回测报告 dict 格式化。"""
     engine = BacktestEngine(initial_capital=100_000)
-    strategy = DualMAStrategy(params={"short_window": 5, "long_window": 10})
+    strategy = BoxBreakoutStrategy(params={"short_window": 5, "long_window": 10})
     result = engine.run(strategy, trend_df, "000001")
     data = format_report_dict(result)
-    assert data["strategy"] == "dual_ma"
+    assert data["strategy"] == "box_breakout"
     assert data["symbol"] == "000001"
     assert "total_return" in data
 
@@ -158,7 +224,7 @@ def test_format_report_dict(trend_df):
 def test_backtest_empty_data():
     """空数据返回空结果。"""
     engine = BacktestEngine()
-    strategy = DualMAStrategy()
+    strategy = BoxBreakoutStrategy()
     result = engine.run(strategy, pd.DataFrame(), "000001")
     assert len(result.equity_curve) == 0
     assert len(result.trades) == 0
@@ -167,7 +233,7 @@ def test_backtest_empty_data():
 def test_backtest_insufficient_cash():
     """资金不足无法买入一手的场景。"""
     engine = BacktestEngine(initial_capital=100)
-    strategy = DualMAStrategy(params={"short_window": 3, "long_window": 5})
+    strategy = BoxBreakoutStrategy(params={"short_window": 3, "long_window": 5})
     df = pd.DataFrame(
         {
             "date": pd.date_range("2026-01-01", periods=10, freq="B"),
@@ -186,7 +252,7 @@ def test_backtest_insufficient_cash():
 def test_backtest_cognitive_engine_runs(low_vol_df):
     """启用认知引擎的回测能跑完且有 cognitive_log。"""
     engine = BacktestEngine(enable_cognitive_engine=True)
-    strategy = DualMAStrategy(params={"short_window": 5, "long_window": 10})
+    strategy = BoxBreakoutStrategy(params={"short_window": 5, "long_window": 10})
     result = engine.run(strategy, low_vol_df, "000001")
     assert result is not None
     assert len(result.equity_curve) == len(low_vol_df)
@@ -198,8 +264,8 @@ def test_backtest_cognitive_log_reduces_trades(low_vol_df):
     """认知引擎应减少交易次数（趋势确认过滤假信号）。"""
     base = BacktestEngine(enable_cognitive_engine=False)
     cog = BacktestEngine(enable_cognitive_engine=True)
-    strategy_base = DualMAStrategy(params={"short_window": 5, "long_window": 10})
-    strategy_cog = DualMAStrategy(params={"short_window": 5, "long_window": 10})
+    strategy_base = BoxBreakoutStrategy(params={"short_window": 5, "long_window": 10})
+    strategy_cog = BoxBreakoutStrategy(params={"short_window": 5, "long_window": 10})
     r_base = base.run(strategy_base, low_vol_df, "000001")
     r_cog = cog.run(strategy_cog, low_vol_df, "000001")
     # 认知引擎可能过滤入场，但不能断言交易次数必然减少
@@ -210,7 +276,7 @@ def test_backtest_cognitive_log_reduces_trades(low_vol_df):
 def test_backtest_cognitive_engine_trailing_stop_exits(low_vol_df):
     """认知引擎的移动止损应产生 EXIT 信号而非策略卖出。"""
     engine = BacktestEngine(enable_cognitive_engine=True)
-    strategy = DualMAStrategy(params={"short_window": 5, "long_window": 10})
+    strategy = BoxBreakoutStrategy(params={"short_window": 5, "long_window": 10})
     result = engine.run(strategy, low_vol_df, "000001")
     # 验证 cognitive_log 中的 trailing_stop_exit 是合法值
     for entry in result.cognitive_log:
@@ -293,7 +359,7 @@ class TestTransactionCosts:
     def test_full_cycle_deducts_all_fees(self, trend_df):
         """完整买卖周期：现金扣除应包含佣金+过户费+印花税。"""
         engine = BacktestEngine(initial_capital=100_000)
-        strategy = DualMAStrategy(params={"short_window": 3, "long_window": 8})
+        strategy = BoxBreakoutStrategy(params={"short_window": 3, "long_window": 8})
         # 使用沪市股票（600开头）确保有过户费
         result = engine.run(strategy, trend_df, "600000")
         if len(result.trades) >= 2:
@@ -313,7 +379,7 @@ class TestTransactionCosts:
         engine_no_fee = BacktestEngine(
             initial_capital=100_000, commission_rate=0.0, stamp_tax=0.0, slippage=0.0
         )
-        strategy = DualMAStrategy(params={"short_window": 3, "long_window": 8})
+        strategy = BoxBreakoutStrategy(params={"short_window": 3, "long_window": 8})
         result_with_fee = engine.run(strategy, trend_df, "600000")
         result_no_fee = engine_no_fee.run(strategy, trend_df, "600000")
         if len(result_with_fee.trades) > 0:

@@ -197,8 +197,8 @@ class TestManifestSettingsConsistency:
             f"请在 manifest 中设为 enabled=true 或从 settings.yaml 移除。"
         )
 
-    def test_conditional_pass_is_not_track_live_runtime_enabled(self, signal_strategies: dict):
-        """条件通过策略只能进入 paper，不能进入 track_live。"""
+    def test_conditional_pass_is_paper_only(self, signal_strategies: dict):
+        """conditional_pass 只能进入 paper 观察，不能进入生产运行时。"""
         from gugu.strategies.manifest import StrategyManifest
 
         manifest = StrategyManifest(_MANIFEST_PATH)
@@ -209,8 +209,8 @@ class TestManifestSettingsConsistency:
                 assert manifest.is_runtime_enabled(key, "paper") is True
                 assert manifest.is_runtime_enabled(key, "track_live") is False
 
-    def test_production_runtime_strategies_not_empty_and_within_verified_whitelist(self):
-        """P0 回归（2026-08-19）：生产模式运行时策略不得为空，且 ⊆ verified_strategies。
+    def test_production_runtime_strategies_within_verified_whitelist(self):
+        """生产模式运行时策略只能来自 verified_strategies；无完整 gate-v1 证据时允许为空。
 
         背景：commit 60247c8 统一策略准入时，生产模式叠加 manifest
         validation_gate.status == "enabled" 硬门禁；而 manifest 全表无 status=enabled
@@ -228,11 +228,6 @@ class TestManifestSettingsConsistency:
             assert (
                 set(names) <= verified
             ), f"{mode} 模式运行时策略 {names} 超出 verified_strategies 白名单 {sorted(verified)}"
-        # 开发者确认了生产白名单时，生产模式不允许出现"0 策略"黑屏
-        if verified:
-            assert get_runtime_strategy_names(
-                execution_mode="track_live"
-            ), "track_live 模式运行时策略为空（verified_strategies 非空却被门禁清空）"
 
     def test_settings_enabled_by_regime_exists_and_enabled_in_manifest(
         self, signal_strategies: dict
@@ -283,16 +278,20 @@ class TestStrategyRegistryRegistration:
         """
         manifest_signal_keys = set(signal_strategies.keys())
         unregistered = manifest_signal_keys - registry_keys
-        # 已证伪且禁用的策略豁免注册要求
+        # 以下策略豁免注册要求：
+        # - 已证伪（backtest_failed 且 enabled=false）：档案保留、注册表移除
+        # - 已归档（archived=true）：代码移至 _archive/strategies/，不再注册
         truly_unregistered = set()
         for key in unregistered:
             entry = signal_strategies.get(key)
-            if (
-                isinstance(entry, dict)
-                and not entry.get("enabled", False)
-                and "backtest_failed" in str(entry.get("validation", ""))
+            if not isinstance(entry, dict):
+                truly_unregistered.add(key)
+                continue
+            if not entry.get("enabled", False) and (
+                "backtest_failed" in str(entry.get("validation", ""))
+                or entry.get("archived", False)
             ):
-                continue  # 已证伪策略：档案保留、注册表移除
+                continue  # 已证伪或已归档策略：档案保留、注册表移除
             truly_unregistered.add(key)
         assert not truly_unregistered, (
             f"以下 signal 策略在 manifest 中声明但未在 _REGISTRY 注册: "
