@@ -197,6 +197,43 @@ class TestUnlockConditionsSingleFailure:
         assert "样本外收益" in report["failed_checks"][0]
 
 
+class TestUnlockConditionsTradeCount:
+    """样本外交易数必须使用明确的闭合交易字段。"""
+
+    def test_closed_trade_count_takes_precedence_over_legacy_trade_legs(self) -> None:
+        """closed_trade_count 优先，不能把 trade legs 当成 round-trip。"""
+        report = _check_unlock_conditions(
+            strategy_name="test",
+            results=[
+                {
+                    "window": 1,
+                    "best_params": {},
+                    "closed_trade_count": 30,
+                    "trades": 60,
+                }
+            ],
+            avg_sharpe=0.5,
+            avg_return=0.05,
+            avg_max_dd=0.10,
+            param_votes={},
+        )
+        assert report["unlocked"] is True
+        assert any("total_test_trades=30" in c["detail"] for c in report["checks"])
+
+    def test_legacy_trade_integer_does_not_count_as_admission_sample(self) -> None:
+        """历史结果仅有整数 trades 时应保守视为缺少闭合交易口径。"""
+        report = _check_unlock_conditions(
+            strategy_name="legacy",
+            results=[{"window": 1, "best_params": {}, "trades": 60}],
+            avg_sharpe=0.5,
+            avg_return=0.05,
+            avg_max_dd=0.10,
+            param_votes={},
+        )
+        assert report["unlocked"] is False
+        assert any("样本外交易次数 < 30" in item for item in report["failed_checks"])
+
+
 class TestUnlockConditionsReportStructure:
     """解锁报告结构验证。"""
 

@@ -83,6 +83,8 @@ class TestMultiStockWalkForwardBasic:
             assert "test_negative_return_ratio" in r
             assert "test_max_trade_share" in r
             assert "risk_flags" in r
+            assert all("closed_trade_count" in detail for detail in r["test_details"])
+            assert all("test_trades" in detail for detail in r["test_details"])
             assert 0 <= r["test_negative_return_ratio"] <= 1
             assert 0 <= r["test_max_trade_share"] <= 1
             sharpes = [detail["test_sharpe"] for detail in r["test_details"]]
@@ -117,6 +119,8 @@ class TestMultiStockWalkForwardBasic:
                 assert "test_return" in detail
                 assert "test_max_dd" in detail
                 assert "trades" in detail
+                assert "closed_trade_count" in detail
+                assert "test_trades" in detail
 
 
 class TestMultiStockWalkForwardEdgeCases:

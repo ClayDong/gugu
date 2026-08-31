@@ -25,7 +25,9 @@ def calc_metrics(equity_curve: pd.Series, trades: list[Any]) -> dict[str, float]
 
     Returns:
         Dict with total_return, annual_return, sharpe, max_drawdown, calmar_ratio,
-        win_rate, profit_factor, total_trades, avg_hold_days.
+        win_rate, profit_factor, trade_legs, closed_trade_count, total_trades,
+        avg_hold_days. ``total_trades`` remains the legacy trade-leg count;
+        ``closed_trade_count`` is the round-trip sample count used for admission.
     """
     returns = (
         equity_curve.pct_change().dropna() if len(equity_curve) > 1 else pd.Series(dtype=float)
@@ -41,6 +43,9 @@ def calc_metrics(equity_curve: pd.Series, trades: list[Any]) -> dict[str, float]
         "sortino_ratio": _sortino_ratio(returns, periods=_TRADING_DAYS, rf_rate=0.02),
         "win_rate": _win_rate(trades),
         "profit_factor": _profit_factor(trades),
+        # Keep the legacy key for report compatibility; admission uses closed trades.
+        "trade_legs": float(len(trades)),
+        "closed_trade_count": float(_closed_trade_count(trades)),
         "total_trades": float(len(trades)),
         "avg_hold_days": _avg_hold_days(trades),
     }
@@ -124,6 +129,30 @@ def _annual_return(equity: pd.Series, periods: int = _TRADING_DAYS) -> float:
     # 保持无日期索引调用的兼容性；正式回测权益曲线必须带日期索引。
     observations = len(equity) - 1
     return float((final / initial) ** (periods / observations) - 1)
+
+
+def _closed_trade_count(trades: list[Any]) -> int:
+    """Count completed round-trips, not individual buy/sell legs."""
+    open_quantity = 0
+    closed_count = 0
+    for trade in trades:
+        direction = _get(trade, "direction")
+        quantity = _trade_quantity(trade)
+        if direction == "buy":
+            open_quantity += quantity
+        elif direction == "sell" and open_quantity > 0:
+            open_quantity = max(0, open_quantity - quantity)
+            if open_quantity == 0:
+                closed_count += 1
+    return closed_count
+
+
+def _trade_quantity(trade: Any) -> int:
+    """Return a positive trade quantity, using one for legacy records."""
+    try:
+        return max(1, int(_get(trade, "quantity", 1) or 1))
+    except (TypeError, ValueError):
+        return 1
 
 
 def _win_rate(trades: list[Any]) -> float:

@@ -1014,7 +1014,10 @@ def walk_forward_optimize(
                 "test_return": round(test_result.metrics.get("total_return", 0), 4),
                 "test_max_dd": round(test_result.metrics.get("max_drawdown", 0), 4),
                 "test_win_rate": round(test_result.metrics.get("win_rate", 0), 4),
+                # 保留 trade legs，同时提供 Gate 使用的闭合 round-trip 样本数。
                 "trades": len(test_result.trades),
+                "closed_trade_count": int(test_result.metrics.get("closed_trade_count", 0)),
+                "test_trades": int(test_result.metrics.get("closed_trade_count", 0)),
             }
         )
 
@@ -1231,13 +1234,15 @@ def walk_forward_optimize_multi_stock(
                         "test_max_dd": round(max_dd, 4),
                         "test_win_rate": round(win_rate, 4),
                         "trades": len(test_result.trades),
+                        "closed_trade_count": int(test_result.metrics.get("closed_trade_count", 0)),
+                        "test_trades": int(test_result.metrics.get("closed_trade_count", 0)),
                     }
                 )
             except Exception as e:
                 logger.debug(f"多股测试 {sym} 失败: {e}")
 
         n = max(len(test_sharpes), 1)
-        total_test_trades = sum(detail["trades"] for detail in test_details)
+        total_test_trades = sum(detail["closed_trade_count"] for detail in test_details)
         test_min_sharpe = min(test_sharpes, default=0.0)
         test_min_return = min(test_returns, default=0.0)
         test_worst_max_dd = max(test_max_dds, default=0.0)
@@ -1277,6 +1282,8 @@ def walk_forward_optimize_multi_stock(
                 "test_max_trade_share": round(test_max_trade_share, 4),
                 "risk_flags": risk_flags,
                 "test_stock_count": len(test_details),
+                "closed_trade_count": int(total_test_trades),
+                "test_trades": int(total_test_trades),
                 "test_details": test_details,
             }
         )

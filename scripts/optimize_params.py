@@ -37,6 +37,7 @@ import sys
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -53,11 +54,77 @@ from gugu.backtest.engine import (
 )  # noqa: E402
 from gugu.config import PROJECT_ROOT  # noqa: E402
 from gugu.data import data_manager  # noqa: E402
+from gugu.research.ledger import append_record, build_record  # noqa: E402
 from gugu.strategies.registry import get_strategy, list_strategies  # noqa: E402
 from gugu.utils.log import get_logger  # noqa: E402
 from gugu.validation.gate_policy import GatePolicy  # noqa: E402
 
 logger = get_logger()
+
+
+def _data_range(df: Any) -> dict[str, Any]:
+    """Return a compact, serializable data-range summary for a research run."""
+    if not hasattr(df, "columns") or "date" not in df.columns:
+        return {"row_count": len(df) if hasattr(df, "__len__") else 0}
+    dates = df["date"]
+    return {
+        "row_count": len(df),
+        "data_start": str(dates.min()),
+        "data_end": str(dates.max()),
+    }
+
+
+def _record_optimization_ledger(
+    *,
+    entrypoint: str,
+    strategy_name: str,
+    symbols: list[str],
+    stock_dfs: dict[str, Any],
+    requested_days: int,
+    param_grid: dict[str, list],
+    results: list[dict] | None,
+    best_params: dict,
+    write_requested: bool,
+    writeback_applied: bool,
+    unlock_report: dict | None,
+    algorithm: str = "walk_forward",
+    n_splits: int = 0,
+    seed: int | None = None,
+    population_size: int | None = None,
+    generations: int | None = None,
+    artifact_path: Path | None = None,
+) -> None:
+    """Record one top-level optimization run without affecting its outcome."""
+    effective_symbols = list(stock_dfs)
+    grid_size = 1
+    for values in param_grid.values():
+        grid_size *= max(1, len(values))
+    record = build_record(
+        kind="optimization",
+        entrypoint=entrypoint,
+        strategy=strategy_name,
+        symbols=symbols,
+        requested_days=requested_days,
+        effective_symbols=effective_symbols,
+        excluded_symbols=sorted(set(symbols) - set(effective_symbols)),
+        data_ranges={symbol: _data_range(df) for symbol, df in stock_dfs.items()},
+        algorithm=algorithm,
+        seed=seed,
+        population_size=population_size,
+        generations=generations,
+        train_ratio=0.6,
+        n_splits=n_splits,
+        parameter_grid=param_grid,
+        parameter_grid_size=grid_size if param_grid else 0,
+        best_params=best_params,
+        results=results or [],
+        gate_status=(unlock_report.get("version") if unlock_report else "not_evaluated"),
+        gate=unlock_report,
+        write_requested=write_requested,
+        writeback_applied=writeback_applied,
+        artifact_path=artifact_path,
+    )
+    append_record(record)
 
 
 # 参数网格定义：策略名 → 参数网格
@@ -613,6 +680,9 @@ async def run_optimization(
         )
 
     # P1 修复：参数写回解锁条件检查
+    unlock_report: dict | None = None
+    writeback_applied = False
+    report_path: Path | None = None
     if write:
         unlock_report = _check_unlock_conditions(
             strategy_name=strategy_name,
@@ -632,6 +702,7 @@ async def run_optimization(
             for k, v in best_params.items():
                 defaults[strategy_name][k] = v
             write_defaults(defaults)
+            writeback_applied = True
             print(f"\n优化参数已写回 config/strategy_defaults.yaml")
         else:
             print(
@@ -666,6 +737,22 @@ async def run_optimization(
             reason=failed_reason,
         )
 
+    _record_optimization_ledger(
+        entrypoint="scripts/optimize_params.py:run_optimization",
+        strategy_name=strategy_name,
+        symbols=[symbol],
+        stock_dfs={symbol: df},
+        requested_days=days,
+        param_grid=param_grid,
+        results=results,
+        best_params=best_params,
+        write_requested=write,
+        writeback_applied=writeback_applied,
+        unlock_report=unlock_report,
+        n_splits=n_splits,
+        artifact_path=report_path,
+    )
+
     return {
         "strategy": strategy_name,
         "best_params": best_params,
@@ -697,12 +784,12 @@ def _check_unlock_conditions(
 
     total_test_trades = 0
     for result in results:
-        trades = result.get("test_trades")
+        # 只消费明确的闭合 round-trip 样本数；旧结果仅兼容 test_trades。
+        trades = result.get("closed_trade_count")
         if trades is None:
-            raw_trades = result.get("trades")
-            trades = len(raw_trades) if isinstance(raw_trades, (list, tuple)) else 0
+            trades = result.get("test_trades", 0)
         try:
-            total_test_trades += int(trades or 0)
+            total_test_trades += max(0, int(trades or 0))
         except (TypeError, ValueError):
             continue
 
@@ -980,6 +1067,7 @@ async def run_heuristic_optimization(
     test_returns: list[float] = []
     test_max_dds: list[float] = []
     test_win_rates: list[float] = []
+    test_closed_trade_counts: list[int] = []
 
     for symbol, df in stock_dfs.items():
         try:
@@ -990,6 +1078,7 @@ async def run_heuristic_optimization(
             test_returns.append(metrics.get("total_return", 0))
             test_max_dds.append(metrics.get("max_drawdown", 0))
             test_win_rates.append(metrics.get("win_rate", 0))
+            test_closed_trade_counts.append(int(metrics.get("closed_trade_count", 0)))
         except Exception as e:
             logger.warning(f"最终回测失败 {symbol}: {e}")
             continue
@@ -1006,6 +1095,7 @@ async def run_heuristic_optimization(
     print(f"  平均胜率:    {avg_win_rate:.2%}")
 
     # 构造解锁条件检查所需的 results 结构
+    closed_trade_count = sum(test_closed_trade_counts)
     results = [
         {
             "best_params": best_params,
@@ -1013,12 +1103,17 @@ async def run_heuristic_optimization(
             "test_return": avg_return,
             "test_max_dd": avg_max_dd,
             "test_win_rate": avg_win_rate,
+            "closed_trade_count": closed_trade_count,
+            "test_trades": closed_trade_count,
         }
     ]
     param_votes: dict[str, dict] = {}
     for param_name, param_val in best_params.items():
         param_votes[param_name] = {str(param_val): 1}
 
+    unlock_report: dict | None = None
+    writeback_applied = False
+    report_path: Path | None = None
     if write:
         unlock_report = _check_unlock_conditions(
             strategy_name=strategy_name,
@@ -1036,6 +1131,7 @@ async def run_heuristic_optimization(
             for k, v in best_params.items():
                 defaults[strategy_name][k] = v
             write_defaults(defaults)
+            writeback_applied = True
             print(f"\n优化参数已写回 config/strategy_defaults.yaml")
         else:
             print(
@@ -1064,6 +1160,26 @@ async def run_heuristic_optimization(
             passed=unlock_report["unlocked"],
             reason=failed_reason,
         )
+
+    _record_optimization_ledger(
+        entrypoint="scripts/optimize_params.py:run_heuristic_optimization",
+        strategy_name=strategy_name,
+        symbols=list(symbols),
+        stock_dfs=stock_dfs,
+        requested_days=days,
+        param_grid=param_grid,
+        results=results,
+        best_params=best_params,
+        write_requested=write,
+        writeback_applied=writeback_applied,
+        unlock_report=unlock_report,
+        algorithm=algorithm,
+        n_splits=1,
+        seed=seed,
+        population_size=population_size,
+        generations=generations,
+        artifact_path=report_path,
+    )
 
     return {
         "strategy": strategy_name,
@@ -1169,6 +1285,10 @@ async def run_multi_stock_optimization(
         best_val = float(best_val_str) if "." in best_val_str else int(best_val_str)
         best_params[param_name] = best_val
 
+    unlock_report: dict | None = None
+    writeback_applied = False
+    report_path: Path | None = None
+
     # 聚合统计
     avg_sharpe = sum(r.get("test_avg_sharpe", 0) for r in results) / max(len(results), 1)
     avg_return = sum(r.get("test_avg_return", 0) for r in results) / max(len(results), 1)
@@ -1221,16 +1341,15 @@ async def run_multi_stock_optimization(
             for k, v in best_params.items():
                 defaults[strategy_name][k] = v
             write_defaults(defaults)
+            writeback_applied = True
             print(f"\n优化参数已写回 config/strategy_defaults.yaml")
         else:
-            print(
-                f"\n❌ 参数写回被拒绝（未通过 {len(unlock_report['failed_checks'])} 项解锁条件）:"
-            )
+            print(f"\n❌ 参数写回被拒绝（未通过 {len(unlock_report['failed_checks'])} 项解锁条件):")
             for check in unlock_report["checks"]:
                 status = "✓" if check["passed"] else "✗"
                 print(f"  {status} {check['name']}: {check['detail']}")
             print(f"\n建议:")
-            print(f"  1. 扩大样本（当前 {len(stock_dfs)} 只，建议 10+ 只不同行业代表股）")
+            print(f"  1. 扩大样本（当前 {symbol} 单股优化易过拟合，建议多股聚合）")
             print(f"  2. 增加数据量（--days 1000+）")
             print("  3. --force 不再绕过生产参数写回门禁；如需研究实验，请使用隔离输出目录")
 
@@ -1254,6 +1373,22 @@ async def run_multi_stock_optimization(
             passed=unlock_report["unlocked"],
             reason=failed_reason,
         )
+
+    _record_optimization_ledger(
+        entrypoint="scripts/optimize_params.py:run_multi_stock_optimization",
+        strategy_name=strategy_name,
+        symbols=list(symbols),
+        stock_dfs=stock_dfs,
+        requested_days=days,
+        param_grid=param_grid,
+        results=results,
+        best_params=best_params,
+        write_requested=write,
+        writeback_applied=writeback_applied,
+        unlock_report=unlock_report,
+        n_splits=n_splits,
+        artifact_path=report_path,
+    )
 
     return {
         "strategy": strategy_name,

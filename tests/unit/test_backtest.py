@@ -163,8 +163,34 @@ def test_metrics_empty():
     metrics = calc_metrics(pd.Series(dtype=float), [])
     assert metrics["total_return"] == 0.0
     assert metrics["total_trades"] == 0.0
+    assert metrics["trade_legs"] == 0.0
+    assert metrics["closed_trade_count"] == 0.0
     assert metrics["win_rate"] == 0.0
     assert metrics["profit_factor"] == 0.0
+
+
+def test_metrics_distinguishes_trade_legs_from_closed_round_trips():
+    """买卖腿数与已闭合 round-trip 数量必须分开统计。"""
+    trades = [
+        {"direction": "buy", "date": "2026-01-01"},
+        {"direction": "buy", "date": "2026-01-02"},
+        {"direction": "sell", "profit": 100.0, "date": "2026-01-03"},
+        {"direction": "sell", "profit": -20.0, "date": "2026-01-04"},
+    ]
+    metrics = calc_metrics(
+        pd.Series([100.0, 101.0], index=pd.date_range("2026-01-01", periods=2, freq="B")),
+        trades,
+    )
+    assert metrics["trade_legs"] == 4.0
+    assert metrics["total_trades"] == 4.0
+    assert metrics["closed_trade_count"] == 1.0
+
+
+def test_metrics_ignores_orphan_sell_for_closed_round_trip():
+    """没有先买入的孤立卖出不应伪造完整交易样本。"""
+    trades = [{"direction": "sell", "profit": 10.0, "date": "2026-01-01"}]
+    metrics = calc_metrics(pd.Series([100.0, 101.0]), trades)
+    assert metrics["closed_trade_count"] == 0.0
 
 
 def test_metrics_single_point():

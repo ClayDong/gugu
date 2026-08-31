@@ -77,3 +77,4 @@ docs/validation/
 # 本地归档与临时日志（2026-08-31）
 _archive/
 /*.log
+.zcode/
