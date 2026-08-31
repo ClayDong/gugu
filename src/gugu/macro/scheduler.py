@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -316,7 +317,11 @@ async def scheduled_macro_report(version: str, broker: Any = None) -> None:
         logger.exception(f"[macro] {version} 日报异常: {e}")
 
 
-def register_macro_jobs(scheduler: AsyncIOScheduler, broker: Any = None) -> None:
+def register_macro_jobs(
+    scheduler: AsyncIOScheduler,
+    broker: Any = None,
+    task_enabled: Callable[[str], bool] | None = None,
+) -> None:
     """在 APScheduler 中注册宏观日报定时任务。
 
     时间安排与信号汇总（engine/scheduler.py 的 report_* 任务）错开 5 分钟，
@@ -330,6 +335,14 @@ def register_macro_jobs(scheduler: AsyncIOScheduler, broker: Any = None) -> None
         ("macro_close", "收盘全球概览", 15, 15),  # signal report 15:10 → macro 15:15
     ]
     for job_id, name, hour, minute in jobs:
+        task_name = {
+            "macro_early": "macro_morning",
+            "macro_morning": "macro_preamarket",
+            "macro_noon": "macro_noon",
+            "macro_close": "macro_close",
+        }[job_id]
+        if task_enabled is not None and not task_enabled(task_name):
+            continue
         scheduler.add_job(
             scheduled_macro_report,
             CronTrigger(hour=hour, minute=minute, day_of_week="mon-fri"),

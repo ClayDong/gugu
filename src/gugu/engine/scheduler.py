@@ -197,14 +197,16 @@ class TradingScheduler(SchedulerJobsMixin):
         feishu_cfg = get_config().feishu
         report_times = feishu_cfg.daily_report_times
 
-        # 盘中多轮扫描
+        # 盘中多轮扫描：每轮独立受配置开关控制。
+        scan_flags = ("scan_open", "scan_mid_morning", "scan_afternoon", "scan_close")
         for i, (h, m) in enumerate(SCAN_TIMES):
-            self._scheduler.add_job(
-                self._safe_run,
-                CronTrigger(hour=h, minute=m, day_of_week="mon-fri"),
-                id=f"scan_{i + 1}",
-                name=f"盘中扫描-{h:02d}:{m:02d}",
-            )
+            if self._task_enabled(scan_flags[i]):
+                self._scheduler.add_job(
+                    self._safe_run,
+                    CronTrigger(hour=h, minute=m, day_of_week="mon-fri"),
+                    id=f"scan_{i + 1}",
+                    name=f"盘中扫描-{h:02d}:{m:02d}",
+                )
 
         # RSI 专项扫描（13:30，仅扫描 rsi_reversal 策略）
         if self._task_enabled("rsi_scan"):
@@ -260,14 +262,18 @@ class TradingScheduler(SchedulerJobsMixin):
                 name="尾盘选股自动调优-15:10",
             )
 
-        # P1-1: 震荡市盘中观察列表推送（10:30 / 13:05）
-        for h, m in [(10, 30), (13, 5)]:
-            self._scheduler.add_job(
-                self._safe_range_watchlist,
-                CronTrigger(hour=h, minute=m, day_of_week="mon-fri"),
-                id=f"range_watchlist_{h:02d}{m:02d}",
-                name=f"震荡市观察列表-{h:02d}:{m:02d}",
-            )
+        # P1-1: 震荡市盘中观察列表推送（跟随对应扫描开关）
+        for h, m, task_name in (
+            (10, 30, "scan_mid_morning"),
+            (13, 5, "scan_afternoon"),
+        ):
+            if self._task_enabled(task_name):
+                self._scheduler.add_job(
+                    self._safe_range_watchlist,
+                    CronTrigger(hour=h, minute=m, day_of_week="mon-fri"),
+                    id=f"range_watchlist_{h:02d}{m:02d}",
+                    name=f"震荡市观察列表-{h:02d}:{m:02d}",
+                )
 
         # 日报推送
         period_map = {"09:10": "morning", "11:35": "noon", "15:10": "close"}
@@ -295,7 +301,11 @@ class TradingScheduler(SchedulerJobsMixin):
         # 宏观日报推送
         from gugu.macro.scheduler import register_macro_jobs
 
-        register_macro_jobs(self._scheduler, broker=self._engine.broker)
+        register_macro_jobs(
+            self._scheduler,
+            broker=self._engine.broker,
+            task_enabled=self._task_enabled,
+        )
 
         # 另类因子数据盘后批量采集：18:00
         if self._task_enabled("altalpha_fetch"):

@@ -44,19 +44,19 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     - flow_afternoon / perspective_daily / altalpha_fetch
     - sentiment_daily / perspective_afternoon / concept_daily
     - signal_performance / alpha_summary / market_temp
-    - scan_open / scan_mid_morning / scan_afternoon / signal_noon
-    - macro_noon / macro_close
+    - signal_noon
+    - macro_morning / macro_preamarket / macro_noon / macro_close
     v0.7.5 P0-14修复：减少推送频次，关闭非核心任务
     """
     scheduler.setup()
     jobs = scheduler._scheduler.get_jobs()
     # 4 scan + 1 rsi_scan + 1 screener + 1 screener_validate + 1 screener_validate_eod
-    # + 1 screener_auto_tune + 2 range_watchlist + 1 report_close + 1 retry + 4 macro
+    # + 1 screener_auto_tune + 2 range_watchlist + 1 report_close + 1 retry
     # + 1 cache_cleanup + 1 weekly_optimize + 1 heuristic_optimize + 1 weekly_review
     # + 1 intraday_monitor + 1 config_hot_reload
-    # + 1 portfolio_report + 1 signal_daily_validation + 1 signal_weekly = 26
-    # flow_morning/flow_close/afternoon_flow 已合并到宏观卡片或禁用，不再单独注册
-    assert len(jobs) == 26
+    # + 1 portfolio_report + 1 signal_daily_validation + 1 signal_weekly = 22
+    # 当前 settings 的四个宏观开关均为 false，因此宏观任务不注册。
+    assert len(jobs) == 22
     job_ids = {j.id for j in jobs}
     assert "intraday_monitor" in job_ids
     assert "scan_1" in job_ids
@@ -70,10 +70,10 @@ def test_setup_creates_scheduled_jobs(scheduler: TradingScheduler) -> None:
     assert "screener_auto_tune_1510" in job_ids
     assert "report_close" in job_ids
     assert "retry_notify" in job_ids
-    assert "macro_early" in job_ids
-    assert "macro_morning" in job_ids
-    assert "macro_noon" in job_ids
-    assert "macro_close" in job_ids
+    assert "macro_early" not in job_ids
+    assert "macro_morning" not in job_ids
+    assert "macro_noon" not in job_ids
+    assert "macro_close" not in job_ids
     # P1-7: weekly_optimize_0300 周参数优化任务
     assert "weekly_optimize_0300" in job_ids
     # 启发式优化任务（每月 1/15 日 04:00）
