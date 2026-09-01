@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from gugu.utils.atomic import atomic_write_json  # noqa: E402
 
 import numpy as np
 import pandas as pd
@@ -342,8 +343,7 @@ async def main():
     if args.output:
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(all_results, f, ensure_ascii=False, indent=2, default=str)
+        atomic_write_json(output_path, all_results, ensure_ascii=False, indent=2, default=str)
         print(f"\n💾 结果已保存到: {output_path}")
 
 

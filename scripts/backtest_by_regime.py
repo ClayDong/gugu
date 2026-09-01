@@ -28,7 +28,9 @@ import pandas as pd
 
 from gugu.backtest import BacktestEngine
 from gugu.config import get_config
+from gugu.research.ledger import append_record, build_record
 from gugu.strategies.registry import get_runtime_strategy_names, get_strategy
+from gugu.utils.atomic import atomic_write_json
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -319,22 +321,31 @@ def main() -> None:
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(
-            {
-                "date": str(date.today()),
-                "n_stocks": len(codes),
-                "regime_segment_counts": regime_segment_counts,
-                "by_regime": aggregated,
-                "elapsed_sec": elapsed,
-            },
-            ensure_ascii=False,
-            indent=2,
-            default=str,
-        ),
-        encoding="utf-8",
+    atomic_write_json(
+        output_path,
+        {
+            "date": str(date.today()),
+            "n_stocks": len(codes),
+            "regime_segment_counts": regime_segment_counts,
+            "by_regime": aggregated,
+            "elapsed_sec": elapsed,
+        },
+        indent=2,
+        default=str,
     )
     logger.info(f"报告已保存: {output_path}")
+    append_record(
+        build_record(
+            kind="regime_backtest",
+            entrypoint="scripts/backtest_by_regime.py:main",
+            strategies=strategies,
+            symbols=codes,
+            output_artifact=str(output_path),
+            regime_segment_counts=regime_segment_counts,
+            summaries=aggregated,
+            elapsed_sec=elapsed,
+        )
+    )
 
 
 if __name__ == "__main__":

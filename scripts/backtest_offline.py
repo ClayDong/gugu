@@ -30,6 +30,7 @@ import pandas as pd
 from gugu.backtest import BacktestEngine
 from gugu.research.ledger import append_record, build_record
 from gugu.strategies.registry import get_runtime_strategy_names, get_strategy
+from gugu.utils.atomic import atomic_write_json
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -351,10 +352,7 @@ def main() -> None:
         "elapsed_sec": elapsed,
         "strategies": all_summaries,
     }
-    output_path.write_text(
-        json.dumps(full_data, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
+    atomic_write_json(output_path, full_data, indent=2, default=str)
     logger.info(f"报告已保存: {output_path}")
 
     append_record(

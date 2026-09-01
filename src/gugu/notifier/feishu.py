@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import fcntl
+import hashlib
 import json
 import os
 import re
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -143,6 +146,7 @@ class FeishuNotifier:
         self._audit_path: Path = self._queue_path.parent / "notification_audit.jsonl"
         self._archive_path: Path = self._queue_path.parent / "notification_archive.jsonl"
         self._digest_buffer = DigestBuffer(self._queue_path.parent / "notification_digest.json")
+        self._digest_flush_lock: asyncio.Lock | None = None
 
         # 读取通知开关配置
         feishu_cfg = get_config().feishu
@@ -344,9 +348,12 @@ class FeishuNotifier:
 
         # v0.7.6 P0-13修复：信号级去重检查（跨进程）
         signal_key = self._get_signal_key_from_card(card)
-        if signal_key and self._is_signal_notified(signal_key):
-            logger.info("信号已通知过，跳过重复发送: {}", signal_key)
-            return True
+        signal_claimed = False
+        if signal_key:
+            if not self._claim_signal(signal_key):
+                logger.info("信号已通知或正在发送，跳过重复发送: {}", signal_key)
+                return True
+            signal_claimed = True
 
         try:
             token = await self._get_tenant_token()
@@ -384,6 +391,8 @@ class FeishuNotifier:
                 )
                 # 入队等待后续重试（P1-4: 使用异步加锁版本，避免与 retry_queued 并发写文件）
                 # 必须携带 receive_id，保证重试时发回原目标群（P0: 业务/系统路由保真）
+                if signal_claimed and signal_key:
+                    self._release_signal(signal_key)
                 if queue_on_failure:
                     await self._enqueue_async(
                         card,
@@ -560,52 +569,128 @@ class FeishuNotifier:
             return Path(tempfile.gettempdir()) / "gugu_test_notified_signals.json"
         return self._queue_path.parent / "notified_signals.json"
 
-    def _is_signal_notified(self, signal_key: str) -> bool:
-        """检查信号是否已通知过（从持久化文件读取）。
+    @contextlib.contextmanager
+    def _signal_dedup_lock(self):
+        """Serialize cross-process signal deduplication reads and writes."""
+        notified_path = self._get_notified_signals_path()
+        lock_path = notified_path.with_name(f".{notified_path.name}.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield notified_path
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
-        v0.7.6 P0-13修复：重试队列的信号级去重。
-        """
+    def _is_signal_notified(self, signal_key: str) -> bool:
+        """检查信号是否已通知过（从持久化文件读取）。"""
         try:
-            notified_path = self._get_notified_signals_path()
-            if not notified_path.exists():
+            with self._signal_dedup_lock() as notified_path:
+                if not notified_path.exists():
+                    return False
+                data = json.loads(notified_path.read_text(encoding="utf-8"))
+                value = data.get(signal_key) if isinstance(data, dict) else None
+                today_str = time.strftime("%Y-%m-%d")
+                if value == today_str:
+                    return True
+                if not isinstance(value, dict) or value.get("date") != today_str:
+                    return False
+                if value.get("status") == "sent":
+                    return True
+                if value.get("status") == "pending":
+                    try:
+                        return float(value.get("claimed_at", 0)) > time.time() - 900
+                    except (TypeError, ValueError):
+                        return False
                 return False
-            with notified_path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            today_str = time.strftime("%Y-%m-%d")
-            return data.get(signal_key) == today_str
         except Exception:
             return False
 
-    def _mark_signal_notified(self, signal_key: str) -> None:
-        """标记信号为已通知（持久化到文件）。
-
-        v0.7.6 P0-13修复：重试队列的信号级去重。
-        """
+    def _claim_signal(self, signal_key: str) -> bool:
+        """Atomically claim a signal. Returns False if another process already holds it."""
+        today_str = time.strftime("%Y-%m-%d")
         try:
-            notified_path = self._get_notified_signals_path()
-            data = {}
-            if notified_path.exists():
-                try:
-                    with notified_path.open("r", encoding="utf-8") as f:
-                        data = json.load(f)
-                except Exception:
-                    data = {}
-            today_str = time.strftime("%Y-%m-%d")
-            data[signal_key] = today_str
-            # 清理过期记录（保留近7天）
-            cutoff = time.time() - 7 * 24 * 3600
-            data = {
-                k: v
-                for k, v in data.items()
-                if v >= time.strftime("%Y-%m-%d", time.localtime(cutoff))
-            }
-            # 原子写入
-            tmp_path = notified_path.with_suffix(".tmp")
-            with tmp_path.open("w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False)
-            tmp_path.replace(notified_path)
-        except Exception as e:
-            logger.warning("标记信号已通知失败: {}", e)
+            with self._signal_dedup_lock() as notified_path:
+                data: dict[str, Any] = {}
+                if notified_path.exists():
+                    with contextlib.suppress(Exception):
+                        raw = json.loads(notified_path.read_text(encoding="utf-8"))
+                        if isinstance(raw, dict):
+                            data = raw
+                value = data.get(signal_key)
+                if value == today_str:
+                    return False
+                if isinstance(value, dict) and value.get("date") == today_str:
+                    if value.get("status") != "pending":
+                        return False
+                    try:
+                        if float(value.get("claimed_at", 0)) > time.time() - 900:
+                            return False
+                    except (TypeError, ValueError):
+                        return False
+                data[signal_key] = {
+                    "date": today_str,
+                    "status": "pending",
+                    "claimed_at": time.time(),
+                }
+                self._write_signal_dedup(notified_path, data)
+                return True
+        except Exception as exc:
+            logger.warning("信号去重 claim 失败，保守跳过发送 {}: {}", signal_key, exc)
+            return False
+
+    def _release_signal(self, signal_key: str) -> None:
+        """Release a failed signal claim so the normal retry path can send it."""
+        try:
+            with self._signal_dedup_lock() as notified_path:
+                if not notified_path.exists():
+                    return
+                data = json.loads(notified_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and isinstance(data.get(signal_key), dict):
+                    data.pop(signal_key, None)
+                    self._write_signal_dedup(notified_path, data)
+        except Exception as exc:
+            logger.warning("释放信号去重 claim 失败 {}: {}", signal_key, exc)
+
+    @staticmethod
+    def _write_signal_dedup(path: Path, data: dict[str, Any]) -> None:
+        """Write signal dedup state with a unique temp file and fsync."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_name, path)
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_name)
+
+    def _mark_signal_notified(self, signal_key: str) -> None:
+        """Mark a successfully delivered signal under the cross-process lock."""
+        try:
+            with self._signal_dedup_lock() as notified_path:
+                data: dict[str, Any] = {}
+                if notified_path.exists():
+                    with contextlib.suppress(Exception):
+                        raw = json.loads(notified_path.read_text(encoding="utf-8"))
+                        if isinstance(raw, dict):
+                            data = raw
+                today_str = time.strftime("%Y-%m-%d")
+                # 成功状态保留历史字符串格式，兼容旧版本去重文件。
+                data[signal_key] = today_str
+                cutoff = time.strftime("%Y-%m-%d", time.localtime(time.time() - 7 * 24 * 3600))
+                data = {
+                    key: value
+                    for key, value in data.items()
+                    if (value.get("date", "") if isinstance(value, dict) else value) >= cutoff
+                }
+                self._write_signal_dedup(notified_path, data)
+        except Exception as exc:
+            logger.warning("标记信号已通知失败: {}", exc)
 
     def _enqueue(
         self,
@@ -662,20 +747,88 @@ class FeishuNotifier:
             )
 
     async def retry_queued(self) -> int:
-        """重试队列中的失败通知（per-item 追加模式，防丢失）。
+        """Claim and retry queued notifications across processes."""
+        if self._queue_path.exists():
+            self._queue_path.touch()
+        queue_path = self._queue_path
+        claim_path = queue_path.with_name(f".{queue_path.name}.{os.getpid()}.processing")
+        lock_path = queue_path.with_name(f".{queue_path.name}.process.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            processing_paths = list(queue_path.parent.glob(f".{queue_path.name}.*.processing"))
+            stale_processing: list[Path] = []
+            for path in processing_paths:
+                try:
+                    owner_pid = int(
+                        path.name.removeprefix(f".{queue_path.name}.").removesuffix(".processing")
+                    )
+                    owner_alive = owner_pid != os.getpid()
+                    if owner_alive:
+                        try:
+                            os.kill(owner_pid, 0)
+                        except ProcessLookupError:
+                            owner_alive = False
+                        except PermissionError:
+                            owner_alive = True
+                    if (owner_alive or time.time() - path.stat().st_mtime < 900) and (
+                        time.time() - path.stat().st_mtime < 900
+                    ):
+                        continue
+                    stale_processing.append(path)
+                except (ValueError, OSError):
+                    continue
+            if stale_processing:
+                from gugu.utils.atomic import atomic_write_text
 
-        每次只读一条，重试成功则从队列删除（重写剩余队列），
-        避免一次性读全部后进程崩溃导致丢失。
+                recovered = "".join(
+                    path.read_text(encoding="utf-8") for path in stale_processing if path.exists()
+                )
+                if recovered:
+                    existing = queue_path.read_text(encoding="utf-8") if queue_path.exists() else ""
+                    atomic_write_text(queue_path, recovered + existing)
+                for path in stale_processing:
+                    with contextlib.suppress(OSError):
+                        path.unlink()
+            if not queue_path.exists():
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                return 0
+            try:
+                os.replace(queue_path, claim_path)
+            except OSError:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                return 0
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
-        P1-4 修复：分两段加锁——读取和写回分别在 _queue_lock 内，
-        发送在锁外（避免长时间持锁阻塞 _enqueue_async）。
-        写回时合并发送期间新入队的条目，防止覆盖丢失。
+        self._queue_path = claim_path
+        try:
+            return await self._retry_claimed_queue()
+        finally:
+            with lock_path.open("a+", encoding="utf-8") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                try:
+                    claim_text = (
+                        claim_path.read_text(encoding="utf-8") if claim_path.exists() else ""
+                    )
+                    queued_text = (
+                        queue_path.read_text(encoding="utf-8") if queue_path.exists() else ""
+                    )
+                    if claim_text or queued_text:
+                        from gugu.utils.atomic import atomic_write_text
 
-        重试前强制刷新 token：400 Bad Request 常因 token 过期或失效，
-        刷新后重试成功率大幅提升。
+                        atomic_write_text(queue_path, claim_text + queued_text)
+                    elif queue_path.exists():
+                        queue_path.write_text("", encoding="utf-8")
+                finally:
+                    with contextlib.suppress(OSError):
+                        claim_path.unlink()
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                self._queue_path = queue_path
 
-        Returns:
-            成功重试的通知数
+    async def _retry_claimed_queue(self) -> int:
+        """Retry notifications from a queue file claimed by this process.
+
+        Send outside the queue lock, then merge newly queued entries back safely.
         """
         # 强制刷新 token：清空缓存的 token，确保重试用的是全新 token
         # （400 Bad Request 最常见原因是 token 过期/失效）
@@ -1217,9 +1370,18 @@ class FeishuNotifier:
         strategies_list = signal.get("strategies", [])
         is_cloud_trend = strategy == "cloud_trend" or "cloud_trend" in strategies_list
         signal_tier = classify_signal_tier(signal)
+        signal_dedup_key = semantic_dedup_key(
+            "signal",
+            symbol=str(signal.get("symbol", "")),
+            direction=str(signal.get("direction", "")),
+            strategy=str(strategy),
+            business_date=time.strftime("%Y-%m-%d"),
+            stage=str(signal.get("stage", signal.get("signal_type", ""))),
+        )
         if is_cloud_trend:
             return await self._send_business_card(
                 format_cloud_trend_signal(signal),
+                dedup_key=signal_dedup_key,
                 event_type="signal",
                 severity="action" if signal_tier == NotificationTier.ACTION else "info",
                 tier=signal_tier,
@@ -1232,6 +1394,7 @@ class FeishuNotifier:
         if is_hot_money:
             return await self._send_business_card(
                 format_hot_money_signal(signal),
+                dedup_key=signal_dedup_key,
                 event_type="signal",
                 severity="action" if signal_tier == NotificationTier.ACTION else "info",
                 tier=signal_tier,
@@ -1730,22 +1893,36 @@ class FeishuNotifier:
 
     async def flush_digest(self, aggregate_key: str, *, title: str = "📋 gugu 汇总提醒") -> bool:
         """Send one buffered Digest and remove it only after successful delivery."""
-        cards = self._digest_buffer.peek(aggregate_key)
-        if not cards:
+        if self._digest_flush_lock is None:
+            self._digest_flush_lock = asyncio.Lock()
+        async with self._digest_flush_lock:
+            return await self._flush_digest_locked(aggregate_key, title=title)
+
+    async def _flush_digest_locked(self, aggregate_key: str, *, title: str) -> bool:
+        """Flush one bucket while holding the process-local flush lock."""
+        claim_token, cards = self._digest_buffer.claim(aggregate_key)
+        if not claim_token or not cards:
             return False
         card = build_digest_card(cards, title=title)
+        digest_content_hash = hashlib.sha256(
+            json.dumps(cards, ensure_ascii=False, sort_keys=True, default=str).encode()
+        ).hexdigest()
         sent = await self.send_card(
             card,
             receive_id=self._business_chat_id,
             event_type="digest",
             tier=NotificationTier.DIGEST,
             dedup_key=semantic_dedup_key(
-                "digest", business_date=time.strftime("%Y-%m-%d"), stage=aggregate_key
+                "digest",
+                business_date=time.strftime("%Y-%m-%d"),
+                stage=f"{aggregate_key}:{len(cards)}:{digest_content_hash}",
             ),
             queue_on_failure=False,
         )
         if sent:
-            self._digest_buffer.remove_first(aggregate_key, len(cards))
+            self._digest_buffer.ack(aggregate_key, claim_token, len(cards))
+        else:
+            self._digest_buffer.release(aggregate_key, claim_token)
         return sent
 
     async def flush_all_digests(self) -> int:
@@ -1758,6 +1935,45 @@ class FeishuNotifier:
             if await self.flush_digest(aggregate_key):
                 sent_count += 1
         return sent_count
+
+    async def notify_weekly_review(self, report: dict[str, Any]) -> bool:
+        """发送周复盘卡片（周日 20:00，Digest 级）。"""
+        try:
+            sections: list[str] = [
+                f"**复盘周期**：{report.get('period', '')}",
+                f"**信号总数**：{report.get('total_signals', 0)} "
+                f"(买 {report.get('buy_signals', 0)} / 卖 {report.get('sell_signals', 0)})",
+            ]
+            strategy_stats = report.get("strategy_stats") or {}
+            if strategy_stats:
+                stat_lines = [f"- {name}: {count} 条" for name, count in strategy_stats.items()]
+                sections.append("**策略分布**\n" + "\n".join(stat_lines[:10]))
+            signals = report.get("signals") or []
+            if signals:
+                signal_lines = []
+                for s in signals[:10]:
+                    symbol = s.get("symbol", "")
+                    direction = "买" if s.get("signal") == 1 or s.get("action") == "buy" else "卖"
+                    signal_lines.append(f"- {symbol} {direction}")
+                sections.append("**最近信号**（前 10）\n" + "\n".join(signal_lines))
+            else:
+                sections.append("最近信号：无")
+            from gugu.notifier.formatter import _card
+
+            card = _card("📅 周复盘", "blue", sections, note="明策 · gugu · 周日20:00")
+            return await self._send_business_card(
+                card,
+                event_type="weekly_review",
+                tier=NotificationTier.DIGEST,
+                dedup_key=semantic_dedup_key(
+                    "weekly_review", business_date=time.strftime("%Y-%m-%d")
+                ),
+                aggregate_key=f"weekly_review:{time.strftime('%Y-%m-%d')}",
+                defer_digest=False,
+            )
+        except Exception as e:
+            logger.warning("发送周复盘卡片失败: {}", e)
+            return False
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""

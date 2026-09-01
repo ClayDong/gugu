@@ -35,6 +35,8 @@ from gugu.analysis.ml_factor import MLFactorModel  # noqa: E402
 from gugu.backtest import BacktestEngine, calc_metrics  # noqa: E402
 from gugu.data.manager import data_manager  # noqa: E402
 from gugu.strategies.registry import get_strategy  # noqa: E402
+from gugu.research.ledger import append_record, build_record  # noqa: E402
+from gugu.utils.atomic import atomic_write_json  # noqa: E402
 from gugu.utils.log import get_logger  # noqa: E402
 
 logger = get_logger()
@@ -490,20 +492,7 @@ async def main_async(
     if output:
         out_path = Path(output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(
-            json.dumps(
-                result,
-                ensure_ascii=False,
-                indent=2,
-                default=lambda o: int(o)
-                if isinstance(o, np.integer)
-                else float(o)
-                if isinstance(o, np.floating)
-                else str(o),
-            )
-            + "\n",
-            encoding="utf-8",
-        )
+        atomic_write_json(out_path, result, ensure_ascii=False, indent=2, default=str)
         logger.info(f"报告已保存: {out_path}")
 
     if report:
@@ -526,6 +515,21 @@ async def main_async(
         print(f"\n门禁通过: {'是' if gate.get('passed') else '否'}")
         if gate.get("failed_checks"):
             print(f"未通过项: {', '.join(gate['failed_checks'])}")
+
+    append_record(
+        build_record(
+            kind="ml_backtest",
+            entrypoint="scripts/backtest_ml_strategy.py:main_async",
+            strategies=["ml_factor"],
+            symbols=symbols,
+            requested_days=days,
+            max_stocks=max_stocks,
+            train_ratio=train_ratio,
+            output_artifact=output or None,
+            gate=gate,
+            backtest=bt_result,
+        )
+    )
 
 
 def main() -> None:

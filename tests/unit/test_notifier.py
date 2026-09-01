@@ -118,6 +118,25 @@ def test_format_signal_buy_shows_conservative_max_loss():
     assert "实际损失可能更高" in text
 
 
+def test_format_signal_buy_infinite_account_value_omits_fake_ratio():
+    """无限账户规模不能生成伪造的账户占比。"""
+    signal = {
+        "symbol": "600519",
+        "direction": "buy",
+        "strategy": "turtle",
+        "strategies": ["turtle"],
+        "reason": "测试",
+        "price": 100.0,
+        "stop_loss_price": 90.0,
+        "quantity": 100,
+        "total_value": float("inf"),
+        "confidence": 0.7,
+    }
+    text = str(format_signal(signal))
+    assert "约亏 ￥1,000.00" in text
+    assert "约占账户" not in text
+
+
 def test_format_signal_buy_missing_loss_inputs_does_not_show_zero_loss():
     """缺少止损或数量时应明确无法估算，不伪造 0 元亏损。"""
     signal = {

@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import tempfile
+from collections.abc import Mapping
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -41,20 +44,49 @@ def atomic_write_text(path: str | Path, content: str) -> None:
 
 
 def append_jsonl(path: str | Path, record: Any, *, max_lines: int = 10000) -> None:
+    """Append one strict JSONL record under a cross-process sidecar lock."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-    lines.append(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
-    atomic_write_text(path, "\n".join(lines[-max_lines:]) + "\n")
+    lock_path = path.with_name(f".{path.name}.lock")
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        import fcntl
+
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+            lines.append(
+                json.dumps(
+                    _sanitize_json(record),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                )
+            )
+            atomic_write_text(path, "\n".join(lines[-max_lines:]) + "\n")
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _sanitize_json(value: Any) -> Any:
+    """Normalize non-finite values while preserving common JSON-adjacent types."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, Mapping):
+        return {str(key): _sanitize_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_json(item) for item in value]
+    if isinstance(value, (datetime, date, Path)):
+        return value.isoformat() if hasattr(value, "isoformat") else str(value)
+    if hasattr(value, "item"):
+        with contextlib.suppress(Exception):
+            return _sanitize_json(value.item())
+    return value
 
 
 def atomic_write_json(path: str | Path, data: Any, **kwargs: Any) -> None:
-    """原子写入 JSON 文件。
-
-    Args:
-        path: 目标文件路径
-        data: 要序列化的对象
-        **kwargs: 传给 json.dumps 的参数（如 ensure_ascii, indent）
-    """
-    content = json.dumps(data, **kwargs)
+    """Write strict JSON atomically; NaN/Infinity become JSON null."""
+    options = dict(kwargs)
+    options.setdefault("allow_nan", False)
+    options.setdefault("ensure_ascii", False)
+    content = json.dumps(_sanitize_json(data), **options)
     atomic_write_text(path, content)

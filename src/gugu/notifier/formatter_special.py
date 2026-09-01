@@ -5,7 +5,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from gugu.notifier.formatter import _card, _resolve_name
+from gugu.notifier.formatter import (
+    _card,
+    _resolve_name,
+    _validation_status_label,
+    estimate_max_loss,
+)
 
 
 def format_cloud_trend_signal(signal: dict[str, Any]) -> dict[str, Any]:
@@ -69,6 +74,7 @@ def format_cloud_trend_signal(signal: dict[str, Any]) -> dict[str, Any]:
     subtitle = f"💰 {price_display} | {summary_line}"
 
     sections = [
+        f"**验证等级**：{_validation_status_label(signal)}\n"
         f"**股票**：{name}({symbol})\n"
         f"**方向**：{action}\n"
         f"**当前价**：{price_display}\n"
@@ -84,6 +90,9 @@ def format_cloud_trend_signal(signal: dict[str, Any]) -> dict[str, Any]:
 
     if is_double_yin_reversal:
         sections.insert(2, "🔥 **双阴反转加强**：前两日连续阴线 + 今日企稳收阳")
+
+    if is_buy:
+        sections.append(estimate_max_loss(signal))
 
     if stop_loss and stop_loss > 0 and price > 0:
         sl_pct = (price - stop_loss) / price * 100
@@ -162,6 +171,7 @@ def format_hot_money_signal(signal: dict[str, Any]) -> dict[str, Any]:
     subtitle = f"💰 {price_display} | {summary_line}"
 
     sections = [
+        f"**验证等级**：{_validation_status_label(signal)}\n"
         f"**股票**：{name}({symbol})\n"
         f"**方向**：{action}\n"
         f"**当前价**：{price_display}\n"
@@ -172,6 +182,9 @@ def format_hot_money_signal(signal: dict[str, Any]) -> dict[str, Any]:
         f"**涨停距今**：{days_since_lu} 天",
         f"**建议仓位**：{position_ratio:.0%}\n**触发理由**：{reason}",
     ]
+
+    if is_buy:
+        sections.append(estimate_max_loss(signal))
 
     sections.append(
         "📐 **三数交易法**\n"

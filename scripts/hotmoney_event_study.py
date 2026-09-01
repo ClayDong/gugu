@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+from gugu.utils.atomic import atomic_write_json  # noqa: E402
 
 TENCENT_KLINE = "https://ifzq.gtimg.cn/appstock/app/fqkline/get"
 TENCENT_QUOTE = "https://qt.gtimg.cn/q={}"
@@ -253,8 +254,7 @@ def main() -> None:
     ev["date"] = ev["date"].dt.strftime("%Y-%m-%d")
     out["events"] = ev.to_dict("records")
     Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-    with open(args.json, "w") as f:
-        json.dump(out, f, ensure_ascii=False, indent=2, default=str)
+    atomic_write_json(args.json, out, ensure_ascii=False, indent=2, default=str)
     print(f"\n结果已存 {args.json}")
 
 

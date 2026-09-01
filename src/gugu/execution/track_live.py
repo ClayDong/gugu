@@ -18,8 +18,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import json
+import os
+import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +51,7 @@ class LivePositionTracker(BaseBroker):
 
     def __init__(self, state_file: Path | None = None) -> None:
         self._state_file = state_file if state_file is not None else STATE_FILE
+        self._state_lock_file = self._state_file.with_name(f".{self._state_file.name}.lock")
         self._lock = threading.RLock()
         self._positions: dict[str, Position] = {}
         self._names: dict[str, str] = {}  # symbol -> name（Position类无name属性，单独管理）
@@ -66,12 +70,14 @@ class LivePositionTracker(BaseBroker):
                 return
 
             try:
-                with self._state_file.open("r", encoding="utf-8") as f:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                self._state_lock_file.parent.mkdir(parents=True, exist_ok=True)
+                with self._state_lock_file.open("a+", encoding="utf-8") as lock:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
                     try:
-                        data = json.load(f)
+                        with self._state_file.open("r", encoding="utf-8") as f:
+                            data = json.load(f)
                     finally:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
                 self._cash = float(data.get("cash", 0.0))
                 self._initial_capital = float(data.get("initial_capital", 1_000_000.0))
@@ -145,16 +151,54 @@ class LivePositionTracker(BaseBroker):
                     ),
                 }
 
-                # 原子写入：先写临时文件，再 rename
-                tmp_file = self._state_file.with_suffix(".json.tmp")
-                with tmp_file.open("w", encoding="utf-8") as f:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                # 稳定 sidecar 锁覆盖整个读改写临界区，临时文件使用唯一名称。
+                self._state_lock_file.parent.mkdir(parents=True, exist_ok=True)
+                with self._state_lock_file.open("a+", encoding="utf-8") as lock:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                    # 用户可在系统运行期间维护数量/成本等字段；这些字段不应被旧快照覆盖。
+                    if self._state_file.exists():
+                        with contextlib.suppress(Exception):
+                            disk_state = json.loads(self._state_file.read_text(encoding="utf-8"))
+                            for field in ("cash", "initial_capital", "daily_start_value"):
+                                if field in disk_state:
+                                    data[field] = disk_state[field]
+                            disk_positions = disk_state.get("positions", {})
+                            if isinstance(disk_positions, dict):
+                                memory_positions = data["positions"]
+                                merged_positions = {
+                                    sym: dict(position)
+                                    for sym, position in disk_positions.items()
+                                    if isinstance(position, dict)
+                                }
+                                for sym, memory_position in memory_positions.items():
+                                    if sym in merged_positions:
+                                        for field in (
+                                            "current_price",
+                                            "stop_loss_price",
+                                            "lowest_price",
+                                        ):
+                                            if field in memory_position:
+                                                merged_positions[sym][field] = memory_position[
+                                                    field
+                                                ]
+                                data["positions"] = merged_positions
+                    tmp_fd, tmp_name = tempfile.mkstemp(
+                        dir=str(self._state_file.parent),
+                        prefix=f".{self._state_file.name}.",
+                        suffix=".tmp",
+                    )
                     try:
-                        json.dump(data, f, ensure_ascii=False, indent=2)
-                        f.flush()
+                        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                            json.dump(data, f, ensure_ascii=False, indent=2)
+                            f.flush()
+                            os.fsync(f.fileno())
+                        os.replace(tmp_name, self._state_file)
+                    except Exception:
+                        with contextlib.suppress(OSError):
+                            os.unlink(tmp_name)
+                        raise
                     finally:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-                tmp_file.replace(self._state_file)
+                        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             except Exception as e:
                 logger.error("[实盘跟踪] 保存持仓文件失败: {}", e)
 

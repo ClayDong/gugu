@@ -89,6 +89,29 @@ def _sanitize(value: Any) -> Any:
     return value
 
 
+def _read_strict_lines(path: Path) -> tuple[list[str], list[str]]:
+    """Keep valid JSONL records and quarantine malformed historical lines."""
+    valid: list[str] = []
+    invalid: list[str] = []
+    if not path.exists():
+        return valid, invalid
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"non-finite JSON constant: {value}")
+
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            parsed = json.loads(line, parse_constant=reject_constant)
+            if not isinstance(parsed, dict):
+                raise ValueError("ledger record must be an object")
+            valid.append(line)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            invalid.append(line)
+    return valid, invalid
+
+
 @contextlib.contextmanager
 def _locked_append(path: Path) -> Iterator[list[str]]:
     """Read and update a JSONL file while serializing writers on POSIX."""
@@ -98,7 +121,11 @@ def _locked_append(path: Path) -> Iterator[list[str]]:
         if fcntl is not None:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
-            lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+            lines, invalid = _read_strict_lines(path)
+            if invalid:
+                quarantine = path.with_suffix(path.suffix + ".invalid")
+                with quarantine.open("a", encoding="utf-8") as invalid_file:
+                    invalid_file.write("\n".join(invalid) + "\n")
             yield lines
         finally:
             if fcntl is not None:

@@ -166,8 +166,14 @@ class RealtimeSignalScanner:
         - live + confirm_required=True：只推送，等待人工确认（由外部确认流程下单）
         - live + confirm_required=False：直接委托 QMT
         """
+        validation_status = str(
+            signal.get("validation_status")
+            or (signal.get("capability") or {}).get("validation_status", "")
+        ).lower()
         if signal.get("direction") == "buy" and (
-            signal.get("observation_only") or signal.get("rejected")
+            signal.get("observation_only")
+            or signal.get("rejected")
+            or validation_status in {"experimental", "in_review", "unknown"}
         ):
             logger.info(
                 "实时信号: 买入信号被门禁标记为不可执行: {} {}",
@@ -221,7 +227,32 @@ class RealtimeSignalScanner:
         # 建议价格（限价单）
         price = signal.get("suggested_price") or signal.get("price") or None
 
+        risk = getattr(self._engine, "_risk", None) or getattr(self._engine, "risk", None)
+        if risk is None:
+            logger.error("实时信号: 自动交易拒绝，风控管理器不可用")
+            return
         try:
+            account = broker.get_account()
+            portfolio = broker.get_portfolio()
+            position = portfolio.get(str(symbol).strip().zfill(6))
+            risk_result = risk.check_order(
+                str(symbol).strip().zfill(6),
+                str(direction),
+                int(suggested_qty),
+                float(price or 0),
+                portfolio,
+                cash=account.cash,
+                prev_close=getattr(position, "prev_close", None),
+                is_st=getattr(position, "is_st", False)
+                if position
+                else bool(signal.get("is_st", False)),
+                is_suspended=getattr(position, "is_suspended", False)
+                if position
+                else bool(signal.get("is_suspended", False)),
+            )
+            if not risk_result.allowed:
+                logger.warning("实时信号: 风控拒绝自动交易 {}: {}", symbol, risk_result.message)
+                return
             result = broker.order(symbol, direction, int(suggested_qty), price)
             logger.info(
                 "实时信号自动执行: {} {} {}股 -> {}",

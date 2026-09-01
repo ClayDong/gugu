@@ -1,3 +1,13 @@
+## 2026-09-01 — v0.9.40 上线前对抗性加固
+
+### 变更：复审修复交易路径、跨进程状态和回测证据边界
+- **交易安全**：实验/in_review/unknown 买入在流水线、OrderManager、RealtimeScanner 三层强制 observation-only；实时 live 委托先经过 RiskManager；Web stop-loss 先 reload 并复用卖出风控检查。
+- **风控一致性**：RiskManager reload 可清除已解除熔断；生产/回测状态文件使用 sidecar 锁和锁内合并，组合峰值不回退；track_live 读写统一 sidecar 锁、唯一临时文件和 fsync。
+- **通知可靠性**：信号去重支持跨进程 claim/pending lease；重试队列使用 process claim 和 processing lease，崩溃遗留可恢复；Digest 过期清理改为单锁操作，避免并发丢卡；周复盘无信号也发送明确空报告并检查真实发送结果。
+- **严格产物**：统一原子 JSON 写入和 NaN/Infinity→null；补齐 ML/按市场状态回测、事件研究、策略评估等回测脚本的原子 JSON 与离线 Walk-Forward 账本/报告闭环；账本历史非法 JSONL 行隔离到 `.invalid`；`write_defaults` 必须显式传入 Gate 授权（`gate_passed=True`）才能写入。
+- **新手边界**：实验/未知信号统一进入 Digest；云策略/游资卡增加验证等级和最大亏损提示；非有限账户规模不再显示伪造占比。
+- **动态验证**：只读 E2E 8/8 通过；远程 API 无管理 Key 返回 503；远程反代模拟鉴权生效；全量回归 `2099 passed / 152 skipped / 0 failed`；Ruff、编译和新基础设施 Mypy 通过。
+
 ## 2026-08-31 — v0.9.39 研究证据、通知治理与新手风险卡
 
 ### 变更：研究账本 + 调度开关 + Action/Digest/Archive + 保守最大亏损估算

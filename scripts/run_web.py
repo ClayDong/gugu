@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -23,6 +24,12 @@ def main() -> None:
     parser.add_argument("--reload", action="store_true", help="开发模式（自动重载）")
     parser.add_argument("--version", action="version", version="gugu 0.6.0")
     args = parser.parse_args()
+    if args.host not in {"127.0.0.1", "::1", "localhost"}:
+        os.environ["GUGU_WEB_REMOTE"] = "1"
+        os.environ.pop("GUGU_WEB_LOCAL", None)
+    else:
+        os.environ["GUGU_WEB_LOCAL"] = "1"
+        os.environ.pop("GUGU_WEB_REMOTE", None)
 
     try:
         import uvicorn

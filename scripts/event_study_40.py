@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+from gugu.utils.atomic import atomic_write_json  # noqa: E402
 
 TENCENT_KLINE = "https://ifzq.gtimg.cn/appstock/app/fqkline/get"
 _CTX = ssl._create_unverified_context()
@@ -243,14 +244,13 @@ def main():
 
     json_path = args.json or f"data/{args.strategy}_event_study_40.json"
     ev["date"] = ev["date"].dt.strftime("%Y-%m-%d")
-    with open(json_path, "w") as f:
-        json.dump(
-            {"strategy": args.strategy, "total": len(ev), "events": ev.to_dict("records")},
-            f,
-            ensure_ascii=False,
-            indent=2,
-            default=str,
-        )
+    atomic_write_json(
+        json_path,
+        {"strategy": args.strategy, "total": len(ev), "events": ev.to_dict("records")},
+        ensure_ascii=False,
+        indent=2,
+        default=str,
+    )
     print(f"\n已存 {json_path}")
 
 

@@ -36,6 +36,7 @@ from gugu.config import get_config
 from gugu.data.manager import data_manager
 from gugu.research.ledger import append_record, build_record
 from gugu.strategies.registry import get_runtime_strategy_names, get_strategy, list_strategies
+from gugu.utils.atomic import atomic_write_json
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -415,10 +416,7 @@ async def main_async(args: argparse.Namespace) -> None:
         "elapsed_sec": elapsed,
         "strategies": output_strategies,
     }
-    output_path.write_text(
-        json.dumps(full_data, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
+    atomic_write_json(output_path, full_data, indent=2, default=str)
     logger.info(f"回测结果已保存: {output_path}")
 
     # 6b. 保存 per-symbol JSON（详细原始数据）
@@ -431,10 +429,7 @@ async def main_async(args: argparse.Namespace) -> None:
         "strategies": strategies,
         "results": per_symbol_results,
     }
-    per_symbol_path.write_text(
-        json.dumps(per_symbol_data, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
+    atomic_write_json(per_symbol_path, per_symbol_data, indent=2, default=str)
     logger.info(f"逐股票原始结果已保存: {per_symbol_path}")
 
     effective_symbols = [symbol for symbol, results in per_symbol_results.items() if results]

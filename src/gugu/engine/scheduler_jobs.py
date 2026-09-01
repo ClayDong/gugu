@@ -647,32 +647,30 @@ class SchedulerJobsMixin:
             from gugu.config import PROJECT_ROOT
 
             history_file = PROJECT_ROOT / "data" / "signals_history.jsonl"
-            if not history_file.exists():
-                logger.info("周复盘: 无信号历史文件")
-                return
-
             today = datetime.now().date()
             week_ago = today - timedelta(days=7)
             signals: list[dict] = []
-            try:
-                with history_file.open("r", encoding="utf-8") as f:
-                    for line in f:
-                        try:
-                            record = json.loads(line)
-                            ts_str = record.get("timestamp", record.get("date", ""))
-                            if ts_str:
-                                record_date = datetime.fromisoformat(ts_str.replace("Z", "")).date()
-                                if record_date >= week_ago:
-                                    signals.append(record)
-                        except (ValueError, KeyError):
-                            continue
-            except Exception as e:
-                logger.warning("周复盘: 读取信号历史失败: {}", e)
-                return
+            if not history_file.exists():
+                logger.info("周复盘: 无信号历史文件，发送空复盘确认")
+            else:
+                try:
+                    with history_file.open("r", encoding="utf-8") as f:
+                        for line in f:
+                            try:
+                                record = json.loads(line)
+                                ts_str = record.get("timestamp", record.get("date", ""))
+                                if ts_str:
+                                    normalized_ts = str(ts_str).replace("Z", "+00:00")
+                                    record_date = datetime.fromisoformat(normalized_ts).date()
+                                    if record_date >= week_ago:
+                                        signals.append(record)
+                            except (ValueError, KeyError, TypeError):
+                                continue
+                except Exception as e:
+                    logger.warning("周复盘: 读取信号历史失败，发送空复盘确认: {}", e)
 
             if not signals:
-                logger.info("周复盘: 本周无信号记录")
-                return
+                logger.info("周复盘: 本周无信号记录，发送空复盘确认")
 
             total_signals = len(signals)
             buy_signals = sum(
@@ -688,7 +686,7 @@ class SchedulerJobsMixin:
                 strategy_stats[strategy] = strategy_stats.get(strategy, 0) + 1
 
             try:
-                await self._engine.notifier.notify_weekly_review(
+                sent = await self._engine.notifier.notify_weekly_review(
                     {
                         "period": f"{week_ago.isoformat()} ~ {today.isoformat()}",
                         "total_signals": total_signals,
@@ -698,10 +696,13 @@ class SchedulerJobsMixin:
                         "signals": signals[:20],
                     }
                 )
-                logger.info(
-                    f"周复盘推送完成: 信号 {total_signals} 条 "
-                    f"(买 {buy_signals} / 卖 {sell_signals})"
-                )
+                if sent:
+                    logger.info(
+                        f"周复盘推送完成: 信号 {total_signals} 条 "
+                        f"(买 {buy_signals} / 卖 {sell_signals})"
+                    )
+                else:
+                    logger.warning("周复盘通知未发送，结果为 False")
             except AttributeError:
                 logger.debug("周复盘: notifier 未实现 notify_weekly_review 方法")
             except Exception as e:
@@ -899,7 +900,9 @@ class SchedulerJobsMixin:
 
             tracker = SignalTracker()
             report = await tracker.generate_weekly_report()
-            await self._engine.notifier.notify_signal_weekly(report)
+            sent = await self._engine.notifier.notify_signal_weekly(report)
+            if not sent:
+                logger.warning("信号绩效周报通知未发送，结果为 False")
 
             total = report.get("total_signals", 0)
             win_rate = report.get("win_rate", 0)

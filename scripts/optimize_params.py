@@ -56,6 +56,7 @@ from gugu.config import PROJECT_ROOT  # noqa: E402
 from gugu.data import data_manager  # noqa: E402
 from gugu.research.ledger import append_record, build_record  # noqa: E402
 from gugu.strategies.registry import get_strategy, list_strategies  # noqa: E402
+from gugu.utils.atomic import atomic_write_text  # noqa: E402
 from gugu.utils.log import get_logger  # noqa: E402
 from gugu.validation.gate_policy import GatePolicy  # noqa: E402
 
@@ -495,8 +496,10 @@ def load_defaults() -> dict:
         return yaml.safe_load(f) or {}
 
 
-def write_defaults(defaults: dict) -> None:
-    """写回 strategy_defaults.yaml，保留注释结构。"""
+def write_defaults(defaults: dict, *, gate_passed: bool = False) -> None:
+    """写回 strategy_defaults.yaml；必须由已通过 GatePolicy 的调用方授权。"""
+    if not gate_passed:
+        raise PermissionError("strategy_defaults.yaml 写回必须先通过 GatePolicy")
     path = PROJECT_ROOT / "config" / "strategy_defaults.yaml"
     # 读取现有文件，保留注释
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
@@ -541,10 +544,29 @@ def write_defaults(defaults: dict) -> None:
             else:
                 new_lines.append(line)
 
-        path.write_text("\n".join(new_lines), encoding="utf-8")
+        existing_strategy_names = {
+            line.strip()[:-1]
+            for line in new_lines
+            if line and not line[0].isspace() and line.strip().endswith(":")
+        }
+        missing_strategies = [name for name in defaults if name not in existing_strategy_names]
+        for name in missing_strategies:
+            new_lines.extend(
+                [
+                    "",
+                    yaml.dump(
+                        {name: defaults[name]},
+                        default_flow_style=False,
+                        allow_unicode=True,
+                    ).rstrip(),
+                ]
+            )
+
+    # 原子写回：先写临时文件再替换，防止进程在写入中途崩溃导致参数文件截断。
+    if existing:
+        atomic_write_text(path, "\n".join(new_lines))
     else:
-        with path.open("w", encoding="utf-8") as f:
-            yaml.dump(defaults, f, default_flow_style=False, allow_unicode=True)
+        atomic_write_text(path, yaml.dump(defaults, default_flow_style=False, allow_unicode=True))
 
     logger.info(f"策略参数已写回: {path}")
 
@@ -701,7 +723,7 @@ async def run_optimization(
                 defaults[strategy_name] = {}
             for k, v in best_params.items():
                 defaults[strategy_name][k] = v
-            write_defaults(defaults)
+            write_defaults(defaults, gate_passed=True)
             writeback_applied = True
             print(f"\n优化参数已写回 config/strategy_defaults.yaml")
         else:
@@ -1130,7 +1152,7 @@ async def run_heuristic_optimization(
                 defaults[strategy_name] = {}
             for k, v in best_params.items():
                 defaults[strategy_name][k] = v
-            write_defaults(defaults)
+            write_defaults(defaults, gate_passed=True)
             writeback_applied = True
             print(f"\n优化参数已写回 config/strategy_defaults.yaml")
         else:
@@ -1340,7 +1362,7 @@ async def run_multi_stock_optimization(
                 defaults[strategy_name] = {}
             for k, v in best_params.items():
                 defaults[strategy_name][k] = v
-            write_defaults(defaults)
+            write_defaults(defaults, gate_passed=True)
             writeback_applied = True
             print(f"\n优化参数已写回 config/strategy_defaults.yaml")
         else:
@@ -1349,7 +1371,7 @@ async def run_multi_stock_optimization(
                 status = "✓" if check["passed"] else "✗"
                 print(f"  {status} {check['name']}: {check['detail']}")
             print(f"\n建议:")
-            print(f"  1. 扩大样本（当前 {symbol} 单股优化易过拟合，建议多股聚合）")
+            print(f"  1. 扩大样本（当前 {len(stock_dfs)} 只股票，建议增加不同行业代表股）")
             print(f"  2. 增加数据量（--days 1000+）")
             print("  3. --force 不再绕过生产参数写回门禁；如需研究实验，请使用隔离输出目录")
 

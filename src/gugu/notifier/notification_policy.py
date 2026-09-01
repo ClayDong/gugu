@@ -7,6 +7,7 @@ import json
 import math
 import os
 import tempfile
+import uuid
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -53,9 +54,14 @@ def classify_signal_tier(signal: Mapping[str, Any]) -> NotificationTier:
     if str(signal.get("direction", "buy")).lower() == "sell":
         return NotificationTier.ACTION
     decision = signal.get("decision") or {}
+    capability = signal.get("capability") or {}
+    validation_status = signal.get("validation_status") or (
+        capability.get("validation_status") if isinstance(capability, Mapping) else ""
+    )
     blocked = isinstance(decision, Mapping) and decision.get("status") == "blocked"
     if (
-        signal.get("observation_only")
+        str(validation_status).lower() in {"experimental", "in_review", "unknown"}
+        or signal.get("observation_only")
         or signal.get("rejected")
         or signal.get("wisdom_filtered")
         or blocked
@@ -145,11 +151,14 @@ class DigestBuffer:
                     )
                     cards = bucket.setdefault("cards", [])
                     dedup_keys = bucket.setdefault("dedup_keys", [])
+                    if not isinstance(dedup_keys, list):
+                        dedup_keys = []
+                    # Keep one key slot per card, including cards without a key.
+                    dedup_keys.extend([""] * max(0, len(cards) - len(dedup_keys)))
                     if dedup_key and dedup_key in dedup_keys:
                         return True
                     cards.append(_sanitize(card))
-                    if dedup_key:
-                        dedup_keys.append(dedup_key)
+                    dedup_keys.append(dedup_key)
                     content = json.dumps(buckets, ensure_ascii=False, allow_nan=False, indent=2)
                     fd, tmp_name = tempfile.mkstemp(
                         dir=str(self.path.parent), prefix=f".{self.path.name}.", suffix=".tmp"
@@ -175,22 +184,38 @@ class DigestBuffer:
         return iter(self.keys())
 
     def discard_expired(self, *, max_age_hours: int = 24) -> int:
-        """Discard old buckets so stale reports cannot be sent on a later day."""
+        """Discard old buckets under one lock so concurrent adds are preserved."""
         cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
-        removed = 0
-        for aggregate_key in self.keys():
-            cards = self.peek(aggregate_key)
-            if not cards:
-                continue
-            # Buckets created by older versions may lack timestamps; keep them for one flush.
-            try:
-                raw = json.loads(self.path.read_text(encoding="utf-8"))
-                created_at = raw[aggregate_key].get("created_at", "")
-                if datetime.fromisoformat(created_at) < cutoff and self.remove(aggregate_key):
-                    removed += 1
-            except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
-                continue
-        return removed
+        lock_path = self.path.with_name(f".{self.path.name}.lock")
+        try:
+            with lock_path.open("a+", encoding="utf-8") as lock_file:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    if not self.path.exists():
+                        return 0
+                    buckets = json.loads(self.path.read_text(encoding="utf-8"))
+                    if not isinstance(buckets, dict):
+                        return 0
+                    removed = 0
+                    for aggregate_key, bucket in list(buckets.items()):
+                        if not isinstance(bucket, dict) or not bucket.get("cards"):
+                            continue
+                        try:
+                            created_at = bucket.get("created_at", "")
+                            if datetime.fromisoformat(created_at) < cutoff:
+                                buckets.pop(aggregate_key)
+                                removed += 1
+                        except (TypeError, ValueError):
+                            continue
+                    if removed:
+                        self._write_locked(lock_file, buckets)
+                    return removed
+                finally:
+                    if fcntl is not None:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        except (OSError, json.JSONDecodeError):
+            return 0
 
     def keys(self) -> list[str]:
         """List currently buffered aggregate keys."""
@@ -209,6 +234,125 @@ class DigestBuffer:
                         fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         except Exception:
             return []
+
+    def claim(self, aggregate_key: str) -> tuple[str, list[dict[str, Any]]]:
+        """Atomically mark one bucket in-flight and return its claim token/cards."""
+        lock_path = self.path.with_name(f".{self.path.name}.lock")
+        try:
+            with lock_path.open("a+", encoding="utf-8") as lock_file:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    if not self.path.exists():
+                        return "", []
+                    buckets = json.loads(self.path.read_text(encoding="utf-8"))
+                    if not isinstance(buckets, dict):
+                        return "", []
+                    bucket = buckets.get(aggregate_key)
+                    if not isinstance(bucket, dict):
+                        return "", []
+                    if bucket.get("inflight"):
+                        inflight_at = bucket.get("inflight_at", "")
+                        try:
+                            stale = datetime.fromisoformat(inflight_at) < datetime.now(
+                                UTC
+                            ) - timedelta(minutes=15)
+                        except (TypeError, ValueError):
+                            stale = False
+                        if not stale:
+                            return "", []
+                        bucket.pop("inflight", None)
+                        bucket.pop("inflight_at", None)
+                    cards = bucket.get("cards", [])
+                    if not isinstance(cards, list) or not cards:
+                        return "", []
+                    token = uuid.uuid4().hex
+                    bucket["inflight"] = token
+                    bucket["inflight_at"] = datetime.now(UTC).isoformat()
+                    self._write_locked(lock_file, buckets)
+                    return token, list(cards)
+                finally:
+                    if fcntl is not None:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            return "", []
+
+    def ack(self, aggregate_key: str, token: str, count: int) -> bool:
+        """Acknowledge a claimed prefix after successful delivery."""
+        if not token or count <= 0:
+            return False
+        lock_path = self.path.with_name(f".{self.path.name}.lock")
+        try:
+            with lock_path.open("a+", encoding="utf-8") as lock_file:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    if not self.path.exists():
+                        return False
+                    buckets = json.loads(self.path.read_text(encoding="utf-8"))
+                    bucket = buckets.get(aggregate_key) if isinstance(buckets, dict) else None
+                    if not isinstance(bucket, dict) or bucket.get("inflight") != token:
+                        return False
+                    cards = bucket.get("cards", [])
+                    if not isinstance(cards, list):
+                        return False
+                    if len(cards) <= count:
+                        buckets.pop(aggregate_key)
+                    else:
+                        bucket["cards"] = cards[count:]
+                        keys = bucket.get("dedup_keys", [])
+                        if isinstance(keys, list):
+                            bucket["dedup_keys"] = keys[count:]
+                        bucket.pop("inflight", None)
+                        bucket.pop("inflight_at", None)
+                    self._write_locked(lock_file, buckets)
+                    return True
+                finally:
+                    if fcntl is not None:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            return False
+
+    def release(self, aggregate_key: str, token: str) -> bool:
+        """Release a failed claim so the bucket can retry."""
+        lock_path = self.path.with_name(f".{self.path.name}.lock")
+        try:
+            with lock_path.open("a+", encoding="utf-8") as lock_file:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    if not self.path.exists():
+                        return False
+                    buckets = json.loads(self.path.read_text(encoding="utf-8"))
+                    bucket = buckets.get(aggregate_key) if isinstance(buckets, dict) else None
+                    if not isinstance(bucket, dict) or bucket.get("inflight") != token:
+                        return False
+                    bucket.pop("inflight", None)
+                    bucket.pop("inflight_at", None)
+                    self._write_locked(lock_file, buckets)
+                    return True
+                finally:
+                    if fcntl is not None:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            return False
+
+    def _write_locked(self, lock_file: Any, buckets: dict[str, Any]) -> None:
+        """Write bucket state while the caller holds the sidecar lock."""
+        content = json.dumps(buckets, ensure_ascii=False, allow_nan=False, indent=2)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(self.path.parent), prefix=f".{self.path.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(content if buckets else "{}\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_name, self.path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_name)
+            raise
 
     def peek(self, aggregate_key: str) -> list[dict[str, Any]]:
         """Read one aggregate bucket without removing it."""

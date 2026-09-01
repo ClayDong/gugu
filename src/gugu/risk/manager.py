@@ -11,6 +11,8 @@ Levels:
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import threading
 import time
@@ -26,6 +28,20 @@ from .holding_duration import HoldingDurationChecker
 from .rules import Position, RiskAction, RiskCheckResult, RiskLevel
 
 logger = get_logger()
+
+
+@contextlib.contextmanager
+def _state_file_guard(path: Path):
+    """Serialize cross-process reads/writes for persisted risk state."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(f".{path.name}.lock")
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
 
 # Price limit ratios by board
 _MAIN_BOARD_LIMIT = 0.10  # 主板 ±10%
@@ -131,6 +147,8 @@ class RiskManager:
         # P0 修复（P0-P1 审查 v0.8.2）：关键状态线程安全
         self._lock = threading.Lock()
         self._halted: bool = False
+        self._explicit_halt_clear: bool = False
+        self._pending_halt_set: bool = False
         self._last_halt_reset_time: float = 0.0  # P1-7: 熔断解除时间戳
         self._last_reset_date: str = ""
         self._liquidity_max_turnover_ratio: float = 0.0  # P2-2: 流动性仓位约束（0=禁用）
@@ -141,6 +159,7 @@ class RiskManager:
         # P0 修复（v0.8.0）：按 scope 选择状态文件，回测与生产隔离
         self._scope = scope
         self._state_file = self._BACKTEST_STATE_FILE if scope == "backtest" else RISK_STATE_FILE
+        self._state_lock_file = self._state_file.with_name(f".{self._state_file.name}.lock")
         self._holding_duration_checker = HoldingDurationChecker(
             self.max_holding_days_warn,
             self.max_holding_days_halt,
@@ -168,6 +187,8 @@ class RiskManager:
             if self._halted:
                 self._logger.info("Risk manager halt state reset")
             self._halted = False
+            self._explicit_halt_clear = True
+            self._pending_halt_set = False
             from datetime import date as _date
 
             self._last_reset_date = _date.today().isoformat()
@@ -198,6 +219,8 @@ class RiskManager:
                 self._logger.info("clear_halt_only 调用但熔断未激活，无操作")
                 return
             self._halted = False
+            self._explicit_halt_clear = True
+            self._pending_halt_set = False
             self._last_halt_reset_time = time.time()  # P1-7: 记录解除时间
             self._save_halt_state()
 
@@ -236,16 +259,20 @@ class RiskManager:
         P0 修复：fail-safe — 文件损坏时保守保持 halted=False 但记录 ERROR。
         """
         try:
+            if not self._state_file.exists():
+                self._halted = False
+                return
             if self._state_file.exists():
-                data = json.loads(self._state_file.read_text(encoding="utf-8"))
+                with _state_file_guard(self._state_file):
+                    data = json.loads(self._state_file.read_text(encoding="utf-8"))
                 halted = data.get("halted", False)
                 halt_date = data.get("halt_date", "")
                 from datetime import date as _date
 
                 today_str = _date.today().isoformat()
                 # 仅恢复当日熔断状态，跨日熔断自动失效（需新交易日 reset）
-                if halted and halt_date == today_str:
-                    self._halted = True
+                self._halted = bool(halted and halt_date == today_str)
+                if self._halted:
                     self._logger.warning(
                         "P0-2: 恢复当日 L2 熔断状态（halt_date={}），交易已被阻断，需人工 reset_halt 后恢复",
                         halt_date,
@@ -276,12 +303,9 @@ class RiskManager:
         return self._last_reset_date
 
     def reload(self) -> None:
-        """P0 修复（v0.8.2）：从磁盘文件重新加载风控状态。
-
-        用于 Web/引擎跨进程状态同步。进程重启或 Web 需要获取引擎最新熔断状态时调用。
-        只重新加载 halt 状态和 portfolio_peak，不修改构造函数传入的配置参数。
-        """
-        self._load_halt_state()
+        """从磁盘重新加载风控状态，并与当前实例的检查串行化。"""
+        with self._lock:
+            self._load_halt_state()
 
     def _save_halt_state(self) -> None:
         """P0 修复（v0.8.2）：持久化全部风控状态。
@@ -303,7 +327,38 @@ class RiskManager:
             }
             from gugu.utils.atomic import atomic_write_json
 
-            atomic_write_json(self._state_file, data, ensure_ascii=False, indent=2)
+            with _state_file_guard(self._state_file):
+                if self._state_file.exists():
+                    with contextlib.suppress(Exception):
+                        current = json.loads(self._state_file.read_text(encoding="utf-8"))
+                        if isinstance(current, dict):
+                            current_active = bool(
+                                current.get("halted")
+                                and current.get("halt_date") == data["halt_date"]
+                            )
+                            current_reset_date = str(current.get("last_reset_date", ""))
+                            current_reset_time = float(
+                                current.get("last_halt_reset_time", 0.0) or 0.0
+                            )
+                            if self._pending_halt_set:
+                                data["halted"] = True
+                                data["halt_date"] = data["halt_date"]
+                            elif self._explicit_halt_clear:
+                                data["halted"] = False
+                                data["last_reset_date"] = data["halt_date"]
+                            else:
+                                # 普通状态保存不能覆盖另一进程最新的熔断/解除事件。
+                                data["halted"] = current_active
+                                if current_reset_date:
+                                    data["last_reset_date"] = current_reset_date
+                                if current_reset_time > float(data["last_halt_reset_time"] or 0.0):
+                                    data["last_halt_reset_time"] = current_reset_time
+                            data["portfolio_peak"] = max(
+                                float(current.get("portfolio_peak", 0.0) or 0.0),
+                                float(data["portfolio_peak"] or 0.0),
+                            )
+                atomic_write_json(self._state_file, data, ensure_ascii=False, indent=2)
+            self._explicit_halt_clear = False
         except Exception as e:
             self._logger.warning("保存熔断状态失败: {}", e)
 
@@ -552,6 +607,7 @@ class RiskManager:
         if loss_pct >= self.daily_loss_halt:
             with self._lock:
                 self._halted = True
+                self._pending_halt_set = True
                 self._save_halt_state()  # P0-2: 持久化熔断状态
             self._logger.warning(
                 "L2 HALT: daily loss {:.2%} >= {:.2%}, trading halted until reset()",
@@ -685,6 +741,7 @@ class RiskManager:
             if dd >= self._max_drawdown_halt:
                 was_halted = self._halted
                 self._halted = True
+                self._pending_halt_set = True
                 if persist:
                     self._save_halt_state()
                 if not was_halted:

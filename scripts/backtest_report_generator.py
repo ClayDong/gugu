@@ -28,6 +28,7 @@ from typing import Any
 import numpy as np
 
 from gugu.backtest import BacktestResult
+from gugu.utils.atomic import atomic_write_text
 
 # 需要计算分布统计的核心指标
 _CORE_METRICS = [
@@ -268,7 +269,7 @@ def save_report(md_content: str, path: str | Path) -> None:
     """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(md_content, encoding="utf-8")
+    atomic_write_text(p, md_content)
 
 
 # ── 内部辅助函数 ──

@@ -54,8 +54,10 @@ from optimize_params import (  # noqa: E402
     STRATEGY_PARAM_GRIDS,
     STRATEGY_PARAM_CONSTRAINTS,
     _check_unlock_conditions,
+    apply_optimization_result,
     load_defaults,
     write_defaults,
+    write_optimization_report,
 )
 
 logger = get_logger()
@@ -277,6 +279,7 @@ async def run_offline_optimization(
     # 解锁条件检查
     unlock_report: dict | None = None
     writeback_applied = False
+    report_path: Path | None = None
     if write:
         unlock_report = _check_unlock_conditions(
             strategy_name=strategy_name,
@@ -292,7 +295,7 @@ async def run_offline_optimization(
                 defaults[strategy_name] = {}
             for k, v in best_params.items():
                 defaults[strategy_name][k] = v
-            write_defaults(defaults)
+            write_defaults(defaults, gate_passed=True)
             writeback_applied = True
             print(f"\n✅ 优化参数已写回 config/strategy_defaults.yaml")
         else:
@@ -306,6 +309,23 @@ async def run_offline_optimization(
             print(f"  1. 检查策略是否真的有效（box_breakout 已通过全市场回测验证）")
             print(f"  2. 增加股票数（当前 {len(stock_dfs)} 只）")
             print("  3. --force 仅保留兼容性，不得绕过 GatePolicy gate-v1")
+
+        report_path = write_optimization_report(
+            strategy_name=strategy_name,
+            unlock_report=unlock_report,
+            avg_sharpe=avg_sharpe,
+            avg_return=avg_return,
+            avg_max_dd=avg_max_dd,
+            param_votes=param_votes,
+            best_params=best_params,
+            n_windows=len(results),
+        )
+        failed_reason = "; ".join(unlock_report["failed_checks"])
+        apply_optimization_result(
+            strategy_name=strategy_name,
+            passed=unlock_report["unlocked"],
+            reason=failed_reason,
+        )
 
     append_record(
         build_record(
@@ -332,6 +352,7 @@ async def run_offline_optimization(
             gate=unlock_report,
             write_requested=write,
             writeback_applied=writeback_applied,
+            artifact_path=report_path,
         )
     )
 

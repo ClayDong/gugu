@@ -22,7 +22,7 @@
 | P1-2 | 卡片新手化 | ✅ | 买入卡显示按计划数量/入场价/止损价估算的最大亏损与账户占比；缺失数据明确“暂无法估算”；绩效兼容 `sample_count/total_signals` 并显示 `n=`；验证等级未知时明确仅供观察 |
 | P1-3 | 增强过滤器只降不升 | ✅ | 移除 3 处买入侧加成（signal_only 另类因子、筹码潜伏者、生产路径另类因子）；量价背离卖出加成保留，因为它只强化退出/避险方向 |
 | P1-4 | 研究账本最小版 | ✅ | 独立 `src/gugu/research/ledger.py` 使用原子/加锁/严格 JSON；已接入单股、在线批量、离线批量、离线 Walk-Forward 和三类优化入口，记录数据范围、参数空间、Gate verdict 与写回状态 |
-| P1-5 | 保命模块分支覆盖 | ⬜ | risk/manager、quality_state、track_live、registry 过滤四模块补分支测试；质量叙事从"总通过数"改为"关键不变量清单" |
+| P1-5 | 保命模块分支覆盖 | ✅ | 新增 `test_safety_invariants.py`，覆盖 RiskManager 安全上限、熔断恢复/隔离；同时补强 track_live、数据质量、registry、实时执行路径回归 |
 
 ## P2（有空再做）
 

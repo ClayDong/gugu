@@ -259,16 +259,23 @@ def estimate_max_loss(signal: dict[str, Any]) -> str:
             if capital <= 0 or ratio <= 0 or ratio > 1:
                 raise ValueError
             quantity = int(capital * ratio / entry / 100) * 100
-        quantity = int(quantity)
-        if quantity <= 0:
+        quantity_value = float(quantity)
+        if (
+            not math.isfinite(quantity_value)
+            or quantity_value <= 0
+            or not quantity_value.is_integer()
+        ):
             raise ValueError
+        quantity = int(quantity_value)
+        if quantity % 100 != 0:
+            return "⚠️ 暂无法估算最大亏损：计划数量不是 A 股有效整手（100 股）"
 
         loss = (entry - stop) * quantity
         if not math.isfinite(loss) or loss <= 0:
             raise ValueError
         account_ratio = None
         total_value = signal.get("total_value")
-        if total_value is not None and float(total_value) > 0:
+        if total_value is not None and math.isfinite(float(total_value)) and float(total_value) > 0:
             account_ratio = loss / float(total_value)
         account_text = f"（约占账户 {account_ratio:.2%}）" if account_ratio is not None else ""
         return (

@@ -139,11 +139,16 @@ class OrderManager:
 
         # 执行入口必须再次阻断未通过流水线的新增买入，防止调用方绕过
         # SignalPipeline 直接调用本类执行观察信号或被拒绝信号。
+        validation_status = str(
+            signal.get("validation_status")
+            or (signal.get("capability") or {}).get("validation_status", "")
+        ).lower()
         if direction == "buy" and (
             signal.get("observation_only")
             or signal.get("rejected")
             or signal.get("wisdom_filtered")
             or signal.get("data_quality") != "fresh_valid"
+            or validation_status in {"experimental", "in_review", "unknown"}
         ):
             logger.warning(
                 "{} 买入信号未通过执行层门禁（observation_only={}, rejected={}, "

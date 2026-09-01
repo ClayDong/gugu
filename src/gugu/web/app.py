@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from pathlib import Path
 from typing import Any, cast
 
-from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from gugu.config import get_config
@@ -127,9 +128,51 @@ def _require_admin_auth(x_api_key: str | None = Header(None, alias="X-API-Key"))
     return
 
 
+def _require_remote_api_key(x_api_key: str | None) -> None:
+    """Require the admin key for remotely originated API requests."""
+    import secrets
+
+    cfg_key = _get_web_admin_api_key()
+    if not cfg_key:
+        raise HTTPException(
+            status_code=503,
+            detail="服务未配置管理 API Key（GUGU_ADMIN_API_KEY），远程 API 已禁用",
+        )
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="缺少 API Key（请求头 X-API-Key）")
+    if not secrets.compare_digest(x_api_key, cfg_key):
+        raise HTTPException(status_code=403, detail="无效的 API Key")
+
+
 def create_app() -> FastAPI:
     """创建 FastAPI 应用实例。"""
     app = FastAPI(title="gugu 交易仪表盘", version="0.6.0")
+
+    @app.middleware("http")
+    async def protect_remote_api(request: Request, call_next):
+        """Require the admin key for non-loopback API reads when remotely exposed."""
+        path = request.url.path
+        client_host = request.client.host if request.client else ""
+        # 反向代理连接通常表现为 loopback；X-Forwarded-For 表明原始请求来自外部。
+        forwarded_for = request.headers.get("x-forwarded-for", "")
+        loopback = (
+            client_host in {"127.0.0.1", "::1", "localhost", "testclient"} and not forwarded_for
+        )
+        test_mode = os.environ.get("GUGU_TEST_MODE") == "1"
+        local_mode = os.environ.get("GUGU_WEB_LOCAL") == "1"
+        remote_mode = os.environ.get("GUGU_WEB_REMOTE") == "1"
+        api_requires_auth = path.startswith("/api/") and path != "/api/health"
+        if (
+            api_requires_auth
+            and not test_mode
+            and (remote_mode or (not loopback and not local_mode))
+        ):
+            try:
+                _require_remote_api_key(request.headers.get("X-API-Key"))
+            except HTTPException as exc:
+                return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+        return await call_next(request)
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
@@ -465,7 +508,7 @@ def create_app() -> FastAPI:
     @app.post("/api/halt/reset", dependencies=[Depends(_require_admin_auth)])
     async def reset_halt() -> dict[str, Any]:
         """手动解除 L2 熔断（使用 Web 单例 RiskManager）。"""
-        risk = _get_web_risk()
+        risk = _get_web_risk(reload=True)
         risk.reset_halt()
         logger.warning("L2 熔断已通过 Web 接口手动解除")
         return {"success": True, "message": "L2 熔断已手动解除"}
@@ -495,7 +538,7 @@ def create_app() -> FastAPI:
             return {"status": "error", "message": f"下单价格必须为正数: {req.price}"}
 
         broker = _get_web_broker()
-        risk = _get_web_risk()
+        risk = _get_web_risk(reload=True)
         account = broker.get_account()
         portfolio = broker.get_portfolio()
         position = portfolio.get(symbol)
@@ -552,6 +595,25 @@ def create_app() -> FastAPI:
                     "message": f"未找到 {symbol} 的持仓",
                 }
             quantity = position.quantity
+            account = broker.get_account()
+            risk = _get_web_risk(reload=True)
+            risk_result = risk.check_order(
+                symbol,
+                "sell",
+                quantity,
+                position.current_price,
+                broker.get_portfolio(),
+                cash=account.cash,
+                prev_close=position.prev_close,
+                is_st=position.is_st,
+                is_suspended=position.is_suspended,
+            )
+            if not risk_result.allowed:
+                return {
+                    "status": "error",
+                    "symbol": symbol,
+                    "message": f"风控拒绝: {risk_result.message}",
+                }
             result = broker.order(symbol, "sell", quantity, price=None)
             if result.success:
                 return {
@@ -569,7 +631,7 @@ def create_app() -> FastAPI:
             logger.error(f"止损卖出 {symbol} 失败: {e}")
             return {"status": "error", "message": str(e)}
 
-    @app.post("/api/engine/run")
+    @app.post("/api/engine/run", dependencies=[Depends(_require_admin_auth)])
     async def trigger_engine_run() -> dict[str, Any]:
         """触发一次交易循环。"""
         from gugu.engine.main import TradingEngine

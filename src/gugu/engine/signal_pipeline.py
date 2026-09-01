@@ -231,6 +231,14 @@ class SignalPipeline:
                 signal = annotate_signal(signal)
             except Exception:
                 pass  # 标注失败不阻塞信号
+            capability = signal.get("capability") or {}
+            validation_status = str(capability.get("validation_status", "")).lower()
+            if signal.get("direction") == "buy" and (
+                not validation_status
+                or validation_status in {"experimental", "in_review", "unknown"}
+            ):
+                signal["observation_only"] = True
+                signal["validation_note"] = "策略尚未完成生产验证，仅供观察，不执行买入"
 
             # 基础信号验证（无持仓卖出、停牌、ST股票）
             if self._validate_signal_basic(signal, symbol, portfolio, meta):

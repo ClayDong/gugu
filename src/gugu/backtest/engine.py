@@ -1248,7 +1248,8 @@ def walk_forward_optimize_multi_stock(
         test_worst_max_dd = max(test_max_dds, default=0.0)
         test_negative_return_ratio = sum(ret < 0 for ret in test_returns) / n
         test_max_trade_share = (
-            max((detail["trades"] for detail in test_details), default=0) / total_test_trades
+            max((detail["closed_trade_count"] for detail in test_details), default=0)
+            / total_test_trades
             if total_test_trades
             else 0.0
         )

@@ -24,7 +24,9 @@ import akshare as ak
 from gugu.backtest.engine import BacktestEngine
 from gugu.config import PROJECT_ROOT
 from gugu.data import data_manager
+from gugu.research.ledger import append_record, build_record
 from gugu.strategies.registry import get_enabled_strategies
+from gugu.utils.atomic import atomic_write_json
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -315,8 +317,19 @@ async def evaluate(
         "strategies": report_data,
     }
     report_path = PROJECT_ROOT / "data" / "strategy_evaluation_report.json"
-    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(report_path, report, ensure_ascii=False, indent=2)
     print(f"\n详细报告已保存: {report_path}")
+    append_record(
+        build_record(
+            kind="strategy_evaluation",
+            entrypoint="scripts/evaluate_strategies.py",
+            strategies=[s.name for s in strategies],
+            symbols=[code for code, _ in all_symbols],
+            effective_symbols=[code for code, _ in all_symbols],
+            output_artifact=str(report_path),
+            summaries=report,
+        )
+    )
 
 
 if __name__ == "__main__":
