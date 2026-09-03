@@ -1,6 +1,29 @@
 # 变更日志
 
-## 2026-09-03 — v0.9.43 道法术器收敛：模拟盘 + 10 策略 + 交易纪律
+## 2026-09-04 — v0.9.44 评审修复落地：paper 成交 + Gate 裁决 + 持仓感知卖出
+
+### 变更：多专家评审（2026-09-03）三项 P0 修复
+
+**P1 模拟盘 0 成交**
+- 根因：`observation_only`/experimental 信号在 paper 模式被 OrderManager/RealtimeScanner 一刀切阻断，模拟盘永远无法积累验证数据
+- 修复：paper 模式放行 observation_only 买入进入 PaperBroker（模拟盘的目的就是成交验证）；`gate_blocked`（纪律拦截）在任何模式都阻断；新增 `test_order_manager_buy_gate_allows_observation_in_paper`
+
+**P2 研究账本 gate 全部 not_evaluated**
+- 根因：`_check_unlock_conditions` 只在 `--write` 时执行，write=False 的研究跑动从不裁决
+- 修复：单股/多股/启发式三个优化入口 Gate 始终裁决；写回仍要求 gate 通过；manifest validation 仅 write 时更新
+- 实证：10 策略 gate-v1 基线全部记录，均未通过（主因样本外交易 0-8 笔 < 30 门槛）
+
+**P3 卖出信号刷屏**
+- 根因：dragon_head/huamulan/sector_momentum/double_yin/box_breakout 卖出无条件触发（无持仓也刷）
+- 修复：顺序状态机持仓感知（买入开仓→卖出平仓）；double_yin 补移动止损兜底
+- 效果：double_yin 1135→90、sector_momentum 1365→311、dragon_head 880→48、huamulan 832→2
+
+**测试与工程**
+- 修 order_manager fail-closed（强制非 paper）、double_yin 止损（先注入买入）、watchdog 重启风暴时间边界（锚定当天 09:00）
+- 补 huamulan_ghost_breakout / sentiment_cycle 参数网格（此前缺失被跳过）
+- 全量 `2088 passed / 143 skipped / 0 failed`；Ruff 全绿；调度器 paper 模式重启
+
+
 
 ### 变更：从策略研究基础设施收敛为散户决策辅助系统
 
