@@ -279,6 +279,7 @@ class SignalPipeline:
         portfolio: dict[str, Any],
         account: Any,
         regime: str | None = None,
+        dragon_head_info: dict[str, Any] | None = None,
     ) -> dict | None:
         try:
             self._filter_scan_count += 1
@@ -324,6 +325,44 @@ class SignalPipeline:
             ):
                 signal["observation_only"] = True
                 signal["validation_note"] = "策略尚未完成生产验证，仅供观察，不执行买入"
+
+            # 跨股龙头纪律（钱多多：只做市场选出的真龙头）
+            # 引擎层已用批量数据识别板块龙头/中军/跟随龙并注入 dragon_head_info
+            if dragon_head_info:
+                signal["dragon_head"] = dragon_head_info
+                is_dragon = bool(dragon_head_info.get("is_dragon"))
+                dragon_sector = str(dragon_head_info.get("sector", ""))
+                # dragon_head 策略只对板块真龙头放行；非龙头信号降级观察
+                strategies_list = signal.get("strategies", []) or []
+                from_dragon_strategy = (
+                    "dragon_head" in strategies_list
+                    or str(signal.get("strategy", "")) == "dragon_head"
+                )
+                if signal.get("direction") == "buy" and from_dragon_strategy and not is_dragon:
+                    signal["observation_only"] = True
+                    signal["gate_reason"] = (
+                        f"非板块真龙头（{dragon_sector}板块），只做市场选出的龙头"
+                    )
+                    signal["dragon_head_role"] = (
+                        dragon_head_info.get("is_anchor")
+                        and "中军"
+                        or (dragon_head_info.get("is_follower") and "跟随龙" or "非龙头")
+                    )
+                    logger.info(
+                        "龙头纪律拦截 {}: {} 板块非龙头（角色={}），dragon_head 信号降级观察",
+                        symbol,
+                        dragon_sector,
+                        signal.get("dragon_head_role", "?"),
+                    )
+                    from gugu.journal.trade_log import log_signal_blocked
+
+                    log_signal_blocked(
+                        symbol=symbol,
+                        strategy="dragon_head",
+                        reason=signal.get("gate_reason", ""),
+                        price=float(signal.get("price", 0)),
+                        regime=regime,
+                    )
 
             # 基础信号验证（无持仓卖出、停牌、ST股票）
             if self._validate_signal_basic(signal, symbol, portfolio, meta):

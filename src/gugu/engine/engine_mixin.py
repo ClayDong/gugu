@@ -248,6 +248,27 @@ class EngineOpsMixin:
         else:
             batch_history = {}
 
+        # 2026-09-03：跨股龙头分析（钱多多"只做真龙头"）
+        # 用批量预取的板块数据识别每只股票的龙头/中军/跟随龙身份与板块情绪，
+        # 注入每只股票的信号上下文，供 dragon_head 策略和入场 Gate 使用。
+        dragon_head_info: dict[str, dict] = {}
+        if len(batch_history) >= 2:
+            try:
+                from gugu.analysis.dragon_head import identify_dragon_head
+
+                dragon_head_info = identify_dragon_head(batch_history)
+                if dragon_head_info:
+                    _dragon_count = sum(1 for v in dragon_head_info.values() if v.get("is_dragon"))
+                    logger.info(
+                        "龙头识别完成: {} 只参与分析, {} 个板块龙头, 情绪={}",
+                        len(dragon_head_info),
+                        _dragon_count,
+                        sorted({v.get("sentiment", "?") for v in dragon_head_info.values()}),
+                    )
+            except Exception as e:
+                logger.warning("龙头识别失败，跳过跨股分析: {}", e)
+                dragon_head_info = {}
+
         async def _scan_single(symbol: str) -> dict[str, Any] | None:
             async with semaphore:
                 try:
@@ -293,6 +314,7 @@ class EngineOpsMixin:
                         portfolio=portfolio,
                         account=account,
                         regime=regime["regime"],
+                        dragon_head_info=dragon_head_info.get(symbol),
                     )
                     if signal is None:
                         return None
