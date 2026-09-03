@@ -85,8 +85,20 @@ class BoxBreakoutStrategy(Strategy):
         # 跌破箱体下沿卖出（v2 修复：不再要求量能确认）
         # 第一性原理：卖出是风控动作，不应依赖量能配合
         # 阴跌时量能萎缩，若要求量能确认则永远无法退出
+        # 2026-09-03 修复（评审 P3）：持仓感知——只在买入后的持仓区间允许卖出，
+        # 无持仓时不再刷卖出信号（213 卖出中大量为无持仓触发）
         breakout_down = df["close"] < df["box_low"]
-        df.loc[breakout_down, "signal"] = -1
+        buy_arr = breakout_up.to_numpy(dtype=bool)
+        sell_raw_arr = breakout_down.to_numpy(dtype=bool)
+        in_pos = False
+        valid_sell = np.zeros(len(df), dtype=bool)
+        for i in range(len(df)):
+            if buy_arr[i]:
+                in_pos = True
+            if sell_raw_arr[i] and in_pos:
+                valid_sell[i] = True
+                in_pos = False
+        df.loc[breakout_down & pd.Series(valid_sell, index=df.index), "signal"] = -1
 
         # v2: 最大持仓天数强制卖出（抽取为基类公共方法）
         df = self._apply_max_hold_exit(df, max_hold_days=max_hold_days)

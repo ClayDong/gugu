@@ -170,10 +170,19 @@ class RealtimeSignalScanner:
             signal.get("validation_status")
             or (signal.get("capability") or {}).get("validation_status", "")
         ).lower()
+        # 2026-09-03 修复（评审 P1）：paper 模式放行 observation_only/experimental，
+        # 模拟盘的目的就是成交验证；live/signal_only/track_live 仍严格阻断。
+        # gate_blocked（纪律拦截）在任何模式都不得执行。
+        is_paper = execution_mode == "paper"
+        blocked_observation = signal.get("observation_only") and not is_paper
+        blocked_validation = (
+            validation_status in {"experimental", "in_review", "unknown"} and not is_paper
+        )
         if signal.get("direction") == "buy" and (
-            signal.get("observation_only")
+            signal.get("gate_blocked")
             or signal.get("rejected")
-            or validation_status in {"experimental", "in_review", "unknown"}
+            or blocked_observation
+            or blocked_validation
         ):
             logger.info(
                 "实时信号: 买入信号被门禁标记为不可执行: {} {}",

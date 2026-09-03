@@ -94,13 +94,27 @@ class DragonHeadStrategy(Strategy):
 
         buy_cond = c1_dragon & c2_trend & c3_volume & c4_pullback
 
-        # ── 卖出条件（3 OR）──────────────────────────
-        # 龙头破位：收盘 < MA5 且 MA5 斜率向下
+        # ── 卖出条件（持仓后才生效，避免无持仓时刷卖出信号）──
+        # 龙头破位：收盘 < MA5 且 MA5 斜率向下；量能枯竭：近5日均量 < 20日均量 × 0.7
+        # 2026-09-03 修复（评审 P3）：原逻辑无条件产生卖出（880 信号中 848 个是卖出，
+        # 无持仓也触发）。现在只在买入后的持仓期间允许这些卖出信号，与移动止损语义一致。
         c_sell_break = (df["close"] < df["ma_short"]) & (df["ma_short_slope"] < 0)
-        # 量能枯竭：近5日均量 < 20日均量 × 0.7
         c_sell_vol = df["vol_ratio"] < vol_shrink_exit
+        sell_cond_raw = c_sell_break | c_sell_vol
 
-        sell_cond = c_sell_break | c_sell_vol
+        # 持仓感知：仅当该日处于买入信号之后的持仓区间才允许卖出
+        # 顺序状态机（正确语义：买入开仓 → 卖出平仓 → 再买入再开仓）
+        buy_arr = buy_cond.to_numpy(dtype=bool)
+        sell_raw = sell_cond_raw.to_numpy(dtype=bool)
+        in_pos = False
+        valid_sell = np.zeros(len(df), dtype=bool)
+        for i in range(len(df)):
+            if buy_arr[i]:
+                in_pos = True
+            if sell_raw[i] and in_pos:
+                valid_sell[i] = True
+                in_pos = False
+        sell_cond = sell_cond_raw & pd.Series(valid_sell, index=df.index)
 
         df["signal"] = 0
         df.loc[buy_cond, "signal"] = 1

@@ -461,11 +461,14 @@ async def run_optimization(
             f"参数={r.get('best_params', {})}"
         )
 
-    # P1 修复：参数写回解锁条件检查
+    # 2026-09-03 修复（评审 P2）：Gate 裁决不再依赖 --write。
+    # 原来只有 write=True 才调用 _check_unlock_conditions → 研究账本 6 次
+    # 优化全部 not_evaluated，准入循环断裂。现在无论是否写回都先裁决，
+    # 写回才依赖裁决结果（write=True 且 unlocked 才允许写 defaults）。
     unlock_report: dict | None = None
     writeback_applied = False
     report_path: Path | None = None
-    if write:
+    if True:  # 始终执行 Gate 裁决，记录真实 gate 结果
         unlock_report = _check_unlock_conditions(
             strategy_name=strategy_name,
             results=results,
@@ -475,7 +478,7 @@ async def run_optimization(
             param_votes=param_votes,
         )
 
-        if unlock_report["unlocked"]:
+        if write and unlock_report["unlocked"]:
             # --force 保留为兼容参数，但不得绕过生产参数写回门禁。
             # 只有 GatePolicy 全部通过时才允许更新 strategy_defaults.yaml。
             # 更新 defaults 并写回
@@ -486,7 +489,9 @@ async def run_optimization(
             write_defaults(defaults, gate_passed=True)
             writeback_applied = True
             print(f"\n优化参数已写回 config/strategy_defaults.yaml")
-        else:
+        elif write:
+            # 仅当请求写回且被拒时才提示写回失败（write=False 时 Gate 裁决
+            # 仅供研究账本记录，不提示写回状态，避免误导）
             print(
                 f"\n❌ 参数写回被拒绝（未通过 {len(unlock_report['failed_checks'])} 项解锁条件）:"
             )
@@ -498,7 +503,7 @@ async def run_optimization(
             print(f"  2. 增加数据量（--days 1000+）")
             print("  3. --force 不再绕过生产参数写回门禁；如需研究实验，请使用隔离输出目录")
 
-        # 闭环修复：输出优化报告 + 更新 manifest validation 字段
+        # 闭环修复：输出优化报告（始终生成，研究也可用）
         report_path = write_optimization_report(
             strategy_name=strategy_name,
             unlock_report=unlock_report,
@@ -510,14 +515,16 @@ async def run_optimization(
             n_windows=len(results),
         )
         print(f"\n📋 优化报告: {report_path}")
-        failed_reason = (
-            "; ".join(unlock_report["failed_checks"]) if unlock_report["failed_checks"] else ""
-        )
-        apply_optimization_result(
-            strategy_name=strategy_name,
-            passed=unlock_report["unlocked"],
-            reason=failed_reason,
-        )
+        # manifest validation 只在请求写回时更新，避免研究跑动污染策略验证状态
+        if write:
+            failed_reason = (
+                "; ".join(unlock_report["failed_checks"]) if unlock_report["failed_checks"] else ""
+            )
+            apply_optimization_result(
+                strategy_name=strategy_name,
+                passed=unlock_report["unlocked"],
+                reason=failed_reason,
+            )
 
     _record_optimization_ledger(
         entrypoint="scripts/optimize_params.py:run_optimization",
@@ -896,7 +903,8 @@ async def run_heuristic_optimization(
     unlock_report: dict | None = None
     writeback_applied = False
     report_path: Path | None = None
-    if write:
+    # 2026-09-03 修复（评审 P2）：Gate 始终裁决，write 只控制写回与 manifest 更新
+    if True:
         unlock_report = _check_unlock_conditions(
             strategy_name=strategy_name,
             results=results,
@@ -906,7 +914,7 @@ async def run_heuristic_optimization(
             param_votes=param_votes,
         )
 
-        if unlock_report["unlocked"]:
+        if write and unlock_report["unlocked"]:
             # --force 仅保留命令兼容性，不能绕过 GatePolicy 写入生产默认参数。
             if strategy_name not in defaults:
                 defaults[strategy_name] = {}
@@ -915,7 +923,7 @@ async def run_heuristic_optimization(
             write_defaults(defaults, gate_passed=True)
             writeback_applied = True
             print(f"\n优化参数已写回 config/strategy_defaults.yaml")
-        else:
+        elif write:
             print(
                 f"\n❌ 参数写回被拒绝（未通过 {len(unlock_report['failed_checks'])} 项解锁条件）:"
             )
@@ -934,14 +942,16 @@ async def run_heuristic_optimization(
             n_windows=1,
         )
         print(f"\n📋 优化报告: {report_path}")
-        failed_reason = (
-            "; ".join(unlock_report["failed_checks"]) if unlock_report["failed_checks"] else ""
-        )
-        apply_optimization_result(
-            strategy_name=strategy_name,
-            passed=unlock_report["unlocked"],
-            reason=failed_reason,
-        )
+        # manifest validation 只在请求写回时更新
+        if write:
+            failed_reason = (
+                "; ".join(unlock_report["failed_checks"]) if unlock_report["failed_checks"] else ""
+            )
+            apply_optimization_result(
+                strategy_name=strategy_name,
+                passed=unlock_report["unlocked"],
+                reason=failed_reason,
+            )
 
     _record_optimization_ledger(
         entrypoint="scripts/optimize_params.py:run_heuristic_optimization",
@@ -1106,7 +1116,9 @@ async def run_multi_stock_optimization(
                 f"    {d['symbol']}: sharpe={d['test_sharpe']:.4f} ret={d['test_return']:.2%} dd={d['test_max_dd']:.2%} trades={d['trades']}"
             )
 
-    if write:
+    # 2026-09-03 修复（评审 P2）：Gate 始终裁决，write 只控制写回与 manifest 更新
+    unlock_report: dict | None = None
+    if True:
         unlock_report = _check_unlock_conditions(
             strategy_name=strategy_name,
             results=results,
@@ -1116,7 +1128,7 @@ async def run_multi_stock_optimization(
             param_votes=param_votes,
         )
 
-        if unlock_report["unlocked"]:
+        if write and unlock_report["unlocked"]:
             # --force 仅保留命令兼容性，不能绕过 GatePolicy 写入生产默认参数。
             if strategy_name not in defaults:
                 defaults[strategy_name] = {}
@@ -1125,7 +1137,7 @@ async def run_multi_stock_optimization(
             write_defaults(defaults, gate_passed=True)
             writeback_applied = True
             print(f"\n优化参数已写回 config/strategy_defaults.yaml")
-        else:
+        elif write:
             print(f"\n❌ 参数写回被拒绝（未通过 {len(unlock_report['failed_checks'])} 项解锁条件):")
             for check in unlock_report["checks"]:
                 status = "✓" if check["passed"] else "✗"
@@ -1135,7 +1147,7 @@ async def run_multi_stock_optimization(
             print(f"  2. 增加数据量（--days 1000+）")
             print("  3. --force 不再绕过生产参数写回门禁；如需研究实验，请使用隔离输出目录")
 
-        # 闭环修复：输出优化报告 + 更新 manifest validation 字段
+        # 闭环修复：输出优化报告（始终生成，研究也可用）
         report_path = write_optimization_report(
             strategy_name=strategy_name,
             unlock_report=unlock_report,
@@ -1147,14 +1159,16 @@ async def run_multi_stock_optimization(
             n_windows=len(results),
         )
         print(f"\n📋 优化报告: {report_path}")
-        failed_reason = (
-            "; ".join(unlock_report["failed_checks"]) if unlock_report["failed_checks"] else ""
-        )
-        apply_optimization_result(
-            strategy_name=strategy_name,
-            passed=unlock_report["unlocked"],
-            reason=failed_reason,
-        )
+        # manifest validation 只在请求写回时更新
+        if write:
+            failed_reason = (
+                "; ".join(unlock_report["failed_checks"]) if unlock_report["failed_checks"] else ""
+            )
+            apply_optimization_result(
+                strategy_name=strategy_name,
+                passed=unlock_report["unlocked"],
+                reason=failed_reason,
+            )
 
     _record_optimization_ledger(
         entrypoint="scripts/optimize_params.py:run_multi_stock_optimization",

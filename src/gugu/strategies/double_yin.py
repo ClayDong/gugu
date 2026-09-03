@@ -209,11 +209,27 @@ class DoubleYinMoneyBagStrategy(Strategy):
 
         # ════════════════════════════════════════════════
         # 信号赋值（卖出优先于买入）
+        # 2026-09-03 修复（评审 P3）：止损/止盈只在持仓期间生效。
+        # 原逻辑无条件产生卖出（1135 信号中 1080 个是卖出，无持仓也触发），
+        # 污染信号历史与飞书通知。移动止损由基类 _apply_max_hold_exit 处理。
         # ════════════════════════════════════════════════
+        sell_raw = cond_stop_loss | cond_take_profit_1 | cond_take_profit_2
+        buy_arr = buy_cond.to_numpy(dtype=bool)
+        sell_raw_arr = sell_raw.to_numpy(dtype=bool)
+        in_pos = False
+        valid_sell = np.zeros(len(df), dtype=bool)
+        for i in range(len(df)):
+            if buy_arr[i]:
+                in_pos = True
+            if sell_raw_arr[i] and in_pos:
+                valid_sell[i] = True
+                in_pos = False
+        sell_cond = sell_raw & pd.Series(valid_sell, index=df.index)
+
         df["signal"] = 0
         df.loc[buy_cond, "signal"] = 1
-        # 卖出信号优先（止损 + 止盈 + 巨量滞涨）
-        df.loc[cond_stop_loss | cond_take_profit_1 | cond_take_profit_2, "signal"] = -1
+        # 卖出信号优先（止损 + 止盈 + 巨量滞涨，仅持仓期间）
+        df.loc[sell_cond, "signal"] = -1
 
         # 置信度：核心信号用评分，倍量加仓日置信度更高
         df["confidence"] = 0.0
@@ -223,5 +239,11 @@ class DoubleYinMoneyBagStrategy(Strategy):
         )
         # 倍量加仓日置信度更高（已有前日信号确认）
         df.loc[add_position_cond, "confidence"] = 0.90
+
+        # 移动止损兜底（道②：让利润奔跑，从最高点回撤才卖）
+        # 2026-09-03：原策略仅靠止损/止盈退出，若价格横盘既不止损也不止盈会无限持仓
+        trailing_stop_pct = float(self.params.get("trailing_stop_pct", 0))
+        if trailing_stop_pct > 0:
+            df = self._apply_trailing_stop_exit(df, trailing_stop_pct)
 
         return df

@@ -143,21 +143,37 @@ class OrderManager:
             signal.get("validation_status")
             or (signal.get("capability") or {}).get("validation_status", "")
         ).lower()
+        # 2026-09-03 修复（评审 P1）：模拟盘 0 成交的根因——
+        # experimental/in_review/unknown 信号在 paper 模式被一刀切阻断，
+        # 模拟盘永远无法积累验证数据。paper 模式的目的就是成交验证，
+        # 故放行 observation_only（仍阻断 rejected/wisdom_filtered/数据不新鲜）。
+        # gate_blocked（纪律拦截：市场状态/熔断/持仓上限/波动/涨停环境）
+        # 在任何模式都不得执行，防止绕过交易纪律。
+        from gugu.config import get_config as _get_exec_cfg
+
+        _exec_mode = _get_exec_cfg().execution.mode
+        is_paper = _exec_mode == "paper"
+        blocked_observation = signal.get("observation_only") and not is_paper
+        blocked_validation = (
+            validation_status in {"experimental", "in_review", "unknown"} and not is_paper
+        )
         if direction == "buy" and (
-            signal.get("observation_only")
+            signal.get("gate_blocked")
             or signal.get("rejected")
             or signal.get("wisdom_filtered")
             or signal.get("data_quality") != "fresh_valid"
-            or validation_status in {"experimental", "in_review", "unknown"}
+            or blocked_observation
+            or blocked_validation
         ):
             logger.warning(
                 "{} 买入信号未通过执行层门禁（observation_only={}, rejected={}, "
-                "wisdom_filtered={}, data_quality={}），跳过下单",
+                "wisdom_filtered={}, data_quality={}, mode={}），跳过下单",
                 symbol,
                 signal.get("observation_only", False),
                 signal.get("rejected", False),
                 signal.get("wisdom_filtered", False),
                 signal.get("data_quality"),
+                _exec_mode,
             )
             return None
 

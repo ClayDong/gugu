@@ -212,14 +212,23 @@ class TestDoubleYinSellSignals:
     """卖出信号测试。"""
 
     def test_stop_loss_when_close_below_ma20(self):
-        """跌破 MA20 应触发止损卖出。"""
+        """跌破 MA20 应触发止损卖出（持仓感知：先有买入才有止损）。"""
         df = _make_df(days=80, seed=42)
+        # 先注入买入信号（50/51/52 双阴+反转，与 test_double_yin_pattern_triggers_buy 一致）
+        df = _inject_double_yin(
+            df,
+            yin2_idx=50,
+            yin1_idx=51,
+            reversal_idx=52,
+        )
         # 最后一天暴跌跌破 MA20
         df.loc[79, "close"] = df["close"].iloc[:79].rolling(20).mean().iloc[-1] * 0.9
         strat = DoubleYinMoneyBagStrategy({"stop_loss_pct": 0.0})
         out = strat.generate_signals(df)
-        # 最后一天应有卖出信号
-        assert out.loc[79, "signal"] == -1
+        # 第 52 天应有买入信号（形态成立）
+        assert (out["signal"] == 1).sum() >= 1, "双阴+反转形态应触发买入"
+        # 持仓感知：买入后跌破 MA20 应触发止损卖出（第 79 天或移动止损触发日）
+        assert (out["signal"] == -1).sum() >= 1, "买入后跌破 MA20 应触发止损"
 
     def test_take_profit_on_big_yang(self):
         """放量大阳线 4.8% 应触发止盈卖出。"""

@@ -77,11 +77,24 @@ class SectorMomentumStrategy(Strategy):
 
         buy_cond = c1_trend & c2_above_ma & c3_momentum & c4_volume
 
-        # ── 卖出条件（2 OR）───────────────────────────
+        # ── 卖出条件（持仓后才生效）──────────────────
+        # 跌破 MA5 → 卖出。2026-09-03 修复（评审 P3）：原逻辑无条件产生卖出
+        # （1365 信号中 1144 个是卖出，无持仓也触发）。现在只在买入后的持仓区间
+        # 允许卖出；移动止损由基类 _apply_max_hold_exit 处理（trailing_stop_pct）。
         c_sell_ma = df["close"] < df["ma_short"]  # 跌破 MA5
-        # 回撤止损：信号生效后，从持仓最高点回撤 stop_loss_pct
-        # 由引擎的 max_hold_exit + 回撤逻辑在运行态处理，这里只标记 MA 卖出
-        sell_cond = c_sell_ma
+
+        # 持仓感知：买入开仓 → 卖出平仓 → 再买入再开仓
+        buy_arr = buy_cond.to_numpy(dtype=bool)
+        sell_raw = c_sell_ma.to_numpy(dtype=bool)
+        in_pos = False
+        valid_sell = np.zeros(len(df), dtype=bool)
+        for i in range(len(df)):
+            if buy_arr[i]:
+                in_pos = True
+            if sell_raw[i] and in_pos:
+                valid_sell[i] = True
+                in_pos = False
+        sell_cond = c_sell_ma & pd.Series(valid_sell, index=df.index)
 
         df["signal"] = 0
         df.loc[buy_cond, "signal"] = 1

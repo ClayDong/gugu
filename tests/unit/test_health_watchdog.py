@@ -259,9 +259,14 @@ def test_restart_threshold_default_allows_dev_restarts(tmp_path: Path):
     )
     boot = tmp_path / "scheduler_boot.json"
 
+    # 2026-09-03 修复：boot 时间锚定到当天 09:00（而非 now-N 分钟）。
+    # 原实现用 now 往前推，凌晨运行时部分时间戳跨天，restarts_today 只统计
+    # "今天"（watchdog 按 .date()==today 过滤），6 次只数到 4 次导致误判。
+    _anchor = now.replace(hour=9, minute=0, second=0, microsecond=0)
+
     def _mk_boots(n: int):
         return [
-            {"boot_time": (now - timedelta(minutes=m)).isoformat(), "pid": 1000 + i}
+            {"boot_time": (_anchor - timedelta(minutes=m)).isoformat(), "pid": 1000 + i}
             for i, m in enumerate([1, 3, 5, 8, 12, 20][:n])
         ]
 

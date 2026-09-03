@@ -620,8 +620,18 @@ class TestOrderManagerE2E:
             {"data_quality": "unavailable"},
         ],
     )
-    async def test_order_manager_buy_gate_is_fail_closed(self, signal_overrides):
-        """绕过 SignalPipeline 的不合格买入必须在 OrderManager 入口被阻断。"""
+    async def test_order_manager_buy_gate_is_fail_closed(self, signal_overrides, monkeypatch):
+        """绕过 SignalPipeline 的不合格买入必须在 OrderManager 入口被阻断。
+
+        2026-09-03 修复（评审 P1）：paper 模式放行 observation_only（模拟盘成交验证），
+        但 live/signal_only/track_live 模式必须 fail-closed。此测试强制非 paper 模式，
+        验证所有不合格信号仍被阻断；paper 放行语义由
+        test_order_manager_buy_gate_allows_observation_in_paper 单独覆盖。
+        """
+        # 强制非 paper 模式，确保 fail-closed 语义不依赖当前配置
+        from gugu.config import get_config as _test_cfg
+
+        _test_cfg().execution.mode = "signal_only"
         order_mgr = OrderManager()
         broker = mock.MagicMock()
         risk = mock.MagicMock()
@@ -648,6 +658,60 @@ class TestOrderManagerE2E:
         broker.get_account.assert_not_called()
         broker.order.assert_not_called()
         risk.check_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_order_manager_buy_gate_allows_observation_in_paper(self, tmp_path, monkeypatch):
+        """2026-09-03 修复（评审 P1）：paper 模式放行 observation_only 买入。
+
+        模拟盘的目的就是成交验证——experimental/in_review 信号在 paper 模式
+        应进入执行器（PaperBroker 模拟下单），否则模拟盘永远 0 成交。
+        """
+        from gugu.config import get_config as _test_cfg
+
+        _test_cfg().execution.mode = "paper"
+        monkeypatch.setattr("gugu.execution.paper.STATE_FILE", tmp_path / "state.json")
+        monkeypatch.setattr("gugu.risk.manager.RISK_STATE_FILE", tmp_path / "risk_state.json")
+        monkeypatch.setattr("gugu.config.PROJECT_ROOT", tmp_path)
+
+        broker = PaperBroker(initial_capital=1_000_000)
+        broker.set_market_context("000858", prev_close=148.0)
+        risk = RiskManager()
+        notifier = make_mock_notifier()
+        event_engine = EventEngine()
+        order_mgr = OrderManager()
+
+        signal = {
+            "symbol": "000858",
+            "name": "五粮液",
+            "direction": "buy",
+            "confidence": 0.75,
+            "strategy": "double_yin",
+            "strategies": ["double_yin"],
+            "reason": "实验信号验证",
+            "suggested_position_ratio": 0.15,
+            "price": 150.0,
+            "prev_close": 148.0,
+            "is_st": False,
+            "is_suspended": False,
+            "data_quality": "fresh_valid",
+            "observation_only": True,
+            "validation_status": "experimental",
+            "_df": make_bollinger_buy_df(60, 100.0),
+        }
+
+        result = await order_mgr.execute(
+            signal=signal,
+            broker=broker,
+            risk=risk,
+            notifier=notifier,
+            event_engine=event_engine,
+        )
+
+        # paper 模式：observation_only/experimental 信号应到达下单层（不再被门禁一刀切）
+        assert result is not None, "paper 模式应放行 observation_only 信号进入执行"
+        order_result = result.get("order_result") or {}
+        # 风控或下单可能因仓位/上下文拒绝，但绝不应因 observation_only 被拦截
+        assert "observation_only" not in str(result.get("risk_message", "")).lower()
 
     @pytest.mark.asyncio
     async def test_order_manager_sell_does_not_require_position_ratio(self, tmp_path, monkeypatch):

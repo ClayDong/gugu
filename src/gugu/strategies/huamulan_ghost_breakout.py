@@ -113,16 +113,17 @@ class HuamulanGhostBreakoutStrategy(Strategy):
         # ════════════════════════════════════════════════
         # 卖出条件（移动止损替代时间/固定止损）
         # ════════════════════════════════════════════════
+        # 退出完全交给移动止损（道②：让利润奔跑，从最高点回撤才卖）
+        # 2026-09-03 修复（评审 P3）：删除无条件 MA5 卖出——原逻辑在无持仓时
+        # 也产生卖出信号（832 信号中 831 个是卖出），策略几乎变纯卖出。
+        # 移动止损按持仓状态跟踪最高价，只在买入后生效，语义正确。
+        # ════════════════════════════════════════════════
         trailing_stop_pct = float(self.params.get("trailing_stop_pct", 0.05))
 
         df["signal"] = 0
         df.loc[buy_cond, "signal"] = 1
-        # 跌破 MA5 且收阴 → 卖出
-        df["ma5"] = df["close"].rolling(5).mean()
-        cond_sell = (df["close"] < df["ma5"]) & (df["close"] < df["open"])
-        df.loc[cond_sell, "signal"] = -1
 
-        # 移动止损（道②：让利润奔跑）
+        # 移动止损（从最高点回撤 trailing_stop_pct 才卖）
         if trailing_stop_pct > 0:
             df = self._apply_trailing_stop_exit(df, trailing_stop_pct)
 
