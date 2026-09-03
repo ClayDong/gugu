@@ -157,8 +157,8 @@ class TestSignalPipeline:
         pipeline._router.route.return_value = {
             "symbol": "600519",
             "direction": "buy",
-            "strategy": "turtle",
-            "strategies": ["turtle"],
+            "strategy": "sector_momentum",
+            "strategies": ["sector_momentum"],
             "confidence": 0.8,
             "data_quality": "fresh",
         }
@@ -201,8 +201,8 @@ class TestSignalPipeline:
         pipeline._router.route.return_value = {
             "symbol": "600519",
             "direction": "buy",
-            "strategy": "turtle",
-            "strategies": ["turtle"],
+            "strategy": "sector_momentum",
+            "strategies": ["sector_momentum"],
             "confidence": 0.8,
             "data_quality": "stale",
         }
@@ -235,8 +235,8 @@ class TestSignalPipeline:
         pipeline._router.route.return_value = {
             "symbol": "600519",
             "direction": "buy",
-            "strategy": "turtle",
-            "strategies": ["turtle"],
+            "strategy": "sector_momentum",
+            "strategies": ["sector_momentum"],
             "confidence": 0.8,
             "data_quality": "stale",
         }
@@ -275,8 +275,8 @@ class TestSignalPipeline:
         pipeline._router.route.return_value = {
             "symbol": "600519",
             "direction": "buy",
-            "strategy": "turtle",
-            "strategies": ["turtle"],
+            "strategy": "sector_momentum",
+            "strategies": ["sector_momentum"],
             "confidence": 0.8,
         }
         pipeline._fundamental_filter.check.return_value = {"pass": True, "reasons": []}
@@ -307,8 +307,8 @@ class TestSignalPipeline:
         pipeline._router.route.return_value = {
             "symbol": "600519",
             "direction": "buy",
-            "strategy": "turtle",
-            "strategies": ["turtle"],
+            "strategy": "sector_momentum",
+            "strategies": ["sector_momentum"],
             "confidence": 0.8,
         }
         pipeline._fundamental_filter.check.return_value = {"pass": True, "reasons": []}
@@ -345,8 +345,8 @@ class TestSignalPipeline:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }
@@ -412,8 +412,8 @@ class TestSignalPipeline:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }
@@ -458,8 +458,8 @@ class TestSignalPipeline:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }
@@ -510,8 +510,8 @@ class TestSignalPipeline:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }
@@ -567,8 +567,8 @@ class TestSignalPipeline:
             return_value={
                 "symbol": "600519",
                 "direction": "sell",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "止损",
                 "confidence": 0.9,
             }
@@ -620,8 +620,8 @@ class TestSignalPipeline:
             return_value={
                 "symbol": "600519",
                 "direction": "sell",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "止损",
                 "confidence": 0.9,
             }
@@ -654,8 +654,8 @@ class TestSignalPipeline:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }
@@ -754,8 +754,8 @@ class TestSignalPipeline:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }
@@ -875,8 +875,8 @@ class TestSectorRotationCheck:
             return_value={
                 "symbol": symbol,
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }
@@ -996,7 +996,7 @@ class TestRecordSignalHistory:
                 "direction": "buy",
                 "price": 1500.0,
                 "confidence": 0.8,
-                "strategies": ["turtle"],
+                "strategies": ["sector_momentum"],
                 "wisdom_filtered": False,
                 "wisdom_decision": {"source": "fallback"},
                 "suggested_position_ratio": 0.15,
@@ -1027,6 +1027,38 @@ class TestRecordSignalHistory:
             assert record["execution_status"] == "filled"
             assert record["outcome_status"] == "open"
             assert "realized_pnl" not in record
+        finally:
+            sp.gugu_config.PROJECT_ROOT = original_root
+
+    def test_record_signal_history_skips_stale_strategy(self, tmp_path) -> None:
+        """2026-09-04 优化：已删除策略名（历史残留）不写入信号历史。"""
+        import json
+        from types import SimpleNamespace
+        import gugu.engine.signal_pipeline as sp
+
+        original_root = sp.gugu_config.PROJECT_ROOT
+        sp.gugu_config.PROJECT_ROOT = tmp_path
+
+        try:
+            signal = {
+                "symbol": "600519",
+                "direction": "buy",
+                "price": 1500.0,
+                "confidence": 0.8,
+                "strategies": ["dual_ma"],  # 已删除策略，不应记录
+                "wisdom_filtered": False,
+                "wisdom_decision": {"source": "fallback"},
+                "suggested_position_ratio": 0.15,
+            }
+            risk_result = SimpleNamespace(allowed=True, message="approved")
+            order_result = SimpleNamespace(success=True)
+
+            record_signal_history(signal, risk_result, order_result)
+
+            history_file = tmp_path / "data" / "signals_history.jsonl"
+            # 残留策略信号应被跳过，文件不存在或为空
+            if history_file.exists():
+                assert history_file.read_text().strip() == "", "残留策略不应写入信号历史"
         finally:
             sp.gugu_config.PROJECT_ROOT = original_root
 
@@ -1156,8 +1188,8 @@ class TestSignalOnlyMode:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }
@@ -1238,8 +1270,8 @@ class TestSignalOnlyMode:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }
@@ -1286,8 +1318,8 @@ class TestDangerSignalFilter:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }
@@ -1355,8 +1387,8 @@ class TestDangerSignalFilter:
             return_value={
                 "symbol": "600519",
                 "direction": "sell",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "止损",
                 "confidence": 0.8,
             }
@@ -1414,8 +1446,8 @@ class TestDivergenceFilter:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }
@@ -1480,8 +1512,8 @@ class TestDivergenceFilter:
             return_value={
                 "symbol": "600519",
                 "direction": "sell",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "止损",
                 "confidence": 0.6,
             }
@@ -1536,8 +1568,8 @@ class TestStageEntryFilter:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }
@@ -1608,8 +1640,8 @@ class TestStageEntryFilter:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }
@@ -1682,8 +1714,8 @@ class TestNoAverageDown:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }
@@ -1761,8 +1793,8 @@ class TestPriceValidation:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }
@@ -1799,8 +1831,8 @@ class TestPriceValidation:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.0,
             }
@@ -1839,8 +1871,8 @@ class TestWisdomTimeout:
             return_value={
                 "symbol": "600519",
                 "direction": "buy",
-                "strategy": "turtle",
-                "strategies": ["turtle"],
+                "strategy": "sector_momentum",
+                "strategies": ["sector_momentum"],
                 "reason": "突破",
                 "confidence": 0.8,
             }

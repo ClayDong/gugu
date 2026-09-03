@@ -198,6 +198,8 @@ class StockSelector:
         - 价格 > 0
         - 成交额 > 1000 万
         - 非 ST（名称不含 ST）
+        - 仅沪深 A 股代码段（排除北交所 920/8/4 开头——单日 ±30% 波动，
+          对新手模拟盘风险过高，且不在自选股内）
         """
         df = df.copy()
         df = df[df["price"] > 0]
@@ -205,4 +207,10 @@ class StockSelector:
             df = df[df["amount"] > 10_000_000]
         if "name" in df.columns:
             df = df[~df["name"].str.contains("ST", na=False, case=False)]
+        # 2026-09-04 优化（数据专家 review）：只保留沪深 A 股代码段
+        # 沪：60/68 开头；深：00/30 开头
+        # 排除：北交所 920/8/4 开头（±30% 限制）、B 股 900/200
+        if "symbol" in df.columns:
+            _sym = df["symbol"].astype(str).str.zfill(6)
+            df = df[_sym.str.startswith(("60", "68", "00", "30"))]
         return df.reset_index(drop=True)

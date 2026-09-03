@@ -1453,6 +1453,34 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "order_stamp_tax": getattr(order_result, "stamp_tax", 0),
                 "order_transfer_fee": getattr(order_result, "transfer_fee", 0),
             }
+            # 2026-09-04 优化（数据专家 review）：校验策略名在注册表中，
+            # 已删除策略（历史残留 dual_ma/turtle/bollinger）不再写入信号历史，
+            # 避免污染策略统计。信号本身仍照常处理，只是不记录到 history。
+            try:
+                from gugu.strategies.registry import list_strategies as _list_strategies
+
+                _registered = set(_list_strategies())
+                # strategy 字段可能是逗号拼接的多策略名，需拆分后逐个校验
+                _sig_strategy = str(record.get("strategy") or "")
+                _raw_names = set()
+                for _part in _sig_strategy.split(",") if _sig_strategy else []:
+                    if _part.strip():
+                        _raw_names.add(_part.strip())
+                for _s in record.get("strategies") or []:
+                    if str(_s).strip():
+                        _raw_names.add(str(_s).strip())
+                # 只要有一个策略名未注册（且非空），视为残留信号，跳过记录
+                if _raw_names and _raw_names - _registered:
+                    _stale = sorted(_raw_names - _registered)
+                    logger.info(
+                        "信号历史跳过残留策略名 {}（{} {}），不记录",
+                        _stale,
+                        record.get("symbol"),
+                        record.get("direction"),
+                    )
+                    return
+            except Exception:
+                pass  # 校验失败不阻塞记录
             append_jsonl(path, record, max_lines=_SIGNAL_HISTORY_MAX_LINES)
     except Exception as e:
         logger.warning("记录信号历史失败: {}", e)
