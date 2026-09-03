@@ -66,20 +66,20 @@ class BoxBreakoutStrategy(Strategy):
             # vol_ma 为 NaN 的行（开箱期）跳过成交量确认，仅用价格突破判断
             vol_ok = vol_ok | df["vol_ma"].isna()
             breakout_up = breakout_up & vol_ok
-        # v2: 趋势过滤 — 上升趋势才允许买入
-        # P2 优化：新增 slope 模式（均线斜率正 = MA20 斜率上行）
-        # 响应速度比 crossover 模式快 5-10 天
+        # v2: 趋势过滤 — 从硬 AND 改为置信度调整（2026-09-02 修复）
+        # 原因：三重 AND 锁死信号（突破+量+趋势向上），在震荡市几乎不触发
+        # 修复：趋势向上=高置信度，趋势向下=低置信度（仍保留信号）
         if trend_filter:
             if trend_mode == "slope":
                 ma = df["close"].rolling(ma_short).mean()
-                # 用当前 MA - N 天前 MA 的差值/MA 近似斜率
                 ma_slope = (ma - ma.shift(5)) / ma.shift(5).replace(0, 1e-10)
                 trend_ok = ma_slope > 0
             else:  # crossover — MA短 > MA长
                 df["ma_short"] = df["close"].rolling(ma_short).mean()
                 df["ma_long"] = df["close"].rolling(ma_long).mean()
                 trend_ok = df["ma_short"] > df["ma_long"]
-            breakout_up = breakout_up & trend_ok
+            # 趋势不做硬过滤，只影响置信度（见下方 confidence 计算）
+            df["_trend_ok"] = trend_ok.astype(float)
         df.loc[breakout_up, "signal"] = 1
 
         # 跌破箱体下沿卖出（v2 修复：不再要求量能确认）
@@ -97,6 +97,10 @@ class BoxBreakoutStrategy(Strategy):
         atr_safe = atr_val.clip(lower=df["close"] * 0.01)
         buy_conf = ((df["close"] - df["box_high"]) / atr_safe).clip(lower=0).clip(upper=1)
         sell_conf = ((df["box_low"] - df["close"]) / atr_safe).clip(lower=0).clip(upper=1)
+        # 趋势调整：趋势向上时买入置信度不打折，趋势向下时打 5 折
+        if trend_filter and "_trend_ok" in df.columns:
+            trend_weight = df["_trend_ok"].fillna(0.5).clip(0.5, 1.0)
+            buy_conf = buy_conf * trend_weight
         df["confidence"] = 0.0
         df.loc[df["signal"] == 1, "confidence"] = buy_conf
         df.loc[df["signal"] == -1, "confidence"] = sell_conf
@@ -117,55 +121,4 @@ class BoxBreakoutStrategy(Strategy):
             f"当日({last_date})最新信号: {last_signal_desc}"
         )
 
-        return df
-
-
-class DualThrustStrategy(Strategy):
-    """Dual Thrust 突破策略。
-
-    基于 N 日内的最高价-最低价、最高价-收盘价、收盘价-最低价计算上下轨。
-
-    设计说明——跳过 confirm_days 确认机制：
-    本策略直接重写 ``generate_signals()`` 而非实现 ``_generate_signals_impl()``，
-    因此不走基类的 ``_require_confirmation()`` 模板方法。
-    原因：Dual Thrust 的突破信号本身就是触发条件（收盘价穿越上下轨），
-    信号当天即成立，无需后续 K 线二次确认；加入 confirm_days 反而会延迟入场、
-    错过突破行情。这与均线突破策略（BreakoutStrategy）不同——后者依赖趋势延续，
-    需要 confirm_days=1 确认非假突破。
-
-    置信度归一化：
-    confidence = 突破幅度 / range_val，经 ``.clip(0, 1)`` 归一化到 [0, 1]。
-    无信号时 confidence=0。
-    """
-
-    name = "dual_thrust"
-    category = "breakout"
-
-    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
-        self._ensure_columns(df)
-        df = df.copy()
-
-        n = int(self.params["lookback"])
-        k_up = float(self.params["k_up"])
-        k_down = float(self.params["k_down"])
-
-        hh = df["high"].rolling(n).max().shift(1)
-        hc = df["close"].rolling(n).max().shift(1)
-        lc = df["close"].rolling(n).min().shift(1)
-        ll = df["low"].rolling(n).min().shift(1)
-
-        range_val = np.maximum(hh - lc, hc - ll)
-        df["upper"] = df["open"] + k_up * range_val
-        df["lower"] = df["open"] - k_down * range_val
-
-        df["signal"] = 0
-        df.loc[df["close"] > df["upper"], "signal"] = 1
-        df.loc[df["close"] < df["lower"], "signal"] = -1
-
-        df["confidence"] = (
-            ((df["close"] - df["upper"]).clip(lower=0) / range_val.shift(1).replace(0, 1))
-            + ((df["lower"] - df["close"]).clip(lower=0) / range_val.shift(1).replace(0, 1))
-        ).clip(0, 1)
-        # 无信号时置信度为 0
-        df.loc[df["signal"] == 0, "confidence"] = 0.0
         return df

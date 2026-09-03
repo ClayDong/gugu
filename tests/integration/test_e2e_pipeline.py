@@ -66,7 +66,7 @@ async def test_imports() -> None:
     # 策略层
     from gugu.strategies.base import Strategy  # noqa: F811
     from gugu.strategies.breakout import BoxBreakoutStrategy  # noqa: F811
-    from gugu.strategies.mean_revert import BollingerStrategy  # noqa: F811
+    # BollingerStrategy removed in 2026-09-02 cleanup  # noqa: F811
 
     # 分析层
     from gugu.analysis.perspectives import PerspectiveEngine  # noqa: F811

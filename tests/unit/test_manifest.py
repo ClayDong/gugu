@@ -179,7 +179,7 @@ class TestManifestEdgeCases:
 
     def test_signal_strategy_details(self, manifest):
         """信号策略应包含 module/class 字段。"""
-        for key in ["turtle", "dual_ma", "bollinger", "rsi_reversal"]:
+        for key in ["rsi_reversal", "box_breakout", "double_yin", "sector_momentum"]:
             info = manifest.get_strategy(key)
             assert info is not None, f"缺失策略: {key}"
             assert "module" in info, f"{key} 缺少 module"

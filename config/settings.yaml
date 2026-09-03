@@ -1,163 +1,101 @@
-# gugu 交易系统主配置
-
-# ========== 自选股 ==========
-# P1-5 优化：扩大自选股池到 20 只，覆盖更多行业和机会
-# 自选股列表（代码用字符串，前缀 0 容易被 YAML 解析为八进制，务必加引号）
 watchlist:
-  # 当前自选监控列表 + 用户真实持仓（系统会基于这些股票产生买卖信号和认知分析）
-  # 白酒/消费
-  - "600519"   # 贵州茅台
-  - "000858"   # 五粮液
-  # 医药
-  - "600276"   # 恒瑞医药
-  - "300760"   # 迈瑞医疗
-  # 新能源/汽车
-  - "300750"   # 宁德时代
-  - "002594"   # 比亚迪
-  - "002472"   # 双环传动
-  # 电子/半导体
-  - "603501"   # 豪威集团
-  - "002371"   # 北方华创
-  # 光伏/新能源
-  - "601012"   # 隆基绿能
-  - "600438"   # 通威股份
-  # 互联网/科技
-  - "300033"   # 同花顺
-  - "002230"   # 科大讯飞
-  # ETF（用户持仓）
-  - "562500"   # 机器人ETF华夏
-  - "510500"   # 中证500ETF（持仓）
-  - "588000"   # 科创50ETF（持仓）
-  - "510310"   # 沪深300ETF（持仓）
-  - "512480"   # 半导体ETF（持仓）
-
-
-# ========== 数据源 ==========
-# 四级冗余：sina 主源 → eastmoney 降级 → akshare 兜底 → tencent 终极兜底
-# sina: 新浪财经直连（稳定、不限流），适合实时行情和历史K线
-# akshare: 东方财富封装（功能全，但部分网络环境被限流）
-# eastmoney: 东方财富直连 HTTP（兜底，单股查询，避免全市场快照限流）
-# tencent: 腾讯财经 ifzq.gtimg.cn（本机最稳定的 qfq 日 K 源，仅支持历史K线）
+- '600519'
+- 000858
+- '600276'
+- '300760'
+- '300750'
+- 002594
+- '002472'
+- '603501'
+- '002371'
+- '601012'
+- '600438'
+- '300033'
+- '002230'
+- '562500'
+- '510500'
+- '588000'
+- '510310'
+- '512480'
 data:
-  primary_source: sina           # 主源：新浪（直连 HTTP，稳定性最好）
-  fallback_sources:              # 降级源（按顺序尝试）
-    - eastmoney                  # 第一备用：东方财富直连 HTTP（全市场快照稳定）
-    - akshare                    # 第二备用：akshare（东方财富后端，全市场快照可能被限流）
-    - tencent                    # 第三备用：腾讯财经（本机最稳定的 qfq 日 K 源）
-  fetch_interval_seconds: 120    # 实时采集间隔（秒）
-  fail_threshold: 3              # 连续失败 N 次降级
-  fail_cooldown_seconds: 300     # 降级冷却时间
-  cache_ttl_seconds: 120         # 实时数据缓存
+  primary_source: sina
+  fallback_sources:
+  - eastmoney
+  - akshare
+  - tencent
+  fetch_interval_seconds: 120
+  fail_threshold: 3
+  fail_cooldown_seconds: 300
+  cache_ttl_seconds: 120
   history_db: sqlite:///data/gugu.db
   parquet_dir: data/parquet
-
-# ========== 策略 ==========
 strategy:
-  # v0.7.5 P0-1修复：策略分组管理（verified / experimental）
-  # verified_strategies: 通过 GatePolicy gate-v1 门控（样本外Sharpe>0/参数稳定性≥80%/最大回撤<25%/平均收益≥0/样本外交易≥30）
-  # experimental_strategies: 逻辑闭环但未完成验证，仅 paper 模式参与信号融合
-  # 实验性策略在 signal_only/track_live 模式下：信号标记 experimental=True，通知卡片显示警告
   enabled_by_regime:
-    # 牛市（3/3条件满足）：核心+实验策略全开（experimental仅参与信号观察）
     bull:
-      - box_breakout
-      - double_yin  # experimental：Sharpe -0.02，2026-08-15 从 verified 降级
-      - rsi_reversal
-      # chenxuezhang 已移除：2026-08-15 持仓回测审计证伪（Sharpe -0.24）
-      - linjudaye
-      - price_volume_signal
-      - regime_cycle_four      # 四周期模型（2026-08-01 公众号战法，in_review）
-      # death_valley_rebound 已移除：2026-08-15 持仓回测审计：事件研究+3.02%→持仓回测-0.57%，Sharpe-5.33
-      # bollinger_oversold_rebound 已移除：2026-08-15 持仓回测审计：事件研究+3.65%→持仓回测-2.24%，Sharpe-1.78
-      # rebound_elite 已移除：2026-08-01 Walk-Forward 样本外证伪（验证期10日-5.40%/超额-6.95% p=0.035显著为负）
-      # hot_money 已移除：2026-08-01 事件研究证伪（510信号依赖单股sh688041占36%，剔除后验证期超额-0.77%转负）
-      # ma5_momentum 已移除：2026-08-01 事件研究证伪（63信号全部不显著）
-      # ml_gradient_boost 已移除：2026-08-01 死配置（模型文件缺失，永远0信号）
-    # 反弹（2/3条件满足）：核心+实验策略全开
+    - box_breakout
+    - double_yin
+    - rsi_reversal
+    - linjudaye
+    - price_volume_signal
+    - regime_cycle_four
+    - sector_momentum
+    - dragon_head
+    - huamulan_ghost_breakout
+    - sentiment_cycle
     rally:
-      - box_breakout
-      - double_yin
-      - rsi_reversal
-      # chenxuezhang 已移除：2026-08-15 持仓回测审计证伪（Sharpe -0.24）
-      - linjudaye
-      - price_volume_signal
-      - regime_cycle_four
-      # death_valley_rebound 已移除：2026-08-15 持仓回测审计证伪
-      # bollinger_oversold_rebound 已移除：2026-08-15 持仓回测审计证伪
-      # rebound_elite 已移除：2026-08-01 Walk-Forward 样本外证伪
-      # hot_money 已移除：2026-08-01 事件研究证伪（集中股依赖）
-      # ma5_momentum 已移除：2026-08-01 事件研究证伪（信号过稀不显著）
-      # ml_gradient_boost 已移除：2026-08-01 死配置（模型缺失）
-    # 震荡（1/3条件满足）：核心策略全开
+    - box_breakout
+    - double_yin
+    - rsi_reversal
+    - linjudaye
+    - price_volume_signal
+    - regime_cycle_four
+    - sector_momentum
+    - dragon_head
+    - huamulan_ghost_breakout
+    - sentiment_cycle
     sideways:
-      - box_breakout
-      - double_yin
-      - rsi_reversal
-      # death_valley_rebound 已移除：2026-08-15 持仓回测审计证伪
-      # bollinger_oversold_rebound 已移除：2026-08-15 持仓回测审计证伪
-    # 信号策略：熊市/崩盘不启用买入策略；选股器的 bear 候选缩减规则见 screener/params.py
+    - box_breakout
+    - double_yin
+    - rsi_reversal
+    - sector_momentum
+    - sentiment_cycle
     bear: []
     crash: []
-  # v0.5.0 P0-1修复：策略分组管理
-  # v0.8.1 修复：验证标签统一（此前 manifest 标"未通过"但此处标"通过"，自相矛盾）
-  # 生产准入只接受已通过当前样本外证据门槛的策略；conditional_pass 仅允许 paper 观察。
-  # 2026-07-26 的 box_breakout Walk-Forward 明确失败（oos_sharpe=-1.4297、平均收益<0、参数稳定性<80%），
-  # 且 2026-07-14 的旧全市场报告同样为负收益/负 Sharpe，不能继续放入生产 verified 白名单。
-  # 当前没有满足 gate-v1 全部门槛且证据完整的生产策略；生产模式只读持仓，不加载策略信号。
   verified_strategies: []
-  # 实验性策略（仅 paper 模式参与信号融合，signal_only/track_live 只观察，不进入生产策略执行）
   experimental_strategies:
-    - rsi_reversal      # 现有报告参数稳定性 66.7% < gate-v1 要求的 80%，保留 paper 复验
-    - box_breakout      # 2026-07-26 Walk-Forward 失败，保留 paper 复验，不得自动交易
-    # chenxuezhang 已移除：2026-08-15 持仓回测审计证伪（Sharpe -0.24），等 paper 观察 30+ 信号若改善再恢复
-    - linjudaye        # 邻居大爷规则策略（2026-08-01 事件研究 conditional_pass）
-    - price_volume_signal  # 换手率+量比尾盘黄金信号（大样本回测验证通过，等 paper 观察30+信号转正）
-    - regime_cycle_four      # 四周期模型（公众号战法，2026-08-01 落地 in_review，待事件研究验证）
-    - double_yin       # 双阴钱袋子（Sharpe -0.02/param_stability 0.4，从 verified 降级观察）
-    # death_valley_rebound 已移除：2026-08-15 持仓回测审计证伪
-    # bollinger_oversold_rebound 已移除：2026-08-15 持仓回测审计证伪
-    # rebound_elite 已移除：2026-08-01 Walk-Forward 样本外证伪（43信号全部年份负超额，验证期p=0.035显著为负）
-    # hot_money 已移除：2026-08-01 事件研究证伪（510信号依赖单股sh688041占36%，剔除后验证期超额-0.77%转负）
-    # ma5_momentum 已移除：2026-08-01 事件研究证伪（63信号全部不显著）
-    # ml_gradient_boost 已移除：2026-08-01 死配置（模型文件缺失）
-  # 向后兼容：原 enabled 列表（当 verified_strategies + experimental_strategies 都为空时使用）
+  - rsi_reversal
+  - box_breakout
+  - linjudaye
+  - price_volume_signal
+  - regime_cycle_four
+  - double_yin
+  - sector_momentum
+  - dragon_head
+  - huamulan_ghost_breakout
+  - sentiment_cycle
   enabled: []
-  # 仅 verified 策略参与生产权重分配；当前没有 verified 策略。
-  # 权重会在 StrategyPool 中根据近期表现动态调整。
   weights: {}
-  # 实验性策略权重（仅 paper 模式使用）
   experimental_weights:
-    rsi_reversal: 1.00   # 当前 gate-v1 证据不足，仅用于纸面复验
-    box_breakout: 0.20   # Walk-Forward 失败，仅用于纸面复验
+    rsi_reversal: 1.0
+    box_breakout: 0.2
     linjudaye: 0.25
     price_volume_signal: 0.15
     regime_cycle_four: 0.15
-    double_yin: 0.15   # Sharpe -0.02，保持观察
-    # chenxuezhang 已移除：2026-08-15 持仓回测 Sharpe -0.24，建议降级 disabled
-    # death_valley_rebound 已移除：2026-08-15 持仓回测审计证伪
-    # bollinger_oversold_rebound 已移除：2026-08-15 持仓回测审计证伪
-    # rebound_elite 权重已移除（样本外证伪）
-    # hot_money 权重已移除（2026-08-01 事件研究证伪，集中股依赖）
-    # ma5_momentum / ml_gradient_boost 权重已移除（证伪 / 模型缺失）
-  # 信号融合规则：unanimous（全票通过）/ majority（多数）/ any（任一）/ weighted（策略池加权）
-  # v0.4.1：恢复 weighted（多策略共识），any 模式在 A 股高噪声下产生大量假信号
+    double_yin: 0.15
+    sector_momentum: 0.2
+    dragon_head: 0.25
+    huamulan_ghost_breakout: 0.15
+    sentiment_cycle: 0.15
   signal_fusion: weighted
-  min_confidence: 0.4            # 降低到0.4：原0.6在共识折扣下导致几乎所有信号被过滤，月产仅14条
-  auto_select: true              # 启用自动选股（全市场扫描+策略信号+综合评分）
-  select_top_n: 50               # 恢复 50，100 过大增加噪声
-  select_max_candidates: 10      # 最大选股数量
-  # v0.4.6: 豹哥三要素选股池过滤器（默认关闭）
-  # 来源：豹哥战法 https://mp.weixin.qq.com/s/guNx28XZgrjSpPy2Ug6x7Q
-  # 三要素是「选股池准入」非「择时信号」，默认关闭因为：
-  # - 要求换手率≥15%（高度活跃），与 pullback_low/double_yin 缩量低吸逻辑冲突
-  # - 适合与 box_breakout（突破追势）配合，趋势市手动开启 enabled: true
+  min_confidence: 0.4
+  auto_select: true
+  select_top_n: 50
+  select_max_candidates: 10
   leopard_universe_filter:
     enabled: false
-    turnover_min: 15.0            # 换手率下限（%）
-    amount_min: 1000000000       # 成交额下限（元，10亿）
-    circ_mv_min: 7000000000     # 流通市值下限（元，70亿）
-
-# ========== 筹码结构过滤 ==========
+    turnover_min: 15.0
+    amount_min: 1000000000
+    circ_mv_min: 7000000000
 holder_concentration_filter:
   enabled: true
   quarterly_change_pct_threshold: 30.0
@@ -165,253 +103,177 @@ holder_concentration_filter:
   avg_hold_change_threshold: -20.0
   lurker_consecutive_quarters: 2
   lurker_total_decline_threshold: 20.0
-
-# ========== 另类 Alpha 因子过滤（v0.6.2 新增）==========
-# 将事件驱动/行为金融因子接入信号流水线，为买入信号提供额外维度评分
-# - 数据缺失时默认放行（fail-open），不阻塞已有策略信号
-# - 综合评分极低时标记过滤理由；高评分时提升 confidence
 altalpha_filter:
   enabled: true
-  block_threshold: -0.50     # 综合评分低于此值时标记过滤
-  boost_threshold: 0.30      # 综合评分高于此值时提升 confidence
-  confidence_boost: 0.10     # 高评分时的 confidence 增量
-  altalpha_weight: 0.30      # 另类因子在综合评分中的权重
-  fetch_financial: false     # 是否获取财务数据（较慢）
-
-# ========== 选股评分器配置（v0.6.0 新增）==========
-# StockRanker 5维度权重，总和必须=1.0（配置一致性测试会校验）
-# v0.6.0 调整：新增筹码画像15%，因子30→25%，基本面25→20%，板块20→15%，资金流25%不变
+  block_threshold: -0.5
+  boost_threshold: 0.3
+  confidence_boost: 0.1
+  altalpha_weight: 0.3
+  fetch_financial: false
 stock_ranker:
-  factor_weight: 0.25        # 因子评分权重
-  fundamental_weight: 0.20  # 基本面评分权重
-  money_flow_weight: 0.25  # 资金流评分权重
-  sector_weight: 0.15      # 板块评分权重
-  chip_score_weight: 0.15  # 筹码画像评分权重
-  chip_score_neutral: 0.5  # 数据缺失时的中性评分
-
-# ========== 盘中实时盯盘 ==========
+  factor_weight: 0.25
+  fundamental_weight: 0.2
+  money_flow_weight: 0.25
+  sector_weight: 0.15
+  chip_score_weight: 0.15
+  chip_score_neutral: 0.5
 intraday_monitor:
   enabled: true
-  performance_mode: auto    # auto|high|medium|low|off
-  # v0.9.0 实时推荐：盘中策略信号持续扫描（复用 intraday_monitor 的分钟级调度）
-  #   signal_only/paper/track_live: 只推送信号，不下单（默认安全）
-  #   live + confirm_required=true:  只推送，等待人工确认
-  #   live + confirm_required=false: 信号直接委托 QMT 自动交易
+  performance_mode: auto
   realtime_recommend: true
-  signal_cooldown_sec: 1800   # 同一(股票,方向)信号最小推送间隔（秒）
-  signal_scan_interval_sec: 300  # 策略全量扫描间隔（秒），单机性能节流
-  # 自定义监控范围（可选，留空则按性能模式自动决定）
-  # P1-5 优化：扩大监控范围到 19 只股票
+  signal_cooldown_sec: 1800
+  signal_scan_interval_sec: 300
   custom_watchlist:
-    - "600519"   # 贵州茅台
-    - "000858"   # 五粮液
-    - "600276"   # 恒瑞医药
-    - "300760"   # 迈瑞医疗
-    - "300750"   # 宁德时代
-    - "002594"   # 比亚迪
-    - "002472"   # 双环传动
-    - "603501"   # 豪威集团
-    - "002371"   # 北方华创
-    - "601012"   # 隆基绿能
-    - "600438"   # 通威股份
-    - "300033"   # 同花顺
-    - "002230"   # 科大讯飞
-    - "562500"   # 机器人ETF华夏
-    - "510500"   # 中证500ETF（持仓）
-    - "588000"   # 科创50ETF（持仓）
-    - "510310"   # 沪深300ETF（持仓）
-    - "512480"   # 半导体ETF（持仓）
-  # 告警阈值（单位：亿元 / %，与 DataManager 返回单位对齐）
-  # P0-1 修复：原按元单位配置（100_000_000），但数据源已 /1e8 转为亿元
+  - '600519'
+  - 000858
+  - '600276'
+  - '300760'
+  - '300750'
+  - 002594
+  - '002472'
+  - '603501'
+  - '002371'
+  - '601012'
+  - '600438'
+  - '300033'
+  - '002230'
+  - '562500'
+  - '510500'
+  - '588000'
+  - '510310'
+  - '512480'
   alert_thresholds:
-    super_large_inflow: 1.0          # 单股超大单净流入 1 亿
-    super_large_outflow: 1.0         # 单股超大单净流出 1 亿
-    main_pct_threshold: 5.0         # 主力净占比 5%（百分比单位）
-    consecutive_days: 3              # 连续日数
-    consecutive_total: 3.0           # 连续累计 3 亿
-    industry_flow_threshold: 10.0    # 行业资金流 10 亿
-    position_outflow_warning: 0.5    # 持仓股主力净流出 0.5 亿告警
-
-# ========== 风控 ==========
+    super_large_inflow: 1.0
+    super_large_outflow: 1.0
+    main_pct_threshold: 5.0
+    consecutive_days: 3
+    consecutive_total: 3.0
+    industry_flow_threshold: 10.0
+    position_outflow_warning: 0.5
 risk:
-  max_position_ratio: 0.30       # 单股仓位上限 30%
-  max_total_position_ratio: 0.70 # P0-3 新增：总仓位上限 70%（解决信号泛滥 vs 执行能力不匹配问题）
-  daily_loss_warn: 0.03          # 日亏 3% 预警
-  daily_loss_halt: 0.05          # 日亏 5% 熔断
-  max_total_positions: 5         # 最大持仓数
-  max_same_industry: 2           # 同行业最大持仓数
-  # 涨跌停/停牌自动过滤（系统默认开启，不可关闭）
-  t_plus_1: true                 # T+1 限制
-
-# ========== 执行 ==========
+  max_position_ratio: 0.3
+  max_total_position_ratio: 0.7
+  daily_loss_warn: 0.03
+  daily_loss_halt: 0.05
+  max_total_positions: 5
+  max_same_industry: 2
+  t_plus_1: true
 execution:
-  # 模式说明：
-  #   signal_only - 只发信号通知 + 并行模拟盘验证（不下真实单）
-  #   paper       - 模拟下单（纸面交易，不触发真实券商下单）
-  #   track_live  - 实盘持仓跟踪（只读用户真实持仓 data/live_positions.json，
-  #                 跑止损/止盈提醒，不自动下单；信号以"建议"卡片推送，用户手动执行）
-  #                 ★ v0.9.0 起：实时信号同时并行记入独立模拟盘验证效果
-  #   live        - 实盘交易（需配置券商接口；待模拟盘验证通过后启用）
-  # v0.6.1 新增 track_live：用户有真实持仓时使用，系统不自动交易，只监控止损提醒
-  # v0.9.0 推荐路径：保持 track_live（真实持仓保护）→ 信号飞书通知 + 模拟盘验证 → 效果达标后切 live
-  mode: track_live
+  mode: paper
   paper:
-    initial_capital: 1000000     # 模拟本金 100 万
-    commission_rate: 0.00025     # 佣金费率万2.5
-    stamp_tax: 0.0005            # 印花税万5（卖出，2023-08-28 起减半，P1-b 修复）
-    slippage: 0.002              # 滑点 0.2%
+    initial_capital: 1000000
+    commission_rate: 0.00025
+    stamp_tax: 0.0005
+    slippage: 0.002
   live:
     broker: qmt
-    confirm_required: true       # 下单前人工确认
-
-# ========== 飞书通知 ==========
+    confirm_required: true
 feishu:
   enabled: true
-  # 消息类型开关
-  notify_signal: true            # 买卖信号
-  notify_daily_report: true      # 每日日报
-  notify_risk_alert: true        # 风控告警
-  notify_backtest: true          # 回测报告
-  notify_system_error: true      # 系统异常
-  # 推送时段（交易日）
-  # v0.7.5 P0-14修复：减少推送频次（4→2次/日），降低通知过载
+  notify_signal: true
+  notify_daily_report: true
+  notify_risk_alert: true
+  notify_backtest: true
+  notify_system_error: true
   daily_report_times:
-    - "09:10"   # 盘前信号汇总（含选股结果）
-    - "15:10"   # 收盘信号汇总（含资金流日报）
-
-# ========== 调度 ==========
+  - 09:10
+  - '15:10'
 scheduler:
   timezone: Asia/Shanghai
-  # 交易日才执行
   trading_days_only: true
-  # 盘中扫描时刻（与 scheduler.py 的 SCAN_TIMES 对应）
   scan_times:
-    - "09:30"   # 开盘扫描
-    - "10:30"   # 上午中段
-    - "13:05"   # 午盘开盘
-    - "14:30"   # 尾盘
-  # 任务开关：可单独关闭不需要的推送（true=启用，false=关闭）
-  # 修改后需重启 scheduler 生效
-  # 精简版：保留核心交易信号通知，关闭分析类噪声模块
+  - 09:30
+  - '10:30'
+  - '13:05'
+  - '14:30'
   tasks:
-    macro_morning: false        # 08:00 早间全球简报（关闭-用户不看全球宏观）
-    market_temp: false         # 08:25 市场温度计（关闭）
-    perspective_daily: false   # 08:30 十大视角日报（关闭）
-    signal_morning: false       # 09:10 盘前信号汇总（关闭-开盘扫描会实时推）
-    macro_preamarket: false    # 09:15 盘前宏观简报（关闭）
-    scan_open: true            # 09:30 开盘扫描（开启-实时推送买卖信号）
-    scan_mid_morning: true    # 10:30 盘中扫描（开启-实时推送买卖信号）
-    signal_noon: false          # 11:35 午盘信号汇总（关闭-实时推送替代汇总）
-    macro_noon: false          # 11:40 午间宏观简报（关闭）
-    scan_afternoon: true       # 13:05 午盘扫描（开启-实时推送买卖信号）
-    rsi_scan: true             # 13:30 RSI 专项扫描（保留）
-    scan_close: true           # 14:30 尾盘扫描（保留）
-    screener: true             # 14:30 尾盘选股（保留）
-    flow_afternoon: false      # 14:30 盘后资金流决策报告（关闭）
-    signal_close: true         # 15:10 收盘信号汇总（保留-收盘看一眼）
-    macro_close: false          # 15:15 收盘宏观概览（关闭）
-    signal_performance: false   # 15:20 信号绩效验证（关闭）
-    signal_daily_validation: true # 15:25 信号次日验证（开启-提供T+1真实收益反馈）
-    signal_weekly: true         # 周日 20:30 信号绩效周报（开启-感知策略运行状态）
-    concept_daily: false       # 20:00 每日概念（关闭）
-    altalpha_fetch: false      # 18:00 另类因子盘后采集（关闭）
-    alpha_summary: false       # 18:05 因子综合评分报告（关闭）
-    portfolio_report: true     # 15:35 持仓认知分析报告（保留）
-    screener_auto_tune: true   # 15:10 尾盘选股自动调优（启用-当前参数已放宽，需要持续验证调优）
-    sentiment_daily: false     # 20:30 舆情日报（关闭）
-    weekly_optimize: true      # 周日 03:00 周参数优化（保留）
-    heuristic_optimize: true   # 每月1/15日 04:00 启发式优化（GA/PSO交替）
-    weekly_review: true        # 周日 20:00 周复盘（保留）
-    intraday_monitor: true     # 每分钟 盘中实时盯盘（保留）
-    perspective_afternoon: false # 15:30 收盘后十大视角二次分析（默认关闭）
-    digest_flush: true          # 09:12/15:40 刷新延迟汇总通知（覆盖15:35持仓报告）
-
-# ========== 交易智慧 ==========
+    macro_morning: false
+    market_temp: false
+    perspective_daily: false
+    signal_morning: false
+    macro_preamarket: false
+    scan_open: true
+    scan_mid_morning: true
+    signal_noon: false
+    macro_noon: false
+    scan_afternoon: true
+    rsi_scan: true
+    scan_close: true
+    screener: true
+    flow_afternoon: false
+    signal_close: true
+    macro_close: false
+    signal_performance: false
+    signal_daily_validation: true
+    signal_weekly: true
+    concept_daily: false
+    altalpha_fetch: false
+    alpha_summary: false
+    portfolio_report: true
+    screener_auto_tune: true
+    sentiment_daily: false
+    weekly_optimize: true
+    heuristic_optimize: true
+    weekly_review: true
+    intraday_monitor: true
+    perspective_afternoon: false
+    digest_flush: true
 wisdom:
-  skill_dir: "src/gugu/wisdom/skills"  # 项目内 skill 目录（优先）
-  fallback_dirs:                       # 额外的 skill 目录（如本地 books2skill）
-    - "_refs/books2skill/library/books/炒股的智慧/skills"
+  skill_dir: src/gugu/wisdom/skills
+  fallback_dirs:
+  - _refs/books2skill/library/books/炒股的智慧/skills
   skill_names:
-    - stock-entry-decision
-    - stock-stop-loss-decision
-    - stock-position-sizing
-    - stock-profit-taking-decision
-    - stock-trailing-stop
-    - stock-psychology-check
-  # 仓颉蒸馏的28本书籍视角（多视角认知参考）
-  books_dir: "src/gugu/wisdom/skills/books"
-  # v0.7.5 P0-3修复：默认开启多视角认知（控制成本）
-  # 仅在买入决策时启用 LLM（止损/止盈/仓位用 fallback）
-  # max_perspectives=2 控制 token 消耗
-  enable_multi_perspective: true          # 默认开启（v0.7.5 修复：原默认关闭导致 28 本书 SKILL 失效）
-  max_perspectives: 2                    # 每次决策最多 2 个视角（控制 LLM 成本）
-  # LLM 超时与重试配置
-  llm_timeout: 20.0                      # LLM 请求超时时间（秒）
-  llm_max_retries: 2                     # LLM 请求最大重试次数
-  llm_retry_delay: 1.0                   # 重试间隔（秒）
-
-# ========== 资金流日报 ==========
+  - stock-entry-decision
+  - stock-stop-loss-decision
+  - stock-position-sizing
+  - stock-profit-taking-decision
+  - stock-trailing-stop
+  - stock-psychology-check
+  books_dir: src/gugu/wisdom/skills/books
+  enable_multi_perspective: true
+  max_perspectives: 2
+  llm_timeout: 20.0
+  llm_max_retries: 2
+  llm_retry_delay: 1.0
 flow_report:
   enabled: true
-  # 推送时段
-  morning_time: "08:00"    # 盘前 — 昨日(T-1)资金流复盘
-  close_time: "15:10"      # 收盘 — 今日资金流日报
-  # 分析参数
+  morning_time: 08:00
+  close_time: '15:10'
   sector_top_n: 5
   stock_strong_top_n: 5
-
-# ========== 基本面过滤 ==========
-# P1-1 优化：增强基本面过滤，避免财务踩雷
-# 参数说明：
-#   PE_MAX=60：A 股合理估值上限约 60 倍，超过此值泡沫风险显著上升
-#   PB_MAX=8：除银行等特殊行业外，PB>8 已属偏高估值，需警惕
-#   ROE_MIN=10：ROE>10%才算有投资价值（巴菲特标准）
-#   DEBT_RATIO_MAX=70：负债率>70%财务风险较高
 fundamental:
-  pe_min: 0              # PE 下限（排除亏损股）
-  pe_max: 60             # PE 上限（排除泡沫股，A 股合理估值上限）
-  pb_min: 0              # PB 下限
-  pb_max: 8              # PB 上限（除银行外 PB>8 已属偏高）
-  roe_min: 10            # ROE 下限（%，P1-1优化：提升到10%，巴菲特标准）
-  revenue_growth_min: -20  # 营收增长率下限（%，排除衰退股）
-  debt_ratio_max: 70     # P1-1新增：负债率上限（%，超过70%财务风险高）
-
-# ========== 日志 ==========
+  pe_min: 0
+  pe_max: 60
+  pb_min: 0
+  pb_max: 8
+  roe_min: 10
+  revenue_growth_min: -20
+  debt_ratio_max: 70
 log:
   level: INFO
   dir: logs
-  rotation: "10 MB"
-  retention: "30 days"
-
-# ========== Web 仪表盘安全 ==========
-# v0.7.5 P0-8修复：敏感接口强制认证
-# 生产环境务必通过环境变量 GUGU_ADMIN_API_KEY 设置密钥
+  rotation: 10 MB
+  retention: 30 days
 web:
-  admin_api_key: "${GUGU_ADMIN_API_KEY}"  # 从环境变量读取（必填）
-  require_auth_for_sensitive: true         # 强制认证（生产安全）
-
-# ========== 十大视角分析 ==========
+  admin_api_key: ${GUGU_ADMIN_API_KEY}
+  require_auth_for_sensitive: true
 perspective:
   enabled: true
-  # 启用的视角列表
   perspectives:
-    - buffett
-    - munger
-    - soros
-    - lynch
-    - livermore
-    - qiu_guo_lu
-    - chen_jiang_ting
-    - technical
-    - investing_habits
-    - dashixiong
-  # 评分阈值
-  pass_threshold: 6.0           # 单视角通过分
-  composite_pass_threshold: 7.0   # 综合评分通过分
-  min_perspective_score: 4.0      # 单视角最低容忍分（低于此直接否决）
-  # 功能开关
-  auto_analyze_watchlist: true    # 每日自动分析自选股
-  scan_with_perspectives: true    # 选股时运行视角分析
-  # 报告
-  report_time: "08:30"           # 每日推送时间（交易日，08:00宏观简报后）
-  top_n_report: 5                # 报告展示前N只
+  - buffett
+  - munger
+  - soros
+  - lynch
+  - livermore
+  - qiu_guo_lu
+  - chen_jiang_ting
+  - technical
+  - investing_habits
+  - dashixiong
+  pass_threshold: 6.0
+  composite_pass_threshold: 7.0
+  min_perspective_score: 4.0
+  auto_analyze_watchlist: true
+  scan_with_perspectives: true
+  report_time: 08:30
+  top_n_report: 5

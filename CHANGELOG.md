@@ -1,3 +1,69 @@
+# 变更日志
+
+## 2026-09-03 — v0.9.43 道法术器收敛：模拟盘 + 10 策略 + 交易纪律
+
+### 变更：从策略研究基础设施收敛为散户决策辅助系统
+
+**执行模式**
+- `track_live` → `paper`：模拟盘 100 万本金启动，实验策略开始实际执行验证收益；实盘跟踪关闭
+
+**策略根因修复（5 个）**
+- price_volume_signal：`float_shares=1e9` 硬编码导致换手率虚高 3-10 倍 → 自动估计流通股本 + amount=0 退化修复（0→11 trades）
+- rsi_reversal：MA20>=MA60 与 RSI<20 逻辑互斥 → 移除硬过滤（1→8 trades）
+- box_breakout：三重 AND 锁死信号 → 趋势过滤改为置信度权重（0→7 trades）
+- double_yin：支撑接近度 3% 太紧 → 参数化 `support_tolerance`（默认 5%）
+- regime_cycle_four：金叉当天才入场 → `silver_window` 扩展至 5 日
+
+**策略清洗（40 → 10）**
+- 删除 30 个已证伪/无进展/冗余策略（代码、注册、manifest、defaults、param grid 全量清理），0 死代码残留
+
+**新策略（4 个）**
+- sector_momentum：板块动量轮动（趋势+动量+量能三重确认，唯一正收益回测）
+- dragon_head：钱多多龙头战法（强势特征+回踩低吸+情绪破位离场）
+- huamulan_ghost_breakout：烂板成妖打板（归档复活，4 AND + 移动止损）
+- sentiment_cycle：情绪周期（MingCe 移植，波动率+量能+动量合成情绪指标）
+
+**交易纪律（道体系落地）**
+- 入场 Gate：5 关检查（市场状态/风控熔断/持仓上限/剧烈波动/涨停环境）
+- 移动止损替代时间止损：`_apply_trailing_stop_exit`，从最高点回撤 8% 才卖
+- 市场环境检测：`MarketEnvironment`（冰点/涨停数/封板率 70%/接力率 60%）
+- 交易日志：`trade_journal.jsonl` 结构化记录每次买入/拦截/止损
+- 龙头识别器：`DragonHeadDetector`（板块结构分析，待接入策略流）
+
+**文档同步**
+- 新增 `docs/TRADING_SYSTEM.md`（个人交易系统：道法术器四层）
+- PRODUCT.md / STRATEGY_LIFECYCLE.md 同步到 10 策略现实
+
+**验证**
+- 修复 9 个测试文件死引用（Bollinger/KDJ/DualThrust/turtle 等已删策略）
+- 全量测试 `2087 passed / 143 skipped / 0 failed`
+- 调度器重启后：策略一致性 ✅，三层一致，10 策略 0 死代码残留
+
+## 2026-09-03 — v0.9.42 复核补充（评估员）：确认修复代码已加载运行
+
+- **复核发现**：signal_pipeline.py 修复写入时间 12:10:28 晚于 12:08:19 的调度器重启——12:08 启动的进程（PID 46341）加载的是修复前/中间版本代码，修复未真正生效。
+- **处置**：12:51 `launchctl kickstart -k` 重启调度器（PID 82905），新进程加载修复版；心跳 12:51:53 新鲜、24 任务注册成功、策略一致性 ✅。全项目 grep 确认无残留 `is_halted()` 误调用。
+- **验证**：`pytest tests/unit/test_signal_pipeline.py --timeout=60` 38 passed；`ruff check` 通过（复核时复跑）。
+- **结论**：09:31 的 8 条 `'bool' object is not callable` ERROR 根因已消除；09:45 zero_signal_streak 升级为同根因次生（信号被吞→连续 0 信号），随修复加载自然恢复。restart_storm 升级（今日 6 次启动）全部为优雅部署重启（日志均含"调度器已停止"），无崩溃线索，按 v0.9.41 结论放过。
+
+## 2026-09-03 — v0.9.42 修复：`is_halted` property 误加括号致盘中扫描全灭
+
+### 变更：`_entry_gate` 中 `risk.is_halted()` → `risk.is_halted`（v0.9.42）
+- **问题（2026-09-03 实证）**：调度器 09:23 启动后，09:31 扫描轮次 8 只股票（600127/600176/600121/600110/600172 等）全部报 `TypeError: 'bool' object is not callable`，每轮扫描 0 信号 → 09:45 触发 `ZeroSignalResult:zero_signal_streak` 升级人工（连续 3 轮 0 信号，data_health=ok）。
+- **根因**：`RiskManager.is_halted` 是 `@property`（返回 bool），`_entry_gate` 新增代码误加 `()` 调用，进程内每只股票扫描抛异常被吞（`process()` 顶层 except 返回 None），信号流静默归零。
+- **修复**：去掉 `()` 改为属性访问；顺带清理 `_entry_gate` 中未使用的 `MarketEnvironment()` 实例与 import 排序（ruff F841/I001）。
+- **验证**：`pytest tests/unit/test_signal_pipeline.py --timeout=60` 38 passed；`ruff check src/gugu/engine/signal_pipeline.py` 通过；`launchctl kickstart -k` 重启调度器（PID 46341），心跳 12:08:19 新鲜。
+- **生效方式**：调度器已重启加载新代码，无需其他操作。
+
+## 2026-09-02 — v0.9.41 评估员修复：重启风暴阈值对齐部署常态
+
+### 变更：`MAX_RESTARTS_PER_DAY` 3 → 5（watchdog 参数修正）
+- **问题（2026-09-02 实证）**：当日调度器 4 次重启全部为优雅部署/开发重启（02:03/07:47/08:27/12:34，日志均含"调度器已停止"，12:34 重启前 12:31-33 有策略代码改动；crash_clue=无崩溃线索，心跳连续无空窗）→ 旧阈值 3 误报"重启风暴"并升级人工。
+- **根因**：v0.9.32 注释自述"历史常态 3-4 次/日"（launchd kickstart/部署重启），`MAX_RESTARTS_PER_DAY=3` 低于自身文档化的部署常态，任何正常开发日（≥4 次按需重启）都会触发高优级误报。
+- **修复**：默认阈值 3 → 5，并更新注释说明。真实崩溃循环仍由心跳陈旧检查（独立指纹，15 分钟未更新）捕获，无盲区；风暴当日同因去重（v0.9.32）机制保留。
+- **验证**：新增回归测试 `test_restart_threshold_default_allows_dev_restarts`（默认阈值下 4 次重启 ok=True / 6 次重启告警）；`pytest tests/unit/test_health_watchdog.py tests/unit/test_auto_recover.py --timeout=30` 49 passed；`ruff check` 通过。
+- **生效方式**：watchdog 以独立进程运行，每次冷加载最新代码，下一轮即生效，无需重启调度器。
+
 ## 2026-09-01 — v0.9.40 上线前对抗性加固
 
 ### 变更：复审修复交易路径、跨进程状态和回测证据边界

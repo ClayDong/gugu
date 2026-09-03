@@ -199,6 +199,9 @@ def cmd_param_audit(manifest, args):
         "stop_loss_pct",
         "take_profit_pct",
         "time_stop_threshold",
+        # 2026-09-03: 移动止损由基类 _apply_max_hold_exit/_apply_trailing_stop_exit 读取，
+        # 各策略源码不直接引用（同 max_hold_days 性质）
+        "trailing_stop_pct",
     }
     # 每个策略独有的参数命名空间（跨策略同名但含义不同，不交叉校验）
     # 策略 key → 其源码文件（含 blogger_rules 子目录）

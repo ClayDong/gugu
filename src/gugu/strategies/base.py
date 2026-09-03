@@ -178,20 +178,30 @@ class Strategy(ABC):
         df: pd.DataFrame,
         max_hold_days: int | None = None,
         signal_col: str = "signal",
+        trailing_stop_pct: float | None = None,
     ) -> pd.DataFrame:
-        """最大持仓天数强制卖出。
+        """持仓退出管理：优先使用移动止损，其次使用时间止损。
 
-        突破后 max_hold_days 内未触发卖出信号 → 趋势未如期发展，强制退出。
-        用于 break 类和 ml 类策略中，防止资金被横盘股套牢。
+        道②：让利润奔跑——赚钱的仓位不设时间上限，从最高点回撤才卖。
+        亏钱的仓位不受此限制，按照原策略卖出信号执行。
 
         Args:
             df: 含 signal 列的 DataFrame
-            max_hold_days: 最大持仓天数，None 时从 self.params 读取
-            signal_col: 信号列名，默认 "signal"
+            max_hold_days: 最大持仓天数（仅当 trailing_stop_pct 为 None 时生效）
+            signal_col: 信号列名
+            trailing_stop_pct: 移动止损回撤比例（默认 0.08 = 8%），
+                              从持仓期间最高收盘价回撤此比例则强制卖出。
+                              None 时使用旧的 max_hold_days 逻辑。
 
         Returns:
-            添加了强制退出信号的 DataFrame（直接修改原 df）
+            添加了强制退出信号的 DataFrame
         """
+        if trailing_stop_pct is None:
+            trailing_stop_pct = float(self.params.get("trailing_stop_pct", 0))
+
+        if trailing_stop_pct > 0:
+            return self._apply_trailing_stop_exit(df, trailing_stop_pct, signal_col)
+
         if max_hold_days is None:
             max_hold_days = int(self.params.get("max_hold_days", 0))
         if max_hold_days <= 0:
@@ -203,17 +213,55 @@ class Strategy(ABC):
         while i < n:
             if signal[i] == 1:
                 exit_idx = min(i + max_hold_days, n - 1)
-                # 检查 (i, exit_idx] 是否已有卖出信号
                 has_sell = False
                 for j in range(i + 1, exit_idx + 1):
                     if signal[j] == -1:
                         has_sell = True
                         break
-                # 仅当 exit_idx 无买入信号时才强制卖出（避免覆盖买入）
                 if not has_sell and exit_idx > i and signal[exit_idx] != 1:
                     signal[exit_idx] = -1
                 i = exit_idx + 1
             else:
                 i += 1
+        df[signal_col] = signal
+        return df
+
+    def _apply_trailing_stop_exit(
+        self,
+        df: pd.DataFrame,
+        trailing_stop_pct: float,
+        signal_col: str = "signal",
+    ) -> pd.DataFrame:
+        """移动止损退出：从持仓最高点回撤 trailing_stop_pct 时强制卖出。
+
+        道②核心实现：让利润奔跑。不设持仓时间上限，
+        只要趋势不破（回撤不超过阈值），就一直持有。
+        """
+        signal = df[signal_col].to_numpy(dtype=int, copy=True)
+        close = df["close"].to_numpy(dtype=float, copy=True)
+        n = len(signal)
+
+        in_position = False
+        highest_since_entry = 0.0
+
+        for i in range(n):
+            if signal[i] == 1 and not in_position:
+                in_position = True
+                highest_since_entry = close[i]
+            elif signal[i] == -1 and in_position:
+                in_position = False
+                highest_since_entry = 0.0
+            elif in_position:
+                if close[i] > highest_since_entry:
+                    highest_since_entry = close[i]
+                # 从最高点回撤超过阈值 → 强制卖出
+                if highest_since_entry > 0 and close[i] < highest_since_entry * (
+                    1 - trailing_stop_pct
+                ):
+                    if signal[i] != 1:  # 不覆盖同日买入信号
+                        signal[i] = -1
+                    in_position = False
+                    highest_since_entry = 0.0
+
         df[signal_col] = signal
         return df

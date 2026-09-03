@@ -243,6 +243,41 @@ def test_restart_boom_alerts(tmp_path: Path):
     assert "重启" in res.message
 
 
+def test_restart_threshold_default_allows_dev_restarts(tmp_path: Path):
+    """v0.9.41：默认重启风暴阈值对齐部署常态（5 次/日）。
+
+    2026-09-02 实证：4 次重启全部为优雅部署/开发重启
+    （日志均含"调度器已停止"，crash_clue=无崩溃线索），旧阈值
+    3 误报升级。真实崩溃循环由心跳陈旧独立指纹捕获，无盲区。
+    4 次（正常开发日，用默认阈值）→ 不告警；6 次（超阈值）→ 告警。
+    """
+    now = datetime.now().replace(microsecond=0)
+    hb = tmp_path / "heartbeat.json"
+    hb.write_text(
+        json.dumps({"last_cycle_at": now.isoformat(), "status": "alive"}),
+        encoding="utf-8",
+    )
+    boot = tmp_path / "scheduler_boot.json"
+
+    def _mk_boots(n: int):
+        return [
+            {"boot_time": (now - timedelta(minutes=m)).isoformat(), "pid": 1000 + i}
+            for i, m in enumerate([1, 3, 5, 8, 12, 20][:n])
+        ]
+
+    # 4 次优雅重启（正常开发日）→ 默认阈值不告警
+    boot.write_text(json.dumps({"history": _mk_boots(4)}), encoding="utf-8")
+    res = check_scheduler_health(heartbeat_path=hb, boot_path=boot, data_dir=tmp_path)
+    assert res.ok is True
+    assert res.restarts_today == 4
+
+    # 6 次（超出默认阈值 5）→ 告警
+    boot.write_text(json.dumps({"history": _mk_boots(6)}), encoding="utf-8")
+    res2 = check_scheduler_health(heartbeat_path=hb, boot_path=boot, data_dir=tmp_path)
+    assert res2.ok is False
+    assert "重启" in res2.message
+
+
 def test_restart_storm_escalates_once_per_day(tmp_path: Path):
     """v0.9.32：重启风暴当日首次升级后，同日后续轮次静默（同因不重复升级）。
 

@@ -9,10 +9,14 @@ from gugu.strategies.base import Strategy
 from gugu.strategies.blogger_rules import LinJuDaYeStrategy
 from gugu.strategies.breakout import BoxBreakoutStrategy
 from gugu.strategies.double_yin import DoubleYinMoneyBagStrategy
+from gugu.strategies.dragon_head import DragonHeadStrategy
+from gugu.strategies.huamulan_ghost_breakout import HuamulanGhostBreakoutStrategy
 from gugu.strategies.manifest import get_manifest
 from gugu.strategies.mean_revert import RSIStrategy
 from gugu.strategies.price_volume import PriceVolumeSignalStrategy
 from gugu.strategies.regime_cycle import RegimeCycleFourStrategy
+from gugu.strategies.sector_momentum import SectorMomentumStrategy
+from gugu.strategies.sentiment_cycle import SentimentCycleStrategy
 
 # 策略注册表：name -> class
 _REGISTRY: dict[str, type[Strategy]] = {
@@ -22,6 +26,10 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "linjudaye": LinJuDaYeStrategy,
     "price_volume_signal": PriceVolumeSignalStrategy,
     "regime_cycle_four": RegimeCycleFourStrategy,
+    "sector_momentum": SectorMomentumStrategy,
+    "dragon_head": DragonHeadStrategy,
+    "huamulan_ghost_breakout": HuamulanGhostBreakoutStrategy,
+    "sentiment_cycle": SentimentCycleStrategy,
 }
 
 

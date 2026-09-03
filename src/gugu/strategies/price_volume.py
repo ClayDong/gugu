@@ -72,11 +72,25 @@ class PriceVolumeSignalStrategy(Strategy):
         high_pos = float(self.params.get("high_pos_rank", 0.70))
         max_hold_days = int(self.params.get("max_hold_days", 5))
 
-        # 换手率 = amount / (close × float_shares) —— 单位鲁棒（amount 是真实成交额）
-        float_shares = float(self.params.get("float_shares", 1e9))
+        # 换手率 = amount / (close × float_shares)
+        # 自动估计流通股本：用近期日均成交额 / 估计均价 / 假设日均换手 2%
+        # 避免硬编码默认值导致大盘股门槛虚高、小盘股门槛虚低
+        float_shares_explicit = self.params.get("float_shares")
         amount = df.get("amount")
         if amount is not None:
+            # 2026-09-02 修复：腾讯数据源 amount 列可能全为 0，退化为 volume×close 估算
+            if amount.max() <= 0:
+                amount = df["volume"] * df["close"]
             close = df["close"].replace(0, np.nan)
+            if float_shares_explicit is not None:
+                float_shares = float(float_shares_explicit)
+            else:
+                # 自动估计：近 60 日日均成交额 / 均价 / 2%（典型日换手率）
+                avg_amount = amount.rolling(60).mean()
+                avg_close = close.rolling(60).mean()
+                estimated = avg_amount / (avg_close + 1e-9) / 0.02
+                # 取中位数作为单值估计，clip 到合理范围 (1亿~100亿股)
+                float_shares = float(np.clip(estimated.median(), 1e8, 1e10))
             turnover = amount / (close * float_shares)
         else:
             # 无 amount 列时退化为空（不产生信号）

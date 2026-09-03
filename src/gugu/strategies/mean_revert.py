@@ -7,46 +7,6 @@ import pandas as pd
 from gugu.strategies.base import Strategy
 
 
-class BollingerStrategy(Strategy):
-    """布林带策略：触及下轨买入，触及上轨卖出。"""
-
-    name = "bollinger"
-    category = "mean_revert"
-
-    def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
-        self._ensure_columns(df)
-        df = df.copy()
-
-        w = int(self.params["window"])
-        n = float(self.params["num_std"])
-
-        df["ma"] = df["close"].rolling(w).mean()
-        df["std"] = df["close"].rolling(w).std()
-        df["upper"] = df["ma"] + n * df["std"]
-        df["lower"] = df["ma"] - n * df["std"]
-
-        # P0 修复：下跌趋势过滤 — MA20 < MA60 时不发买入信号（不接飞刀）
-        ma_short = df["close"].rolling(20).mean()
-        ma_long = df["close"].rolling(60).mean()
-        downtrend_mask = (ma_short < ma_long) & ma_long.notna()
-
-        df["signal"] = 0
-        # 收盘价跌破下轨买入（但下跌趋势中不接飞刀）
-        buy_cond = (df["close"] < df["lower"]) & ~downtrend_mask
-        df.loc[buy_cond, "signal"] = 1
-        # 收盘价突破上轨卖出
-        df.loc[df["close"] > df["upper"], "signal"] = -1
-
-        # 置信度：基线 0.5（触轨即信号）+ 偏离布林带外的程度
-        band_width = (df["upper"] - df["lower"]).clip(lower=df["close"].abs() * 0.01).replace(0, 1)
-        outside_buy = (df["lower"] - df["close"]).clip(lower=0) / band_width
-        outside_sell = (df["close"] - df["upper"]).clip(lower=0) / band_width
-        df["confidence"] = (0.5 + outside_buy + outside_sell).clip(0, 1)
-        # 无信号时置信度为 0
-        df.loc[df["signal"] == 0, "confidence"] = 0.0
-        return df
-
-
 class RSIStrategy(Strategy):
     """RSI 均值回归：超卖买入，超买卖出。"""
 
@@ -73,12 +33,10 @@ class RSIStrategy(Strategy):
         df["signal"] = 0
         # RSI 回升确认策略：从超卖区回升到超卖线上方时买入，从超买区回落到超买线下方时卖出
         # 回升确认流派：RSI 离开超卖区时触发（价格已反弹），更安全
-        # P0 修复：下跌趋势过滤 — MA20 < MA60 时不接飞刀
-        ma_short = df["close"].rolling(20).mean()
-        ma_long = df["close"].rolling(60).mean()
-        downtrend_mask = (ma_short < ma_long) & ma_long.notna()
+        # 2026-09-02 修复：移除 MA20>MA60 硬过滤（与 RSI<20 逻辑矛盾——超卖时必然在下跌趋势中）
+        # 改用位置权重：RSI 超卖深度越大，置信度越高（反弹潜力越大）
         rsi_buy = (df["rsi"] >= oversold) & (df["rsi"].shift(1) < oversold)
-        df.loc[rsi_buy & ~downtrend_mask, "signal"] = 1
+        df.loc[rsi_buy, "signal"] = 1
         # RSI 从超买区回落
         df.loc[(df["rsi"] <= overbought) & (df["rsi"].shift(1) > overbought), "signal"] = -1
 
@@ -86,63 +44,6 @@ class RSIStrategy(Strategy):
         prev_rsi = df["rsi"].shift(1)
         buy_conf = (oversold - prev_rsi).clip(lower=0) / oversold
         sell_conf = (prev_rsi - overbought).clip(lower=0) / (100 - overbought)
-        df["confidence"] = (buy_conf + sell_conf).clip(0, 1)
-        # 无信号时置信度为 0
-        df.loc[df["signal"] == 0, "confidence"] = 0.0
-        return df
-
-
-class KDJStrategy(Strategy):
-    """KDJ 策略：K 线金叉 D 线买入，死叉卖出。"""
-
-    name = "kdj"
-    category = "mean_revert"
-
-    def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
-        self._ensure_columns(df)
-        df = df.copy()
-
-        w = int(self.params["window"])
-        oversold = float(self.params["oversold"])
-        overbought = float(self.params["overbought"])
-
-        low_min = df["low"].rolling(w).min()
-        high_max = df["high"].rolling(w).max()
-        price_range = high_max - low_min
-        # 零波动时 RSV 设为 50（中性）
-        rsv = pd.Series(50.0, index=df.index)
-        tradable = price_range > 0
-        rsv[tradable] = (df["close"][tradable] - low_min[tradable]) / price_range[tradable] * 100
-
-        df["k"] = rsv.ewm(com=2, adjust=False).mean()
-        df["d"] = df["k"].ewm(com=2, adjust=False).mean()
-        df["j"] = 3 * df["k"] - 2 * df["d"]
-
-        df["signal"] = 0
-        # P1修复：添加下跌趋势过滤（与Bollinger/RSI一致）
-        if len(df) >= 60:
-            ma20 = df["close"].rolling(20).mean()
-            ma60 = df["close"].rolling(60).mean()
-            downtrend_filter = ma20 >= ma60  # MA20 < MA60 时不接飞刀
-        else:
-            downtrend_filter = pd.Series(True, index=df.index)
-        # K 在超卖区金叉 D
-        golden = (
-            (df["k"] > df["d"])
-            & (df["k"].shift(1) <= df["d"].shift(1))
-            & (df["k"] < oversold)
-            & downtrend_filter
-        )
-        df.loc[golden, "signal"] = 1
-        # K 在超买区死叉 D
-        death = (
-            (df["k"] < df["d"]) & (df["k"].shift(1) >= df["d"].shift(1)) & (df["k"] > overbought)
-        )
-        df.loc[death, "signal"] = -1
-
-        # 置信度：用 K 值在超卖/超买区的深度衡量
-        buy_conf = (oversold - df["k"]).clip(lower=0) / oversold
-        sell_conf = (df["k"] - overbought).clip(lower=0) / (100 - overbought)
         df["confidence"] = (buy_conf + sell_conf).clip(0, 1)
         # 无信号时置信度为 0
         df.loc[df["signal"] == 0, "confidence"] = 0.0

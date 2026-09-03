@@ -201,8 +201,72 @@ class SignalPipeline:
         for step, cnt in sorted(self._filter_stats.items(), key=lambda x: -x[1]):
             pct = cnt / self._filter_scan_count * 100
             logger.info("   {:<20s}: {:>3d}次 ({:.1f}%)", step, cnt, pct)
-        self._filter_stats.clear()
-        self._filter_scan_count = 0
+
+    def _entry_gate(
+        self,
+        signal: dict[str, Any],
+        symbol: str,
+        portfolio: dict[str, Any],
+        account: Any,
+        regime: str | None,
+        df: pd.DataFrame,
+    ) -> str | None:
+        """入场前检查清单（交易纪律）。
+
+        返回 None 表示通过，返回字符串表示拦截原因。
+        所有买入信号必须通过此门禁，不可绕过。
+        """
+        # ── 1. 市场状态不允许买入 ──────────────────────
+        if regime in ("bear", "crash"):
+            return f"市场状态为 {regime}，禁止买入"
+
+        # ── 2. 风控熔断中 ──────────────────────────────
+        from gugu.risk.manager import RiskManager
+
+        risk = RiskManager(scope="live")
+        # is_halted 是 @property（bool），不是方法——误加 () 会抛
+        # TypeError: 'bool' object is not callable（2026-09-03 实证，v0.9.42 修复）
+        if risk.is_halted:
+            return "风控熔断中，禁止买入"
+
+        # ── 3. 总持仓数已达上限 ─────────────────────────
+        positions = portfolio.get("positions", {})
+        cfg = gugu_config.get_config()
+        max_positions = cfg.risk.max_total_positions
+        active_positions = {k: v for k, v in positions.items() if v.get("quantity", 0) > 0}
+        if len(active_positions) >= max_positions:
+            return f"持仓数已达上限 {max_positions}，禁止新增买入"
+
+        # ── 4. 剧烈波动日（单日涨跌 > 5%） ──────────────
+        if len(df) >= 2:
+            today_ret = (
+                (df["close"].iloc[-1] / df["close"].iloc[-2] - 1) if df["close"].iloc[-2] > 0 else 0
+            )
+            if abs(today_ret) > 0.05:
+                direction = "暴涨" if today_ret > 0 else "暴跌"
+                return f"今日{direction} {today_ret:.1%}，不追涨杀跌"
+
+        # ── 5. 涨停环境（钱多多：每天只有几只涨停就空仓） ──
+        # 冰点除外——冰点是试探性买入的窗口
+        strategy_name = str(signal.get("strategy", ""))
+        from gugu.analysis.market_env import (
+            should_avoid_board,
+            should_avoid_relay,
+            should_empty_position,
+        )
+
+        # 简化：用单股数据近似涨停环境（全市场数据需从引擎层注入）
+        # 生产环境由引擎层预计算 market_env 并注入到 signal context
+        precomputed_env = signal.get("_market_env")
+        if precomputed_env:
+            if should_empty_position(precomputed_env):
+                return f"涨停稀少({precomputed_env.get('limit_up_count', 0)}只)，空仓等机会"
+            if "ghost_breakout" in strategy_name and should_avoid_board(precomputed_env):
+                return f"封板率{precomputed_env.get('seal_rate', 0):.0%}低于70%，不打板"
+            if "dragon_head" in strategy_name and should_avoid_relay(precomputed_env):
+                return f"接力成功率{precomputed_env.get('relay_rate', 0):.0%}低于60%，不接力"
+
+        return None
 
     async def process(
         self,
@@ -222,6 +286,27 @@ class SignalPipeline:
             if not signal:
                 self._inc_filter("信号路由")
                 return None
+
+            # ═══════════════════════════════════════════════════════
+            # 道①：入场前检查清单（交易纪律，不可绕过）
+            # "耐心等待"——只在胜率最高时出手
+            # ═══════════════════════════════════════════════════════
+            if signal.get("direction") == "buy":
+                gate_result = self._entry_gate(signal, symbol, portfolio, account, regime, df)
+                if gate_result:
+                    signal["observation_only"] = True
+                    signal["gate_blocked"] = True
+                    signal["gate_reason"] = gate_result
+                    logger.info("入场门禁拦截 %s: %s", symbol, gate_result)
+                    from gugu.journal.trade_log import log_signal_blocked
+
+                    log_signal_blocked(
+                        symbol=symbol,
+                        strategy=str(signal.get("strategy", "")),
+                        reason=gate_result,
+                        price=float(signal.get("price", 0)),
+                        regime=regime,
+                    )
 
             # P2 能力圈标注：注入策略可解释性/验证等级/仓位上限
             # （巴菲特：知道自己在圈内还是圈外）

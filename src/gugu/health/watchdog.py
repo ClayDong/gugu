@@ -34,7 +34,13 @@ from .results import (
 # 默认阈值
 HEARTBEAT_STALE_MINUTES = 15  # 心跳超过 15 分钟未更新视为挂死
 SIGNAL_HISTORY_STALE_DAYS = 2  # 交易日信号历史超过 2 天未写入视为失忆
-MAX_RESTARTS_PER_DAY = 3  # 单日重启超过 3 次视为重启风暴
+# v0.9.41：单日重启阈值 3 → 5。
+# 背景（2026-09-02 实证）：当日 4 次重启全部为优雅部署/开发重启
+# （日志均含"调度器已停止"，12:34 重启前 12:31-33 有策略代码改动，
+#  crash_clue=无崩溃线索，心跳连续无空窗）→ 旧阈值 3 误报"重启风暴"
+# 升级人工。v0.9.32 注释自述"历史常态 3-4 次/日"（部署重启），
+# 阈值应高于常态。真实崩溃循环仍由心跳陈旧检查（独立指纹）捕获，无盲区。
+MAX_RESTARTS_PER_DAY = 5  # 单日重启超过 5 次视为重启风暴
 DEFAULT_BOOT_FILE = "scheduler_boot.json"
 DEFAULT_HEARTBEAT_FILE = "heartbeat.json"
 DEFAULT_HISTORY_FILE = "signals_history.jsonl"

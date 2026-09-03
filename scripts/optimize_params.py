@@ -131,22 +131,6 @@ def _record_optimization_ledger(
 # 参数网格定义：策略名 → 参数网格
 # 基于 config/strategy_defaults.yaml 中的每个策略
 STRATEGY_PARAM_GRIDS: dict[str, dict[str, list]] = {
-    "turtle": {
-        "breakout_window": [10, 15, 20, 25, 30],
-        "exit_window": [5, 10, 15, 20],
-        "atr_window": [10, 14, 20, 26],
-        "risk_per_trade": [0.005, 0.01, 0.015, 0.02],
-        "max_units": [2, 4, 6],
-    },
-    "bollinger": {
-        "window": [10, 15, 20, 25, 30],
-        "num_std": [1.5, 2.0, 2.5, 3.0],
-        "stop_loss_atr": [1.0, 1.5, 2.0, 2.5, 3.0],
-    },
-    "dual_ma": {
-        "short_window": [3, 5, 8, 10, 13],
-        "long_window": [10, 15, 20, 26, 30, 50],
-    },
     "box_breakout": {
         "box_window": [10, 15, 20, 25, 30],
         "volume_ratio": [1.2, 1.5, 1.8, 2.0],
@@ -155,39 +139,6 @@ STRATEGY_PARAM_GRIDS: dict[str, dict[str, list]] = {
         "window": [9, 14, 20],
         "oversold": [20, 25, 30, 35],
         "overbought": [65, 70, 75, 80],
-    },
-    "macd": {
-        "short_window": [8, 12, 16],
-        "long_window": [20, 26, 30],
-        "signal_window": [5, 9, 12],
-    },
-    "kdj": {
-        "window": [5, 9, 14],
-        "oversold": [15, 20, 25, 30],
-        "overbought": [70, 75, 80, 85],
-    },
-    "dual_thrust": {
-        "lookback": [3, 5, 8, 10],
-        "k_up": [0.3, 0.5, 0.7, 0.9],
-        "k_down": [0.3, 0.5, 0.7, 0.9],
-    },
-    # P0 补全：两个新策略的参数网格（上轮未注册，参数永远无法被历史数据验证）
-    "money_flow_follow": {
-        "new_high_window": [10, 15, 20, 30],
-        "new_high_lookback": [60, 90, 120, 180],
-        "pullback_max_pct": [0.03, 0.05, 0.08, 0.10],
-        "volume_expand_ratio": [1.2, 1.5, 1.8, 2.0],
-        "volume_shrink_days": [1, 2, 3],
-        "recent_gain_threshold": [0.02, 0.03, 0.05],
-        "abnormal_volume_ratio": [2.0, 2.5, 3.0, 4.0],
-    },
-    "chen_jiangting": {
-        "resistance_window": [10, 15, 20, 30],
-        "volume_ratio": [1.2, 1.5, 1.8, 2.0],
-        "vol_ma_window": [10, 20, 30],
-        "ma_short": [10, 15, 20, 25],
-        "ma_long": [40, 50, 60, 90],
-        "max_daily_gain_pct": [0.05, 0.07, 0.09],
     },
     "double_yin": {
         "ma_slope_window": [3, 5, 8],
@@ -198,94 +149,57 @@ STRATEGY_PARAM_GRIDS: dict[str, dict[str, list]] = {
         "breakout_vol_ratio_min": [1.5, 2.0, 2.5],
         "take_profit_pct": [0.06, 0.08, 0.10],
         "stagnation_vol_ratio": [2.0, 2.5, 3.0],
+        "support_tolerance": [0.03, 0.05, 0.08],  # 2026-09-02: 支撑接近度（原硬编码3%）
     },
-    # v0.6.2 新增：主力资金跟随策略参数网格（已缩小至核心维度，避免组合爆炸）
-    "north_force_long": {
-        "ma_trend_window": [20, 30],
-        "ma_long_window": [60, 90],
-        "pullback_to_ma_pct": [0.02, 0.03, 0.05],
-        "max_daily_gain_pct": [0.04, 0.07],
-        "max_vol_ratio": [2.0, 2.5, 3.0],
-        "stop_loss_pct": [0.05, 0.07],
-        "take_profit_pct": [0.10, 0.20],
-        "min_confidence": [0.40, 0.50, 0.60],
+    # 2026-09-01 新增：三个启用策略的参数网格
+    "linjudaye": {
+        "golden_level": [0.5, 0.618, 0.7, 0.8],
+        "vol_shrink_ratio": [0.5, 0.7, 0.9],
+        "box_range_threshold": [0.03, 0.05, 0.08],
+        "low_vol_ratio": [0.3, 0.5, 0.7],
+        "pullback_tolerance": [0.02, 0.03, 0.05],
+        "max_hold_days": [5, 10, 15],
     },
-    "dragon_tiger_short": {
-        # v0.6.2 调优：网格覆盖默认值并放宽，解决 trades=0 问题
-        "limit_up_pct": [0.07, 0.085, 0.10],  # 默认 0.07，覆盖 7%/8.5%/10%
-        "limit_up_lookback": [5, 10, 15],  # 默认 10，覆盖 5/10/15 日
-        "max_break_days": [3, 5, 7],  # 默认 5，覆盖 3/5/7 日反包窗口
-        "stop_loss_pct": [0.05, 0.07],
-        "take_profit_pct": [0.10, 0.15],
-        "max_vol_ratio": [2.5, 3.5, 5.0],
-        "min_confidence": [0.40, 0.50],
+    "price_volume_signal": {
+        "turnover_min_pct": [0.03, 0.05, 0.08],
+        "vol_ratio_min": [1.5, 2.0, 3.0],
+        "vol_ratio_max": [3.0, 5.0, 8.0],
+        "max_hold_days": [3, 5, 10],
+        "big_turnover_pct": [0.08, 0.10, 0.15],
+        "big_vol_ratio": [3.0, 5.0, 8.0],
+        "float_shares": [5e7, 1e8, 5e8, 1e9],  # 流通股本：5000万~10亿（覆盖中小盘→大盘）
     },
-    # v0.6.2 新增：云策略 + 游资策略参数网格
-    "cloud_trend": {
-        "ma_short": [8, 10, 12],
-        "ma_trend": [15, 20, 25],
-        "hh_ll_window": [15, 20, 25],
-        "breakout_vol_ratio": [1.3, 1.5, 2.0],
-        "trailing_stop_pct": [0.03, 0.05, 0.07],
-        "time_stop_days": [10, 15, 20],
+    "regime_cycle_four": {
+        "ma_short": [5, 10, 20],
+        "ma_long": [20, 30, 60],
+        "macd_fast": [8, 12, 16],
+        "macd_slow": [20, 26, 30],
+        "macd_signal": [5, 9, 12],
+        "silver_window": [1, 3, 5, 10],  # 2026-09-02: 金叉后入场窗口（原只允许当天）
     },
-    "hot_money": {
-        "limit_up_window": [5, 7, 10],
-        "shrink_ratio": [0.3, 0.4, 0.5, 0.6],
-        "expand_ratio": [1.5, 2.0, 2.5, 3.0],
-        "max_track_days": [15, 20, 30, 45],
-        "hard_stop_loss_pct": [0.03, 0.05, 0.07],
-        "trailing_stop_pct": [0.05, 0.07, 0.10],
+    "sector_momentum": {
+        "ma_short": [5, 10],
+        "ma_mid": [10, 20, 30],
+        "momentum_days": [3, 5, 10],
+        "vol_ratio": [1.0, 1.2, 1.5],
+        "stop_loss_pct": [0.05, 0.08, 0.10],
+        "max_hold_days": [10, 20, 30],
     },
-    # v0.7.4 新增：5日均线动量策略参数网格
-    "ma5_momentum": {
-        "big_yang_gain_pct": [0.03, 0.05, 0.07],
-        "big_yang_vol_ratio": [1.3, 1.5, 1.8, 2.0],
-        "big_yang_lookback": [3, 5, 7],
-        "pullback_tolerance": [0.01, 0.02, 0.03],
-        "shrink_vol_ratio": [0.5, 0.6, 0.7, 0.8],
-        "profit_deviation_pct": [0.03, 0.05, 0.07],
-        "ma5_break_exit_days": [2, 3, 4],
-    },
-    # v0.6.3 新增：陈学长不吃面策略参数网格
-    "breakout_rebound": {
-        "shrink_vol_ratio": [0.3, 0.4, 0.5, 0.6, 0.7],  # 缩量判断标准
-        "wash_day_max": [2, 3, 4, 5],  # 洗盘观察天数
-        "stop_loss_pct": [0.02, 0.03, 0.04, 0.05],  # 止损百分比
-        "limit_up_lookback": [3, 5, 7],  # 涨停板回看窗口
-        "take_profit_pct": [0.06, 0.08, 0.10],  # 止盈位
+    "dragon_head": {
+        "ma_short": [5, 10],
+        "limit_up_pct": [0.07, 0.09, 0.095],
+        "pullback_max": [0.02, 0.03, 0.05],
+        "vol_expand_min": [0.8, 1.0, 1.2],
+        "vol_shrink_exit": [0.5, 0.7, 0.9],
+        "trailing_stop_pct": [0.05, 0.08, 0.10],
     },
 }
 
 # 策略 → 其策略类需要哪些参数（pyproject.toml 中定义的策略类）
 # 使用 strategy_defaults.yaml 中的 key 名
 STRATEGY_CONFIG_KEYS: dict[str, list[str]] = {
-    "turtle": ["breakout_window", "exit_window", "atr_window", "risk_per_trade", "max_units"],
-    "bollinger": ["window", "num_std", "stop_loss_atr"],
-    "dual_ma": ["short_window", "long_window"],
     "box_breakout": ["box_window", "volume_confirm", "volume_ratio"],
     "rsi_reversal": ["window", "oversold", "overbought"],
-    "macd": ["short_window", "long_window", "signal_window"],
-    "kdj": ["window", "oversold", "overbought"],
-    "dual_thrust": ["lookback", "k_up", "k_down"],
-    # P0 补全：与新策略网格同步
-    "money_flow_follow": [
-        "new_high_window",
-        "new_high_lookback",
-        "pullback_max_pct",
-        "volume_expand_ratio",
-        "volume_shrink_days",
-        "recent_gain_threshold",
-        "abnormal_volume_ratio",
-    ],
-    "chen_jiangting": [
-        "resistance_window",
-        "volume_ratio",
-        "vol_ma_window",
-        "ma_short",
-        "ma_long",
-        "max_daily_gain_pct",
-    ],
     "double_yin": [
         "ma_slope_window",
         "first_yin_vol_ratio_max",
@@ -296,101 +210,13 @@ STRATEGY_CONFIG_KEYS: dict[str, list[str]] = {
         "take_profit_pct",
         "stagnation_vol_ratio",
     ],
-    # v0.6.2 新增：主力资金跟随策略配置键
-    "north_force_long": [
-        "ma_trend_window",
-        "ma_long_window",
-        "ma_slope_window",
-        "pullback_to_ma_pct",
-        "recent_momentum_window",
-        "recent_momentum_pct",
-        "recent_spike_window",
-        "recent_spike_pct",
-        "max_daily_gain_pct",
-        "max_vol_ratio",
-        "vol_ma_window",
-        "stop_loss_pct",
-        "take_profit_pct",
-        "stagnation_vol_ratio",
-        "max_upper_shadow_pct",
-        "time_stop_window",
-        "time_stop_threshold",
-        "min_confidence",
-    ],
-    "dragon_tiger_short": [
-        "ma_trend_window",
-        "ma_slope_window",
-        "limit_up_pct",
-        "limit_up_lookback",
-        "max_break_days",
-        "stop_loss_pct",
-        "take_profit_pct",
-        "stagnation_vol_ratio",
-        "max_upper_shadow_pct",
-        "time_stop_window",
-        "time_stop_threshold",
-        "max_vol_ratio",
-        "vol_ma_window",
-        "min_confidence",
-    ],
-    # v0.6.2 新增：云策略 + 游资策略配置键
-    "cloud_trend": [
+    "dragon_head": [
         "ma_short",
-        "ma_trend",
-        "hh_ll_window",
-        "hh_ll_compare",
-        "vol_compare_window",
-        "breakout_vol_ratio",
-        "pullback_tolerance",
-        "doji_body_max",
-        "small_yang_max_gain",
-        "stop_loss_pct",
-        "max_hold_days",
-        "trailing_stop_pct",
-        "time_stop_days",
-    ],
-    "hot_money": [
-        "limit_up_window",
-        "limit_up_threshold",
-        "big_yang_threshold",
-        "shrink_ratio",
-        "expand_ratio",
-        "vol_ma_window",
-        "min_volume",
-        "max_hold_days",
-        "max_track_days",
-        "hard_stop_loss_pct",
-        "trailing_stop_pct",
-    ],
-    # v0.7.4 新增：5日均线动量策略配置键
-    "ma5_momentum": [
-        "big_yang_gain_pct",
-        "big_yang_vol_ratio",
-        "big_yang_lookback",
-        "pullback_tolerance",
-        "shrink_vol_ratio",
-        "profit_deviation_pct",
-        "ma5_break_exit_days",
-        "vol_ma_window",
-    ],
-    # v0.6.3 新增：陈学长不吃面策略配置键
-    "breakout_rebound": [
-        "ma_trend_window",
-        "ma_long_window",
-        "ma_slope_window",
         "limit_up_pct",
-        "limit_up_lookback",
-        "wash_day_max",
-        "breakout_vol_ratio",
-        "shrink_vol_ratio",
-        "ground_vol_ratio",
-        "min_confidence",
-        "stop_loss_pct",
-        "take_profit_pct",
-        "max_upper_shadow_pct",
-        "stagnation_vol_ratio",
-        "time_stop_window",
-        "time_stop_threshold",
+        "pullback_max",
+        "vol_expand_min",
+        "vol_shrink_exit",
+        "trailing_stop_pct",
     ],
 }
 
@@ -400,48 +226,9 @@ STRATEGY_CONFIG_KEYS: dict[str, list[str]] = {
 # 否则会产出语义错误的"金叉/死叉"（短均线比长均线还长，失去均线交叉的意义）
 # 对抗性审查：在策略类 __init__ 中校验更彻底，但改动基类影响范围大；
 # 在 grid search 中过滤是最小侵入方案，仅优化路径生效，运行时仍依赖策略自身逻辑
-def _dual_ma_constraints(p: dict) -> bool:
-    """dual_ma: 短均线必须严格小于长均线。"""
-    sw = p.get("short_window", 0)
-    lw = p.get("long_window", 0)
-    return sw < lw
-
-
-def _macd_constraints(p: dict) -> bool:
-    """macd: 短均线必须严格小于长均线；信号线必须短于短均线。"""
-    sw = p.get("short_window", 0)
-    lw = p.get("long_window", 0)
-    sigw = p.get("signal_window", 0)
-    return sw < lw and sigw < sw
-
-
-def _turtle_constraints(p: dict) -> bool:
-    """turtle: 突破窗口必须严格大于出场窗口（出场信号应早于突破信号触发）。"""
-    bw = p.get("breakout_window", 0)
-    ew = p.get("exit_window", 0)
-    return bw > ew
-
-
 def _rsi_reversal_constraints(p: dict) -> bool:
     """rsi_reversal: 超卖必须严格小于超买。"""
     return p.get("oversold", 0) < p.get("overbought", 0)
-
-
-def _kdj_constraints(p: dict) -> bool:
-    """kdj: 超卖必须严格小于超买。"""
-    return p.get("oversold", 0) < p.get("overbought", 0)
-
-
-def _chen_jiangting_constraints(p: dict) -> bool:
-    """chen_jiangting: 短均线必须严格小于长均线。"""
-    return p.get("ma_short", 0) < p.get("ma_long", 0)
-
-
-def _money_flow_follow_constraints(p: dict) -> bool:
-    """money_flow_follow: 创高窗口必须小于回看窗口（创高是近期现象，回看是历史基线）。"""
-    nw = p.get("new_high_window", 0)
-    nl = p.get("new_high_lookback", 0)
-    return nw < nl
 
 
 def _double_yin_constraints(p: dict) -> bool:
@@ -453,36 +240,9 @@ def _double_yin_constraints(p: dict) -> bool:
     )
 
 
-def _north_force_long_constraints(p: dict) -> bool:
-    """north_force_long: 趋势均线必须严格小于长期均线；止损必须小于止盈。"""
-    return (
-        p.get("ma_trend_window", 0) < p.get("ma_long_window", 0)
-        and p.get("stop_loss_pct", 0) < p.get("take_profit_pct", 0)
-        and p.get("recent_spike_window", 0) <= p.get("recent_momentum_window", 0)
-    )
-
-
-def _dragon_tiger_short_constraints(p: dict) -> bool:
-    """dragon_tiger_short: 止损必须小于止盈；断板窗口不超过涨停回看窗口。"""
-    return (
-        p.get("stop_loss_pct", 0) < p.get("take_profit_pct", 0)
-        and p.get("max_break_days", 0) <= p.get("limit_up_lookback", 0)
-        and p.get("time_stop_threshold", 0) < p.get("take_profit_pct", 0)
-    )
-
-
 STRATEGY_PARAM_CONSTRAINTS: dict[str, "callable[[dict], bool]"] = {
-    "dual_ma": _dual_ma_constraints,
-    "macd": _macd_constraints,
-    "turtle": _turtle_constraints,
     "rsi_reversal": _rsi_reversal_constraints,
-    "kdj": _kdj_constraints,
-    "chen_jiangting": _chen_jiangting_constraints,
-    "money_flow_follow": _money_flow_follow_constraints,
     "double_yin": _double_yin_constraints,
-    # v0.6.2 新增：主力资金跟随策略约束
-    "north_force_long": _north_force_long_constraints,
-    "dragon_tiger_short": _dragon_tiger_short_constraints,
 }
 
 

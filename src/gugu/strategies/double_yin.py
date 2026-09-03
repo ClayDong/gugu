@@ -95,6 +95,8 @@ class DoubleYinMoneyBagStrategy(Strategy):
         # 反转K线参数
         doji_body_max = float(self.params.get("doji_body_max", 0.01))
         small_yang_max_gain = float(self.params.get("small_yang_max_gain", 0.03))
+        # 2026-09-02 新增：支撑接近度参数（原硬编码 3%，现可调）
+        support_tolerance = float(self.params.get("support_tolerance", 0.05))
 
         # ── 计算均线 ──────────────────────────────────
         df["ma_trend"] = df["close"].rolling(ma_trend_window).mean()
@@ -129,10 +131,10 @@ class DoubleYinMoneyBagStrategy(Strategy):
         df["yin_1d_ago"] = df["is_yin"].shift(1)
         cond_double_yin = df["yin_2d_ago"] & df["yin_1d_ago"]
 
-        # 条件3: 支撑不破（双阴最低点 ≥ MA20 × 0.97）
+        # 条件3: 支撑不破（双阴最低点 ≥ MA20 × (1 - tolerance)，默认 5%）
         df["yin_low"] = np.minimum(df["low"].shift(2), df["low"].shift(1))
         df["ma20_ref"] = df["ma_trend"].shift(1)
-        cond_ma20_support = df["yin_low"] >= df["ma20_ref"] * (1 - 0.03)
+        cond_ma20_support = df["yin_low"] >= df["ma20_ref"] * (1 - support_tolerance)
 
         # 条件4: 反转K线（当日十字 or 小阳）
         df["is_doji"] = df["body"] < doji_body_max

@@ -6,23 +6,22 @@
 
 ---
 
-## 零、当前策略诚实状态（2026-09-02）
+## 零、当前策略诚实状态（2026-09-03）
 
-**生产准入：零策略**。`verified_strategies: []`（空白名单），`execution.mode: track_live`。
+**生产准入：零策略**。`verified_strategies: []`（空白名单），`execution.mode: paper`（模拟盘）。
 
-| 状态 | 数量 | 含义 |
+2026-09-02 完成策略清洗：从 40 个信号策略收敛到 10 个，删除 30 个已证伪/无进展/冗余策略（代码、注册、manifest、defaults 全量清理）。当前 10 个策略全部为 `conditional_pass`，仅允许 paper 观察。
+
+| 状态 | 数量 | 策略 |
 |------|------|------|
-| backtest_failed | 19 | 已明确证伪，结构上禁止进入信号融合 |
-| pending | 9 | 尚无足够验证证据，未进入运行时 |
-| conditional_pass | 9 | 仅允许 paper 观察，不等同生产准入 |
-| in_review | 2 | 证据不足，尚未完成准入 |
-| failed | 1 | 独立失败标记 |
+| conditional_pass | 10 | box_breakout / double_yin / rsi_reversal / linjudaye / price_volume_signal / regime_cycle_four / sector_momentum / dragon_head / huamulan_ghost_breakout / sentiment_cycle |
+| verified | 0 | —（空白名单） |
 
 **这是诚实的状态，不是系统失灵**。系统在不知道策略是否赚钱时，不会假装知道。对新手而言，这比"挂着 36 个策略但不知道哪个有效"要好得多。
 
 **当前系统最值钱的三样东西**（对新手决策辅助）：
-1. **持仓守护**：止损/止盈提醒、移动止损、track_live 只读防误操作
-2. **市场状态判断**：regime 检测、市场温度计、资金流复盘
+1. **持仓守护**：止损/止盈提醒、移动止损（8% 回撤）、入场门禁（5 关）
+2. **市场状态判断**：regime 检测、市场环境（冰点/涨停/封板率/接力率）、资金流复盘
 3. **纪律执行**：三级风控铁律不可绕过、熔断持久化、实验信号强制 observation-only
 
 **当前系统不做的事**（设计上排除）：

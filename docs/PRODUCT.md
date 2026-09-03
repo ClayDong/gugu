@@ -39,51 +39,36 @@
 
 ### 4.1 策略层
 
-**当前策略诚实评估（2026-09-02）**：
+**当前策略诚实评估（2026-09-03）**：
 
-本项目当前有 40 个信号策略在 manifest 中登记，但**没有任何一个策略通过 gate-v1 全部门槛**（样本外 Sharpe>0 + 参数稳定性≥80% + 最大回撤<25% + 平均收益≥0 + 样本外交易≥30）。19 个策略已被明确证伪（backtest_failed），9 个等待首次验证（pending），9 个条件通过但不等同核实（conditional_pass），2 个审查中，1 个失败。
+2026-09-02 完成策略清洗：从 40 个信号策略收敛到 10 个，删除 30 个已证伪/无进展/冗余策略（代码、注册、manifest、defaults 全量清理）。**当前没有任何一个策略通过 gate-v1 全部门槛**（样本外 Sharpe>0 + 参数稳定性≥80% + 最大回撤<25% + 平均收益≥0 + 样本外交易≥30），全部为 `conditional_pass`，仅允许 paper 观察。
 
-**当前生产状态**：`verified_strategies: []`（空白名单），`execution.mode: track_live`。这意味着：
-- 生产运行时**不加载任何策略信号**，系统仅跟踪用户真实持仓、推送止损/止盈提醒
-- 6 个标记为 `enabled: true` 的信号策略仅保留在 paper 观察通道，不参与生产决策
+**当前生产状态**：`verified_strategies: []`（空白名单），`execution.mode: paper`（模拟盘）。这意味着：
+- 10 个策略全部在模拟盘观察通道运行，不参与生产决策
+- 入场门禁（5 关）、移动止损（8% 回撤）、市场环境检测（冰点/涨停/封板率/接力率）已全部接入
 - 这是**正确的保守配置**——不给新手虚假的"策略已验证"信号
 
-**核心策略分组**：
+**核心策略分组（10 个）**：
 
 | 分组 | 策略 | 说明 |
 |------|------|------|
-| 实验性 | box_breakout | 达尔文箱体突破；最新 Walk-Forward 未通过，保留 paper 复验 |
-| 实验性 | double_yin | 双阴钱袋子；样本外 Sharpe 为负，保留 paper 观察 |
-| 实验性 | rsi_reversal | RSI 超买超卖反弹；现有参数稳定性 66.7%，未达到 gate-v1 的 80% 要求 |
-| 已禁用/研究 | hot_money | 游资三数交易法；已归档，禁止进入运行时策略链路 |
-| 已禁用/研究 | ma5_momentum | MA5 动量突破；已归档，禁止进入运行时策略链路 |
-| 已禁用/研究 | chenxuezhang | 陈学长不吃面规则策略；持仓回测 Sharpe -0.24，语义标签研究专用 |
-| 实验性 | linjudaye | 邻居大爷规则策略（8 大量价规则组合） |
-| 已禁用/研究 | ml_gradient_boost | ML GradientBoosting 5 日收益预测（需滚动重训和样本外复验） |
-| 历史/观察 | Turtle / DualMA / MACD | 趋势跟踪基础策略（当前未启用，保留代码） |
-| 历史/观察 | KDJ / Bollinger / PullbackLow | 均值回归/低吸策略（当前未启用，保留代码） |
-| 历史/观察 | NorthForceLong | 趋势向上+缩量回踩 MA20（回测未通过，持续调参） |
-| 历史/观察 | DragonTigerShort | 涨停断板反包（回测观察通过，仅在 paper 观察） |
-| 已禁用/研究 | rebound_elite | 断板反包精英追涨；小样本正收益后被 Walk-Forward 证伪，禁止进入信号融合 |
-| 实验性 | price_volume_signal | 换手率+量比尾盘黄金信号（四信号框架，待 paper 观察） |
-| 已禁用 | IndustryCapitalMomentum | 行业资金强度+动量确认 v1.2（回测 -15.38%，待重构） |
-| 研究中 | regime_cycle_four | 公众号《八月，来了~~》四周期模型；事件研究方向为正但验证期不显著，待扩池复验 |
-| 已禁用/研究 | death_valley_rebound | 持仓回测收益 -0.57%、Sharpe -5.33，事件研究结果不可作为准入依据 |
-| 已禁用/研究 | bollinger_oversold_rebound | 持仓回测收益 -2.24%、Sharpe -1.78，事件研究结果不可作为准入依据 |
-| 已禁用/研究 | fanbao_strategy | 小圈圈儿《反包策略》V2.0 已实现，尚未完成全市场回测，禁止启用 |
-| 已禁用/研究 | rebound_system | 陈学长断板反包实战体系·手册完整版；买点 A 仅探索性正向，买点 C 已证伪，尚未完成前向验证 |
-| 已禁用/研究 | asset_combo | 认知资产组合验证载体；仅提取 gap/regime 风控组件，不作为独立盈利策略 |
-| 研究组件 | risk_rules (通用组件) | 从断板反包战法中抢救出的认知资产，必须经过独立验证后才能复用，不代表原策略有效 |
-| 已禁用/研究 | breakout_rebound | 断板反包完整版；样本外未通过，禁止重新启用 |
+| 实验性 | box_breakout | 达尔文箱体突破；趋势过滤已从硬 AND 改为置信度权重 |
+| 实验性 | double_yin | 双阴钱袋子；支撑公差 3%→5% 参数化 |
+| 实验性 | rsi_reversal | RSI 超卖反弹；已移除 MA20>=MA60 互斥过滤 |
+| 实验性 | linjudaye | 邻居大爷 8 规则组合 |
+| 实验性 | price_volume_signal | 换手率+量比；float_shares 自动估计修复 |
+| 实验性 | regime_cycle_four | 四周期模型；金叉窗口扩展至 5 日 |
+| 实验性 | sector_momentum | 板块动量轮动（2026-09-02 新增，唯一正收益回测） |
+| 实验性 | dragon_head | 龙头战法（2026-09-03 钱多多体系） |
+| 实验性 | huamulan_ghost_breakout | 烂板成妖打板（2026-09-03 归档复活） |
+| 实验性 | sentiment_cycle | 情绪周期（2026-09-03 MingCe 移植） |
 
 **当前策略配置（按市场状态分流）**：
-- `bull/rally`：配置中保留 box_breakout、double_yin、rsi_reversal、linjudaye、price_volume_signal、regime_cycle_four；实验性信号仅按配置和运行模式观察，不能据此宣称已验证
-- `sideways`：配置中保留 box_breakout、double_yin、rsi_reversal
-- `chenxuezhang`、`breakout_rebound`、`rebound_elite`、`rebound_system`：disabled / research-only，不参与信号融合
-- **信号策略**：`bear/crash` 均不启用买入策略（`settings.yaml:enabled_by_regime`），系统进入观察/防守状态
-- **选股器**：`bear` 仍可输出缩减后的观察候选（候选数 ×0.4；MA5<MA10 时再减半），仅供研究，不等于买入许可
-- `crash`：保护性空仓（系统性崩盘日不接飞刀）
-- `conditional_pass` 仅允许进入 `paper`；`track_live/signal_only/live` 只加载 settings `verified_strategies` 白名单中的策略，并要求策略已注册。当前配置保持 `track_live`，因暂无完整 gate-v1 通过证据，生产运行时不加载策略信号，仅跟踪真实持仓
+- `bull/rally`：10 策略全开（except 按市场环境 Gate 过滤）
+- `sideways`：box_breakout、double_yin、rsi_reversal、sector_momentum、sentiment_cycle
+- `bear/crash`：均不启用买入策略（`settings.yaml:enabled_by_regime`），系统进入观察/防守状态
+- 入场门禁：市场状态 / 风控熔断 / 持仓上限 / 剧烈波动 / 涨停环境（冰点→试探买入，涨停稀少→空仓，封板率<70%→不打板，接力率<60%→不接力）
+- `conditional_pass` 仅允许进入 `paper`；生产模式只加载 settings `verified_strategies` 白名单中的策略
 
 **策略池动态权重（v0.7.10+）**：`StrategyPool` 根据近 20 笔交易表现动态调整策略权重，连续亏损 5 次大幅降权但保留策略（不删除），连续盈利 3 次逐步恢复；权重持久化到 `data/strategy_pool_weights.json`，进程重启不丢失。
 

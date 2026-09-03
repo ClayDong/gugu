@@ -45,18 +45,34 @@ def test_golden_level_affects_signal_count():
     assert n_a != n_b, f"golden_level 应改变信号数: {n_a} vs {n_b}"
 
 
-def test_max_hold_exit_applied():
-    """max_hold_days>0 时调用 _apply_max_hold_exit（产生卖出信号）。"""
-    df = make_df(n=80)
-    # 无时间止损：可能没有卖出信号
-    st_no = LinJuDaYeStrategy({"max_hold_days": 0})
-    sig_no = st_no.generate_signals(df.copy(), is_backtest=True)
-    # 有时间止损：必然有卖出信号（强制退出）
-    st_yes = LinJuDaYeStrategy({"max_hold_days": 5})
-    sig_yes = st_yes.generate_signals(df.copy(), is_backtest=True)
-    assert int((sig_yes["signal"] == -1).sum()) > 0, "时间止损应产生卖出信号"
-    # 有卖出信号的数量应 >= 无时间止损版本
-    assert int((sig_yes["signal"] == -1).sum()) >= int((sig_no["signal"] == -1).sum())
+def test_trailing_stop_applied():
+    """trailing_stop_pct>0 时 _apply_trailing_stop_exit 产生卖出信号。"""
+    from gugu.strategies.base import Strategy
+
+    dates = pd.date_range("2025-01-01", periods=80, freq="B")
+    # 连续上涨30天后退50天，保证移动止损触发
+    close = np.array([10 + i * 0.05 for i in range(30)] + [15 - i * 0.1 for i in range(50)])
+    n = len(close)
+    df = pd.DataFrame(
+        {
+            "date": dates,
+            "close": close,
+            "open": close * 0.99,
+            "high": close * 1.01,
+            "low": close * 0.98,
+            "volume": [1_000_000] * n,
+            "signal": [0] * n,
+        }
+    )
+    # 手动设置一个买入信号
+    df.loc[10, "signal"] = 1
+    s = Strategy()
+    s.params = {"trailing_stop_pct": 0.08}
+    result = s._apply_trailing_stop_exit(df.copy(), 0.08)
+    sell_signals = int((result["signal"] == -1).sum())
+    assert (
+        sell_signals > 0
+    ), f"移动止损应产生卖出信号，实际=0（最高从10涨到11.45，回撤10%应触发8%止损）"
 
 
 def test_signal_columns_present():
