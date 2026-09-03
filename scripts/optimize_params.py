@@ -185,6 +185,18 @@ STRATEGY_PARAM_GRIDS: dict[str, dict[str, list]] = {
         "stop_loss_pct": [0.05, 0.08, 0.10],
         "max_hold_days": [10, 20, 30],
     },
+    "huamulan_ghost_breakout": {
+        "limit_up_pct": [0.07, 0.09, 0.095],
+        "vol_expand_ratio": [1.2, 1.5, 2.0],
+        "consolidation_window": [10, 20, 30],
+        "trailing_stop_pct": [0.03, 0.05, 0.08],
+    },
+    "sentiment_cycle": {
+        "sentiment_window": [10, 20, 30],
+        "momentum_days": [5, 10, 15],
+        "fear_threshold": [0.2, 0.3, 0.4],
+        "greed_threshold": [0.7, 0.8, 0.9],
+    },
     "dragon_head": {
         "ma_short": [5, 10],
         "limit_up_pct": [0.07, 0.09, 0.095],
