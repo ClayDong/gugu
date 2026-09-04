@@ -40,7 +40,14 @@ SIGNAL_HISTORY_STALE_DAYS = 2  # 交易日信号历史超过 2 天未写入视�
 #  crash_clue=无崩溃线索，心跳连续无空窗）→ 旧阈值 3 误报"重启风暴"
 # 升级人工。v0.9.32 注释自述"历史常态 3-4 次/日"（部署重启），
 # 阈值应高于常态。真实崩溃循环仍由心跳陈旧检查（独立指纹）捕获，无盲区。
-MAX_RESTARTS_PER_DAY = 5  # 单日重启超过 5 次视为重启风暴
+# v0.9.45：阈值 5 → 8。
+# 背景（09-03/09-04 连续实证）：09-03 全天 10 次、09-04 09:40 前 6 次启动，
+# 全部为优雅信号退出（exit code=0、"调度器已停止"、无 ERROR/Traceback、
+#  crash_clue=无崩溃线索、launchd last exit code=0）→ 显式 kickstart 的
+# 部署/开发重启（用户工作流程标准操作），非崩溃循环。阈值 5 连续两天误报
+# "重启风暴"升级人工。真实崩溃循环的判据：10+ 次快速重启 或 心跳陈旧
+# （独立指纹，无盲区）——日计数阈值调至 8 仍可捕获。
+MAX_RESTARTS_PER_DAY = 8  # 单日重启超过 8 次视为重启风暴
 DEFAULT_BOOT_FILE = "scheduler_boot.json"
 DEFAULT_HEARTBEAT_FILE = "heartbeat.json"
 DEFAULT_HISTORY_FILE = "signals_history.jsonl"

@@ -1,5 +1,31 @@
 # 变更日志
 
+## 2026-09-04 — v0.9.45 重启风暴阈值对齐部署常态（5→8）
+
+### 变更：告警评估员处置（2026-09-04 告警分诊）
+
+**❌ 重启风暴升级 [SchedulerHealthResult:restart_storm] 09:40:15（今日启动 6 次）**
+- 根因调查：09-04 六次启动（00:14/01:05/03:15/07:28/07:51/09:37）全部为优雅信号退出
+  （日志均含"调度器已停止"、exit code=0、无 ERROR/Traceback、crash_clue=无崩溃线索、
+  launchd `last exit code = 0`）→ 显式 `launchctl kickstart` 的部署/开发重启
+  （CLAUDE.md 标准工作流），非崩溃循环；看门狗当日无任何自动修复动作；
+  09:37 后调度器连续稳定 4h+（心跳/扫描/信号全正常）
+- 修复：`MAX_RESTARTS_PER_DAY` 5 → 8（v0.9.41 曾 3→5，09-03/09-04 连续两天
+  6 次优雅重启再次误报升级；真实崩溃循环仍由心跳陈旧独立指纹捕获，无盲区）
+- 测试：`test_restart_threshold_default_allows_dev_restarts` 同步更新
+  （4/6 次不告警，9 次告警）；`49 passed`；Ruff 全绿
+
+### 放过记录（无代码变更，附理由）
+- `sentiment.fetcher` 正则 WARNING：`Invalid escape sequence \u` 源自 akshare 内部，
+  gugu 已优雅降级（WARNING + 公告兜底 + 2h 缓存），非 gugu 代码缺陷
+- 13:31 资金流数据源熔断（akshare 连续 3 次失败 + eastmoney ConnectionError）：
+  瞬时网络抖动，缓存兜底 + 1800s 自动恢复，四级冗余设计行为
+- 凌晨 00:29-03:09 回测批量任务日志风暴（~70MB/3h，box_breakout/300760 等）：
+  外部批处理并发多进程所致，磁盘余量 9.5GB 无风险，10MB 轮转自动回收
+- Hermes cron `gugu-scheduler` 任务（工作日 08:00）脚本损坏（"Script not found"）：
+  与 launchd KeepAlive + gugu-health-watchdog 职责重复且静默失败，无害；
+  建议后续人工清理该任务（cron 配置不在 gugu 仓库内，评估员不动）
+
 ## 2026-09-04 — v0.9.44 评审修复落地：paper 成交 + Gate 裁决 + 持仓感知卖出
 
 ### 变更：多专家评审（2026-09-03）三项 P0 修复

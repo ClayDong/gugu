@@ -244,12 +244,14 @@ def test_restart_boom_alerts(tmp_path: Path):
 
 
 def test_restart_threshold_default_allows_dev_restarts(tmp_path: Path):
-    """v0.9.41：默认重启风暴阈值对齐部署常态（5 次/日）。
+    """v0.9.45：默认重启风暴阈值对齐部署常态（8 次/日）。
 
-    2026-09-02 实证：4 次重启全部为优雅部署/开发重启
-    （日志均含"调度器已停止"，crash_clue=无崩溃线索），旧阈值
-    3 误报升级。真实崩溃循环由心跳陈旧独立指纹捕获，无盲区。
-    4 次（正常开发日，用默认阈值）→ 不告警；6 次（超阈值）→ 告警。
+    2026-09-02 实证：4 次重启全部为优雅部署/开发重启（日志均含
+    "调度器已停止"，crash_clue=无崩溃线索），旧阈值 3 误报升级。
+    v0.9.41 阈值 3→5 后，09-03/09-04 又连续两天 6 次（同样全部为
+    优雅信号退出 + 无崩溃线索）再次误报 → v0.9.45 阈值 5→8。
+    真实崩溃循环由心跳陈旧独立指纹捕获，无盲区。
+    4 次 / 6 次（正常开发日，用默认阈值）→ 不告警；9 次（超阈值）→ 告警。
     """
     now = datetime.now().replace(microsecond=0)
     hb = tmp_path / "heartbeat.json"
@@ -267,7 +269,7 @@ def test_restart_threshold_default_allows_dev_restarts(tmp_path: Path):
     def _mk_boots(n: int):
         return [
             {"boot_time": (_anchor - timedelta(minutes=m)).isoformat(), "pid": 1000 + i}
-            for i, m in enumerate([1, 3, 5, 8, 12, 20][:n])
+            for i, m in enumerate([1, 3, 5, 8, 12, 20, 30, 45, 60][:n])
         ]
 
     # 4 次优雅重启（正常开发日）→ 默认阈值不告警
@@ -276,11 +278,17 @@ def test_restart_threshold_default_allows_dev_restarts(tmp_path: Path):
     assert res.ok is True
     assert res.restarts_today == 4
 
-    # 6 次（超出默认阈值 5）→ 告警
+    # 6 次（v0.9.41 曾超出旧阈值 5；v0.9.45 起 6 次为部署常态）→ 不告警
     boot.write_text(json.dumps({"history": _mk_boots(6)}), encoding="utf-8")
     res2 = check_scheduler_health(heartbeat_path=hb, boot_path=boot, data_dir=tmp_path)
-    assert res2.ok is False
-    assert "重启" in res2.message
+    assert res2.ok is True
+    assert res2.restarts_today == 6
+
+    # 9 次（超出默认阈值 8）→ 告警
+    boot.write_text(json.dumps({"history": _mk_boots(9)}), encoding="utf-8")
+    res3 = check_scheduler_health(heartbeat_path=hb, boot_path=boot, data_dir=tmp_path)
+    assert res3.ok is False
+    assert "重启" in res3.message
 
 
 def test_restart_storm_escalates_once_per_day(tmp_path: Path):
