@@ -83,16 +83,18 @@ dragon_head:
   vol_expand_min: 1.0
   vol_shrink_exit: 0.7
   trailing_stop_pct: 0.08
-
 huamulan_ghost_breakout:
   limit_up_pct: 0.095
   vol_expand_ratio: 1.5
   trailing_stop_pct: 0.05
   consolidation_window: 20
-
 sentiment_cycle:
   sentiment_window: 20
   momentum_days: 10
   fear_threshold: 0.3
   greed_threshold: 0.8
   trailing_stop_pct: 0.08
+two_b_reversal:
+  cycle_days: 14
+  trailing_stop_pct: 0.08
+  max_hold_days: 5

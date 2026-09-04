@@ -42,6 +42,7 @@ strategy:
     - dragon_head
     - huamulan_ghost_breakout
     - sentiment_cycle
+    - two_b_reversal
     rally:
     - box_breakout
     - double_yin
@@ -53,12 +54,14 @@ strategy:
     - dragon_head
     - huamulan_ghost_breakout
     - sentiment_cycle
+    - two_b_reversal
     sideways:
     - box_breakout
     - double_yin
     - rsi_reversal
     - sector_momentum
     - sentiment_cycle
+    - two_b_reversal
     bear: []
     crash: []
   verified_strategies: []
@@ -73,6 +76,7 @@ strategy:
   - dragon_head
   - huamulan_ghost_breakout
   - sentiment_cycle
+  - two_b_reversal
   enabled: []
   weights: {}
   experimental_weights:
@@ -86,6 +90,7 @@ strategy:
     dragon_head: 0.25
     huamulan_ghost_breakout: 0.15
     sentiment_cycle: 0.15
+    two_b_reversal: 0.2
   signal_fusion: weighted
   min_confidence: 0.4
   auto_select: true

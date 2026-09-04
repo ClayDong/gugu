@@ -224,6 +224,26 @@ signal_strategies:
         avg_return: 0.0
       sample: 待 Walk-Forward 验证
       next_action: Walk-Forward 参数优化 + paper 验证 30+ 信号
+  two_b_reversal:
+    name: 2B反转（邻居大爷）
+    module: gugu.strategies.two_b_reversal
+    class: TwoBReversalStrategy
+    source: 邻居大爷 R-LN06 2B点（mulan-quant 规则库）
+    enabled: true
+    summary: 14日周期二次探底不破前低+收阳 → 买入；跌破前低/移动止损8% → 卖出
+    params_entry: strategy_defaults.yaml
+    validation: conditional_pass 2026-09-04 - 事件研究 116 样本 5日超额+2.18% p=0.001 显著；但当前
+      300 天下跌市回测绝对收益为负（正alpha负beta），待 paper 观察
+    validation_gate:
+      status: conditional_pass
+      sample: 事件研究 116 样本（58 只缓存股票）
+      metrics:
+        excess_5d: 0.0218
+        p_value: 0.0006
+        total_trades: 116
+        bt_avg_return: -0.0707
+        note: 下跌市窗口绝对收益为负，事件研究超额显著
+      next_action: paper 观察 30+ 信号，牛市窗口复验超额
 risk_strategies:
   trailing_stop:
     name: 浪谷递进移动止损

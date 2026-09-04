@@ -197,6 +197,10 @@ STRATEGY_PARAM_GRIDS: dict[str, dict[str, list]] = {
         "fear_threshold": [0.2, 0.3, 0.4],
         "greed_threshold": [0.7, 0.8, 0.9],
     },
+    "two_b_reversal": {
+        "cycle_days": [10, 14, 20],
+        "trailing_stop_pct": [0.05, 0.08, 0.10],
+    },
     "dragon_head": {
         "ma_short": [5, 10],
         "limit_up_pct": [0.07, 0.09, 0.095],
