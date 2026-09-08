@@ -360,6 +360,11 @@ class OrderManager:
                     pos.prev_close = float(signal["prev_close"])
                 pos.is_st = bool(signal.get("is_st", False))
                 pos.is_suspended = bool(signal.get("is_suspended", False))
+                if execution_context is not None:
+                    pos.entry_signal_id = execution_context.signal_id
+                    pos.entry_strategy = execution_context.strategy
+                    pos.entry_strategies = list(execution_context.strategies)
+                    pos.entry_execution_id = result.execution_id or ""
 
                 # 初始化移动止损状态
                 df_for_stop = (

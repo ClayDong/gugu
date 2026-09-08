@@ -42,6 +42,11 @@ class Position:
     entry_date: str = ""
     # 是否经过除权除息调整
     dividend_adjusted: bool = False
+    # 入场成交归因，用于止损/止盈卖出关联原始策略
+    entry_signal_id: str = ""
+    entry_strategy: str = ""
+    entry_strategies: list[str] | None = None
+    entry_execution_id: str = ""
 
     @property
     def market_value(self) -> float:

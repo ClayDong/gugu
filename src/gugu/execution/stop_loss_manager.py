@@ -21,6 +21,7 @@ import pandas as pd
 from gugu.analysis.dynamic_take_profit import DynamicTakeProfitEngine
 from gugu.analysis.trailing_stop import TrailingStopEngine, TrailingStopSignal
 from gugu.data.stock_names import lookup_stock_name
+from gugu.execution.paper_ledger import ExecutionContext
 from gugu.models import Position
 from gugu.risk.rules import RiskAction
 from gugu.utils.log import get_logger
@@ -214,7 +215,19 @@ class StopLossManager:
                 is_suspended=bool(getattr(pos, "is_suspended", False)),
             )
             if risk_result.allowed:
-                result = broker.order(symbol, "sell", int(available), price)
+                context = ExecutionContext(
+                    signal_id=getattr(pos, "entry_signal_id", ""),
+                    strategy=getattr(pos, "entry_strategy", ""),
+                    strategies=tuple(getattr(pos, "entry_strategies", None) or []),
+                    attribution_method="primary",
+                    data_quality="fresh_valid",
+                )
+                if getattr(broker, "supports_execution_context", False):
+                    result = broker.order(
+                        symbol, "sell", int(available), price, execution_context=context
+                    )
+                else:
+                    result = broker.order(symbol, "sell", int(available), price)
                 if result.success:
                     # 清仓后清理状态
                     fresh_pos = broker.get_position(symbol)

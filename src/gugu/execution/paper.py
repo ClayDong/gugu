@@ -724,6 +724,10 @@ class PaperBroker(BaseBroker):
                             "dividend_adjusted": p.dividend_adjusted,
                             "trailing_stop": p.trailing_stop,
                             "danger_signals": p.danger_signals,
+                            "entry_signal_id": p.entry_signal_id,
+                            "entry_strategy": p.entry_strategy,
+                            "entry_strategies": p.entry_strategies,
+                            "entry_execution_id": p.entry_execution_id,
                         }
                         for sym, p in self._positions.items()
                     },
@@ -822,6 +826,10 @@ class PaperBroker(BaseBroker):
                     dividend_adjusted=p.get("dividend_adjusted", False),
                     trailing_stop=p.get("trailing_stop"),
                     danger_signals=p.get("danger_signals"),
+                    entry_signal_id=p.get("entry_signal_id", ""),
+                    entry_strategy=p.get("entry_strategy", ""),
+                    entry_strategies=p.get("entry_strategies"),
+                    entry_execution_id=p.get("entry_execution_id", ""),
                 )
             except (KeyError, TypeError, ValueError) as pos_err:
                 logger.warning("恢复持仓 {} 失败，跳过该持仓: {}；原始数据: {}", sym, pos_err, p)
