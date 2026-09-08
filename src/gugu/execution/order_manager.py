@@ -327,8 +327,17 @@ class OrderManager:
                     "{} 前收无效 prev_close={}，交由 broker 拒绝交易", symbol, prev_close
                 )
 
-        # 下单
-        result = broker.order(symbol, direction, quantity, price)
+        # 下单。PaperBroker 支持显式成交上下文；其它 broker 保持旧 API。
+        execution_context = None
+        if getattr(broker, "supports_execution_context", False):
+            from gugu.execution.paper_ledger import ExecutionContext
+
+            execution_context = ExecutionContext.from_signal(signal)
+            result = broker.order(
+                symbol, direction, quantity, price, execution_context=execution_context
+            )
+        else:
+            result = broker.order(symbol, direction, quantity, price)
 
         # 结构化交易日志
         account = broker.get_account()
@@ -413,6 +422,11 @@ class OrderManager:
             "price": result.price,
             "quantity": result.quantity,
             "commission": result.commission,
+            "stamp_tax": result.stamp_tax,
+            "transfer_fee": result.transfer_fee,
+            "execution_id": result.execution_id,
+            "entry_execution_id": result.entry_execution_id,
+            "realized_pnl": result.realized_pnl,
             "message": result.message,
         }
         signal["order_result"] = order_result

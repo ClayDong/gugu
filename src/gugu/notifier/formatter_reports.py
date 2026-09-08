@@ -195,6 +195,13 @@ def _format_performance(perf: dict[str, Any]) -> str:
         f"闭仓交易胜率: {closed_trade_win_rate:.1%} | 已实现盈亏: {realized_pnl:+.2f}",
         "（说明：前瞻命中率 = 信号发出后5日K线收盘价涨幅；闭仓胜率仅依据 outcome_status=closed 的 realized_pnl）",
     ]
+    paper = perf.get("paper_execution") or {}
+    if paper:
+        lines.append(
+            f"Paper成交: {paper.get('fills', 0)} 笔 | "
+            f"闭仓 {paper.get('closed_trades', 0)} 笔 | "
+            f"已实现盈亏 {float(paper.get('realized_pnl', 0.0)):+.2f}"
+        )
 
     by_strategy = perf.get("by_strategy", [])
     if by_strategy:
@@ -384,6 +391,12 @@ def build_signal_performance_card(report: dict[str, Any]) -> dict[str, Any]:
         f"**已平仓交易胜率**：{closed_trade_win_rate:.1%}",
         f"**已实现盈亏**：{realized_pnl:+.2f}",
     ]
+    paper = report.get("paper_execution") or {}
+    if paper:
+        overview_lines.append(
+            f"**Paper 成交**：{paper.get('fills', 0)} 笔，闭仓 {paper.get('closed_trades', 0)} 笔，"
+            f"已实现盈亏 {float(paper.get('realized_pnl', 0.0)):+.2f}"
+        )
     sections = ["\n".join(overview_lines)]
 
     by_strategy = report.get("by_strategy", [])

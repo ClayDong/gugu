@@ -7,8 +7,7 @@ signal_strategies:
     enabled: true
     summary: 识别箱体上下沿，突破上沿买入、跌破下沿卖出，配合成交量确认
     params_entry: strategy_defaults.yaml
-    validation: conditional_pass 2026-07-26 - Walk-Forward 样本外 Sharpe≤0(-1.43)，但 300股全市场回测
-      150 笔夏普 0.15/胜率 55%；有条件启用需 paper 验证
+    validation: conditional_pass 2026-07-26 - 过往全市场回测 150 笔夏普 0.15/胜率 55%，最新 Walk-Forward 未通过；当前仅允许 paper 观察
     notes: confirm_days=1 防假突破
     validation_gate:
       status: conditional_pass

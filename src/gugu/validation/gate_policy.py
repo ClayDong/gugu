@@ -102,6 +102,20 @@ class GatePolicy:
         return cls.evaluate(metrics, cls.WRITEBACK_RULES)
 
     @classmethod
+    def classify_evidence(
+        cls, verdict: dict[str, Any], *, sample_key: str = "oos_trades", minimum: int = 30
+    ) -> str:
+        """区分通过、明确失败和样本不足，不降低任何 Gate 阈值。"""
+        checks = verdict.get("checks") or {}
+        sample = checks.get(sample_key, {}).get("value")
+        try:
+            if sample is None or float(sample) < minimum:
+                return "insufficient_evidence"
+        except (TypeError, ValueError):
+            return "insufficient_evidence"
+        return "passed" if verdict.get("passed") else "failed"
+
+    @classmethod
     def thresholds(cls, rules: dict[str, GateRule] | None = None) -> dict[str, float]:
         """返回兼容旧脚本的纯阈值映射。"""
         return {key: rule.threshold for key, rule in (rules or cls.FULL_RULES).items()}

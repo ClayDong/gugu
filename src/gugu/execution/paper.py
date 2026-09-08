@@ -23,6 +23,12 @@ from typing import Any
 
 from gugu.config import PROJECT_ROOT, get_config
 from gugu.execution.base import AccountInfo, BaseBroker, Direction, OrderResult
+from gugu.execution.paper_ledger import (
+    ExecutionContext,
+    append_fill,
+    build_fill_record,
+    new_execution_id,
+)
 from gugu.models import Position
 from gugu.utils.log import get_logger
 
@@ -52,6 +58,8 @@ LIQUIDITY_TIERS = [
 class PaperBroker(BaseBroker):
     """模拟盘 broker。"""
 
+    supports_execution_context = True
+
     def __init__(
         self,
         initial_capital: float | None = None,
@@ -68,6 +76,8 @@ class PaperBroker(BaseBroker):
         self._slippage = float(slippage or cfg.slippage)
         self._positions: dict[str, Position] = {}
         self._trades: list[dict[str, Any]] = []
+        # 每个持仓的首笔入场成交 ID，用于卖出关联 realized_pnl
+        self._position_entry_execution: dict[str, str] = {}
         self._daily_start_value: float | None = None
         # 部分成交状态缓存 {symbol: market_value_in_billions}
         self._market_value_cache: dict[str, float] = {}
@@ -242,10 +252,14 @@ class PaperBroker(BaseBroker):
         direction: Direction,
         quantity: int,
         price: float | None = None,
+        *,
+        execution_context: ExecutionContext | None = None,
     ) -> OrderResult:
         """下单。模拟成交，扣手续费/印花税/滑点，支持部分成交。"""
         with self._lock:
-            return self._order_impl(symbol, direction, quantity, price)
+            return self._order_impl(
+                symbol, direction, quantity, price, execution_context=execution_context
+            )
 
     def _order_impl(
         self,
@@ -253,6 +267,8 @@ class PaperBroker(BaseBroker):
         direction: Direction,
         quantity: int,
         price: float | None = None,
+        *,
+        execution_context: ExecutionContext | None = None,
     ) -> OrderResult:
         symbol = symbol.strip().zfill(6)
         direction = direction.lower().strip()  # 规范化，与 RiskManager 保持一致
@@ -302,6 +318,12 @@ class PaperBroker(BaseBroker):
         # 流动性感知滑点
         slippage_bps, partial_prob = self._get_liquidity_tier(symbol)
         effective_slippage = max(self._slippage, slippage_bps / 10000)
+
+        # 成交上下文与统一账本字段；失败订单不会写入成交账本
+        execution_id = new_execution_id()
+        entry_execution_id: str | None = None
+        cost_basis_consumed = 0.0
+        realized_pnl: float | None = None
 
         if direction == "buy":
             # 涨跌停成交检查
@@ -373,6 +395,7 @@ class PaperBroker(BaseBroker):
                 # 加仓后同步更新现价，避免止损检查用旧价
                 pos.current_price = cur_price
                 # T+1：追加买入的部分当日仍不可卖，旧持仓的 available 不变
+                entry_execution_id = self._position_entry_execution.get(symbol)
             else:
                 self._positions[symbol] = Position(
                     symbol=symbol,
@@ -381,6 +404,8 @@ class PaperBroker(BaseBroker):
                     avg_cost=fill_price,
                     current_price=cur_price,
                 )
+                entry_execution_id = execution_id
+                self._position_entry_execution[symbol] = execution_id
 
             result = OrderResult(
                 True,
@@ -392,6 +417,8 @@ class PaperBroker(BaseBroker):
                 0,
                 transfer_fee,
                 f"买入成功{'（部分成交）' if actual_quantity < quantity else ''}",
+                execution_id=execution_id,
+                entry_execution_id=entry_execution_id,
             )
             logger.info(
                 f"[模拟盘] 买入 {symbol} {actual_quantity}股 @ {fill_price:.2f} "
@@ -426,11 +453,17 @@ class PaperBroker(BaseBroker):
             stamp_tax = fill_price * actual_quantity * self._stamp_tax
             proceeds = fill_price * actual_quantity - commission - stamp_tax - transfer_fee
 
+            # 移动平均成本：卖出部分仓位时按当前 avg_cost 匹配成本并计算已实现盈亏
+            cost_basis_consumed = pos.avg_cost * actual_quantity
+            realized_pnl = proceeds - cost_basis_consumed
+            entry_execution_id = self._position_entry_execution.get(symbol)
+
             self._cash += proceeds
             pos.quantity -= actual_quantity
             pos.available -= actual_quantity
             if pos.quantity <= 0:
                 del self._positions[symbol]
+                self._position_entry_execution.pop(symbol, None)
 
             result = OrderResult(
                 True,
@@ -442,6 +475,9 @@ class PaperBroker(BaseBroker):
                 stamp_tax,
                 transfer_fee,
                 f"卖出成功{'（部分成交）' if actual_quantity < quantity else ''}",
+                execution_id=execution_id,
+                entry_execution_id=entry_execution_id,
+                realized_pnl=realized_pnl,
             )
             logger.info(
                 f"[模拟盘] 卖出 {symbol} {actual_quantity}股 @ {fill_price:.2f} "
@@ -462,8 +498,34 @@ class PaperBroker(BaseBroker):
                 "commission": result.commission,
                 "stamp_tax": result.stamp_tax,
                 "transfer_fee": result.transfer_fee,
+                "execution_id": result.execution_id,
+                "entry_execution_id": result.entry_execution_id,
+                "realized_pnl": result.realized_pnl,
+                "strategy": execution_context.strategy if execution_context else "",
+                "strategies": list(execution_context.strategies) if execution_context else [],
+                "outcome_status": "closed" if direction == "sell" else "open",
             }
         )
+        if execution_context is not None:
+            append_fill(
+                build_fill_record(
+                    execution_id=result.execution_id or execution_id,
+                    context=execution_context,
+                    symbol=symbol,
+                    direction=direction,
+                    requested_quantity=quantity,
+                    filled_quantity=result.quantity,
+                    requested_price=float(price or cur_price),
+                    fill_price=result.price,
+                    commission=result.commission,
+                    stamp_tax=result.stamp_tax,
+                    transfer_fee=result.transfer_fee,
+                    entry_execution_id=result.entry_execution_id,
+                    cost_basis_consumed=cost_basis_consumed,
+                    realized_pnl=result.realized_pnl,
+                    outcome_status="closed" if direction == "sell" else "open",
+                )
+            )
         self._save_state()
         return result
 
@@ -666,6 +728,7 @@ class PaperBroker(BaseBroker):
                         for sym, p in self._positions.items()
                     },
                     "trades": self._trades,
+                    "position_entry_execution": self._position_entry_execution,
                     "market_context": self._market_context,
                     "daily_start_value": self._daily_start_value,
                     # P1-1 修复（2026-08-05）：状态文件必须带时间戳。
@@ -763,6 +826,7 @@ class PaperBroker(BaseBroker):
             except (KeyError, TypeError, ValueError) as pos_err:
                 logger.warning("恢复持仓 {} 失败，跳过该持仓: {}；原始数据: {}", sym, pos_err, p)
         self._trades = data.get("trades", [])
+        self._position_entry_execution = data.get("position_entry_execution", {})
         self._market_context = data.get("market_context", {})
         self._daily_start_value = data.get("daily_start_value")
         if self._positions:

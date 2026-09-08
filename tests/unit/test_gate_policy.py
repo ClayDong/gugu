@@ -69,3 +69,30 @@ class TestGatePolicy:
         )
         assert report["passed"] is False
         assert report["failed_checks"] == ["param_stability"]
+
+
+def test_classify_evidence_marks_low_sample_without_lowering_gate():
+    verdict = GatePolicy.evaluate_writeback(
+        {
+            "avg_sharpe": 1.0,
+            "param_stability": 1.0,
+            "max_drawdown": 0.1,
+            "avg_return": 0.1,
+            "oos_trades": 8,
+        }
+    )
+    assert verdict["passed"] is False
+    assert GatePolicy.classify_evidence(verdict) == "insufficient_evidence"
+
+
+def test_classify_evidence_marks_full_sample_failure():
+    verdict = GatePolicy.evaluate_writeback(
+        {
+            "avg_sharpe": -0.1,
+            "param_stability": 1.0,
+            "max_drawdown": 0.1,
+            "avg_return": -0.1,
+            "oos_trades": 30,
+        }
+    )
+    assert GatePolicy.classify_evidence(verdict) == "failed"

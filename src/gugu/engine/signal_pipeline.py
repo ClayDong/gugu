@@ -259,6 +259,8 @@ class SignalPipeline:
         # 生产环境由引擎层预计算 market_env 并注入到 signal context
         precomputed_env = signal.get("_market_env")
         if precomputed_env:
+            if precomputed_env.get("detector_status") != "available":
+                return "市场环境数据不足，仅观察"
             if should_empty_position(precomputed_env):
                 return f"涨停稀少({precomputed_env.get('limit_up_count', 0)}只)，空仓等机会"
             if "ghost_breakout" in strategy_name and should_avoid_board(precomputed_env):
@@ -280,6 +282,7 @@ class SignalPipeline:
         account: Any,
         regime: str | None = None,
         dragon_head_info: dict[str, Any] | None = None,
+        market_env: dict[str, Any] | None = None,
     ) -> dict | None:
         try:
             self._filter_scan_count += 1
@@ -287,6 +290,28 @@ class SignalPipeline:
             if not signal:
                 self._inc_filter("信号路由")
                 return None
+
+            # 龙头策略在跨股证据不可用时 fail-closed，不静默当成真龙头
+            _signal_strategies = signal.get("strategies", []) or []
+            _is_dragon_signal = (
+                "dragon_head" in _signal_strategies or signal.get("strategy") == "dragon_head"
+            )
+            if signal.get("direction") == "buy" and _is_dragon_signal and not dragon_head_info:
+                signal["observation_only"] = True
+                signal["gate_blocked"] = True
+                signal["gate_reason"] = "跨股龙头证据不可用，仅观察"
+
+            # 市场环境由引擎批量预计算；缺失/不足只允许观察，不能升级买入资格
+            if market_env:
+                signal["_market_env"] = market_env
+                signal["market_env"] = market_env
+                if (
+                    signal.get("direction") == "buy"
+                    and market_env.get("detector_status") != "available"
+                ):
+                    signal["observation_only"] = True
+                    signal["gate_blocked"] = True
+                    signal["gate_reason"] = "市场环境数据不足，仅观察"
 
             # ═══════════════════════════════════════════════════════
             # 道①：入场前检查清单（交易纪律，不可绕过）
@@ -1452,6 +1477,10 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "order_commission": getattr(order_result, "commission", 0),
                 "order_stamp_tax": getattr(order_result, "stamp_tax", 0),
                 "order_transfer_fee": getattr(order_result, "transfer_fee", 0),
+                "execution_id": getattr(order_result, "execution_id", None),
+                "entry_execution_id": getattr(order_result, "entry_execution_id", None),
+                "realized_pnl": getattr(order_result, "realized_pnl", None),
+                "attribution_method": signal.get("attribution_method", "primary"),
             }
             # 2026-09-04 优化（数据专家 review）：校验策略名在注册表中，
             # 已删除策略（历史残留 dual_ma/turtle/bollinger）不再写入信号历史，

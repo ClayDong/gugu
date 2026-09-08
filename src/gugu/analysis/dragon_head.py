@@ -27,7 +27,51 @@ from gugu.utils.log import get_logger
 
 logger = get_logger()
 
-# A 股主要板块映射（申万一级行业 → 代表股票）
+
+class DragonHeadDetector:
+    """兼容类接口，封装现有跨股龙头识别函数。
+
+    输出明确标注为 heuristic/unverified，不参与策略准入或 verified 升级。
+    """
+
+    def __init__(
+        self,
+        sector_map: dict[str, list[str]] | None = None,
+        lookback: int = 20,
+        strong_day_pct: float = 0.07,
+    ):
+        self.sector_map = sector_map
+        self.lookback = lookback
+        self.strong_day_pct = strong_day_pct
+
+    def detect(self, stock_data: dict[str, pd.DataFrame]) -> dict[str, dict]:
+        """Run heuristic detection and attach evidence metadata."""
+        result = identify_dragon_head(
+            stock_data, self.sector_map, self.lookback, self.strong_day_pct
+        )
+        coverage = len(stock_data)
+        asof = max(
+            (
+                str(df["date"].iloc[-1])
+                for df in stock_data.values()
+                if not df.empty and "date" in df.columns
+            ),
+            default="",
+        )
+        for info in result.values():
+            info.update(
+                {
+                    "evidence_status": "heuristic",
+                    "data_coverage": coverage,
+                    "sample_count": coverage,
+                    "asof": asof,
+                    "roles_complete": bool(info.get("anchor_symbol") or info.get("followers")),
+                }
+            )
+        return result
+
+
+__all__ = ["DragonHeadDetector", "identify_dragon_head"]
 SECTOR_MAP: dict[str, list[str]] = {
     "白酒": ["600519", "000858", "000568", "002304"],
     "新能源": ["300750", "002594", "601012", "600438"],
@@ -42,6 +86,7 @@ def identify_dragon_head(
     stock_data: dict[str, pd.DataFrame],
     sector_map: dict[str, list[str]] | None = None,
     lookback: int = 20,
+    strong_day_pct: float = 0.07,
 ) -> dict[str, dict]:
     """识别每个板块的龙头股。
 
@@ -76,10 +121,12 @@ def identify_dragon_head(
             ret_5d = (close[-1] / close[-min(5, len(close))] - 1) if len(close) >= 5 else 0
             ret_10d = (close[-1] / close[-min(10, len(close))] - 1) if len(close) >= 10 else 0
 
-            # 2. 连板检测（近似：连续涨幅 > 9.5% 的天数）
+            # 2. 强势日检测（默认涨幅 > 7%，由配置/Detector 参数统一）
             daily_ret = np.diff(close) / close[:-1]
             limit_up_days = (
-                int(np.sum(daily_ret[-lookback:] > 0.095)) if len(daily_ret) >= lookback else 0
+                int(np.sum(daily_ret[-lookback:] > strong_day_pct))
+                if len(daily_ret) >= lookback
+                else 0
             )
 
             # 3. 量能扩张（近5日量 vs 20日均量）

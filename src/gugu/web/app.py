@@ -224,7 +224,13 @@ def create_app() -> FastAPI:
         for t in trades:
             if "name" not in t:
                 t["name"] = lookup_stock_name(t.get("symbol", ""))
-        return {"trades": trades, "count": len(trades)}
+        from gugu.execution.paper_ledger import summarize_fills
+
+        return {
+            "trades": trades,
+            "count": len(trades),
+            "paper_execution": summarize_fills(),
+        }
 
     @app.get("/api/risk")
     async def get_risk_status() -> dict[str, Any]:

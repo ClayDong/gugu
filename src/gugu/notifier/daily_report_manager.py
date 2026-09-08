@@ -130,7 +130,14 @@ class DailyReportManager:
             from gugu.analysis.signal_tracker import SignalTracker
 
             tracker = SignalTracker()
-            return await tracker.generate_report(days=30)
+            report = await tracker.generate_report(days=30)
+            try:
+                from gugu.execution.paper_ledger import summarize_fills
+
+                report["paper_execution"] = summarize_fills()
+            except Exception as e:
+                logger.debug("获取 paper 成交摘要失败: {}", e)
+            return report
         except Exception as e:
             logger.warning("生成信号绩效报告失败: {}", e)
             return None

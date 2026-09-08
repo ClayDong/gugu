@@ -27,6 +27,10 @@ class OrderResult:
     stamp_tax: float = 0.0
     transfer_fee: float = 0.0
     message: str = ""
+    # paper 统一成交账本关联字段（旧 broker 调用保持兼容）
+    execution_id: str | None = None
+    entry_execution_id: str | None = None
+    realized_pnl: float | None = None
 
 
 @dataclass

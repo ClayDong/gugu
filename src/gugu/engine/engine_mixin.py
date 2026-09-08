@@ -254,9 +254,9 @@ class EngineOpsMixin:
         dragon_head_info: dict[str, dict] = {}
         if len(batch_history) >= 2:
             try:
-                from gugu.analysis.dragon_head import identify_dragon_head
+                from gugu.analysis.dragon_head import DragonHeadDetector
 
-                dragon_head_info = identify_dragon_head(batch_history)
+                dragon_head_info = DragonHeadDetector().detect(batch_history)
                 if dragon_head_info:
                     _dragon_count = sum(1 for v in dragon_head_info.values() if v.get("is_dragon"))
                     logger.info(
@@ -268,6 +268,21 @@ class EngineOpsMixin:
             except Exception as e:
                 logger.warning("龙头识别失败，跳过跨股分析: {}", e)
                 dragon_head_info = {}
+
+        # 市场环境一次性预计算并显式注入 pipeline。
+        market_env: dict[str, Any] = {
+            "detector_status": "unavailable",
+            "sample_count": len(batch_history),
+            "mode": "unavailable",
+            "asof": datetime.now().isoformat(timespec="seconds"),
+        }
+        if batch_history:
+            try:
+                from gugu.analysis.market_env import MarketEnvironment
+
+                market_env = MarketEnvironment().assess(batch_history)
+            except Exception as e:
+                logger.warning("市场环境评估失败，买入 fail-closed: {}", e)
 
         async def _scan_single(symbol: str) -> dict[str, Any] | None:
             async with semaphore:
@@ -315,6 +330,7 @@ class EngineOpsMixin:
                         account=account,
                         regime=regime["regime"],
                         dragon_head_info=dragon_head_info.get(symbol),
+                        market_env=market_env,
                     )
                     if signal is None:
                         return None

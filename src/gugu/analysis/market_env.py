@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pandas as pd
 
 from gugu.utils.log import get_logger
@@ -76,10 +78,12 @@ class MarketEnvironment:
         sealed_count = 0  # 封板数（涨停且未炸板，即收阳）
         relay_candidates = 0  # 接力候选（前日涨停的股票数）
         relay_success = 0  # 接力成功（前日涨停 + 今日高开）
+        valid_samples = 0
 
         for _sym, df in watchlist_data.items():
-            if len(df) < 2:
+            if len(df) < 3:
                 continue
+            valid_samples += 1
             close = df["close"].values
             open_p = df["open"].values
             daily_ret = (close[-1] / close[-2] - 1) if close[-2] > 0 else 0
@@ -107,7 +111,10 @@ class MarketEnvironment:
         )
 
         # ── 环境模式 ──────────────────────────────────
-        if is_ice:
+        if valid_samples < 3:
+            mode = "unavailable"
+            advice = "市场环境数据不足，仅观察，不产生可执行买入。"
+        elif is_ice:
             # 冰点 → 试探性买入（买在不得不涨的时间窗口）
             mode = "ice_point_buy"
             advice = "冰点极致，个股先于情绪，情绪先于板块。关注率先涨停的焦点股。"
@@ -120,6 +127,9 @@ class MarketEnvironment:
             advice = "正常环境，按策略信号执行。"
 
         result = {
+            "detector_status": "available" if valid_samples >= 3 else "insufficient",
+            "asof": datetime.now().isoformat(timespec="seconds"),
+            "sample_count": valid_samples,
             "limit_up_count": limit_up_count,
             "seal_rate": round(seal_rate, 2),
             "relay_rate": round(relay_rate, 2),

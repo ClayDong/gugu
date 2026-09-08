@@ -1026,7 +1026,8 @@ class TestRecordSignalHistory:
             assert record["execution_success"] is True
             assert record["execution_status"] == "filled"
             assert record["outcome_status"] == "open"
-            assert "realized_pnl" not in record
+            assert record["realized_pnl"] is None
+            assert record["execution_id"] is None
         finally:
             sp.gugu_config.PROJECT_ROOT = original_root
 

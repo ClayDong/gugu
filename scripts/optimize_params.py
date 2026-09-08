@@ -119,7 +119,7 @@ def _record_optimization_ledger(
         parameter_grid_size=grid_size if param_grid else 0,
         best_params=best_params,
         results=results or [],
-        gate_status=(unlock_report.get("version") if unlock_report else "not_evaluated"),
+        gate_status=(unlock_report.get("verdict") if unlock_report else "not_evaluated"),
         gate=unlock_report,
         write_requested=write_requested,
         writeback_applied=writeback_applied,
@@ -636,8 +636,10 @@ def _check_unlock_conditions(
         "avg_return": "平均样本外收益 < 0",
         "oos_trades": "样本外交易次数 < 30",
     }
+    verdict = GatePolicy.classify_evidence(gate, sample_key="oos_trades", minimum=30)
     return {
         "unlocked": gate["passed"],
+        "verdict": verdict,
         "version": gate["version"],
         "checks": checks,
         "failed_checks": [legacy_failed_names[key] for key in gate["failed_checks"]],

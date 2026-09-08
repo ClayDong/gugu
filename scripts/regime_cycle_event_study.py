@@ -23,6 +23,7 @@ from math import sqrt
 from pathlib import Path
 
 import pandas as pd
+from scipy import stats
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -76,21 +77,12 @@ def fetch_index(days: int = 600) -> pd.DataFrame:
 
 
 def welch_t(x: list[float]) -> tuple[float, float]:
-    """单样本 Welch t 检验（vs 0），返回 (t, p)。"""
-    n = len(x)
-    if n < 2:
+    """One-sample t test against zero, with finite-sample p-value."""
+    values = pd.Series(x, dtype=float).replace([float("inf"), float("-inf")], pd.NA).dropna()
+    if len(values) < 3:
         return 0.0, 1.0
-    mean = sum(x) / n
-    var = sum((v - mean) ** 2 for v in x) / (n - 1)
-    if var == 0:
-        return (mean / 1e-9, 0.0) if mean != 0 else (0.0, 1.0)
-    se = sqrt(var / n)
-    t = mean / se
-    # 近似正态 p 值（n 大时足够）
-    from math import erf
-
-    p = 2 * (1 - 0.5 * (1 + erf(abs(t) / sqrt(2))))
-    return t, p
+    result = stats.ttest_1samp(values.to_numpy(), 0.0, nan_policy="omit")
+    return float(result.statistic), float(result.pvalue)
 
 
 def event_study(strategy_name: str, dfs: dict[str, pd.DataFrame], index_df: pd.DataFrame) -> dict:
@@ -123,7 +115,12 @@ def event_study(strategy_name: str, dfs: dict[str, pd.DataFrame], index_df: pd.D
                     # 同期指数收益
                     d0 = df2.loc[i, "date"]
                     d1 = df2.loc[j, "date"]
-                    idx_r = index_ret.loc[d0:d1].sum() if d0 in index_ret.index else float("nan")
+                    idx_window = index_ret.loc[d0:d1].dropna()
+                    idx_r = (
+                        float((1.0 + idx_window).prod() - 1.0)
+                        if not idx_window.empty
+                        else float("nan")
+                    )
                     ev["ret"][h] = ret
                     ev["excess"][h] = ret - idx_r if pd.notna(idx_r) else float("nan")
             if ev["ret"]:

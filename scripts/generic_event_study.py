@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from gugu.utils.atomic import atomic_write_json  # noqa: E402
 
 TENCENT_KLINE = "https://ifzq.gtimg.cn/appstock/app/fqkline/get"
@@ -53,22 +53,20 @@ TRAIN_START, TRAIN_END = "2024-02-01", "2025-01-31"
 VAL_START, VAL_END = "2025-02-01", "2026-07-31"
 
 
-def welch_t(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
-    from math import erf, sqrt
+def welch_t(a: np.ndarray, b: np.ndarray | None = None) -> tuple[float, float]:
+    """One-sample t test of event returns against zero.
 
-    a = np.asarray(a, float)
-    a = a[~np.isnan(a)]
-    if len(a) < 3:
+    ``b`` is retained for CLI/backward compatibility. Event studies here test
+    excess returns against zero; it is not a Welch two-sample test.
+    """
+    from scipy import stats
+
+    values = np.asarray(a, dtype=float)
+    values = values[np.isfinite(values)]
+    if len(values) < 3:
         return 0.0, 1.0
-    ma = a.mean()
-    va = a.var(ddof=1)
-    n = len(a)
-    se = np.sqrt(va / n)
-    if se == 0:
-        return 0.0, 1.0
-    t = ma / se
-    p = 1 - erf(abs(t) / sqrt(2))
-    return t, p
+    result = stats.ttest_1samp(values, 0.0, nan_policy="omit")
+    return float(result.statistic), float(result.pvalue)
 
 
 def _http_get(url: str, referer: str = "http://finance.qq.com/") -> str:
@@ -155,6 +153,9 @@ def main() -> None:
     ap.add_argument("--days", type=int, default=600)
     ap.add_argument("--pool", nargs="*", default=DEFAULT_POOL)
     ap.add_argument("--json", default=None)
+    ap.add_argument(
+        "--cost", type=float, default=0.004, help="往返交易成本估计（含滑点/佣金/印花税）"
+    )
     args = ap.parse_args()
 
     json_path = args.json or f"data/{args.strategy}_event_study.json"
@@ -189,18 +190,24 @@ def main() -> None:
         print(f"  {symbol}: K线{len(df)} 买入信号 {len(buy_days)}")
 
         close = df["close"].values
+        open_prices = df["open"].values
         for i in buy_days:
-            d = df["date"].iloc[i]
-            entry = close[i]
-            if entry <= 0:
+            # 可执行入场：信号日下一交易日开盘（T+1/避免当日收盘前视），
+            # 退出按未来收盘，扣除显式往返成本。
+            entry_idx = i + 1
+            d = df["date"].iloc[entry_idx] if entry_idx < len(df) else None
+            entry = open_prices[entry_idx] if entry_idx < len(df) else float("nan")
+            if entry_idx >= len(df) or not np.isfinite(entry) or entry <= 0:
                 continue
-            row = {"code": symbol, "date": d, "entry": entry}
+            row = {"code": symbol, "signal_date": df["date"].iloc[i], "date": d, "entry": entry}
             for h in (3, 5, 10):
-                if i + h < len(close) and close[i + h] > 0:
-                    row[f"ret_{h}d"] = close[i + h] / entry - 1
+                exit_idx = entry_idx + h
+                if exit_idx < len(close) and close[exit_idx] > 0:
+                    row[f"ret_{h}d"] = close[exit_idx] / entry * (1 - args.cost) - 1
             for h in (3, 5, 10):
-                if i + h < len(df):
-                    idx_ret = df["idx_close"].iloc[i + h] / df["idx_close"].iloc[i] - 1
+                exit_idx = entry_idx + h
+                if exit_idx < len(df):
+                    idx_ret = df["idx_close"].iloc[exit_idx] / df["idx_close"].iloc[entry_idx] - 1
                     if pd.notna(idx_ret) and f"ret_{h}d" in row:
                         row[f"excess_{h}d"] = row[f"ret_{h}d"] - idx_ret
             all_rows.append(row)

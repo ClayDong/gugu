@@ -12,9 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import numpy as np
 import pandas as pd
 from loguru import logger
+
+from gugu.backtest.benchmark import compare_price_series
 
 BENCHMARK_HS300 = "000300"
 
@@ -72,53 +73,16 @@ def calc_benchmark_comparison(
     if len(strategy_equity) < 10 or len(benchmark_df) < 10:
         return BenchmarkResult(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
 
-    strategy_returns = strategy_equity.pct_change().dropna()
-
-    benchmark_aligned = benchmark_df.reindex(strategy_equity.index)
-    if benchmark_aligned["close"].isna().all():
-        return BenchmarkResult(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
-
-    benchmark_returns = benchmark_aligned["close"].pct_change().dropna()
-
-    common_idx = strategy_returns.index.intersection(benchmark_returns.index)
-    if len(common_idx) < 10:
-        return BenchmarkResult(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
-
-    strategy_ret_aligned = strategy_returns.loc[common_idx]
-    benchmark_ret_aligned = benchmark_returns.loc[common_idx]
-
-    strategy_total = (strategy_equity.iloc[-1] / strategy_equity.iloc[0]) - 1
-    benchmark_total = (benchmark_aligned["close"].iloc[-1] / benchmark_aligned["close"].iloc[0]) - 1
-
-    excess = strategy_total - benchmark_total
-
-    days = len(common_idx)
-    years = days / 252
-    excess_annual = (1 + excess) ** (1 / years) - 1 if years > 0 else 0
-
-    tracking_error = (strategy_ret_aligned - benchmark_ret_aligned).std() * np.sqrt(252)
-    information_ratio = excess_annual / tracking_error if tracking_error > 0 else 0.0
-
-    cov_matrix = np.cov(strategy_ret_aligned, benchmark_ret_aligned)
-    if cov_matrix.shape == (2, 2):
-        covariance = cov_matrix[0, 1]
-        benchmark_var = cov_matrix[1, 1]
-        beta = covariance / benchmark_var if benchmark_var > 0 else 1.0
-    else:
-        beta = 1.0
-
-    correlation = float(strategy_ret_aligned.corr(benchmark_ret_aligned))
-    if np.isnan(correlation):
-        correlation = 0.0
-
+    benchmark_close = benchmark_df["close"] if "close" in benchmark_df else pd.Series(dtype=float)
+    result = compare_price_series(strategy_equity, benchmark_close)
     return BenchmarkResult(
-        strategy_return=strategy_total,
-        benchmark_return=benchmark_total,
-        excess_return=excess,
-        excess_annual=excess_annual,
-        information_ratio=float(information_ratio) if not np.isnan(information_ratio) else 0.0,
-        beta=float(beta) if not np.isnan(beta) else 1.0,
-        correlation=correlation,
+        strategy_return=result.strategy_return,
+        benchmark_return=result.benchmark_return,
+        excess_return=result.excess_return,
+        excess_annual=(1 + result.excess_return) ** (252 / max(result.common_days, 1)) - 1,
+        information_ratio=result.information_ratio,
+        beta=result.beta,
+        correlation=result.correlation,
     )
 
 
