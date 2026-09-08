@@ -201,6 +201,14 @@ STRATEGY_PARAM_GRIDS: dict[str, dict[str, list]] = {
         "cycle_days": [10, 14, 20],
         "trailing_stop_pct": [0.05, 0.08, 0.10],
     },
+    "macd_zero_axis": {
+        "macd_fast": [8, 12, 16],
+        "macd_slow": [20, 26, 30],
+        "macd_signal": [5, 9, 12],
+        "confirm_window": [3, 5, 10],
+        "pullback_tolerance": [0.02, 0.03, 0.05],
+        "trailing_stop_pct": [0.05, 0.08, 0.10],
+    },
     "dragon_head": {
         "ma_short": [5, 10],
         "limit_up_pct": [0.07, 0.09, 0.095],

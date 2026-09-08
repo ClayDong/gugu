@@ -7,7 +7,8 @@ signal_strategies:
     enabled: true
     summary: 识别箱体上下沿，突破上沿买入、跌破下沿卖出，配合成交量确认
     params_entry: strategy_defaults.yaml
-    validation: conditional_pass 2026-07-26 - 过往全市场回测 150 笔夏普 0.15/胜率 55%，最新 Walk-Forward 未通过；当前仅允许 paper 观察
+    validation: conditional_pass 2026-07-26 - 过往全市场回测 150 笔夏普 0.15/胜率 55%，最新 Walk-Forward
+      未通过；当前仅允许 paper 观察
     notes: confirm_days=1 防假突破
     validation_gate:
       status: conditional_pass
@@ -243,6 +244,23 @@ signal_strategies:
         bt_avg_return: -0.0707
         note: 下跌市窗口绝对收益为负，事件研究超额显著
       next_action: paper 观察 30+ 信号，牛市窗口复验超额
+  macd_zero_axis:
+    name: MACD零轴上方回调
+    module: gugu.strategies.macd_zero_axis
+    class: MacdZeroAxisStrategy
+    source: 用户提供六句MACD口诀，P2-Alpha可证伪实现
+    enabled: true
+    summary: DIF/DEA零轴上方+金叉后回踩MA20/近5日低点确认买入；顶背离/趋势破坏/移动止损退出
+    params_entry: strategy_defaults.yaml
+    validation: conditional_pass 2026-09-08 - 新增假设，待Walk-Forward和paper观察
+    validation_gate:
+      status: conditional_pass
+      sample: 待 Walk-Forward 验证
+      metrics:
+        total_trades: 0
+        avg_return: 0.0
+        avg_sharpe: 0.0
+      next_action: P2-Alpha paper观察2周，30+信号后复验
 risk_strategies:
   trailing_stop:
     name: 浪谷递进移动止损

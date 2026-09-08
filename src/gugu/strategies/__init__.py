@@ -11,6 +11,7 @@ from gugu.strategies.breakout import BoxBreakoutStrategy
 from gugu.strategies.double_yin import DoubleYinMoneyBagStrategy
 from gugu.strategies.dragon_head import DragonHeadStrategy
 from gugu.strategies.huamulan_ghost_breakout import HuamulanGhostBreakoutStrategy
+from gugu.strategies.macd_zero_axis import MacdZeroAxisStrategy
 from gugu.strategies.mean_revert import RSIStrategy
 from gugu.strategies.price_volume import PriceVolumeSignalStrategy
 from gugu.strategies.regime_cycle import RegimeCycleFourStrategy
@@ -38,6 +39,7 @@ __all__ = [
     "SectorMomentumStrategy",
     "SentimentCycleStrategy",
     "TwoBReversalStrategy",
+    "MacdZeroAxisStrategy",
     "Strategy",
     "StrategyConfig",
     "get_enabled_strategies",

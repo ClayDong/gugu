@@ -98,3 +98,10 @@ two_b_reversal:
   cycle_days: 14
   trailing_stop_pct: 0.08
   max_hold_days: 5
+macd_zero_axis:
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  confirm_window: 5
+  pullback_tolerance: 0.03
+  trailing_stop_pct: 0.08

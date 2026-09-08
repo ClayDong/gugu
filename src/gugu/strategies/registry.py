@@ -11,6 +11,7 @@ from gugu.strategies.breakout import BoxBreakoutStrategy
 from gugu.strategies.double_yin import DoubleYinMoneyBagStrategy
 from gugu.strategies.dragon_head import DragonHeadStrategy
 from gugu.strategies.huamulan_ghost_breakout import HuamulanGhostBreakoutStrategy
+from gugu.strategies.macd_zero_axis import MacdZeroAxisStrategy
 from gugu.strategies.manifest import get_manifest
 from gugu.strategies.mean_revert import RSIStrategy
 from gugu.strategies.price_volume import PriceVolumeSignalStrategy
@@ -22,6 +23,7 @@ from gugu.strategies.two_b_reversal import TwoBReversalStrategy
 # 策略注册表：name -> class
 _REGISTRY: dict[str, type[Strategy]] = {
     "rsi_reversal": RSIStrategy,
+    "macd_zero_axis": MacdZeroAxisStrategy,
     "box_breakout": BoxBreakoutStrategy,
     "double_yin": DoubleYinMoneyBagStrategy,
     "linjudaye": LinJuDaYeStrategy,

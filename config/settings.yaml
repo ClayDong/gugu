@@ -43,6 +43,7 @@ strategy:
     - huamulan_ghost_breakout
     - sentiment_cycle
     - two_b_reversal
+    - macd_zero_axis
     rally:
     - box_breakout
     - double_yin
@@ -55,6 +56,7 @@ strategy:
     - huamulan_ghost_breakout
     - sentiment_cycle
     - two_b_reversal
+    - macd_zero_axis
     sideways:
     - box_breakout
     - double_yin
@@ -62,6 +64,7 @@ strategy:
     - sector_momentum
     - sentiment_cycle
     - two_b_reversal
+    - macd_zero_axis
     bear: []
     crash: []
   verified_strategies: []
@@ -77,6 +80,7 @@ strategy:
   - huamulan_ghost_breakout
   - sentiment_cycle
   - two_b_reversal
+  - macd_zero_axis
   enabled: []
   weights: {}
   experimental_weights:
@@ -91,6 +95,7 @@ strategy:
     huamulan_ghost_breakout: 0.15
     sentiment_cycle: 0.15
     two_b_reversal: 0.2
+    macd_zero_axis: 0.2
   signal_fusion: weighted
   min_confidence: 0.4
   auto_select: true
