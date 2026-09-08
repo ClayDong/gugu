@@ -47,6 +47,10 @@ class Position:
     entry_strategy: str = ""
     entry_strategies: list[str] | None = None
     entry_execution_id: str = ""
+    entry_attribution_method: str = "primary"
+    entry_regime: str = ""
+    entry_data_quality: str = "unknown"
+    entry_market_env: dict | None = None
 
     @property
     def market_value(self) -> float:

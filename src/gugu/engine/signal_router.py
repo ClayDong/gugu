@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import pandas as pd
@@ -333,6 +334,8 @@ class SignalRouter:
             "strategy": ",".join(triggered),
             "strategies": triggered,
             "reason": f"策略 {','.join(triggered)} 触发 {direction} 信号",
+            "signal_id": uuid.uuid4().hex,
+            "attribution_method": "primary",
         }
         # P1 共振等级：多策略共振过滤（利弗莫尔：关键点需要确认，不依赖单一信号）
         # - resonance >= 2：多策略共振 → 强信号（推送）

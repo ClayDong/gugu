@@ -211,6 +211,7 @@ class OrderManager:
                 pass
 
         account = broker.get_account()
+        had_position_before_order = broker.get_position(symbol) is not None
         if direction == "sell":
             position = broker.get_position(symbol)
             requested_quantity = signal.get("quantity") or signal.get("suggested_quantity")
@@ -276,6 +277,9 @@ class OrderManager:
                 logger.info("{} 数量为0告警已去重，跳过通知", symbol)
             return None
 
+        # 将最终请求量写回信号，便于区分订单部分成交与持仓部分平仓。
+        signal["requested_quantity"] = quantity
+
         # 风控检查
         portfolio = broker.get_portfolio()
         risk_result = risk.check_order(
@@ -333,6 +337,9 @@ class OrderManager:
             from gugu.execution.paper_ledger import ExecutionContext
 
             execution_context = ExecutionContext.from_signal(signal)
+            # ExecutionContext 可能为缺省 signal 生成 ID；回写信号，保证
+            # signal history 与 paper ledger 使用同一个关联标识。
+            signal["signal_id"] = execution_context.signal_id
             result = broker.order(
                 symbol, direction, quantity, price, execution_context=execution_context
             )
@@ -361,10 +368,20 @@ class OrderManager:
                 pos.is_st = bool(signal.get("is_st", False))
                 pos.is_suspended = bool(signal.get("is_suspended", False))
                 if execution_context is not None:
-                    pos.entry_signal_id = execution_context.signal_id
-                    pos.entry_strategy = execution_context.strategy
-                    pos.entry_strategies = list(execution_context.strategies)
-                    pos.entry_execution_id = result.execution_id or ""
+                    # 首笔入场归因属于整仓，不被后续加仓覆盖。
+                    if not getattr(pos, "entry_execution_id", ""):
+                        pos.entry_signal_id = execution_context.signal_id
+                        pos.entry_strategy = execution_context.strategy
+                        pos.entry_strategies = list(execution_context.strategies)
+                        pos.entry_execution_id = (
+                            result.entry_execution_id or result.execution_id or ""
+                        )
+                        pos.entry_attribution_method = execution_context.attribution_method
+                        pos.entry_regime = execution_context.regime
+                        pos.entry_data_quality = execution_context.data_quality
+                        pos.entry_market_env = execution_context.market_env_snapshot
+                    if not getattr(pos, "entry_date", ""):
+                        pos.entry_date = date.today().isoformat()
 
                 # 初始化移动止损状态
                 df_for_stop = (
@@ -385,13 +402,17 @@ class OrderManager:
                     pos.stop_loss_price = trailing_state.initial_stop_price
                 pos.trailing_stop = self._trailing_stop_engine.state_to_dict(trailing_state)
 
-                # 注册财叔动态止盈监控
-                self._take_profit_engine.register(symbol, result.price)
+                # 仅首次建仓注册动态止盈；加仓沿用原有止盈状态，避免重置档位。
+                if not had_position_before_order:
+                    self._take_profit_engine.register(symbol, result.price)
 
                 # 注入危险信号信息
                 danger_info = signal.get("danger_signals", {})
                 if danger_info.get("signals"):
                     pos.danger_signals = danger_info["signals"]
+                persist_state = getattr(broker, "persist_state", None)
+                if callable(persist_state):
+                    persist_state()
 
         # 事件推送：信号 + 订单
         event_engine.put(
@@ -432,21 +453,29 @@ class OrderManager:
             "execution_id": result.execution_id,
             "entry_execution_id": result.entry_execution_id,
             "realized_pnl": result.realized_pnl,
+            "position_closed": result.position_closed,
+            "fill_status": result.fill_status,
+            "position_status": result.position_status,
+            "exit_reason": result.exit_reason,
             "message": result.message,
         }
         signal["order_result"] = order_result
 
+        # 先记录成交生命周期，通知服务异常不能造成 history/ledger 分叉。
+        record_signal_history(signal, risk_result, result)
+
         # 通知
         inject_performance_summary(signal)
-        notify_ok = await notifier.notify_signal(signal)
+        try:
+            notify_ok = await notifier.notify_signal(signal)
+        except Exception as exc:
+            logger.error("{} 成交已记录但信号通知异常: {}", symbol, exc)
+            notify_ok = False
         if not notify_ok:
             logger.error(
                 f"{symbol} 下单已执行（success={result.success}, qty={result.quantity}@{result.price}）"
                 f"但飞书通知失败，请检查飞书配置与网络"
             )
-
-        # 记录信号历史
-        record_signal_history(signal, risk_result, result)
 
         return {
             "risk_allowed": True,

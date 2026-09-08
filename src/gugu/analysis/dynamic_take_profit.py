@@ -276,6 +276,7 @@ class DynamicTakeProfitEngine:
         price: float,
         signal: TakeProfitSignal,
         today_str: str | None = None,
+        requested_qty: int | None = None,
     ) -> None:
         """减仓执行后更新止盈状态。
 
@@ -293,17 +294,21 @@ class DynamicTakeProfitEngine:
 
         today = today_str or date.today().isoformat()
         state.total_reduced += executed_qty
+        fully_executed = requested_qty is None or executed_qty >= requested_qty
 
-        if signal.trigger_step == 4:
-            # 大跌减半
-            state.last_big_drop_date = today
-        elif signal.trigger_step == 1:
-            # 首减
-            state.first_reduced = True
-            state.last_reduce_ratio = FIRST_TAKE_PROFIT_THRESHOLD
-        elif signal.trigger_step == 3:
-            # 阶梯递减
-            state.last_reduce_ratio += STEP_THRESHOLD
+        # 实际成交不足本次计划数量时只记录已成交数量，不推进档位；
+        # 下一轮仍可补足，避免流动性部分成交被误判为完整减仓。
+        if fully_executed:
+            if signal.trigger_step == 4:
+                # 大跌减半
+                state.last_big_drop_date = today
+            elif signal.trigger_step == 1:
+                # 首减
+                state.first_reduced = True
+                state.last_reduce_ratio = FIRST_TAKE_PROFIT_THRESHOLD
+            elif signal.trigger_step == 3:
+                # 阶梯递减
+                state.last_reduce_ratio += STEP_THRESHOLD
 
         state.history.append(
             {

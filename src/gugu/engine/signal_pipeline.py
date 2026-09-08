@@ -1442,11 +1442,14 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
 
             record = {
                 "timestamp": pd.Timestamp.now().isoformat(),
+                "signal_id": signal.get("signal_id"),
+                "parent_signal_id": signal.get("parent_signal_id"),
                 "symbol": signal.get("symbol"),
                 "name": _raw_name,
                 "direction": signal.get("direction"),
                 "price": signal.get("price"),
                 "confidence": signal.get("confidence"),
+                "reason": signal.get("reason", ""),
                 "strategy": signal.get("strategy"),
                 "strategies": signal.get("strategies"),
                 "rank_score": signal.get("rank_score"),
@@ -1465,13 +1468,26 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "order_success": getattr(order_result, "success", None),
                 "execution_success": getattr(order_result, "success", None),
                 "execution_status": (
-                    "filled"
+                    getattr(order_result, "fill_status", "filled")
                     if getattr(order_result, "success", False)
                     else "rejected"
                     if order_result is not None
                     else "not_submitted"
                 ),
-                "outcome_status": "open" if getattr(order_result, "success", False) else "pending",
+                "fill_status": getattr(order_result, "fill_status", "unknown"),
+                "position_status": getattr(order_result, "position_status", "unknown"),
+                "position_closed": getattr(order_result, "position_closed", False),
+                "outcome_status": (
+                    "closed"
+                    if getattr(order_result, "success", False)
+                    and signal.get("direction") == "sell"
+                    and getattr(order_result, "position_closed", False)
+                    else "partial"
+                    if getattr(order_result, "success", False) and signal.get("direction") == "sell"
+                    else "open"
+                    if getattr(order_result, "success", False)
+                    else "pending"
+                ),
                 "order_quantity": getattr(order_result, "quantity", 0),
                 "order_price": getattr(order_result, "price", 0),
                 "order_commission": getattr(order_result, "commission", 0),
@@ -1481,6 +1497,12 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                 "entry_execution_id": getattr(order_result, "entry_execution_id", None),
                 "realized_pnl": getattr(order_result, "realized_pnl", None),
                 "attribution_method": signal.get("attribution_method", "primary"),
+                "requested_quantity": signal.get("requested_quantity")
+                or signal.get("quantity")
+                or signal.get("suggested_quantity"),
+                "exit_reason": signal.get("exit_reason") or signal.get("reason", "")
+                if signal.get("direction") == "sell"
+                else signal.get("exit_reason", ""),
             }
             # 2026-09-04 优化（数据专家 review）：校验策略名在注册表中，
             # 已删除策略（历史残留 dual_ma/turtle/bollinger）不再写入信号历史，

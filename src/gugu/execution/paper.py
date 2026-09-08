@@ -324,6 +324,8 @@ class PaperBroker(BaseBroker):
         entry_execution_id: str | None = None
         cost_basis_consumed = 0.0
         realized_pnl: float | None = None
+        position_closed = False
+        effective_context = execution_context
 
         if direction == "buy":
             # 涨跌停成交检查
@@ -386,23 +388,61 @@ class PaperBroker(BaseBroker):
 
             self._cash -= total_cost
             pos = self._positions.get(symbol)
+            # 买入费用计入成本基础，卖出 realized_pnl 才是完整 round-trip 净收益。
+            buy_cost_basis = fill_price * actual_quantity + commission + transfer_fee
             if pos:
                 new_qty = pos.quantity + actual_quantity
-                pos.avg_cost = (
-                    pos.avg_cost * pos.quantity + fill_price * actual_quantity
-                ) / new_qty
+                pos.avg_cost = (pos.avg_cost * pos.quantity + buy_cost_basis) / new_qty
                 pos.quantity = new_qty
                 # 加仓后同步更新现价，避免止损检查用旧价
                 pos.current_price = cur_price
                 # T+1：追加买入的部分当日仍不可卖，旧持仓的 available 不变
-                entry_execution_id = self._position_entry_execution.get(symbol)
+                entry_execution_id = (
+                    self._position_entry_execution.get(symbol) or pos.entry_execution_id or None
+                )
+                if entry_execution_id:
+                    self._position_entry_execution[symbol] = entry_execution_id
+                # 兼容直接调用 broker.order(context=...)：若旧持仓没有归因，
+                # 用本次上下文补齐，但不覆盖已有首笔入场身份。
+                if execution_context is not None and not pos.entry_signal_id:
+                    pos.entry_signal_id = execution_context.signal_id
+                    pos.entry_strategy = execution_context.strategy
+                    pos.entry_strategies = list(execution_context.strategies)
+                    pos.entry_attribution_method = execution_context.attribution_method
+                    pos.entry_regime = execution_context.regime
+                    pos.entry_data_quality = execution_context.data_quality
+                    pos.entry_market_env = execution_context.market_env_snapshot
+                if not entry_execution_id:
+                    entry_execution_id = execution_id
+                    self._position_entry_execution[symbol] = entry_execution_id
+                if not pos.entry_execution_id:
+                    pos.entry_execution_id = entry_execution_id or ""
+                if not pos.entry_date:
+                    pos.entry_date = date.today().isoformat()
             else:
                 self._positions[symbol] = Position(
                     symbol=symbol,
                     quantity=actual_quantity,
                     available=0,  # T+1
-                    avg_cost=fill_price,
+                    avg_cost=buy_cost_basis / actual_quantity,
                     current_price=cur_price,
+                    entry_signal_id=execution_context.signal_id if execution_context else "",
+                    entry_strategy=execution_context.strategy if execution_context else "",
+                    entry_strategies=(
+                        list(execution_context.strategies) if execution_context else []
+                    ),
+                    entry_execution_id=execution_id,
+                    entry_attribution_method=(
+                        execution_context.attribution_method if execution_context else "primary"
+                    ),
+                    entry_regime=execution_context.regime if execution_context else "",
+                    entry_data_quality=(
+                        execution_context.data_quality if execution_context else "unknown"
+                    ),
+                    entry_market_env=(
+                        execution_context.market_env_snapshot if execution_context else None
+                    ),
+                    entry_date=date.today().isoformat(),
                 )
                 entry_execution_id = execution_id
                 self._position_entry_execution[symbol] = execution_id
@@ -419,6 +459,9 @@ class PaperBroker(BaseBroker):
                 f"买入成功{'（部分成交）' if actual_quantity < quantity else ''}",
                 execution_id=execution_id,
                 entry_execution_id=entry_execution_id,
+                fill_status="filled" if actual_quantity == quantity else "partial",
+                position_status="open",
+                exit_reason=effective_context.exit_reason if effective_context else "",
             )
             logger.info(
                 f"[模拟盘] 买入 {symbol} {actual_quantity}股 @ {fill_price:.2f} "
@@ -428,6 +471,35 @@ class PaperBroker(BaseBroker):
 
         elif direction == "sell":
             pos = self._positions.get(symbol)
+            if pos is not None:
+                # 退出归因以首笔入场为准；传入上下文仅提供退出事件 ID/原因。
+                # 这样普通卖出、止损和止盈都能关联同一笔 round-trip。
+                entry_signal_id = getattr(pos, "entry_signal_id", "")
+                requested_context = effective_context
+                effective_context = ExecutionContext(
+                    signal_id=(
+                        requested_context.signal_id
+                        if requested_context and requested_context.signal_id
+                        else f"manual-{execution_id}"
+                    ),
+                    parent_signal_id=(
+                        requested_context.parent_signal_id or entry_signal_id
+                        if requested_context
+                        else entry_signal_id
+                    ),
+                    strategy=getattr(pos, "entry_strategy", "")
+                    or (requested_context.strategy if requested_context else ""),
+                    strategies=tuple(getattr(pos, "entry_strategies", None) or [])
+                    or (requested_context.strategies if requested_context else ()),
+                    attribution_method=getattr(pos, "entry_attribution_method", "primary"),
+                    regime=getattr(pos, "entry_regime", "")
+                    or (requested_context.regime if requested_context else ""),
+                    data_quality=getattr(pos, "entry_data_quality", "unknown")
+                    or (requested_context.data_quality if requested_context else "unknown"),
+                    market_env_snapshot=getattr(pos, "entry_market_env", None)
+                    or (requested_context.market_env_snapshot if requested_context else None),
+                    exit_reason=(requested_context.exit_reason if requested_context else ""),
+                )
             if not pos or pos.available < 100:
                 return OrderResult(False, symbol, direction, 0, 0, 0, message="可卖数量不足（T+1）")
 
@@ -456,12 +528,17 @@ class PaperBroker(BaseBroker):
             # 移动平均成本：卖出部分仓位时按当前 avg_cost 匹配成本并计算已实现盈亏
             cost_basis_consumed = pos.avg_cost * actual_quantity
             realized_pnl = proceeds - cost_basis_consumed
-            entry_execution_id = self._position_entry_execution.get(symbol)
+            entry_execution_id = (
+                self._position_entry_execution.get(symbol)
+                or getattr(pos, "entry_execution_id", "")
+                or None
+            )
 
             self._cash += proceeds
             pos.quantity -= actual_quantity
             pos.available -= actual_quantity
-            if pos.quantity <= 0:
+            position_closed = pos.quantity <= 0
+            if position_closed:
                 del self._positions[symbol]
                 self._position_entry_execution.pop(symbol, None)
 
@@ -478,6 +555,10 @@ class PaperBroker(BaseBroker):
                 execution_id=execution_id,
                 entry_execution_id=entry_execution_id,
                 realized_pnl=realized_pnl,
+                position_closed=position_closed,
+                fill_status="filled" if actual_quantity == quantity else "partial",
+                position_status="closed" if position_closed else "partial",
+                exit_reason=effective_context.exit_reason if effective_context else "",
             )
             logger.info(
                 f"[模拟盘] 卖出 {symbol} {actual_quantity}股 @ {fill_price:.2f} "
@@ -501,31 +582,46 @@ class PaperBroker(BaseBroker):
                 "execution_id": result.execution_id,
                 "entry_execution_id": result.entry_execution_id,
                 "realized_pnl": result.realized_pnl,
-                "strategy": execution_context.strategy if execution_context else "",
-                "strategies": list(execution_context.strategies) if execution_context else [],
-                "outcome_status": "closed" if direction == "sell" else "open",
+                "strategy": effective_context.strategy if effective_context else "",
+                "strategies": list(effective_context.strategies) if effective_context else [],
+                "outcome_status": (
+                    "closed"
+                    if result.position_closed
+                    else "partial"
+                    if direction == "sell"
+                    else "open"
+                ),
+                "exit_reason": result.exit_reason
+                or (effective_context.exit_reason if effective_context else ""),
             }
         )
-        if execution_context is not None:
-            append_fill(
-                build_fill_record(
-                    execution_id=result.execution_id or execution_id,
-                    context=execution_context,
-                    symbol=symbol,
-                    direction=direction,
-                    requested_quantity=quantity,
-                    filled_quantity=result.quantity,
-                    requested_price=float(price or cur_price),
-                    fill_price=result.price,
-                    commission=result.commission,
-                    stamp_tax=result.stamp_tax,
-                    transfer_fee=result.transfer_fee,
-                    entry_execution_id=result.entry_execution_id,
-                    cost_basis_consumed=cost_basis_consumed,
-                    realized_pnl=result.realized_pnl,
-                    outcome_status="closed" if direction == "sell" else "open",
-                )
+        append_fill(
+            build_fill_record(
+                execution_id=result.execution_id or execution_id,
+                context=effective_context,
+                symbol=symbol,
+                direction=direction,
+                requested_quantity=quantity,
+                filled_quantity=result.quantity,
+                requested_price=float(price or cur_price),
+                fill_price=result.price,
+                commission=result.commission,
+                stamp_tax=result.stamp_tax,
+                transfer_fee=result.transfer_fee,
+                entry_execution_id=result.entry_execution_id,
+                cost_basis_consumed=cost_basis_consumed,
+                realized_pnl=result.realized_pnl,
+                outcome_status=(
+                    "closed"
+                    if result.position_closed
+                    else "partial"
+                    if direction == "sell"
+                    else "open"
+                ),
+                exit_reason=result.exit_reason
+                or (effective_context.exit_reason if effective_context else ""),
             )
+        )
         self._save_state()
         return result
 
@@ -697,6 +793,10 @@ class PaperBroker(BaseBroker):
         self._daily_start_value = self.get_account().total_value
         self._save_state()
 
+    def persist_state(self) -> None:
+        """公开持久化入口，供订单后处理写回止损和归因元数据。"""
+        self._save_state()
+
     def _save_state(self) -> None:
         """将当前状态持久化到 JSON 文件（原子写入 + 文件锁，双进程安全）。
 
@@ -724,10 +824,15 @@ class PaperBroker(BaseBroker):
                             "dividend_adjusted": p.dividend_adjusted,
                             "trailing_stop": p.trailing_stop,
                             "danger_signals": p.danger_signals,
+                            "entry_date": p.entry_date,
                             "entry_signal_id": p.entry_signal_id,
                             "entry_strategy": p.entry_strategy,
                             "entry_strategies": p.entry_strategies,
                             "entry_execution_id": p.entry_execution_id,
+                            "entry_attribution_method": p.entry_attribution_method,
+                            "entry_regime": p.entry_regime,
+                            "entry_data_quality": p.entry_data_quality,
+                            "entry_market_env": p.entry_market_env,
                         }
                         for sym, p in self._positions.items()
                     },
@@ -826,10 +931,15 @@ class PaperBroker(BaseBroker):
                     dividend_adjusted=p.get("dividend_adjusted", False),
                     trailing_stop=p.get("trailing_stop"),
                     danger_signals=p.get("danger_signals"),
+                    entry_date=p.get("entry_date", ""),
                     entry_signal_id=p.get("entry_signal_id", ""),
                     entry_strategy=p.get("entry_strategy", ""),
                     entry_strategies=p.get("entry_strategies"),
                     entry_execution_id=p.get("entry_execution_id", ""),
+                    entry_attribution_method=p.get("entry_attribution_method", "primary"),
+                    entry_regime=p.get("entry_regime", ""),
+                    entry_data_quality=p.get("entry_data_quality", "unknown"),
+                    entry_market_env=p.get("entry_market_env"),
                 )
             except (KeyError, TypeError, ValueError) as pos_err:
                 logger.warning("恢复持仓 {} 失败，跳过该持仓: {}；原始数据: {}", sym, pos_err, p)

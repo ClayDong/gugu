@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import contextlib
+import uuid
 from collections.abc import Callable
 from datetime import date
 from typing import TYPE_CHECKING, Any
@@ -55,6 +56,39 @@ class StopLossManager:
         )
         self._should_alert = should_alert
 
+    @staticmethod
+    def _record_exit_history(
+        symbol: str,
+        pos: Position,
+        result: Any | None,
+        risk_result: Any,
+        reason: str,
+        exit_signal_id: str | None = None,
+    ) -> None:
+        """将止损/止盈退出写入信号审计，保持 signal 生命周期可追踪。"""
+        try:
+            from gugu.engine.signal_pipeline import record_signal_history
+
+            entry_signal_id = getattr(pos, "entry_signal_id", "")
+            signal = {
+                # 退出事件使用独立 ID，同时保留 parent_signal_id 关联入场。
+                "signal_id": exit_signal_id or uuid.uuid4().hex,
+                "parent_signal_id": entry_signal_id,
+                "symbol": symbol,
+                "direction": "sell",
+                "price": result.price,
+                "confidence": 1.0,
+                "strategy": getattr(pos, "entry_strategy", ""),
+                "strategies": getattr(pos, "entry_strategies", None) or [],
+                "reason": reason,
+                "exit_reason": reason,
+                "data_quality": getattr(pos, "entry_data_quality", "unknown"),
+                "attribution_method": getattr(pos, "entry_attribution_method", "primary"),
+            }
+            record_signal_history(signal, risk_result, result)
+        except Exception as exc:
+            logger.warning("退出信号历史写入失败 {}：{}", symbol, exc)
+
     async def execute(
         self,
         broker: Any,
@@ -84,6 +118,7 @@ class StopLossManager:
         symbols = list(portfolio.keys())
         if not symbols:
             return 0
+        stopped_symbols: set[str] = set()
 
         # 批量拉取所有持仓的历史数据
         try:
@@ -216,11 +251,15 @@ class StopLossManager:
             )
             if risk_result.allowed:
                 context = ExecutionContext(
-                    signal_id=getattr(pos, "entry_signal_id", ""),
+                    signal_id=uuid.uuid4().hex,
                     strategy=getattr(pos, "entry_strategy", ""),
                     strategies=tuple(getattr(pos, "entry_strategies", None) or []),
-                    attribution_method="primary",
-                    data_quality="fresh_valid",
+                    attribution_method=getattr(pos, "entry_attribution_method", "primary"),
+                    regime=getattr(pos, "entry_regime", ""),
+                    data_quality=getattr(pos, "entry_data_quality", "unknown"),
+                    market_env_snapshot=getattr(pos, "entry_market_env", None),
+                    exit_reason="stop_loss",
+                    parent_signal_id=getattr(pos, "entry_signal_id", ""),
                 )
                 if getattr(broker, "supports_execution_context", False):
                     result = broker.order(
@@ -229,9 +268,26 @@ class StopLossManager:
                 else:
                     result = broker.order(symbol, "sell", int(available), price)
                 if result.success:
-                    # 清仓后清理状态
+                    stopped_symbols.add(symbol)
+                    self._record_exit_history(
+                        symbol,
+                        pos,
+                        result,
+                        risk_result,
+                        reason="stop_loss",
+                        exit_signal_id=context.signal_id,
+                    )
+                    # 只有完整清仓才移除退出监控；部分成交必须保留残仓状态。
                     fresh_pos = broker.get_position(symbol)
-                    if fresh_pos:
+                    if fresh_pos is None:
+                        self._take_profit_engine.unregister(symbol)
+                    else:
+                        persist_state = getattr(broker, "persist_state", None)
+                        if callable(persist_state):
+                            persist_state()
+
+                    # 清仓后清理残余的止损/危险信号状态
+                    if fresh_pos is not None and result.position_closed:
                         fresh_pos.trailing_stop = None
                         fresh_pos.danger_signals = None
 
@@ -297,8 +353,16 @@ class StopLossManager:
             else:
                 logger.warning("止损卖出 {} 被风控拦截: {}", symbol, risk_result.message)
 
-        # 财叔动态止盈减仓检查（与移动止损互补）
-        await self._check_take_profit(broker, risk, notifier, portfolio, self._should_alert)
+        # 财叔动态止盈减仓检查（与移动止损互补）。使用止损后的最新持仓，
+        # 并跳过本轮已处理的标的，避免同一轮同时止损又止盈。
+        await self._check_take_profit(
+            broker,
+            risk,
+            notifier,
+            broker.get_portfolio(),
+            self._should_alert,
+            skip_symbols=stopped_symbols,
+        )
 
         return sold_count
 
@@ -309,6 +373,7 @@ class StopLossManager:
         notifier: Any,
         portfolio: dict[str, Position],
         should_alert: Callable[[str], bool] | None = None,
+        skip_symbols: set[str] | None = None,
     ) -> None:
         """财叔动态止盈减仓检查（四步策略）。
 
@@ -323,6 +388,8 @@ class StopLossManager:
         cached_cash = broker.get_account().cash
 
         for symbol, pos in portfolio.items():
+            if skip_symbols and symbol in skip_symbols:
+                continue
             if pos.available <= 0:
                 continue
 
@@ -379,7 +446,24 @@ class StopLossManager:
                 )
                 continue
 
-            result = broker.order(symbol, "sell", reduce_qty, pos.current_price)
+            context = ExecutionContext(
+                signal_id=uuid.uuid4().hex,
+                strategy=getattr(pos, "entry_strategy", ""),
+                strategies=tuple(getattr(pos, "entry_strategies", None) or []),
+                attribution_method=getattr(pos, "entry_attribution_method", "primary"),
+                regime=getattr(pos, "entry_regime", ""),
+                data_quality=getattr(pos, "entry_data_quality", "unknown"),
+                market_env_snapshot=getattr(pos, "entry_market_env", None),
+                exit_reason=f"take_profit_step_{tp_signal.trigger_step}",
+                parent_signal_id=getattr(pos, "entry_signal_id", ""),
+            )
+
+            if getattr(broker, "supports_execution_context", False):
+                result = broker.order(
+                    symbol, "sell", reduce_qty, pos.current_price, execution_context=context
+                )
+            else:
+                result = broker.order(symbol, "sell", reduce_qty, pos.current_price)
             if not result.success:
                 # v0.6.1: track_live 模式拒绝下单时，推送止盈减仓提醒卡片
                 if "track_live" in (result.message or "").lower():
@@ -426,13 +510,28 @@ class StopLossManager:
                     logger.warning("[take_profit] {} 止盈减仓下单失败", symbol)
                 continue
 
+            exit_signal_id = context.signal_id
+            self._record_exit_history(
+                symbol,
+                pos,
+                result,
+                risk_result,
+                reason=f"take_profit_step_{tp_signal.trigger_step}",
+                exit_signal_id=exit_signal_id,
+            )
             self._take_profit_engine.mark_reduced(
                 symbol=symbol,
                 executed_qty=result.quantity,
                 price=result.price,
                 signal=tp_signal,
                 today_str=today_str,
+                requested_qty=reduce_qty,
             )
+            if result.position_closed:
+                self._take_profit_engine.unregister(symbol)
+            persist_state = getattr(broker, "persist_state", None)
+            if callable(persist_state) and not result.position_closed:
+                persist_state()
 
             stock_name = lookup_stock_name(symbol) or ""
             signal_dict = {

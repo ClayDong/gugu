@@ -39,6 +39,19 @@ REGIME_INDEX = "000300"
 REGIME_MA_WINDOW = 60
 
 
+def _normalize_timestamp(value: Any) -> pd.Timestamp | None:
+    """Parse a history timestamp into a timezone-naive value or return None."""
+    try:
+        timestamp = pd.to_datetime(value, errors="coerce")
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if timestamp is None or pd.isna(timestamp):
+        return None
+    if getattr(timestamp, "tzinfo", None) is not None:
+        timestamp = timestamp.tz_localize(None)
+    return pd.Timestamp(timestamp)
+
+
 class SignalTracker:
     """信号绩效追踪器。
 
@@ -71,7 +84,7 @@ class SignalTracker:
             return []
 
         records: list[dict[str, Any]] = []
-        cutoff = datetime.now() - timedelta(days=days) if days > 0 else None
+        cutoff = pd.Timestamp(datetime.now() - timedelta(days=days)) if days > 0 else None
 
         try:
             with self._history_path.open("r", encoding="utf-8") as f:
@@ -81,10 +94,15 @@ class SignalTracker:
                         continue
                     try:
                         rec = json.loads(line)
-                        ts = pd.to_datetime(rec.get("timestamp"))
+                        if not isinstance(rec, dict):
+                            continue
+                        ts = _normalize_timestamp(rec.get("timestamp"))
+                        if ts is None:
+                            logger.debug("跳过无效时间戳: {}", rec.get("timestamp"))
+                            continue
                         if cutoff is None or ts >= cutoff:
                             records.append(rec)
-                    except (json.JSONDecodeError, ValueError) as e:
+                    except (json.JSONDecodeError, TypeError, ValueError) as e:
                         logger.debug("跳过无效行: {}", e)
                         continue
         except Exception as e:
@@ -113,14 +131,13 @@ class SignalTracker:
             - recent_signals: 最近 5 条信号及追踪结果
         """
         records = self.load_history(days)
+        # 去重后再判断样本门槛；多个退出事件必须保留独立 event/signal ID。
+        records = self._dedupe(records)
         if len(records) < MIN_SAMPLE_SIZE:
             return {
                 "total_signals": len(records),
                 "message": f"样本数不足（{len(records)}<{MIN_SAMPLE_SIZE}），无法生成报告",
             }
-
-        # 去重：同一股票同一天同方向的信号只取最后一条
-        records = self._dedupe(records)
 
         buy_signals = [r for r in records if r.get("direction") == "buy"]
         sell_signals = [r for r in records if r.get("direction") == "sell"]
@@ -145,8 +162,6 @@ class SignalTracker:
         valid = [t for t in tracked if t.get("return_5d") is not None]
         wins = [t for t in valid if t["return_5d"] > 0]
         forward_5d_signal_hit_rate = len(wins) / len(valid) if valid else 0
-        avg_return = sum(t["return_5d"] for t in valid) / len(valid) if valid else 0
-
         closed_trades = [t for t in records if t.get("outcome_status") == "closed"]
         realized_pnls: list[float] = []
         for trade in closed_trades:
@@ -170,8 +185,7 @@ class SignalTracker:
             "executed_count": len(executed),
             "tracked_count": len(valid),
             "forward_5d_signal_hit_rate": round(forward_5d_signal_hit_rate, 4),
-            "avg_return_5d": round(avg_return, 4),
-            "closed_trade_count": len(closed_trades),
+            "closed_trade_count": len(realized_pnls),
             "closed_trade_win_rate": round(closed_trade_win_rate, 4),
             "realized_pnl": round(realized_pnl, 2),
             "by_strategy": by_strategy,
@@ -182,19 +196,19 @@ class SignalTracker:
         }
 
     def _dedupe(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """去重：同一股票同一天同方向只保留最后一条。"""
+        """按事件 ID 去重；旧记录退回同日同股同方向兼容键。"""
         seen: dict[str, dict[str, Any]] = {}
         for r in records:
-            ts = r.get("timestamp", "")
-            symbol = r.get("symbol", "")
-            direction = r.get("direction", "")
-            # 按日期+股票+方向去重
-            try:
-                d = pd.to_datetime(ts).date().isoformat()
-            except Exception:
-                continue
-            key = f"{d}_{symbol}_{direction}"
-            seen[key] = r  # 后出现的覆盖前面的
+            event_id = str(r.get("signal_id") or r.get("execution_id") or "")
+            if not event_id:
+                timestamp = _normalize_timestamp(r.get("timestamp"))
+                if timestamp is None:
+                    continue
+                event_id = (
+                    f"{timestamp.date().isoformat()}_{r.get('symbol', '')}_"
+                    f"{r.get('direction', '')}"
+                )
+            seen[event_id] = r
         return list(seen.values())
 
     async def _track_signals(self, signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -241,13 +255,14 @@ class SignalTracker:
             if df.empty or len(df) < 2:
                 return {**sig, "error": "no_data"}
 
-            # 找到信号日对应的 K 线索引
+            # 按交易日排序并使用位置索引，避免非连续索引/乱序行情取错日期。
             df["date"] = pd.to_datetime(df["date"])
+            df = df.sort_values("date").reset_index(drop=True)
             mask = df["date"] >= signal_date
             if not mask.any():
                 return {**sig, "error": "date_not_found"}
 
-            idx = df[mask].index[0]
+            idx = int(mask.to_numpy().nonzero()[0][0])
 
             # 优先使用实际成交价，否则用信号日收盘价
             order_result = sig.get("order_result")
@@ -261,7 +276,7 @@ class SignalTracker:
                     signal_date.date(),
                 )
             else:
-                entry_price = float(df.loc[idx, "close"])
+                entry_price = float(df.iloc[idx]["close"])
                 price_source = "close"
 
             # 计算各周期收益
@@ -273,7 +288,7 @@ class SignalTracker:
             for n in TRACK_PERIODS:
                 target_idx = idx + n
                 if target_idx < len(df):
-                    exit_price = float(df.loc[target_idx, "close"])
+                    exit_price = float(df.iloc[target_idx]["close"])
                     ret = (exit_price - entry_price) / entry_price
                     result[f"return_{n}d"] = round(ret, 4)
                     result[f"close_{n}d"] = round(exit_price, 3)

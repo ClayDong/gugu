@@ -225,18 +225,22 @@ class AttributionAnalyzer:
         return report
 
     def _dedupe(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """去重：同一股票同一天同方向只保留最后一条。"""
+        """按事件 ID 去重；旧记录退回同日同股同方向兼容键。"""
         seen: dict[str, dict[str, Any]] = {}
         for r in records:
-            ts = r.get("timestamp", "")
-            symbol = r.get("symbol", "")
-            direction = r.get("direction", "")
-            try:
-                d = pd.to_datetime(ts).date().isoformat()
-            except Exception:
-                continue
-            key = f"{d}_{symbol}_{direction}"
-            seen[key] = r
+            event_id = str(r.get("signal_id") or r.get("execution_id") or "")
+            if not event_id:
+                try:
+                    timestamp = pd.to_datetime(r.get("timestamp"), errors="coerce")
+                    if pd.isna(timestamp):
+                        continue
+                    event_id = (
+                        f"{timestamp.date().isoformat()}_{r.get('symbol', '')}_"
+                        f"{r.get('direction', '')}"
+                    )
+                except (TypeError, ValueError):
+                    continue
+            seen[event_id] = r
         return list(seen.values())
 
     def _analyze_filter_steps(self, records: list[dict]) -> list[dict[str, Any]]:

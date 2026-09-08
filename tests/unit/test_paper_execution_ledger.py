@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from gugu.execution.paper import PaperBroker
-from gugu.execution.paper_ledger import ExecutionContext
+from gugu.execution.paper_ledger import ExecutionContext, summarize_fills
 
 
 def test_paper_buy_sell_writes_context_and_realized_pnl(tmp_path, monkeypatch):
@@ -24,6 +24,13 @@ def test_paper_buy_sell_writes_context_and_realized_pnl(tmp_path, monkeypatch):
     buy = broker.order("600519", "buy", 100, 100.0, execution_context=context)
     assert buy.success
     assert buy.execution_id
+    position = broker.get_position("600519")
+    assert position is not None
+    expected_cost = buy.price * buy.quantity + buy.commission + buy.transfer_fee
+    assert position.avg_cost == expected_cost / buy.quantity
+    assert position.entry_signal_id == "sig-1"
+    assert position.entry_execution_id == buy.execution_id
+    assert position.entry_date
     broker.settle_t_plus_1()
     broker.update_price("600519", 110.0)
 
@@ -41,6 +48,49 @@ def test_paper_buy_sell_writes_context_and_realized_pnl(tmp_path, monkeypatch):
     assert rows[1]["outcome_status"] == "closed"
     assert rows[1]["realized_pnl"] > 0
     assert rows[1]["entry_execution_id"] == rows[0]["execution_id"]
+
+
+def test_paper_partial_then_full_close_and_summary(tmp_path, monkeypatch):
+    """部分平仓只计 realized fill，完整平仓才计 closed trade。"""
+    monkeypatch.setattr("gugu.config.PROJECT_ROOT", tmp_path)
+    broker = PaperBroker(initial_capital=200_000, state_file=tmp_path / "state.json")
+    broker.set_market_context("600519", prev_close=100.0)
+    context = ExecutionContext(signal_id="sig-partial", strategy="sector_momentum")
+    monkeypatch.setattr(
+        broker,
+        "_simulate_partial_fill",
+        lambda quantity, fill_price, partial_prob: (quantity, fill_price),
+    )
+
+    buy = broker.order("600519", "buy", 1_000, 100.0, execution_context=context)
+    assert buy.success and buy.quantity == 1_000
+    broker.settle_t_plus_1()
+    first = broker.get_position("600519")
+    assert first is not None
+    first_sell = broker.order("600519", "sell", 400, 110.0, execution_context=context)
+    assert first_sell.success
+    assert first_sell.position_closed is False
+    assert first_sell.position_status == "partial"
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "data" / "paper_execution_ledger.jsonl").read_text().splitlines()
+    ]
+    assert rows[-1]["outcome_status"] == "partial"
+    summary = summarize_fills(rows)
+    assert summary["realized_fills"] == 1
+    assert summary["closed_trades"] == 0
+
+    second_sell = broker.order("600519", "sell", 600, 110.0, execution_context=context)
+    assert second_sell.success
+    assert second_sell.position_closed is True
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "data" / "paper_execution_ledger.jsonl").read_text().splitlines()
+    ]
+    summary = summarize_fills(rows)
+    assert summary["realized_fills"] == 2
+    assert summary["closed_trades"] == 1
 
 
 def test_paper_old_order_call_remains_compatible(tmp_path):

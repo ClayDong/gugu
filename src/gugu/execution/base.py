@@ -31,6 +31,10 @@ class OrderResult:
     execution_id: str | None = None
     entry_execution_id: str | None = None
     realized_pnl: float | None = None
+    position_closed: bool = False
+    fill_status: str = "unknown"
+    position_status: str = "unknown"
+    exit_reason: str = ""
 
 
 @dataclass
