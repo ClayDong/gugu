@@ -27,6 +27,7 @@
 - 规则检测：`src/gugu/analysis/yege_battle.py`
 - 个股候选策略：`src/gugu/strategies/yege_mainline_explosion.py`
 - 离线事件研究汇总：`scripts/yege_event_study.py`
+- T+1 验证：`scripts/validate_yege_next_day.py`
 - 事件测试：`tests/unit/test_yege_battle.py`
 - 策略测试：`tests/unit/test_yege_mainline_explosion.py`
 
