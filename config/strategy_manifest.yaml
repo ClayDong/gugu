@@ -261,6 +261,20 @@ signal_strategies:
         avg_return: 0.0
         avg_sharpe: 0.0
       next_action: P2-Alpha paper观察2周，30+信号后复验
+  yege_mainline_explosion:
+    name: 野哥主线爆发战法
+    module: gugu.strategies.yege_mainline_explosion
+    class: YegeMainlineExplosionStrategy
+    source: 用户提供的野哥战法（消息、首板潮、板块突破、中军、老龙、次日验证）
+    enabled: true
+    summary: 识别主线题材早盘首板爆发并聚焦核心/空间龙；缺少结构化板块与次日证据时仅观察
+    params_entry: strategy_defaults.yaml
+    validation: pending - 首版规则与数据契约已实现，尚无历史事件研究和 paper 样本
+    validation_gate:
+      status: pending
+      sample: 尚无可审计事件样本
+      metrics: {}
+      next_action: 补齐板块/首板/早盘/市值/老龙字段，完成事件研究、连续持仓和30+ paper前向验证
 risk_strategies:
   trailing_stop:
     name: 浪谷递进移动止损

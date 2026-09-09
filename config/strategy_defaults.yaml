@@ -105,3 +105,18 @@ macd_zero_axis:
   confirm_window: 5
   pullback_tolerance: 0.03
   trailing_stop_pct: 0.08
+yege_mainline_explosion:
+  ma_short: 5
+  ma_mid: 20
+  momentum_days: 3
+  volume_ratio_min: 1.1
+  pullback_tolerance: 0.04
+  min_first_board_count: 3
+  max_first_board_count: 5
+  first_board_window_min: 3
+  first_board_window_max: 60
+  min_message_level: high
+  min_anchor_market_cap_yi: 100.0
+  min_sector_volume_ratio: 1.2
+  breakout_window: 20
+  trailing_stop_pct: 0.08

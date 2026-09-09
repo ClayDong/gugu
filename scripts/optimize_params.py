@@ -217,6 +217,14 @@ STRATEGY_PARAM_GRIDS: dict[str, dict[str, list]] = {
         "vol_shrink_exit": [0.5, 0.7, 0.9],
         "trailing_stop_pct": [0.05, 0.08, 0.10],
     },
+    "yege_mainline_explosion": {
+        "ma_short": [5, 10],
+        "ma_mid": [20, 30],
+        "momentum_days": [3, 5],
+        "volume_ratio_min": [1.0, 1.1, 1.3],
+        "pullback_tolerance": [0.03, 0.04, 0.06],
+        "trailing_stop_pct": [0.05, 0.08, 0.10],
+    },
 }
 
 # 策略 → 其策略类需要哪些参数（pyproject.toml 中定义的策略类）
@@ -240,6 +248,14 @@ STRATEGY_CONFIG_KEYS: dict[str, list[str]] = {
         "pullback_max",
         "vol_expand_min",
         "vol_shrink_exit",
+        "trailing_stop_pct",
+    ],
+    "yege_mainline_explosion": [
+        "ma_short",
+        "ma_mid",
+        "momentum_days",
+        "volume_ratio_min",
+        "pullback_tolerance",
         "trailing_stop_pct",
     ],
 }

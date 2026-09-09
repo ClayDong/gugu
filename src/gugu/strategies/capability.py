@@ -142,6 +142,13 @@ STRATEGY_PROFILES: dict[str, StrategyProfile] = {
         0.15,
         "四周期模型（银山谷/死亡谷）",
     ),
+    "yege_mainline_explosion": StrategyProfile(
+        "yege_mainline_explosion",
+        EXPLAINABILITY_RULE,
+        IN_REVIEW,
+        0.10,
+        "野哥主线爆发：消息、首板潮、板块突破、中军和老龙证据均需可审计",
+    ),
     "death_valley_rebound": StrategyProfile(
         "death_valley_rebound",
         EXPLAINABILITY_TECHNICAL,

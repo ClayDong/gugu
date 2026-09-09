@@ -19,6 +19,7 @@ from gugu.strategies.regime_cycle import RegimeCycleFourStrategy
 from gugu.strategies.sector_momentum import SectorMomentumStrategy
 from gugu.strategies.sentiment_cycle import SentimentCycleStrategy
 from gugu.strategies.two_b_reversal import TwoBReversalStrategy
+from gugu.strategies.yege_mainline_explosion import YegeMainlineExplosionStrategy
 
 # 策略注册表：name -> class
 _REGISTRY: dict[str, type[Strategy]] = {
@@ -34,6 +35,7 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "huamulan_ghost_breakout": HuamulanGhostBreakoutStrategy,
     "sentiment_cycle": SentimentCycleStrategy,
     "two_b_reversal": TwoBReversalStrategy,
+    "yege_mainline_explosion": YegeMainlineExplosionStrategy,
 }
 
 

@@ -319,6 +319,19 @@ class EngineOpsMixin:
                     portfolio = self._broker.get_portfolio()
                     account = self._broker.get_account()
 
+                    yege_context = None
+                    if "yege_mainline_explosion" in {
+                        strategy.name for strategy in (self._strategies or [])
+                    }:
+                        # 当前数据链尚未提供完整板块事件快照；显式标记不可用，
+                        # 由策略和 Pipeline fail-closed，仅保留观察语义。
+                        yege_context = {
+                            "evidence_status": "unavailable",
+                            "data_quality": "insufficient",
+                            "passed": False,
+                            "entry_ready": False,
+                        }
+
                     signal = await self._pipeline.process(
                         symbol=symbol,
                         df=df,
@@ -331,6 +344,7 @@ class EngineOpsMixin:
                         regime=regime["regime"],
                         dragon_head_info=dragon_head_info.get(symbol),
                         market_env=market_env,
+                        yege_context=yege_context,
                     )
                     if signal is None:
                         return None

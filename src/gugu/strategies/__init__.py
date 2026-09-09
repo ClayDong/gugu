@@ -24,6 +24,7 @@ from gugu.strategies.registry import (
 from gugu.strategies.sector_momentum import SectorMomentumStrategy
 from gugu.strategies.sentiment_cycle import SentimentCycleStrategy
 from gugu.strategies.two_b_reversal import TwoBReversalStrategy
+from gugu.strategies.yege_mainline_explosion import YegeMainlineExplosionStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ __all__ = [
     "SectorMomentumStrategy",
     "SentimentCycleStrategy",
     "TwoBReversalStrategy",
+    "YegeMainlineExplosionStrategy",
     "MacdZeroAxisStrategy",
     "Strategy",
     "StrategyConfig",

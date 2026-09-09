@@ -29,7 +29,13 @@ STRATEGY_CATEGORIES: dict[str, list[str]] = {
     "trend": ["turtle", "dual_ma", "macd", "chen_jiangting"],
     "mean_revert": ["rsi_reversal", "bollinger", "kdj"],
     "breakout": ["box_breakout", "dual_thrust", "money_flow_follow", "pullback_low"],
-    "main_force": ["double_yin", "breakout_rebound", "capital_flow_alert", "leopard_three_factors"],
+    "main_force": [
+        "double_yin",
+        "breakout_rebound",
+        "capital_flow_alert",
+        "leopard_three_factors",
+        "yege_mainline_explosion",
+    ],
 }
 
 # 市场状态下的策略权重乘数

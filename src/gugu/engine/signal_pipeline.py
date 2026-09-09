@@ -283,9 +283,32 @@ class SignalPipeline:
         regime: str | None = None,
         dragon_head_info: dict[str, Any] | None = None,
         market_env: dict[str, Any] | None = None,
+        yege_context: dict[str, Any] | None = None,
     ) -> dict | None:
         try:
             self._filter_scan_count += 1
+            # 将结构化野哥事件快照映射为策略可读列；缺失快照不注入，
+            # yege_mainline_explosion 会按 fail-closed 规则保持无买入信号。
+            if yege_context:
+                yege_columns = {
+                    "passed": "yege_event_passed",
+                    "entry_ready": "yege_entry_ready",
+                    "evidence_status": "yege_evidence_status",
+                    "candidate": "yege_candidate",
+                    "board_role": "yege_board_role",
+                    "message_level": "yege_message_level",
+                    "first_board_count": "yege_first_board_count",
+                    "first_board_window_minutes": "yege_first_board_window_minutes",
+                    "sector_index_new_high": "yege_sector_index_new_high",
+                    "sector_volume_ratio": "yege_sector_volume_ratio",
+                    "max_anchor_market_cap_yi": "yege_max_anchor_market_cap_yi",
+                    "old_dragon_anomaly": "yege_old_dragon_anomaly",
+                    "sector_index_high": "yege_sector_index_high",
+                    "sector_index_close": "yege_sector_index_close",
+                }
+                for source, target in yege_columns.items():
+                    if source in yege_context:
+                        df[target] = yege_context[source]
             signal = self._router.route(df, symbol, name=meta.get("name", ""), regime=regime)
             if not signal:
                 self._inc_filter("信号路由")
@@ -312,6 +335,18 @@ class SignalPipeline:
                     signal["observation_only"] = True
                     signal["gate_blocked"] = True
                     signal["gate_reason"] = "市场环境数据不足，仅观察"
+
+            # 野哥策略必须有结构化主线事件证据；缺失或未通过只允许观察。
+            if yege_context is not None:
+                signal["yege_context"] = yege_context
+                if (
+                    signal.get("direction") == "buy"
+                    and "yege_mainline_explosion" in _signal_strategies
+                    and not bool(yege_context.get("passed"))
+                ):
+                    signal["observation_only"] = True
+                    signal["gate_blocked"] = True
+                    signal["gate_reason"] = "野哥主线证据未完成确认，仅观察"
 
             # ═══════════════════════════════════════════════════════
             # 道①：入场前检查清单（交易纪律，不可绕过）

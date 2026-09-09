@@ -44,7 +44,8 @@ strategy:
     - sentiment_cycle
     - two_b_reversal
     - macd_zero_axis
-    rally:
+    - yege_mainline_explosion
+  rally:
     - box_breakout
     - double_yin
     - rsi_reversal
@@ -57,7 +58,8 @@ strategy:
     - sentiment_cycle
     - two_b_reversal
     - macd_zero_axis
-    sideways:
+    - yege_mainline_explosion
+  sideways:
     - box_breakout
     - double_yin
     - rsi_reversal
@@ -65,8 +67,9 @@ strategy:
     - sentiment_cycle
     - two_b_reversal
     - macd_zero_axis
-    bear: []
-    crash: []
+    - yege_mainline_explosion
+  bear: []
+  crash: []
   verified_strategies: []
   experimental_strategies:
   - rsi_reversal
@@ -81,6 +84,7 @@ strategy:
   - sentiment_cycle
   - two_b_reversal
   - macd_zero_axis
+  - yege_mainline_explosion
   enabled: []
   weights: {}
   experimental_weights:
@@ -96,6 +100,7 @@ strategy:
     sentiment_cycle: 0.15
     two_b_reversal: 0.2
     macd_zero_axis: 0.2
+    yege_mainline_explosion: 0.1
   signal_fusion: weighted
   min_confidence: 0.4
   auto_select: true
