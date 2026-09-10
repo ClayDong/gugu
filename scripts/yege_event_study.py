@@ -132,9 +132,20 @@ def summarize(events: list[dict[str, Any]], *, cooldown_days: int = 3) -> dict[s
     insufficient = [
         event
         for event in deduped
-        if event not in valid and event.get("return_status", "available") != "available"
+        if event not in valid
+        and (
+            event.get("return_status") != "available"
+            or event.get("evidence_status")
+            in {"unavailable", "source_unavailable", "insufficient_evidence"}
+            or event.get("rule_status") == "insufficient_evidence"
+        )
     ]
-    rule_failed = [event for event in deduped if event.get("rule_status") == "failed"]
+    rule_failed = [
+        event
+        for event in deduped
+        if event.get("rule_status") in {"failed", "rule_failed"}
+        or (event.get("validated") is False and event.get("evidence_status") == "available")
+    ]
     return {
         "rule_version": "yege-mainline-v1",
         "event_count": len(events),

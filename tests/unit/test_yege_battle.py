@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import pandas as pd
+
 from gugu.analysis.yege_battle import (
     audit_context,
     audit_event_records,
+    derive_burst_context,
     detect_mainline_burst,
     validate_next_day,
 )
@@ -46,6 +49,39 @@ def test_audit_event_records_reports_missing_fields():
     assert audit["ready_count"] == 0
     assert audit["status"] == "insufficient_evidence"
     assert audit["missing_field_counts"]["message_level"] == 2
+
+
+def test_derive_burst_context_uses_only_structured_inputs():
+    index = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=21),
+            "close": [100.0] * 20 + [105.0],
+            "volume": [1_000_000.0] * 20 + [2_000_000.0],
+        }
+    )
+    context = derive_burst_context(
+        sector="机器人",
+        message={
+            "message_level": "high",
+            "source": "official",
+            "impact_score": 0.9,
+            "sector_limit_up_count": 4,
+        },
+        first_board_rows=[
+            {"window_minutes": 20},
+            {"window_minutes": 25},
+            {"window_minutes": 30},
+        ],
+        sector_index=index,
+        anchor_rows=[{"market_cap_yi": 500.0}],
+        old_dragon={"symbol": "000001", "anomaly": True, "candidate_role": "space_dragon"},
+        signal_date="2026-09-10",
+        candidate_symbol="600000",
+    )
+    assert context["evidence_status"] == "available"
+    assert context["sector_volume_ratio"] == 2.0
+    event = detect_mainline_burst(context, candidate_symbol="600000")
+    assert event["passed"] is True
 
 
 def test_mainline_burst_requires_all_evidence():
