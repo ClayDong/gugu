@@ -68,8 +68,11 @@ def test_cxbr_uses_independent_state_and_records_fill(tmp_path: Path) -> None:
 
 def test_cxbr_rejects_limit_up_with_real_prev_close(tmp_path: Path) -> None:
     executor = _executor(tmp_path)
+    # 涨停价 = prev_close * 1.10 = 9.5 * 1.10 = 10.45
+    # 使用 round 确保浮点精度不绕过限价检查
+    limit_up_price = round(9.5 * 1.10, 2)
     result = executor.execute_signal(
-        _buy_signal(), CXBRMarketSnapshot(price=10.45, prev_close=9.5), 100
+        _buy_signal(), CXBRMarketSnapshot(price=limit_up_price, prev_close=9.5), 100
     )
     assert result is not None
     assert not result.success

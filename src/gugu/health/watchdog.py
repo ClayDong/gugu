@@ -20,6 +20,8 @@ from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pandas as pd
+
 from gugu.utils.atomic import atomic_write_json
 
 from .results import (
@@ -930,8 +932,9 @@ def check_strategy_underperformance(
 ) -> StrategyUnderperformanceResult:
     """检查策略是否持续跑输基准。
 
-    读取 signals_history.jsonl，按策略分组计算5日前瞻命中率。
-    连续 N 个月 forward_5d_hit_rate < 阈值 → 告警。
+    读取 signals_history.jsonl，按策略+月份分组计算5日前瞻命中率。
+    对每个策略检查最近 consecutive_months 个月的月度命中率是否均低于阈值。
+    使用滚动月度窗口而非全局聚合，避免历史优秀掩盖近期恶化。
 
     只告警不自动降级（符合 auto_recover.py "策略层升级人工"的安全边界）。
     """
@@ -968,10 +971,12 @@ def check_strategy_underperformance(
             checked_strategies=0,
         )
 
-    # 按策略分组，计算5日前瞻命中率
+    # 按策略+月份分组，计算5日前瞻命中率
+    # 使用滚动月度窗口：检查最近 consecutive_months 个月的月度命中率
     from collections import defaultdict
 
-    strategy_hits: dict[str, list[bool]] = defaultdict(list)
+    # strategy -> {year-month -> [is_win, ...]}
+    strategy_monthly: dict[str, dict[str, list[bool]]] = defaultdict(lambda: defaultdict(list))
     for rec in records:
         strategies = rec.get("strategies", [])
         if isinstance(strategies, str):
@@ -983,37 +988,65 @@ def check_strategy_underperformance(
             is_win = float(ret_5d) > 0
         except (TypeError, ValueError):
             continue
+
+        # 提取信号月份
+        ts = rec.get("timestamp")
+        if not ts:
+            continue
+        try:
+            month_key = str(pd.Timestamp(ts).to_period("M"))
+        except (ValueError, TypeError):
+            continue
+
         for s in strategies:
             if s:
-                strategy_hits[s].append(is_win)
+                strategy_monthly[s][month_key].append(is_win)
 
     underperforming: list[str] = []
-    for strategy, hits in strategy_hits.items():
-        if len(hits) < 5:
+    for strategy, monthly in strategy_monthly.items():
+        # 计算各月份命中率
+        monthly_rates: dict[str, float] = {}
+        for month_key, hits in monthly.items():
+            if len(hits) < 5:  # 样本不足的月份跳过
+                continue
+            monthly_rates[month_key] = sum(hits) / len(hits)
+
+        if not monthly_rates:
             continue
-        hit_rate = sum(hits) / len(hits)
-        if hit_rate < min_hit_rate:
-            underperforming.append(f"{strategy}（命中率{hit_rate:.0%}, 样本{len(hits)}）")
+
+        # 按时间排序，取最近 consecutive_months 个月
+        sorted_months = sorted(monthly_rates.keys())
+        recent_months = sorted_months[-consecutive_months:]
+
+        # 检查最近 N 个月是否都低于阈值
+        below_threshold = [m for m in recent_months if monthly_rates[m] < min_hit_rate]
+        if len(below_threshold) >= consecutive_months:
+            details = "; ".join(
+                f"{m}: {monthly_rates[m]:.0%}（样本{len(monthly[m])}）" for m in recent_months
+            )
+            underperforming.append(
+                f"{strategy}（连续{consecutive_months}个月命中率<{min_hit_rate:.0%}: {details}）"
+            )
 
     if underperforming:
         return StrategyUnderperformanceResult(
             ok=False,
             severity="warn",
             message=(
-                f"策略持续跑输基准（5日命中率<{min_hit_rate:.0%}）: "
+                f"策略持续跑输基准（连续{consecutive_months}个月5日命中率<{min_hit_rate:.0%}）: "
                 + ", ".join(underperforming)
                 + "。建议人工复核，考虑降级或暂停。"
             ),
             underperforming_strategies=underperforming,
-            checked_strategies=len(strategy_hits),
+            checked_strategies=len(strategy_monthly),
             min_hit_rate=min_hit_rate,
             consecutive_months=consecutive_months,
         )
 
     return StrategyUnderperformanceResult(
         ok=True,
-        message=f"策略绩效正常（检查{len(strategy_hits)}个策略）",
-        checked_strategies=len(strategy_hits),
+        message=f"策略绩效正常（检查{len(strategy_monthly)}个策略，滚动{consecutive_months}个月窗口）",
+        checked_strategies=len(strategy_monthly),
         min_hit_rate=min_hit_rate,
         consecutive_months=consecutive_months,
     )

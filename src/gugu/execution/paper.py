@@ -104,6 +104,11 @@ class PaperBroker(BaseBroker):
             )
         else:
             self._state_file = STATE_FILE
+        # P0 统一：限价安全阈值。1.0 = 与 RiskManager 完全一致。
+        # 降低到 0.95 可使 paper 模式比生产更保守（涨停前 5% 即阻断买入）。
+        self._limit_adjacent_threshold = getattr(
+            get_config().execution.paper, "limit_adjacent_threshold", 1.0
+        )
         # 从磁盘恢复状态
         self._load_state()
 
@@ -201,15 +206,24 @@ class PaperBroker(BaseBroker):
 
         limit_pct = self._get_limit_pct(symbol)
 
-        # 涨停附近（>= limit_pct * 0.95）— 买入硬阻断
-        if direction == "buy" and change_pct >= limit_pct * 0.95:
+        # P0 统一：使用与 RiskManager 一致的标准限价阈值判定。
+        # round(change_pct, 4) 解决浮点精度：如 (10.45-9.5)/9.5 = 0.099999... 应等于 0.10
+        # paper 模式可选更保守的安全边际（limit_adjacent_threshold 配置项）
+        # 默认 1.0 = 与 RiskManager 完全一致，不设额外 margins
+        margin = getattr(self, "_limit_adjacent_threshold", 1.0)
+
+        # 涨停附近（>= limit_pct * margin）— 买入硬阻断
+        if direction == "buy" and round(change_pct, 4) >= limit_pct * margin:
             return False
 
-        return not (direction == "sell" and change_pct <= -limit_pct * 0.95)
+        return not (direction == "sell" and round(change_pct, 4) <= -limit_pct * margin)
 
     @staticmethod
     def _get_limit_pct(symbol: str, is_st: bool = False) -> float:
-        """根据股票代码前缀返回涨跌停幅度（P0 修复新增）。
+        """根据股票代码前缀返回涨跌停幅度。
+
+        P0 修复：统一委托 RiskManager._price_limit_ratio，消除 paper 与生产风控的阈值差异。
+        保持此方法作为兼容包装，但逻辑委托给 RiskManager。
 
         - 主板（60/00/30 开头）：±10%
         - 创业板（300/301）：±20%
@@ -217,16 +231,10 @@ class PaperBroker(BaseBroker):
         - 北交所（43/83/87/88/920）：±30%
         - ST/*ST：±5%（需外部标记 is_st）
         """
-        if is_st:
-            return 0.05  # P1-5 修复：ST 涨跌停 ±5%
-        if not symbol:
-            return 0.10  # 默认主板
-        code = symbol.strip().zfill(6)
-        if code.startswith(("300", "301", "688", "689")):
-            return 0.20  # 创业板/科创板
-        if code.startswith(("43", "83", "87", "88", "920")):
-            return 0.30  # 北交所
-        return 0.10  # 主板
+        # P0 统一：委托给 RiskManager._price_limit_ratio 确保与生产风控一致
+        from gugu.risk.manager import RiskManager
+
+        return RiskManager._price_limit_ratio(symbol, is_st)
 
     @staticmethod
     def _calc_transfer_fee(symbol: str, trade_value: float) -> float:

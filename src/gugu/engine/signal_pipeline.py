@@ -78,7 +78,6 @@ from gugu.wisdom import WisdomAdvisor
 logger = get_logger()
 
 _SECTOR_CACHE_TTL = 300
-_sector_cache_lock: asyncio.Lock | None = None
 
 
 class SignalPipeline:
@@ -143,6 +142,15 @@ class SignalPipeline:
                 logger.debug("另类 Alpha 过滤器初始化跳过: {}", e)
 
         self._industry_constraint = industry_constraint or IndustryConstraint()
+
+        # P0 优化：缓存 RiskManager 实例，避免每笔信号都重新初始化
+        self._risk_manager: Any = None
+        try:
+            from gugu.risk.manager import RiskManager  # noqa: F811
+
+            self._risk_manager = RiskManager(scope="live")
+        except Exception as e:
+            logger.warning("RiskManager 初始化失败，_entry_gate 将跳过风控熔断检查: {}", e)
         self._sector_rotation = sector_rotation or SectorRotation()
         self._hot_sectors_cache: dict[str, Any] | None = None
         self._hot_sectors_ts: float = 0.0
@@ -221,12 +229,14 @@ class SignalPipeline:
             return f"市场状态为 {regime}，禁止买入"
 
         # ── 2. 风控熔断中 ──────────────────────────────
-        from gugu.risk.manager import RiskManager
+        # P0 优化：使用 __init__ 时缓存的 RiskManager 实例
+        if self._risk_manager is None:
+            from gugu.risk.manager import RiskManager
 
-        risk = RiskManager(scope="live")
+            self._risk_manager = RiskManager(scope="live")
         # is_halted 是 @property（bool），不是方法——误加 () 会抛
         # TypeError: 'bool' object is not callable（2026-09-03 实证，v0.9.42 修复）
-        if risk.is_halted:
+        if self._risk_manager.is_halted:
             return "风控熔断中，禁止买入"
 
         # ── 3. 总持仓数已达上限 ─────────────────────────
@@ -289,7 +299,9 @@ class SignalPipeline:
             self._filter_scan_count += 1
             # 将结构化野哥事件快照映射为策略可读列；缺失快照不注入，
             # yege_mainline_explosion 会按 fail-closed 规则保持无买入信号。
+            # P2 优化：copy 避免 yege 列污染原始 DataFrame
             if yege_context:
+                df = df.copy()
                 yege_columns = {
                     "passed": "yege_event_passed",
                     "entry_ready": "yege_entry_ready",
@@ -1261,11 +1273,11 @@ class SignalPipeline:
                 signal["wisdom_filtered"] = True
 
     async def _check_sector_rotation(self, symbol: str) -> dict:
-        global _sector_cache_lock
-        if _sector_cache_lock is None:
-            _sector_cache_lock = asyncio.Lock()
+        # P2 优化：实例级锁替代全局 _sector_cache_lock，避免多 pipeline 实例互斥
+        if not hasattr(self, "_sector_lock"):
+            self._sector_lock = asyncio.Lock()
         now = time.time()
-        async with _sector_cache_lock:
+        async with self._sector_lock:
             if self._hot_sectors_cache is None or now - self._hot_sectors_ts > _SECTOR_CACHE_TTL:
                 try:
                     result = await self._sector_rotation.detect(top_n=5)
