@@ -31,18 +31,21 @@ class TestUnlockConditionsAllPass:
                 "best_params": {"breakout_window": 20},
                 "test_sharpe": 0.5,
                 "test_trades": 15,
+                "test_profits": [0.05, -0.02, 0.08, -0.01, 0.03],
             },
             {
                 "window": 2,
                 "best_params": {"breakout_window": 20},
                 "test_sharpe": 0.6,
                 "test_trades": 15,
+                "test_profits": [0.04, 0.06, -0.01, 0.03, 0.02],
             },
             {
                 "window": 3,
                 "best_params": {"breakout_window": 20},
                 "test_sharpe": 0.4,
                 "test_trades": 10,
+                "test_profits": [0.03, -0.01, 0.05, 0.02, -0.01],
             },
         ]  # 总交易 40 >= 30 通过
         param_votes = {"breakout_window": {"20": 3}}  # 100% 一致性
@@ -63,7 +66,13 @@ class TestUnlockConditionsAllPass:
     def test_minimal_pass_thresholds(self) -> None:
         """刚好处在阈值边界时也应通过（>0 / 80% / <25% / >=0 / >=30笔）。"""
         results = [
-            {"window": i, "best_params": {"x": 10}, "test_sharpe": 0.0, "test_trades": 10}
+            {
+                "window": i,
+                "best_params": {"x": 10},
+                "test_sharpe": 0.0,
+                "test_trades": 10,
+                "test_profits": [0.02, -0.01, 0.03],
+            }
             for i in range(4)
         ]
         # 4/4 = 100% 一致性（v0.8.1 起阈值 80%）
@@ -90,7 +99,12 @@ class TestUnlockConditionsOverfit:
         模拟：训练 Sharpe 5.01 vs 测试 Sharpe -6.28
         """
         results = [
-            {"window": 1, "best_params": {"x": 20}, "test_sharpe": -6.28},
+            {
+                "window": 1,
+                "best_params": {"x": 20},
+                "test_sharpe": -6.28,
+                "test_profits": [-0.05, -0.03],
+            },
         ]
         param_votes = {"x": {"20": 1}}
 
@@ -110,9 +124,27 @@ class TestUnlockConditionsOverfit:
     def test_instable_params_rejected(self) -> None:
         """每个窗口最优参数都不同应拒绝写回。"""
         results = [
-            {"window": 1, "best_params": {"x": 10}, "test_sharpe": 0.5, "test_trades": 10},
-            {"window": 2, "best_params": {"x": 20}, "test_sharpe": 0.5, "test_trades": 10},
-            {"window": 3, "best_params": {"x": 30}, "test_sharpe": 0.5, "test_trades": 10},
+            {
+                "window": 1,
+                "best_params": {"x": 10},
+                "test_sharpe": 0.5,
+                "test_trades": 10,
+                "test_profits": [0.05, 0.03],
+            },
+            {
+                "window": 2,
+                "best_params": {"x": 20},
+                "test_sharpe": 0.5,
+                "test_trades": 10,
+                "test_profits": [0.04, 0.06],
+            },
+            {
+                "window": 3,
+                "best_params": {"x": 30},
+                "test_sharpe": 0.5,
+                "test_trades": 10,
+                "test_profits": [0.03, 0.05],
+            },
         ]
         # 3 个窗口 3 个不同的最优值，最高一致性只有 1/3 ≈ 33% < 80%（v0.8.1 阈值）
         param_votes = {"x": {"10": 1, "20": 1, "30": 1}}
@@ -136,8 +168,20 @@ class TestUnlockConditionsSingleFailure:
     def test_negative_sharpe_only_rejected(self) -> None:
         """仅 Sharpe 失败（其他通过）应拒绝。"""
         results = [
-            {"window": 1, "best_params": {"x": 10}, "test_sharpe": -0.1, "test_trades": 20},
-            {"window": 2, "best_params": {"x": 10}, "test_sharpe": -0.1, "test_trades": 20},
+            {
+                "window": 1,
+                "best_params": {"x": 10},
+                "test_sharpe": -0.1,
+                "test_trades": 20,
+                "test_profits": [0.05, 0.03],
+            },
+            {
+                "window": 2,
+                "best_params": {"x": 10},
+                "test_sharpe": -0.1,
+                "test_trades": 20,
+                "test_profits": [0.04, 0.06],
+            },
         ]
         param_votes = {"x": {"10": 2}}
 
@@ -157,8 +201,20 @@ class TestUnlockConditionsSingleFailure:
     def test_high_drawdown_only_rejected(self) -> None:
         """仅回撤过高（其他通过）应拒绝。"""
         results = [
-            {"window": 1, "best_params": {"x": 10}, "test_sharpe": 0.5, "test_trades": 20},
-            {"window": 2, "best_params": {"x": 10}, "test_sharpe": 0.5, "test_trades": 20},
+            {
+                "window": 1,
+                "best_params": {"x": 10},
+                "test_sharpe": 0.5,
+                "test_trades": 20,
+                "test_profits": [0.05, 0.03],
+            },
+            {
+                "window": 2,
+                "best_params": {"x": 10},
+                "test_sharpe": 0.5,
+                "test_trades": 20,
+                "test_profits": [0.04, 0.06],
+            },
         ]
         param_votes = {"x": {"10": 2}}
 
@@ -178,8 +234,20 @@ class TestUnlockConditionsSingleFailure:
     def test_negative_return_only_rejected(self) -> None:
         """仅收益为负（其他通过）应拒绝。"""
         results = [
-            {"window": 1, "best_params": {"x": 10}, "test_sharpe": 0.1, "test_trades": 20},
-            {"window": 2, "best_params": {"x": 10}, "test_sharpe": 0.1, "test_trades": 20},
+            {
+                "window": 1,
+                "best_params": {"x": 10},
+                "test_sharpe": 0.1,
+                "test_trades": 20,
+                "test_profits": [0.05, 0.03],
+            },
+            {
+                "window": 2,
+                "best_params": {"x": 10},
+                "test_sharpe": 0.1,
+                "test_trades": 20,
+                "test_profits": [0.04, 0.06],
+            },
         ]
         param_votes = {"x": {"10": 2}}
 
@@ -210,6 +278,7 @@ class TestUnlockConditionsTradeCount:
                     "best_params": {},
                     "closed_trade_count": 30,
                     "trades": 60,
+                    "test_profits": [0.05, 0.03],
                 }
             ],
             avg_sharpe=0.5,
@@ -224,7 +293,7 @@ class TestUnlockConditionsTradeCount:
         """历史结果仅有整数 trades 时应保守视为缺少闭合交易口径。"""
         report = _check_unlock_conditions(
             strategy_name="legacy",
-            results=[{"window": 1, "best_params": {}, "trades": 60}],
+            results=[{"window": 1, "best_params": {}, "trades": 60, "test_profits": [0.05, 0.03]}],
             avg_sharpe=0.5,
             avg_return=0.05,
             avg_max_dd=0.10,
@@ -241,7 +310,15 @@ class TestUnlockConditionsReportStructure:
         """报告应包含 unlocked/checks/failed_checks 三个字段。"""
         report = _check_unlock_conditions(
             strategy_name="test",
-            results=[{"window": 1, "best_params": {}, "test_sharpe": 0.0, "test_trades": 30}],
+            results=[
+                {
+                    "window": 1,
+                    "best_params": {},
+                    "test_sharpe": 0.0,
+                    "test_trades": 30,
+                    "test_profits": [0.05, 0.03],
+                }
+            ],
             avg_sharpe=0.0,
             avg_return=0.0,
             avg_max_dd=0.0,
@@ -252,13 +329,15 @@ class TestUnlockConditionsReportStructure:
         assert "checks" in report
         assert "failed_checks" in report
         assert isinstance(report["checks"], list)
-        assert len(report["checks"]) == 5  # v0.8.1: 新增样本外交易次数检查
+        assert len(report["checks"]) == 6  # gate-v2: 新增 profit_factor + 原有5项
 
     def test_each_check_has_required_fields(self) -> None:
         """每项检查应包含 name/passed/detail 三个字段。"""
         report = _check_unlock_conditions(
             strategy_name="test",
-            results=[{"window": 1, "best_params": {}, "test_sharpe": 0.0}],
+            results=[
+                {"window": 1, "best_params": {}, "test_sharpe": 0.0, "test_profits": [0.05, 0.03]}
+            ],
             avg_sharpe=0.0,
             avg_return=0.0,
             avg_max_dd=0.0,
@@ -276,7 +355,15 @@ class TestUnlockConditionsReportStructure:
         """参数投票为空（无参数策略）不应崩溃。"""
         report = _check_unlock_conditions(
             strategy_name="test",
-            results=[{"window": 1, "best_params": {}, "test_sharpe": 0.5, "test_trades": 30}],
+            results=[
+                {
+                    "window": 1,
+                    "best_params": {},
+                    "test_sharpe": 0.5,
+                    "test_trades": 30,
+                    "test_profits": [0.05, 0.03],
+                }
+            ],
             avg_sharpe=0.5,
             avg_return=0.05,
             avg_max_dd=0.15,

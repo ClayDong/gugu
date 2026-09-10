@@ -188,6 +188,10 @@ risk:
   max_total_positions: 5
   max_same_industry: 2
   t_plus_1: true
+strategy_health:
+  enabled: true
+  min_forward_hit_rate: 0.4
+  consecutive_months: 3
 execution:
   mode: paper
   paper:

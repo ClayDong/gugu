@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 import sys
 from copy import deepcopy
 from datetime import datetime
@@ -612,6 +613,7 @@ def _check_unlock_conditions(
     param_stability = min(stability_ratios.values(), default=1.0)
 
     total_test_trades = 0
+    all_test_profits: list[float] = []
     for result in results:
         # 只消费明确的闭合 round-trip 样本数；旧结果仅兼容 test_trades。
         trades = result.get("closed_trade_count")
@@ -620,7 +622,17 @@ def _check_unlock_conditions(
         try:
             total_test_trades += max(0, int(trades or 0))
         except (TypeError, ValueError):
-            continue
+            pass
+        # 收集样本外盈亏用于计算盈亏比
+        test_profits = result.get("test_profits") or result.get("test_returns")
+        if isinstance(test_profits, (list, tuple)):
+            all_test_profits.extend(float(p) for p in test_profits if p is not None)
+
+    gross_profit = sum(p for p in all_test_profits if p > 0)
+    gross_loss = abs(sum(p for p in all_test_profits if p < 0))
+    profit_factor = (
+        gross_profit / gross_loss if gross_loss > 0 else (9999.0 if gross_profit > 0 else 0.0)
+    )
 
     gate = GatePolicy.evaluate_writeback(
         {
@@ -628,6 +640,7 @@ def _check_unlock_conditions(
             "param_stability": param_stability,
             "max_drawdown": avg_max_dd,
             "avg_return": avg_return,
+            "profit_factor": profit_factor,
             "oos_trades": total_test_trades,
         }
     )
@@ -636,6 +649,7 @@ def _check_unlock_conditions(
         "param_stability": f"最低参数一致性={param_stability:.0%}",
         "max_drawdown": f"avg_max_dd={avg_max_dd:.2%}",
         "avg_return": f"avg_return={avg_return:.2%}",
+        "profit_factor": f"profit_factor={profit_factor:.2f}",
         "oos_trades": f"total_test_trades={total_test_trades}",
     }
     names = {
@@ -643,13 +657,14 @@ def _check_unlock_conditions(
         "param_stability": "参数稳定性 ≥80%",
         "max_drawdown": "最大回撤 < 25%",
         "avg_return": "平均样本外收益 ≥ 0",
+        "profit_factor": "盈亏比 ≥ 1.5",
         "oos_trades": "样本外交易次数 ≥ 30",
     }
     checks = [
         {
-            "name": names[key],
+            "name": names.get(key, key),
             "passed": item["passed"],
-            "detail": f"{detail_values[key]} ({'通过' if item['passed'] else '失败'})",
+            "detail": f"{detail_values.get(key, 'N/A')} ({'通过' if item['passed'] else '失败'})",
         }
         for key, item in gate["checks"].items()
     ]
@@ -658,6 +673,7 @@ def _check_unlock_conditions(
         "param_stability": "参数稳定性 <80%",
         "max_drawdown": "最大回撤 ≥ 25%",
         "avg_return": "平均样本外收益 < 0",
+        "profit_factor": "盈亏比 < 1.5",
         "oos_trades": "样本外交易次数 < 30",
     }
     verdict = GatePolicy.classify_evidence(gate, sample_key="oos_trades", minimum=30)

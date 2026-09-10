@@ -2,6 +2,11 @@
 
 该模块是验证脚本、参数优化和启动一致性检查共用的唯一阈值来源。
 门禁对缺失、非法和非有限指标一律失败，避免调用方因默认值而误放行。
+
+gate-v2 变更（2026-09-10）：
+- 新增 profit_factor ≥ 1.5（盈亏比，弥补只看胜率不看盈亏比的缺口）
+- max_drawdown 按策略类型分层：短线(trend/breakout/mean_revert) < 15%，中长线(main_force) < 25%
+- evaluate() 新增可选 category 参数，按类型覆盖 max_drawdown 规则
 """
 
 from __future__ import annotations
@@ -11,7 +16,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-GATE_VERSION = "gate-v1"
+GATE_VERSION = "gate-v2"
+
+# 按策略类型的最大回撤阈值
+_SHORT_TERM_CATEGORIES = {"trend", "breakout", "mean_revert"}
+_SHORT_TERM_MAX_DRAWDOWN = 0.15
+_LONG_TERM_MAX_DRAWDOWN = 0.25
 
 
 @dataclass(frozen=True)
@@ -53,6 +63,7 @@ class GatePolicy:
         "avg_sharpe": GateRule(0.0, "higher", "平均 Sharpe > 0", strict=True),
         "max_drawdown": GateRule(0.25, "lower", "最大回撤 < 25%", strict=True),
         "profitable_ratio": GateRule(0.50, "higher", "盈利策略比例 ≥ 50%"),
+        "profit_factor": GateRule(1.5, "higher", "盈亏比 ≥ 1.5"),
         "param_stability": GateRule(0.80, "higher", "参数稳定性 ≥ 80%"),
         "paper_signals": GateRule(30, "higher", "paper 信号数 ≥ 30"),
         "paper_return": GateRule(0.0, "higher", "paper 收益 ≥ 0"),
@@ -64,17 +75,42 @@ class GatePolicy:
         "param_stability": FULL_RULES["param_stability"],
         "max_drawdown": FULL_RULES["max_drawdown"],
         "avg_return": FULL_RULES["avg_return"],
+        "profit_factor": FULL_RULES["profit_factor"],
         "oos_trades": GateRule(30, "higher", "样本外交易次数 ≥ 30"),
     }
+
+    @classmethod
+    def _resolve_rules(
+        cls, rules: dict[str, GateRule] | None, category: str | None
+    ) -> dict[str, GateRule]:
+        """按策略类型覆盖 max_drawdown 规则。"""
+        active = dict(cls.FULL_RULES if rules is None else rules)
+        if category and category in _SHORT_TERM_CATEGORIES:
+            active["max_drawdown"] = GateRule(
+                _SHORT_TERM_MAX_DRAWDOWN,
+                "lower",
+                f"短线策略最大回撤 < {_SHORT_TERM_MAX_DRAWDOWN:.0%}",
+                strict=True,
+            )
+        return active
 
     @classmethod
     def evaluate(
         cls,
         metrics: dict[str, Any],
         rules: dict[str, GateRule] | None = None,
+        *,
+        category: str | None = None,
     ) -> dict[str, Any]:
-        """按指定规则评估指标，缺失指标视为失败。"""
-        active_rules = cls.FULL_RULES if rules is None else rules
+        """按指定规则评估指标，缺失指标视为失败。
+
+        Args:
+            metrics: 策略指标字典
+            rules: 自定义规则集，None 时用 FULL_RULES
+            category: 策略类型（trend/breakout/mean_revert/main_force），
+                      用于按类型覆盖 max_drawdown 阈值
+        """
+        active_rules = cls._resolve_rules(rules, category)
         checks: dict[str, dict[str, Any]] = {}
         failed: list[str] = []
         for key, rule in active_rules.items():
@@ -91,6 +127,7 @@ class GatePolicy:
                 failed.append(key)
         return {
             "version": cls.VERSION,
+            "category": category,
             "passed": not failed,
             "failed_checks": failed,
             "checks": checks,

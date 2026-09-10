@@ -28,6 +28,7 @@ from .results import (
     HealthCheckResult,
     SchedulerHealthResult,
     SignalHistoryResult,
+    StrategyUnderperformanceResult,
     ZeroSignalResult,
 )
 
@@ -405,6 +406,7 @@ def run_all_checks(
         check_disk_health(data_dir=data_dir),
         check_data_source_health(data_dir=data_dir),
         check_zero_signal_streak(data_dir=data_dir, runtime_strategies=runtime_strategies),
+        check_strategy_underperformance(data_dir=data_dir),
     ]
 
 
@@ -912,6 +914,109 @@ def dedupe_alerts(
             # 状态写失败不阻塞告警推送
             state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     return to_push
+
+
+# ========== 6. 策略绩效失效检查（2026-09-10 gate-v2 新增） ==========
+
+DEFAULT_MIN_FORWARD_HIT_RATE = 0.40
+DEFAULT_CONSECUTIVE_MONTHS = 3
+
+
+def check_strategy_underperformance(
+    data_dir: Path | None = None,
+    history_path: Path | None = None,
+    min_hit_rate: float = DEFAULT_MIN_FORWARD_HIT_RATE,
+    consecutive_months: int = DEFAULT_CONSECUTIVE_MONTHS,
+) -> StrategyUnderperformanceResult:
+    """检查策略是否持续跑输基准。
+
+    读取 signals_history.jsonl，按策略分组计算5日前瞻命中率。
+    连续 N 个月 forward_5d_hit_rate < 阈值 → 告警。
+
+    只告警不自动降级（符合 auto_recover.py "策略层升级人工"的安全边界）。
+    """
+    data_dir = data_dir or Path("data")
+    history_path = history_path or data_dir / DEFAULT_HISTORY_FILE
+
+    if not history_path.exists():
+        return StrategyUnderperformanceResult(
+            ok=True,
+            message="信号历史文件不存在，跳过策略失效检查",
+        )
+
+    # 读取信号历史
+    records: list[dict] = []
+    try:
+        for line in history_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            with contextlib.suppress(json.JSONDecodeError, ValueError):
+                rec = json.loads(line)
+                if isinstance(rec, dict):
+                    records.append(rec)
+    except Exception:
+        return StrategyUnderperformanceResult(
+            ok=True,
+            message="信号历史读取失败，跳过策略失效检查",
+        )
+
+    if len(records) < 10:
+        return StrategyUnderperformanceResult(
+            ok=True,
+            message=f"信号样本不足（{len(records)}<10），跳过策略失效检查",
+            checked_strategies=0,
+        )
+
+    # 按策略分组，计算5日前瞻命中率
+    from collections import defaultdict
+
+    strategy_hits: dict[str, list[bool]] = defaultdict(list)
+    for rec in records:
+        strategies = rec.get("strategies", [])
+        if isinstance(strategies, str):
+            strategies = [strategies]
+        ret_5d = rec.get("return_5d")
+        if ret_5d is None:
+            continue
+        try:
+            is_win = float(ret_5d) > 0
+        except (TypeError, ValueError):
+            continue
+        for s in strategies:
+            if s:
+                strategy_hits[s].append(is_win)
+
+    underperforming: list[str] = []
+    for strategy, hits in strategy_hits.items():
+        if len(hits) < 5:
+            continue
+        hit_rate = sum(hits) / len(hits)
+        if hit_rate < min_hit_rate:
+            underperforming.append(f"{strategy}（命中率{hit_rate:.0%}, 样本{len(hits)}）")
+
+    if underperforming:
+        return StrategyUnderperformanceResult(
+            ok=False,
+            severity="warn",
+            message=(
+                f"策略持续跑输基准（5日命中率<{min_hit_rate:.0%}）: "
+                + ", ".join(underperforming)
+                + "。建议人工复核，考虑降级或暂停。"
+            ),
+            underperforming_strategies=underperforming,
+            checked_strategies=len(strategy_hits),
+            min_hit_rate=min_hit_rate,
+            consecutive_months=consecutive_months,
+        )
+
+    return StrategyUnderperformanceResult(
+        ok=True,
+        message=f"策略绩效正常（检查{len(strategy_hits)}个策略）",
+        checked_strategies=len(strategy_hits),
+        min_hit_rate=min_hit_rate,
+        consecutive_months=consecutive_months,
+    )
 
 
 if __name__ == "__main__":

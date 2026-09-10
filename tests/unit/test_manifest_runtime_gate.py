@@ -35,6 +35,7 @@ class TestManifestRuntimeGate:
             "avg_sharpe": 0.2,
             "max_drawdown": 0.1,
             "profitable_ratio": 0.6,
+            "profit_factor": 2.0,
             "param_stability": 0.9,
             "paper_signals": 40,
             "paper_return": 0.01,

@@ -287,7 +287,9 @@ def print_report(
 def main() -> None:
     parser = argparse.ArgumentParser(description="全市场多策略批量回测（离线版）")
     parser.add_argument("--max-stocks", type=int, default=None, help="限制股票数（调试用）")
-    parser.add_argument("--min-days", type=int, default=60, help="最少缓存天数要求（默认 60）")
+    parser.add_argument(
+        "--min-days", type=int, default=120, help="最少缓存天数要求（默认 120，确保至少覆盖半年）"
+    )
     parser.add_argument("--strategies", type=str, default=None, help="逗号分隔的策略名")
     parser.add_argument(
         "--output", type=str, default="data/backtest_report.json", help="输出 JSON 路径"

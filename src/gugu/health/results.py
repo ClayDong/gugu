@@ -58,3 +58,13 @@ class ZeroSignalResult(HealthCheckResult):
 
     streak: int = 0
     last_scan_at: str = ""
+
+
+@dataclass
+class StrategyUnderperformanceResult(HealthCheckResult):
+    """策略绩效失效检查结果。"""
+
+    underperforming_strategies: list[str] = field(default_factory=list)
+    checked_strategies: int = 0
+    min_hit_rate: float = 0.0
+    consecutive_months: int = 0

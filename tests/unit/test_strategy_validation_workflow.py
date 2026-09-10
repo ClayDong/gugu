@@ -92,6 +92,7 @@ class TestStrategyGateScript:
                 "avg_sharpe": 0.35,
                 "max_drawdown": 0.12,
                 "profitable_ratio": 0.56,
+                "profit_factor": 2.0,
                 "param_stability": 0.8,
                 "paper_signals": 35,
                 "paper_return": 0.02,

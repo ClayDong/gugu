@@ -112,11 +112,16 @@ class BacktestEngine:
         enable_cognitive_engine: bool = False,
         strict_confirmation: bool = False,
         position_sizing: PositionSizingFn | None = None,
+        execution_price_mode: str = "close",
     ) -> None:
         self.initial_capital = initial_capital
         self.commission_rate = commission_rate
         self.stamp_tax = stamp_tax
         self.slippage = slippage
+        # 2026-09-10 gate-v2: 支持次日开盘价成交模式
+        # "close"（默认）：用当日收盘价，保持向后兼容
+        # "next_open"：用下一日开盘价，与事件研究口径一致
+        self.execution_price_mode = execution_price_mode
         # 默认与风控 L1 保持一致，避免回测与模拟盘行为脱节
         if position_ratio is None:
             position_ratio = get_config().risk.max_position_ratio
@@ -285,6 +290,8 @@ class BacktestEngine:
         close_arr = df["close"].to_numpy(dtype=float)
         date_arr = df["date"].to_numpy()
         signal_arr = signals_df["signal"].to_numpy(dtype=int)
+        # 2026-09-10 gate-v2: next_open 模式需要次日开盘价
+        open_arr = df["open"].to_numpy(dtype=float) if "open" in df.columns else None
         suspended_arr = (
             df["is_suspended"].fillna(False).to_numpy(dtype=bool)
             if "is_suspended" in df.columns
@@ -564,8 +571,21 @@ class BacktestEngine:
                 else:
                     # Buy with adjusted cash (wisdom may reduce position)
                     equity = cash + position_qty * close
+                    # gate-v2: next_open 模式用次日开盘价成交
+                    buy_price_override = None
+                    if (
+                        self.execution_price_mode == "next_open"
+                        and open_arr is not None
+                        and i + 1 < n_rows
+                    ):
+                        buy_price_override = float(open_arr[i + 1])
                     trade = self._execute_buy(
-                        symbol, current_date, close, buy_cash, current_equity=equity
+                        symbol,
+                        current_date,
+                        close,
+                        buy_cash,
+                        current_equity=equity,
+                        price_override=buy_price_override,
                     )
                     if trade is not None:
                         trades.append(trade)
@@ -610,8 +630,20 @@ class BacktestEngine:
                     )
                 else:
                     # Sell all shares (clear position)
+                    sell_price_override = None
+                    if (
+                        self.execution_price_mode == "next_open"
+                        and open_arr is not None
+                        and i + 1 < n_rows
+                    ):
+                        sell_price_override = float(open_arr[i + 1])
                     trade = self._execute_sell(
-                        symbol, current_date, close, position_qty, position_cost
+                        symbol,
+                        current_date,
+                        close,
+                        position_qty,
+                        position_cost,
+                        price_override=sell_price_override,
                     )
                     trades.append(trade)
                     proceeds = (
@@ -813,10 +845,11 @@ class BacktestEngine:
         cash: float,
         *,
         current_equity: float | None = None,
+        price_override: float | None = None,
     ) -> Trade | None:
         """Execute a buy order with slippage, commission (min 5 CNY), and transfer fee.
 
-        Buy price = close * (1 + slippage)
+        Buy price = (price_override or close) * (1 + slippage)
         Quantity is rounded down to the nearest board lot (100 shares).
         买入金额受 position_ratio 限制，与风控 L1 单股上限保持一致。
         保底机制：常规计算为 0 但现金够买 100 股时，买入 100 股
@@ -824,10 +857,12 @@ class BacktestEngine:
 
         Args:
             current_equity: 当前账户总净值。若未传则退回到 initial_capital。
+            price_override: 指定成交价（如次日开盘价），None 时用 close。
 
         Returns None if not enough cash for even one lot.
         """
-        buy_price = close * (1 + self.slippage)
+        base_price = price_override if price_override is not None else close
+        buy_price = base_price * (1 + self.slippage)
         transfer_fee_rate = (
             0.00001
             if symbol.strip()
@@ -876,14 +911,17 @@ class BacktestEngine:
         close: float,
         quantity: int,
         cost_basis: float,
+        *,
+        price_override: float | None = None,
     ) -> Trade:
         """Execute a sell order with slippage, commission (min 5 CNY), stamp tax, and transfer fee.
 
-        Sell price = close * (1 - slippage)
+        Sell price = (price_override or close) * (1 - slippage)
         Stamp tax is only applied to sells (A-share rule).
         Transfer fee is applied to sells for Shanghai stocks.
         """
-        sell_price = close * (1 - self.slippage)
+        base_price = price_override if price_override is not None else close
+        sell_price = base_price * (1 - self.slippage)
         trade_value = sell_price * quantity
         commission = trade_value * self.commission_rate
         commission = max(commission, 5.0)
