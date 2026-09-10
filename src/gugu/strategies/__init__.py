@@ -7,6 +7,9 @@
 import logging
 
 from gugu.strategies.base import Strategy, StrategyConfig
+from gugu.strategies.binge_714 import Binge714Strategy
+from gugu.strategies.binge_trend import BingeTrendStrategy
+from gugu.strategies.binge_wave import BingeWaveStrategy
 from gugu.strategies.breakout import BoxBreakoutStrategy
 from gugu.strategies.double_yin import DoubleYinMoneyBagStrategy
 from gugu.strategies.dragon_head import DragonHeadStrategy
@@ -41,6 +44,9 @@ __all__ = [
     "SentimentCycleStrategy",
     "TwoBReversalStrategy",
     "YegeMainlineExplosionStrategy",
+    "Binge714Strategy",
+    "BingeWaveStrategy",
+    "BingeTrendStrategy",
     "MacdZeroAxisStrategy",
     "Strategy",
     "StrategyConfig",

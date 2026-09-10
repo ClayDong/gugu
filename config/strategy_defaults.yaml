@@ -120,3 +120,28 @@ yege_mainline_explosion:
   min_sector_volume_ratio: 1.2
   breakout_window: 20
   trailing_stop_pct: 0.08
+binge_714:
+  consecutive_yang_min: 7
+  vol_ratio_min: 2.0
+  confirm_days: 4
+  turnover_min: 0.03
+  turnover_max: 0.09
+  max_consecutive_boards: 3
+  trailing_stop_pct: 0.08
+binge_wave:
+  ema_period: 20
+  lookback_days: 10
+  vol_ratio_min: 1.5
+  pullback_tolerance: 0.03
+  max_consecutive_boards: 3
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  trailing_stop_pct: 0.08
+binge_trend:
+  ema_short: 10
+  ema_mid: 20
+  ema_long: 30
+  pullback_tolerance: 0.03
+  vol_ratio_min: 1.2
+  trailing_stop_pct: 0.08

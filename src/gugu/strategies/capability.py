@@ -149,6 +149,27 @@ STRATEGY_PROFILES: dict[str, StrategyProfile] = {
         0.10,
         "野哥主线爆发：消息、首板潮、板块突破、中军和老龙证据均需可审计",
     ),
+    "binge_714": StrategyProfile(
+        "binge_714",
+        EXPLAINABILITY_RULE,
+        IN_REVIEW,
+        0.10,
+        "斌哥714战法：7连阳+异动倍量阳+4天缩量确认",
+    ),
+    "binge_wave": StrategyProfile(
+        "binge_wave",
+        EXPLAINABILITY_RULE,
+        IN_REVIEW,
+        0.10,
+        "斌哥笨战法三步：涨停筛选+MACD金叉+EMA20回踩放量阳线",
+    ),
+    "binge_trend": StrategyProfile(
+        "binge_trend",
+        EXPLAINABILITY_TECHNICAL,
+        IN_REVIEW,
+        0.10,
+        "斌哥趋势极简：EMA10/20/30三线+格兰威尔八信号",
+    ),
     "death_valley_rebound": StrategyProfile(
         "death_valley_rebound",
         EXPLAINABILITY_TECHNICAL,

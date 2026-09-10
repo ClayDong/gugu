@@ -45,6 +45,9 @@ strategy:
     - two_b_reversal
     - macd_zero_axis
     - yege_mainline_explosion
+    - binge_714
+    - binge_wave
+    - binge_trend
   rally:
     - box_breakout
     - double_yin
@@ -59,6 +62,9 @@ strategy:
     - two_b_reversal
     - macd_zero_axis
     - yege_mainline_explosion
+    - binge_714
+    - binge_wave
+    - binge_trend
   sideways:
     - box_breakout
     - double_yin
@@ -68,6 +74,9 @@ strategy:
     - two_b_reversal
     - macd_zero_axis
     - yege_mainline_explosion
+    - binge_714
+    - binge_wave
+    - binge_trend
   bear: []
   crash: []
   verified_strategies: []
@@ -85,6 +94,9 @@ strategy:
   - two_b_reversal
   - macd_zero_axis
   - yege_mainline_explosion
+  - binge_714
+  - binge_wave
+  - binge_trend
   enabled: []
   weights: {}
   experimental_weights:
@@ -101,6 +113,9 @@ strategy:
     two_b_reversal: 0.2
     macd_zero_axis: 0.2
     yege_mainline_explosion: 0.1
+    binge_714: 0.15
+    binge_wave: 0.15
+    binge_trend: 0.15
   signal_fusion: weighted
   min_confidence: 0.4
   auto_select: true

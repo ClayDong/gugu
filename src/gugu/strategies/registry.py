@@ -6,6 +6,9 @@ from functools import lru_cache
 from typing import Any
 
 from gugu.strategies.base import Strategy
+from gugu.strategies.binge_714 import Binge714Strategy
+from gugu.strategies.binge_trend import BingeTrendStrategy
+from gugu.strategies.binge_wave import BingeWaveStrategy
 from gugu.strategies.blogger_rules import LinJuDaYeStrategy
 from gugu.strategies.breakout import BoxBreakoutStrategy
 from gugu.strategies.double_yin import DoubleYinMoneyBagStrategy
@@ -36,6 +39,9 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "sentiment_cycle": SentimentCycleStrategy,
     "two_b_reversal": TwoBReversalStrategy,
     "yege_mainline_explosion": YegeMainlineExplosionStrategy,
+    "binge_714": Binge714Strategy,
+    "binge_wave": BingeWaveStrategy,
+    "binge_trend": BingeTrendStrategy,
 }
 
 

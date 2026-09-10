@@ -26,7 +26,7 @@ logger = get_logger()
 # P0 修复：移除不存在的 sar 策略（文档声称但代码从未实现），添加 chen_jiangting
 # P1 修复：补全所有注册策略的分类，消除 "unknown" 返回
 STRATEGY_CATEGORIES: dict[str, list[str]] = {
-    "trend": ["turtle", "dual_ma", "macd", "chen_jiangting"],
+    "trend": ["turtle", "dual_ma", "macd", "chen_jiangting", "binge_wave", "binge_trend"],
     "mean_revert": ["rsi_reversal", "bollinger", "kdj"],
     "breakout": ["box_breakout", "dual_thrust", "money_flow_follow", "pullback_low"],
     "main_force": [
@@ -35,6 +35,7 @@ STRATEGY_CATEGORIES: dict[str, list[str]] = {
         "capital_flow_alert",
         "leopard_three_factors",
         "yege_mainline_explosion",
+        "binge_714",
     ],
 }
 
