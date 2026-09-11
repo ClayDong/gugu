@@ -187,6 +187,18 @@ async def validate_yesterday_screener(is_eod: bool = False) -> list[ValidationRe
         if today_data is None:
             continue
         open_price, high_price, low_price, current_price = today_data
+        # 防御（2026-09-11）：行情字段缺失时跳过该记录，避免 None 参与算术
+        # 抛 TypeError 中断整个尾盘验证任务（四级数据源降级后仍可能返回 None）。
+        if None in (open_price, high_price, low_price, current_price):
+            logger.warning(
+                "尾盘验证: {} 行情字段缺失（open={} high={} low={} current={}），跳过",
+                rec.symbol,
+                open_price,
+                high_price,
+                low_price,
+                current_price,
+            )
+            continue
 
         def _pct(new: float, old: float) -> float:
             return (new - old) / old if old > 0 else 0.0
@@ -342,13 +354,16 @@ async def _fetch_today_prices(
             data = resp.json()
     except Exception as e:
         logger.warning(f"尾盘验证: 东财批量实时行情获取失败: {e}")
-        return [(None, None, None, None)] * len(records)
+        # 2026-09-11 修复：此处必须返回 None 占位（而非 (None,None,None,None) 元组），
+        # 否则调用方的 `if today_data is None` 守卫失效，None 会流入 _pct() 抛 TypeError
+        # 并中断整个尾盘验证任务。
+        return [None] * len(records)
 
     # 解析返回数据
     diff_list = data.get("data", {}).get("diff", []) if data.get("data") else []
     if not diff_list:
         logger.warning("尾盘验证: 东财批量接口返回空数据")
-        return [(None, None, None, None)] * len(records)
+        return [None] * len(records)
 
     # 建立代码 → (今开, 最高, 最低, 当前价) 映射
     price_map: dict[str, tuple[float, float, float, float]] = {}

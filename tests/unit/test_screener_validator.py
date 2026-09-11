@@ -13,6 +13,7 @@ import pytest
 from gugu.screener.validator import (
     ScreenerRecord,
     ValidationResult,
+    _fetch_today_prices,
     _load_records_by_date,
     _rotate_file,
     save_screener_records,
@@ -57,6 +58,19 @@ class _MockAsyncClient:
         if "000300" in secids:
             return _MockResponse(self._hs300)
         return _MockResponse(self._stock)
+
+
+class _FailingAsyncClient:
+    """模拟 httpx.AsyncClient，get() 直接抛异常（数据源不可用）。"""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def get(self, url, params=None, **kwargs):
+        raise RuntimeError("mock 数据源不可用")
 
 
 class TestScreenerRecord:
@@ -350,6 +364,44 @@ class TestValidateYesterdayScreener:
         ):
             results = await validate_yesterday_screener()
             assert results == []
+
+    @pytest.mark.asyncio
+    async def test_source_failure_no_crash(self, mock_history, mock_validation_file):
+        """数据源整体失败时应静默跳过而非抛异常。
+
+        回归 2026-09-11 尾盘验证 TypeError（unsupported operand NoneType - float）：
+        历史 bug 是 _fetch_today_prices 失败路径返回 (None,None,None,None) 元组，
+        绕过调用方 `if today_data is None` 守卫 → _pct(None, close) 抛错并中断任务。
+        """
+        with (
+            patch("gugu.screener.validator._SCREENER_HISTORY_FILE", mock_history),
+            patch("gugu.screener.validator._SCREENER_VALIDATION_FILE", mock_validation_file),
+            patch("gugu.screener.validator.httpx.AsyncClient", return_value=_FailingAsyncClient()),
+        ):
+            results = await validate_yesterday_screener()
+            assert results == []
+
+    @pytest.mark.asyncio
+    async def test_empty_diff_no_crash(self, mock_history, mock_validation_file):
+        """东财返回空 diff 时同样不崩溃，返回空列表。"""
+        mock_client = _MockAsyncClient({"data": {"diff": []}}, {"data": {"diff": []}})
+        with (
+            patch("gugu.screener.validator._SCREENER_HISTORY_FILE", mock_history),
+            patch("gugu.screener.validator._SCREENER_VALIDATION_FILE", mock_validation_file),
+            patch("gugu.screener.validator.httpx.AsyncClient", return_value=mock_client),
+        ):
+            results = await validate_yesterday_screener()
+            assert results == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_today_prices_failure_returns_none_placeholders(self):
+        """_fetch_today_prices 失败时必须返回 None 占位（而非含 None 的元组）。"""
+        records = [
+            ScreenerRecord("600519", "茅台", 1520.5, 3.2, 1.8, "2026-01-01", True, []),
+        ]
+        with patch("gugu.screener.validator.httpx.AsyncClient", return_value=_FailingAsyncClient()):
+            out = await _fetch_today_prices(records)
+        assert out == [None]
 
 
 class TestValidationResult:

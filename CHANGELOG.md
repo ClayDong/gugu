@@ -1,5 +1,36 @@
 # 变更日志
 
+## 2026-09-11 — v0.9.46 尾盘验证数据源失败崩溃修复（NoneType 运算）
+
+### 变更：告警评估员处置（2026-09-11 告警分诊）
+
+**🔴 ERROR 09:36:18 `scheduler_jobs:116 尾盘选股验证异常: unsupported operand type(s) for -: 'NoneType' and 'float'`**
+- 根因：`screener/validator.py::_fetch_today_prices` 在「东财批量行情请求异常」与
+  「返回空 diff」两条失败路径上返回 `[(None,None,None,None)] * n` 元组，
+  绕过调用方 `if today_data is None: continue` 守卫 → `None` 流入 `_pct()`，
+  `None - 23.5` 抛 TypeError，**整个 09:35 尾盘验证任务中断**，
+  昨日（09-10 sh603533 掌阅科技）验证结果未落库（`validate` 循环首条即崩）。
+- 修复（`src/gugu/screener/validator.py`）：
+  1. 失败/空数据路径改返回 `[None] * len(records)`，与声明的返回类型
+     `list[tuple[...] | None]` 一致，使调用方 None 守卫真正生效；
+  2. 验证循环新增防御性 None 守卫：`today_data` 任一价格字段缺失时
+     WARNING + `continue` 跳过该记录，而非中断整批（四级数据源降级后仍可能返回 None）。
+- 测试：`tests/unit/test_screener_validator.py` 新增 3 个回归用例
+  （数据源异常不崩溃 / 空 diff 不崩溃 / `_fetch_today_prices` 返回 None 占位）→
+  **27 passed**；相关 screener 套件（screener + params + auto_tune + validator）**94 passed**；
+  `ruff check` 全绿。
+- 部署：`launchctl kickstart -k` 重启，新实例 PID 2669 由 launchd 托管，心跳新鲜
+  （last_cycle_at 持续递增，无崩溃循环）。
+- 附带发现：重启前运行中的 scheduler 是**手动 nohup 启动**（PPID=1 的 `uv run`），
+  与 launchd plist 实例互斥 → launchd job 长期反复被单实例锁拒绝（`last exit=1`，
+  err.log 累积 4.2MB）。本次重启后已收敛为 launchd 单实例托管。
+
+### 放过记录（无代码变更，附理由）
+- 09:36 基本面过滤对 600256/600255 报 "全部指标获取失败，拒绝放行"：
+  akshare/东财瞬时断连，四级冗余设计内的安全拒绝（拒放行=宁缺毋滥），非缺陷。
+- `sentiment.fetcher` 正则 WARNING（`Invalid escape sequence \u`）：源自 akshare 内部，
+  gugu 已优雅降级（WARNING + 公告兜底），历史已知无害。
+
 ## 2026-09-04 — v0.9.45 重启风暴阈值对齐部署常态（5→8）
 
 ### 变更：告警评估员处置（2026-09-04 告警分诊）
