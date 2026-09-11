@@ -31,12 +31,26 @@
   非交易日跳过、akshare 缺失/上游异常降级为空、合并去重。
 - 联机冒烟（真实 akshare）：600519 新闻 5 条（修复前 0 条）；
   000703 公告 3 条含 URL（修复前恒为空）。
-- `ruff check` + `ruff format --check` 全绿；全量单测结果见下。
+- `ruff check` + `ruff format --check` 全绿；全量单测 **2143 passed / 141 skipped**（0 failed）。
+- 部署：`launchctl kickstart -k` 重启（12:35:19，PID 28090，launchd 单实例托管），
+  重启后 13:00 盘中扫描完整跑通：新增 ERROR 0 条、新闻/公告失败 WARNING 0 条
+  （修复前每轮扫描各 2~20 条）；生产路径复现 `NewsFetcher().fetch_stock_news(600519, 5)`
+  返回 5 条新闻且 SentimentAnalyzer 正常出标签。
 
 ### 放过记录（无代码变更，附理由）
 - 09:36:18 尾盘验证 ERROR：v0.9.46/v0.9.47 已修复，运行实例（PID 13273，
   11:05:13 启动）晚于修复提交，当日日志中的该行属**历史告警残留**，无需处置。
 - 心跳（12:30:48）/watchdog/自愈/磁盘（8.0GB）/数据源失败率 0%/单实例锁正常。
+
+### 附带：分诊口径修正 + 历史残留标注（scripts/alert_triage.py）
+- 同一 ERROR 在当日修复+重启后仍被反复分诊（今日连续 3 轮），造成重复处置。
+- 修正条数口径：只统计 loguru 行头 ERROR/CRITICAL，Traceback 行标注为
+  「上下文」（旧口径 1 次崩溃报「2 条」）。
+- 新增 `_stale_error_note()`：当日 ERROR 时间戳**全部早于**当前实例
+  `scheduler_boot.json` 启动时间时，追加「疑似已由重启修复的历史残留」提示。
+  **仅展示层标注，不改变 issues 判定**——重启后复现的 ERROR 照常上报，不会被掩盖。
+- 测试：新增 `tests/unit/test_alert_triage.py` 8 例（无 boot 记录 / 错误晚于启动 /
+  临界同秒 / 全部早于启动 / 部分晚于启动 / 无时间戳行 / 缺字段 / 空输入）→ 全绿。
 
 ## 2026-09-11 — v0.9.47 尾盘验证行情字段防护（非数值/缺失字段不再中断任务）
 

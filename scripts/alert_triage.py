@@ -31,6 +31,28 @@ DATA = PROJECT_ROOT / "data"
 LOGS = PROJECT_ROOT / "logs"
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+# loguru 行首时间戳（2026-09-11 09:36:18 | ERROR | ...）
+TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+
+
+def _stale_error_note(error_lines: list[str]) -> str:
+    """标注「早于当前实例启动」的历史 ERROR（已由重启修复，非新告警）。
+
+    背景：修复+重启后，当日日志里修复前的 ERROR 行仍会被反复分诊，
+    导致每轮评估重复处置同一条历史告警（2026-09-11 连续 3 轮）。
+    这里只做**展示层**标注，不改变 issues 判定，复现的 ERROR 仍会照常上报。
+    """
+    boot = _read_json(DATA / "scheduler_boot.json") or {}
+    boot_ts = str(boot.get("boot_time", "")).replace("T", " ")[:19]
+    if not boot_ts:
+        return ""
+    stamps = [m.group(1) for line in error_lines if (m := TS_RE.match(line.strip()))]
+    if not stamps or max(stamps) >= boot_ts:
+        return ""
+    return (
+        f"   ⚠️ 以上 ERROR 时间戳均早于当前实例启动（{boot_ts}），"
+        f"疑似已由重启修复的**历史残留**；若重启后仍复现请按新告警处置"
+    )
 
 
 def _read_json(path: Path) -> dict | None:
@@ -137,12 +159,23 @@ def main() -> int:
             ).splitlines()
             errors = [l for l in lines if "ERROR" in l or "CRITICAL" in l or "Traceback" in l]
             if errors:
-                issues.append(f"当日日志 {len(errors)} 条 ERROR/异常")
+                # 精确口径：条数只统计 loguru 日志行头的 ERROR/CRITICAL，
+                # Traceback 行仅作上下文（旧口径把两者都计数 → 1 次崩溃报「2 条」）
+                entries = [l for l in errors if "| ERROR" in l or "| CRITICAL" in l]
+                tb_count = len(errors) - len(entries)
+                if not entries:  # 非 loguru 格式（外部脚本写入）兜底，保持原口径
+                    entries, tb_count = errors, 0
+                label = f"当日日志 {len(entries)} 条 ERROR/异常"
+                if tb_count:
+                    label += f"（另有 {tb_count} 行 Traceback 上下文）"
+                issues.append(label)
                 samples = errors[-5:]
                 sections.append(
-                    f"4. 当日日志: {len(errors)} 条 ERROR/异常 (最近5条):\n"
-                    + "\n".join(f"  {s[:160]}" for s in samples)
+                    f"4. {label} (最近5条):\n" + "\n".join(f"  {s[:160]}" for s in samples)
                 )
+                note = _stale_error_note(entries)
+                if note:
+                    sections.append(note)
             else:
                 sections.append("4. 当日日志: 无 ERROR")
         except OSError:
