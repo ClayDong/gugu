@@ -1,5 +1,42 @@
 # 变更日志
 
+## 2026-09-11 — v0.9.47 尾盘验证行情字段防护（非数值/缺失字段不再中断任务）
+
+### 变更：告警评估员处置（2026-09-11 11:05 告警分诊）
+
+**背景**：分诊报「当日日志 2 条 ERROR/异常」= 09:36:18 尾盘验证 NoneType 崩溃
+（已在 v0.9.46 修复并部署，属已解决的历史告警）。复核修复后代码，
+发现同一函数仍有**同类残留脆点**，本次做第二批加固：
+
+**🔴 残留脆点 1：非数值字段 → ValueError 中断整批**
+- `_fetch_today_prices` 解析东财 push2 字段用 `float(item.get("f17"))`，
+  停牌/异常标的返回 `"-"` / `"--"` / `None` 时抛 `ValueError`/`TypeError`，
+  且该解析在 `try` 之外 → 与 09:36 崩溃同属「一条坏数据中断整批尾盘验证」。
+
+**🟡 残留脆点 2：low/current 缺失回退 0.0 → 污染验证统计**
+- 旧逻辑 `float(low_raw) / 100 if low_raw is not None else 0.0`：最低价缺失记 0.0 →
+  `low_price <= stop_loss_price` 恒真 → **假止损命中**；
+  `_pct(0.0, close)` → 当前溢价 -100% → 污染 auto_tune 收益样本与止损命中率统计。
+
+修复（`src/gugu/screener/validator.py`）：
+1. 新增 `_parse_price()`：统一解析东财原始价格（原始值 ÷100），
+   非数值 / None / NaN / Inf / ≤0 一律返回 None；
+2. 今开/最高/最低/最新四字段必须全部有效才入 `price_map`，
+   否则 WARNING + 跳过该条（不合格数据不进系统）——单条坏数据不再中断整批；
+3. `_fetch_hs300_open_change` 改用同一 helper，基准字段非法时降级 0.0 而非抛错。
+
+测试：`tests/unit/test_screener_validator.py` 新增 `TestPriceFieldGuard` 5 例
+（`'-'` 不崩溃 / low 缺失不产生假止损 / 部分非法仅跳过坏记录 / hs300 非法降级 /
+`_parse_price` 边界），并补齐 2 个 P0 时代 mock 缺失的 f2/f16 字段
+（v0.9.46 后新增"四字段齐全"约束）→ **32 passed**；screener 相关 **117 passed**；
+全量单测 **2085 passed, 102 skipped**；`ruff check` / `ruff format --check` 全绿。
+
+### 放过记录（无代码变更，附理由）
+- `eastmoney GET 失败 / ConnectionError` WARNING 密集出现（10:01/10:05/10:36 各若干条）：
+  四级数据源冗余内的瞬时降级，`signal_scan.data_health=ok`、今日数据源失败率 0%，
+  资金流接口自动降级，非缺陷。
+- 心跳/watchdog/自愈/磁盘（9.3GB）/单实例锁（PID 2669）全部正常，无需处置。
+
 ## 2026-09-11 — v0.9.46 尾盘验证数据源失败崩溃修复（NoneType 运算）
 
 ### 变更：告警评估员处置（2026-09-11 告警分诊）

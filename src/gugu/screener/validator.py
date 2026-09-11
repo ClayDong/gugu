@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -309,6 +310,35 @@ def _load_records_by_date(target_date: str) -> list[ScreenerRecord]:
     return records
 
 
+def _parse_price(raw: Any) -> float | None:
+    """解析东财 push2 原始价格字段（原始值 ÷ 100）为元。
+
+    防护（2026-09-11 第二批）：东财对停牌/异常标的可能返回非数值字符串
+    （如 ``"-"`` / ``"--"`` / ``""``）或 None，直接 ``float()`` 会抛
+    ValueError/TypeError 并中断整个尾盘验证任务（与 09:36 NoneType 崩溃同类）。
+    非法值（非数值 / NaN / Inf / <=0）统一返回 None，由调用方跳过该记录。
+
+    Args:
+        raw: 接口原始字段值（int/float/str/None）。
+
+    Returns:
+        价格（元）；非法或不可用时为 None。
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if raw in ("", "-", "--", "null", "None"):
+            return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return value / 100
+
+
 async def _fetch_today_prices(
     records: list[ScreenerRecord],
 ) -> list[tuple[float, float, float, float] | None]:
@@ -370,17 +400,26 @@ async def _fetch_today_prices(
     for item in diff_list:
         code = str(item.get("f12", ""))
         # 东财返回的价格是原始值÷100（如 2089 → 20.89 元）
-        open_raw = item.get("f17")
-        high_raw = item.get("f15")
-        low_raw = item.get("f16")
-        current_raw = item.get("f2")
-        if open_raw is not None and high_raw is not None:
-            price_map[code] = (
-                float(open_raw) / 100,
-                float(high_raw) / 100,
-                float(low_raw) / 100 if low_raw is not None else 0.0,
-                float(current_raw) / 100 if current_raw is not None else 0.0,
+        # 2026-09-11 第二批防护：四个价格字段必须全部有效才入库，
+        # 避免 '-'/None/NaN 参与算术（ValueError/TypeError 中断任务），
+        # 以及 0.0 缺省值导致的「假止损命中」「假回撤」污染验证统计。
+        parsed = (
+            _parse_price(item.get("f17")),  # 今开
+            _parse_price(item.get("f15")),  # 最高
+            _parse_price(item.get("f16")),  # 最低
+            _parse_price(item.get("f2")),  # 最新价
+        )
+        if None in parsed:
+            logger.warning(
+                "尾盘验证: {} 行情字段不完整/非法（open={} high={} low={} current={}），跳过",
+                code,
+                item.get("f17"),
+                item.get("f15"),
+                item.get("f16"),
+                item.get("f2"),
             )
+            continue
+        price_map[code] = parsed  # type: ignore[assignment]
 
     # 按 records 顺序输出结果
     final: list[tuple[float, float, float, float] | None] = []
@@ -418,9 +457,10 @@ async def _fetch_hs300_open_change() -> float:
         diff_list = data.get("data", {}).get("diff", []) if data.get("data") else []
         if diff_list:
             item = diff_list[0]
-            today_open = float(item.get("f17", 0)) / 100
-            prev_close = float(item.get("f18", 0)) / 100
-            if prev_close > 0:
+            # 2026-09-11 第二批防护：非数值字段（'-'/None）不再触发 ValueError
+            today_open = _parse_price(item.get("f17"))
+            prev_close = _parse_price(item.get("f18"))
+            if today_open and prev_close:
                 return round((today_open - prev_close) / prev_close * 100, 2)
     except Exception as e:
         logger.debug(f"获取沪深300开盘涨幅失败: {e}")

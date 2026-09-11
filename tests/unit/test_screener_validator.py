@@ -13,8 +13,10 @@ import pytest
 from gugu.screener.validator import (
     ScreenerRecord,
     ValidationResult,
+    _fetch_hs300_open_change,
     _fetch_today_prices,
     _load_records_by_date,
+    _parse_price,
     _rotate_file,
     save_screener_records,
     validate_yesterday_screener,
@@ -263,7 +265,16 @@ class TestValidateYesterdayScreener:
         mock_stock_data = {
             "data": {
                 "diff": [
-                    {"f12": "600519", "f14": "茅台", "f15": 154000, "f17": 153000, "f18": 152050}
+                    # f2=最新价, f16=最低价（P2 扩展字段，2026-09-11 起四字段必须齐全）
+                    {
+                        "f12": "600519",
+                        "f14": "茅台",
+                        "f2": 153500,
+                        "f15": 154000,
+                        "f16": 151000,
+                        "f17": 153000,
+                        "f18": 152050,
+                    }
                 ]
             }
         }
@@ -309,7 +320,15 @@ class TestValidateYesterdayScreener:
         mock_stock_data = {
             "data": {
                 "diff": [
-                    {"f12": "600519", "f14": "茅台", "f15": 152500, "f17": 150000, "f18": 152050}
+                    {
+                        "f12": "600519",
+                        "f14": "茅台",
+                        "f2": 151000,
+                        "f15": 152500,
+                        "f16": 149000,
+                        "f17": 150000,
+                        "f18": 152050,
+                    }
                 ]
             }
         }
@@ -402,6 +421,126 @@ class TestValidateYesterdayScreener:
         with patch("gugu.screener.validator.httpx.AsyncClient", return_value=_FailingAsyncClient()):
             out = await _fetch_today_prices(records)
         assert out == [None]
+
+
+class TestPriceFieldGuard:
+    """2026-09-11 第二批：非数值/缺失行情字段防护。
+
+    回归同类崩溃：东财对停牌/异常标的可能返回 '-' 等非数值字符串，
+    直接 float('-') 抛 ValueError 中断整个尾盘验证任务；
+    且 low 字段缺失时回退 0.0 会造成「假止损命中 / 假回撤」污染验证统计。
+    """
+
+    def _write_history(self, rows: list[dict]) -> str:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".jsonl") as f:
+            for r in rows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            return f.name
+
+    def _row(self, symbol: str, stop_loss_price: float = 9.5) -> dict:
+        return {
+            "symbol": symbol,
+            "name": "测试股",
+            "close_price": 10.0,
+            "change_pct": 3.0,
+            "volume_ratio": 1.5,
+            "screener_date": last_trading_day().isoformat(),
+            "passed": True,
+            "failed_conditions": [],
+            "stop_loss_price": stop_loss_price,
+            "created_at": "",
+        }
+
+    def _hs300_ok(self) -> dict:
+        return {"data": {"diff": [{"f12": "000300", "f15": 403000, "f17": 403000, "f18": 401000}]}}
+
+    def test_parse_price_variants(self):
+        """合法值 ÷100；非法值（非数值/NaN/<=0）统一 None。"""
+        assert _parse_price(2089) == 20.89
+        assert _parse_price(2089.0) == 20.89
+        assert _parse_price("2089") == 20.89
+        assert _parse_price(" 2089 ") == 20.89
+        for bad in (None, "-", "--", "", "   ", "abc", float("nan"), float("inf"), 0, -1, "0"):
+            assert _parse_price(bad) is None, f"非法值应返回 None: {bad!r}"
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_fields_no_crash(self):
+        """东财返回 '-' 非数值字段时不得抛 ValueError 中断任务。"""
+        history = self._write_history([self._row("600519")])
+        stock = {
+            "data": {"diff": [{"f12": "600519", "f17": "-", "f15": "-", "f16": "-", "f2": "-"}]}
+        }
+        try:
+            with (
+                patch("gugu.screener.validator._SCREENER_HISTORY_FILE", history),
+                patch("gugu.screener.validator._SCREENER_VALIDATION_FILE", history + ".val"),
+                patch(
+                    "gugu.screener.validator.httpx.AsyncClient",
+                    return_value=_MockAsyncClient(stock, self._hs300_ok()),
+                ),
+            ):
+                assert await validate_yesterday_screener() == []
+        finally:
+            os.unlink(history)
+
+    @pytest.mark.asyncio
+    async def test_missing_low_no_false_stop_loss(self):
+        """最低价缺失应跳过该记录，而非回退 0.0 触发假止损命中。"""
+        history = self._write_history([self._row("600519", stop_loss_price=9.5)])
+        # 今开 10.0 / 最高 10.3 / 最低 '-' / 最新 10.2 —— 旧逻辑会令 low=0.0 <= 9.5 假止损
+        stock = {
+            "data": {"diff": [{"f12": "600519", "f17": 1000, "f15": 1030, "f16": "-", "f2": 1020}]}
+        }
+        try:
+            with (
+                patch("gugu.screener.validator._SCREENER_HISTORY_FILE", history),
+                patch("gugu.screener.validator._SCREENER_VALIDATION_FILE", history + ".val"),
+                patch(
+                    "gugu.screener.validator.httpx.AsyncClient",
+                    return_value=_MockAsyncClient(stock, self._hs300_ok()),
+                ),
+            ):
+                results = await validate_yesterday_screener()
+                assert results == []
+        finally:
+            os.unlink(history)
+
+    @pytest.mark.asyncio
+    async def test_partial_invalid_skips_only_bad_record(self):
+        """多条记录中仅非法字段的那条被跳过，合法记录正常验证。"""
+        history = self._write_history([self._row("600519"), self._row("000858")])
+        stock = {
+            "data": {
+                "diff": [
+                    {"f12": "600519", "f17": 1000, "f15": 1030, "f16": 990, "f2": 1020},
+                    {"f12": "000858", "f17": "-", "f15": "-", "f16": "-", "f2": "-"},
+                ]
+            }
+        }
+        try:
+            with (
+                patch("gugu.screener.validator._SCREENER_HISTORY_FILE", history),
+                patch("gugu.screener.validator._SCREENER_VALIDATION_FILE", history + ".val"),
+                patch(
+                    "gugu.screener.validator.httpx.AsyncClient",
+                    return_value=_MockAsyncClient(stock, self._hs300_ok()),
+                ),
+            ):
+                results = await validate_yesterday_screener()
+                assert [r.symbol for r in results] == ["600519"]
+                assert results[0].open_price == 10.0
+        finally:
+            os.unlink(history)
+
+    @pytest.mark.asyncio
+    async def test_hs300_non_numeric_degrades_to_zero(self):
+        """沪深300 基准字段非数值时降级为 0.0，而非抛 ValueError。"""
+        hs300 = {"data": {"diff": [{"f12": "000300", "f15": "-", "f17": "-", "f18": "-"}]}}
+        with patch(
+            "gugu.screener.validator.httpx.AsyncClient",
+            return_value=_MockAsyncClient({"data": {"diff": []}}, hs300),
+        ):
+            assert await _fetch_hs300_open_change() == 0.0
 
 
 class TestValidationResult:
