@@ -68,6 +68,7 @@ class StudyConfig:
     entry_mode: str = "next_open"  # "close" | "next_open"
     output_path: str | None = None  # 写入路径，None 不写文件
     stock_pool: list[str] | None = None  # 策略验证的股票池
+    enrich_func: callable | None = None  # 策略特殊列注入函数，签名 (df, symbol) -> (df, dict)
 
 
 @dataclass
@@ -314,14 +315,37 @@ class EventStudy:
         """直接运行策略生成信号并执行事件研究。
 
         适用于新策略尚未有历史信号时的离线验证。
+
+        支持 enrich_func 配置项：签名 (df, symbol) -> (df, dict)，用于注入
+        策略依赖的特殊列（如 price_volume_signal 需要 amount/float_shares）。
         """
         pool = stock_pool or self.config.stock_pool or _DEFAULT_POOL
         all_events: list[dict] = []
+
+        # 确保指数数据就绪
+        self._ensure_index_data()
+        index = self._index_df
 
         for symbol in pool:
             df = self._get_stock_data(symbol, days)
             if df.empty or len(df) < 100:
                 continue
+
+            # 注入指数收益列（供策略使用）
+            if index is not None and not index.empty:
+                idx_close_map = index.set_index("date")["close"]
+                df["idx_close"] = df["date"].map(idx_close_map)
+                df["idx_ret"] = df["idx_close"] / df["idx_close"].shift(1) - 1
+                df["index_return"] = df["idx_ret"].fillna(0.0)
+
+            # 策略特殊列注入
+            if self.config.enrich_func is not None:
+                try:
+                    df, param_override = self.config.enrich_func(df, symbol)
+                except Exception as e:
+                    logger.debug("enrich_func 失败 {}: {}", symbol, e)
+                    continue
+
             try:
                 strategy = strategy_class() if isinstance(strategy_class, type) else strategy_class
                 signals = strategy.generate_signals(df.copy(), is_backtest=True)
