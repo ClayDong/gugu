@@ -80,6 +80,22 @@ class TestStudyConfig:
         assert config.entry_mode == "close"
         assert config.cost_rate == 0.002
 
+    def test_invalid_overlapping_periods_rejected(self) -> None:
+        with pytest.raises(ValueError, match="不能重叠") as exc_info:
+            StudyConfig(
+                strategy_name="test",
+                train_start="2024-01-01",
+                train_end="2024-06-30",
+                val_start="2024-06-30",
+                val_end="2024-12-31",
+            )
+        assert "不能重叠" in str(exc_info.value)
+
+    def test_invalid_numeric_config_rejected(self) -> None:
+        with pytest.raises(ValueError, match="cost_rate") as exc_info:
+            StudyConfig(strategy_name="test", cost_rate=float("nan"))
+        assert "cost_rate" in str(exc_info.value)
+
 
 class TestClassifyPeriod:
     """时期分类逻辑。"""
@@ -283,15 +299,28 @@ class TestRunFromHistory:
             },
         ]
         history.write_text("\n".join(json.dumps(d) for d in data) + "\n")
-        config = StudyConfig(strategy_name="test")
-        study = EventStudy(config)
-        result = study.run_from_history(str(history))
-        # 买入信号 1 条被提取（可成功计算 return），卖出被跳过
+        dates = pd.bdate_range("2024-06-14", periods=20)
+        close = np.arange(150.0, 170.0)
+        bars = pd.DataFrame(
+            {
+                "date": dates,
+                "open": close,
+                "high": close + 1.0,
+                "low": close - 1.0,
+                "close": close,
+                "volume": [1000.0] * len(dates),
+            }
+        )
+        config = StudyConfig(strategy_name="test", entry_mode="close")
+        study = EventStudy(
+            config,
+            stock_loader=lambda symbol, days: bars,
+            index_loader=lambda symbol, days: bars,
+        )
+        result = study.run_from_history(str(history), max_days=20)
+        # 买入信号 1 条被提取，卖出被跳过；固定 loader 保证测试不访问外网
         assert result.n_events == 1
-        # 验证事件的 symbol 和方向（买入的信号才有 event）
-        signal_symbols = [e.symbol for e in result.events]
-        assert "600519" in signal_symbols
-        # 检查不包含卖出相关 event（sell 被跳过）
+        assert [event.symbol for event in result.events] == ["600519"]
         assert result.n_symbols == 1
 
 
@@ -418,6 +447,111 @@ class TestAggregateByHorizon:
         ]
         results = study._aggregate_by_horizon(events)
         assert len(results) == 0
+
+
+class TestDeterministicRun:
+    """使用注入行情加载器验证事件口径，不访问外部网络。"""
+
+    @staticmethod
+    def _bars(start: str = "2024-01-01", count: int = 12) -> pd.DataFrame:
+        dates = pd.bdate_range(start, periods=count)
+        close = np.arange(10.0, 10.0 + count)
+        return pd.DataFrame(
+            {
+                "date": dates,
+                "open": close + 0.5,
+                "high": close + 1.0,
+                "low": close - 1.0,
+                "close": close,
+                "volume": [1000.0] * count,
+            }
+        )
+
+    def test_next_open_horizon_is_from_actual_entry(self) -> None:
+        bars = self._bars()
+        study = EventStudy(
+            StudyConfig(strategy_name="test", horizons=[1], cost_rate=0.0),
+            stock_loader=lambda symbol, days: bars,
+            index_loader=lambda symbol, days: bars,
+        )
+        result = study.run(
+            pd.DataFrame([{"symbol": "sh600519", "date": bars.iloc[0]["date"], "entry": 10.0}]),
+            data_days=12,
+        )
+        assert result.n_events == 1
+        event = result.events[0]
+        assert event.entry_source == "next_open"
+        assert event.entry_date == bars.iloc[1]["date"].strftime("%Y-%m-%d")
+        # 入场为第 2 根 open=11.5，h=1 退出第 3 根 close=12。
+        assert event.returns["1"] == round(12.0 / 11.5 - 1, 4)
+
+    def test_non_trading_signal_uses_next_trading_day(self) -> None:
+        bars = self._bars()
+        study = EventStudy(
+            StudyConfig(strategy_name="test", horizons=[1], entry_mode="close", cost_rate=0.0),
+            stock_loader=lambda symbol, days: bars,
+            index_loader=lambda symbol, days: bars,
+        )
+        result = study.run(
+            pd.DataFrame([{"symbol": "600519", "date": "2024-01-06", "entry": 99.0}]),
+            data_days=12,
+        )
+        assert result.n_events == 1
+        assert result.events[0].date == "2024-01-06"
+        assert result.events[0].entry_date == bars.iloc[5]["date"].strftime("%Y-%m-%d")
+
+    def test_missing_benchmark_keeps_absolute_returns(self) -> None:
+        bars = self._bars()
+        study = EventStudy(
+            StudyConfig(strategy_name="test", horizons=[1], entry_mode="close", cost_rate=0.0),
+            stock_loader=lambda symbol, days: bars,
+            index_loader=lambda symbol, days: pd.DataFrame(),
+        )
+        result = study.run(
+            pd.DataFrame(
+                [
+                    {"symbol": "600519", "date": bars.iloc[0]["date"], "entry": 10.0},
+                    {"symbol": "600519", "date": bars.iloc[1]["date"], "entry": 11.0},
+                    {"symbol": "600519", "date": bars.iloc[2]["date"], "entry": 12.0},
+                ]
+            ),
+            data_days=12,
+        )
+        assert result.n_events == 3
+        assert result.benchmark_available is False
+        assert result.events[0].returns["1"] == 0.1
+        assert result.per_horizon[0].n_returns == 3
+        assert result.per_horizon[0].n_excess == 0
+
+    def test_concentration_threshold_comes_from_config(self) -> None:
+        events = [
+            StudyEvent(symbol="600001", date="2024-01-01", entry=10.0, period="val", year=2024),
+            StudyEvent(symbol="600001", date="2024-01-02", entry=10.0, period="val", year=2024),
+            StudyEvent(symbol="600002", date="2024-01-03", entry=10.0, period="val", year=2024),
+        ]
+        study = EventStudy(StudyConfig(strategy_name="test", concentration_threshold=0.8))
+        assert (
+            study._check_concentration(events, threshold=study.config.concentration_threshold) == []
+        )
+
+    def test_loader_receives_normalized_symbol_and_requested_days(self) -> None:
+        bars = self._bars()
+        calls: list[tuple[str, int]] = []
+
+        def loader(symbol: str, days: int) -> pd.DataFrame:
+            calls.append((symbol, days))
+            return bars
+
+        study = EventStudy(
+            StudyConfig(strategy_name="test", horizons=[1], entry_mode="close", cost_rate=0.0),
+            stock_loader=loader,
+            index_loader=lambda symbol, days: bars,
+        )
+        study.run(
+            pd.DataFrame([{"symbol": "sh600519", "date": bars.iloc[0]["date"], "entry": 10.0}]),
+            data_days=12,
+        )
+        assert ("600519", 12) in calls
 
 
 class TestPrintSummary:

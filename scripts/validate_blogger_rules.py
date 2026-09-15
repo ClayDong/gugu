@@ -1,177 +1,275 @@
-"""批量事件研究：验证网络博主战法是否真有 edge（P0）。
+"""批量验证外部博主规则的配对事件研究。
 
-来源：mulan-quant rules_library/multi_blogger_engine.py 的 8 位博主规则函数。
-方法：对每条可量化买入规则，扫描全缓存股票，计算信号后 5/10 日收益，
-与全市场同期平均收益（基准）对比，用 t 检验判断超额是否显著。
+规则函数来自可选的 ``mulan-quant`` 工作区。事件收益与同一股票、同一
+信号日的基准收益成对比较，避免把两个不同样本的均值硬拼成 alpha。
 
-输出：data/rule_event_study_report.json（每条规则的样本数、超额、t、p、判定）。
-判定：p<0.05 且超额>0 → "有edge"；p<0.05 且超额<0 → "证伪"；否则 "样本不足"。
+用法::
 
-用法：
-    uv run python scripts/validate_blogger_rules.py
+    python scripts/validate_blogger_rules.py --mulan-root /path/to/mulan-quant
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, "/Users/dong/workspace/mulan-quant")
-
-# 可量化买入规则（从 multi_blogger_engine.py 导入）
-from rules_library.multi_blogger_engine import (  # noqa: E402
-    chen_bottom_divergence,
-    chen_failed_limitup_reversal,
-    neighbor_2b_buy,
-    neighbor_golden_section,
-    neighbor_pullback_buy,
-)
-
-RULES: dict[str, object] = {
-    "陈学长·底背离买入": chen_bottom_divergence,
-    "陈学长·断板反包": chen_failed_limitup_reversal,
-    "邻居大爷·2B反转": neighbor_2b_buy,
-    "邻居大爷·黄金分割": neighbor_golden_section,
-    "邻居大爷·缩量回踩": neighbor_pullback_buy,
-}
 
 
-def _rule_signal(rule_fn, df: pd.DataFrame) -> bool:
-    """调用规则函数，返回是否产生买入信号（兼容 mulan Signal 对象或 None）。"""
+def _load_rules(mulan_root: Path) -> dict[str, Callable[..., Any]]:
+    """按显式路径加载外部规则，避免导入阶段依赖固定机器路径。"""
+    if not mulan_root.exists():
+        raise FileNotFoundError(f"mulan-quant 路径不存在: {mulan_root}")
+    sys.path.insert(0, str(mulan_root))
     try:
-        sig = rule_fn(df)
-        if sig is None:
-            return False
-        # mulan Signal.signal_type 是 SignalType 枚举，转字符串是 "SignalType.BUY"
-        if hasattr(sig, "signal_type"):
-            st = str(getattr(sig, "signal_type", "")).upper()
-            return "BUY" in st or "买入" in st
-        if isinstance(sig, dict):
-            return "BUY" in str(sig.get("signal_type", "")).upper()
-        return True
+        from rules_library.multi_blogger_engine import (
+            chen_bottom_divergence,
+            chen_failed_limitup_reversal,
+            neighbor_2b_buy,
+            neighbor_golden_section,
+            neighbor_pullback_buy,
+        )
+    except ImportError as exc:
+        raise ImportError(f"{mulan_root} 中缺少 rules_library.multi_blogger_engine") from exc
+    return {
+        "陈学长·底背离买入": chen_bottom_divergence,
+        "陈学长·断板反包": chen_failed_limitup_reversal,
+        "邻居大爷·2B反转": neighbor_2b_buy,
+        "邻居大爷·黄金分割": neighbor_golden_section,
+        "邻居大爷·缩量回踩": neighbor_pullback_buy,
+    }
+
+
+def _rule_signal(rule_fn: Callable[..., Any], df: pd.DataFrame) -> bool:
+    """调用规则函数，兼容 mulan Signal 对象或 dict。"""
+    try:
+        signal = rule_fn(df)
     except Exception:
         return False
+    if signal is None:
+        return False
+    if hasattr(signal, "signal_type"):
+        text = str(getattr(signal, "signal_type", "")).upper()
+        return "BUY" in text or "买入" in text
+    if isinstance(signal, dict):
+        text = str(signal.get("signal_type", "")).upper()
+        return "BUY" in text or "买入" in text
+    return True
 
 
 def _enrich(df: pd.DataFrame) -> pd.DataFrame:
-    """补充规则需要的列（dif/dea/均线等）。"""
+    """补充外部规则需要的历史技术列。"""
     out = df.sort_values("date").reset_index(drop=True).copy()
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.normalize()
+    out["close"] = pd.to_numeric(out["close"], errors="coerce")
+    out["volume"] = pd.to_numeric(out["volume"], errors="coerce")
+    out = out.dropna(subset=["date", "close", "volume"])
     if "prev_close" not in out.columns:
         out["prev_close"] = out["close"].shift(1)
-    # MACD（规则用 dif）
     ema12 = out["close"].ewm(span=12, adjust=False).mean()
     ema26 = out["close"].ewm(span=26, adjust=False).mean()
     out["dif"] = ema12 - ema26
-    # 均线（邻居大爷回踩买点需要 ma_20）
     if "ma_20" not in out.columns:
         out["ma_20"] = out["close"].rolling(20).mean()
     return out
 
 
-async def main() -> None:
+def _paired_event_rows(
+    df: pd.DataFrame,
+    rule_fn: Callable[..., Any],
+    symbol: str,
+    horizons: tuple[int, ...],
+    benchmark_by_date: dict[int, dict[pd.Timestamp, dict[str, float]]],
+) -> list[dict[str, Any]]:
+    """生成事件和同日横截面基准收益，排除事件股票自身。"""
+    closes = df["close"].to_numpy(dtype=float)
+    dates = df["date"]
+    rows: list[dict[str, Any]] = []
+    max_horizon = max(horizons)
+    for index in range(30, len(df) - max_horizon):
+        if closes[index] <= 0 or not _rule_signal(rule_fn, df.iloc[: index + 1].copy()):
+            continue
+        event_date = dates.iloc[index]
+        row: dict[str, Any] = {"symbol": symbol, "date": event_date}
+        for horizon in horizons:
+            event_return = closes[index + horizon] / closes[index] - 1
+            peers = [
+                value
+                for peer_symbol, value in benchmark_by_date.get(horizon, {})
+                .get(event_date, {})
+                .items()
+                if peer_symbol != symbol and np.isfinite(value)
+            ]
+            row[f"event_{horizon}d"] = event_return
+            row[f"benchmark_{horizon}d"] = float(np.mean(peers)) if peers else np.nan
+        rows.append(row)
+        break
+    return rows
+
+
+def _summarize_paired(rows: list[dict[str, Any]], horizon: int) -> dict[str, Any]:
+    """对事件和配对基准做超额统计。"""
+    from scipy import stats
+
+    event_key = f"event_{horizon}d"
+    benchmark_key = f"benchmark_{horizon}d"
+    if not rows:
+        return {
+            "horizon": horizon,
+            "samples": 0,
+            "verdict": "样本不足",
+            "detail": "无事件",
+        }
+    event_values = np.asarray([float(row[event_key]) for row in rows], dtype=float)
+    benchmark_values = np.asarray([float(row[benchmark_key]) for row in rows], dtype=float)
+    excess_values = event_values - benchmark_values
+    finite = np.isfinite(event_values) & np.isfinite(benchmark_values)
+    event_values = event_values[finite]
+    benchmark_values = benchmark_values[finite]
+    excess_values = excess_values[finite]
+    if len(excess_values) < 5:
+        return {
+            "horizon": horizon,
+            "samples": int(len(excess_values)),
+            "verdict": "样本不足",
+            "detail": "配对事件 < 5，无法统计",
+        }
+    t_stat, p_value = stats.ttest_1samp(excess_values, 0.0, nan_policy="omit")
+    t_stat = float(t_stat) if np.isfinite(t_stat) else 0.0
+    p_value = float(p_value) if np.isfinite(p_value) else 1.0
+    mean_excess = float(np.mean(excess_values))
+    verdict = (
+        "有edge"
+        if p_value < 0.05 and mean_excess > 0
+        else ("证伪" if p_value < 0.05 and mean_excess < 0 else "样本不足")
+    )
+    return {
+        "horizon": horizon,
+        "samples": int(len(excess_values)),
+        "event_avg_return": round(float(np.mean(event_values)), 4),
+        "benchmark_avg_return": round(float(np.mean(benchmark_values)), 4),
+        "excess_return": round(mean_excess, 4),
+        "t": round(t_stat, 3),
+        "p": round(p_value, 4),
+        "win_rate": round(float(np.mean(event_values > 0)), 4),
+        "excess_win_rate": round(float(np.mean(excess_values > 0)), 4),
+        "verdict": verdict,
+    }
+
+
+async def run(args: argparse.Namespace) -> int:
+    sys.path.insert(0, str(PROJECT_ROOT / "src"))
     from gugu.data.manager import DataManager
 
+    try:
+        rules = _load_rules(args.mulan_root)
+    except (FileNotFoundError, ImportError) as exc:
+        raise SystemExit(str(exc)) from exc
+
     dm = DataManager()
-    # 从 parquet 缓存拿所有可用股票
     cache_dir = PROJECT_ROOT / "data" / "parquet_cache"
     symbols = sorted(
         {
-            p.name.split("_")[0]
-            for p in cache_dir.glob("*_120d_none.parquet")
-            if p.name.split("_")[0].isdigit()
+            path.name.split("_")[0]
+            for path in cache_dir.glob("*_120d_none.parquet")
+            if path.name.split("_")[0].isdigit()
         }
-    )[:182]
+    )[: args.max_symbols]
     print(f"扫描 {len(symbols)} 只缓存股票\n")
 
-    # 1. 扫描所有股票，收集每条规则的信号事件 + 全体收益基准
-    rule_events: dict[str, list[float]] = {k: [] for k in RULES}
-    market_returns: dict[int, list[float]] = {5: [], 10: []}
-
-    for sym in symbols:
+    frames: dict[str, pd.DataFrame] = {}
+    for symbol in symbols:
         try:
-            df = await dm.fetch_stock_history(sym, days=300)
+            frame = await dm.fetch_stock_history(symbol, days=args.days)
         except Exception:
             continue
-        if df is None or len(df) < 30:
+        if frame is None or len(frame) < 30:
             continue
-        df = _enrich(df)
-        closes = df["close"].to_numpy(dtype=float)
-        n = len(closes)
-        # 全体收益基准（所有股票所有日的平均未来收益）
-        for h in (5, 10):
-            for i in range(n - h):
-                if closes[i] > 0:
-                    market_returns[h].append(closes[i + h] / closes[i] - 1)
-        # 每条规则的事件
-        for name, fn in RULES.items():
-            ev = rule_events[name]
-            for i in range(30, n - 10):
-                window = df.iloc[: i + 1].copy()
-                if _rule_signal(fn, window):
-                    # 信号日收盘买入，持有 5/10 日
-                    for h in (5, 10):
-                        if closes[i] > 0:
-                            ev.append(closes[i + h] / closes[i] - 1)
-                    break  # 每只股票每规则只记一次（避免重复计数）
+        frames[symbol] = _enrich(frame)
 
-    # 2. 汇总判定
-    report: dict[str, dict] = {}
-    for name, ev in rule_events.items():
-        ev5 = ev  # 用 5 日事件近似（简化：记录时以 5 日为准）
-        n_ev = len(ev)
-        if n_ev < 5:
-            report[name] = {
-                "samples": n_ev,
-                "verdict": "样本不足",
-                "detail": "事件 < 5，无法统计",
-            }
-            continue
-        ev_arr = np.array(ev)
-        bench_arr = np.array(market_returns[5])[: len(ev_arr)]
-        if len(bench_arr) == 0:
-            continue
-        excess = ev_arr.mean() - bench_arr.mean()
-        # 单样本 t 检验：excess vs 0
-        if len(ev_arr) > 1 and ev_arr.std(ddof=1) > 0:
-            t = excess / (ev_arr.std(ddof=1) / np.sqrt(len(ev_arr)))
-            from scipy import stats
+    # 先构造同日横截面基准，再扫描规则事件。
+    benchmark_by_date: dict[int, dict[pd.Timestamp, dict[str, float]]] = {
+        horizon: {} for horizon in (5, 10)
+    }
+    for symbol, frame in frames.items():
+        closes = frame["close"].to_numpy(dtype=float)
+        dates = frame["date"]
+        for index in range(len(frame) - 10):
+            if closes[index] <= 0:
+                continue
+            for horizon in (5, 10):
+                if index + horizon >= len(frame) or closes[index + horizon] <= 0:
+                    continue
+                benchmark_by_date[horizon].setdefault(dates.iloc[index], {})[symbol] = (
+                    closes[index + horizon] / closes[index] - 1
+                )
 
-            p = 2 * (1 - stats.t.cdf(abs(t), df=len(ev_arr) - 1))
-        else:
-            t, p = 0.0, 1.0
-        if p < 0.05 and excess > 0:
-            verdict = "有edge"
-        elif p < 0.05 and excess < 0:
-            verdict = "证伪"
-        else:
-            verdict = "样本不足"
+    rule_rows: dict[str, list[dict[str, Any]]] = {name: [] for name in rules}
+    for symbol, frame in frames.items():
+        for name, rule_fn in rules.items():
+            rule_rows[name].extend(
+                _paired_event_rows(frame, rule_fn, symbol, (5, 10), benchmark_by_date)
+            )
+
+    report: dict[str, dict[str, Any]] = {}
+    for name, rows in rule_rows.items():
+        by_horizon = {str(horizon): _summarize_paired(rows, horizon) for horizon in (5, 10)}
         report[name] = {
-            "samples": n_ev,
-            "event_avg_5d": round(float(ev_arr.mean()), 4),
-            "benchmark_avg_5d": round(float(bench_arr.mean()), 4),
-            "excess_5d": round(float(excess), 4),
-            "t": round(float(t), 3),
-            "p": round(float(p), 4),
-            "verdict": verdict,
+            "rule": name,
+            "event_count": len(rows),
+            "by_horizon": by_horizon,
         }
+        result_5d = by_horizon["5"]
+
+        def _pct(value: object) -> str:
+            try:
+                return f"{float(value):+.2%}"
+            except (TypeError, ValueError):
+                return "N/A"
+
         print(
-            f"{name:<14} n={n_ev:<4} 事件均{ev_arr.mean():+.2%} "
-            f"基准{bench_arr.mean():+.2%} 超额{excess:+.2%} "
-            f"t={t:.2f} p={p:.3f} → {verdict}"
+            f"{name:<14} n={result_5d['samples']:<4} "
+            f"事件均{_pct(result_5d.get('event_avg_return'))} "
+            f"基准{_pct(result_5d.get('benchmark_avg_return'))} "
+            f"超额{_pct(result_5d.get('excess_return'))} "
+            f"p={result_5d.get('p', 1):.3f} → {result_5d['verdict']}"
         )
 
-    # 3. 落盘
-    out_path = PROJECT_ROOT / "data" / "rule_event_study_report.json"
-    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\n💾 报告已保存: {out_path}")
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n报告已保存: {args.output}")
+    return 0
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="批量验证外部规则的配对事件研究")
+    parser.add_argument(
+        "--mulan-root",
+        type=Path,
+        default=Path(os.environ.get("MULAN_QUANT_ROOT", str(PROJECT_ROOT.parent / "mulan-quant"))),
+        help="mulan-quant 工作区路径",
+    )
+    parser.add_argument("--max-symbols", type=int, default=182)
+    parser.add_argument("--days", type=int, default=300)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=PROJECT_ROOT / "data" / "rule_event_study_report.json",
+    )
+    return parser
+
+
+def main() -> int:
+    return asyncio.run(run(_build_parser().parse_args()))
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(main())

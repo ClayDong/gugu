@@ -2,6 +2,13 @@
 
 from gugu.analysis.alpha_factory import AlphaFactor, AlphaFactory
 from gugu.analysis.danger_signal import DangerSignalDetector, DangerSignalResult
+from gugu.analysis.event_study import (
+    EventStudy,
+    HorizonResult,
+    StudyConfig,
+    StudyEvent,
+    StudyResult,
+)
 from gugu.analysis.execution_optimizer import ExecutionOptimizer, ExecutionPlan, ExecutionReport
 from gugu.analysis.golden_ratio import (
     FibonacciLevel,
@@ -41,6 +48,11 @@ from gugu.analysis.trailing_stop import TrailingStopEngine, TrailingStopSignal, 
 
 __all__ = [
     "SW_INDUSTRY_MAP",
+    "EventStudy",
+    "HorizonResult",
+    "StudyConfig",
+    "StudyEvent",
+    "StudyResult",
     "AlphaFactor",
     "AlphaFactory",
     "AverageDownCheckResult",

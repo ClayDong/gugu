@@ -51,7 +51,8 @@ POOL = [
     "sz002475",  # 立讯精密 电子
 ]
 
-STRATEGIES = ["regime_cycle_four", "death_valley_rebound", "bollinger_oversold_rebound"]
+# 只有当前运行时注册的策略可以进入统一验证；历史上的两个名称已移除。
+STRATEGIES = ["regime_cycle_four"]
 HORIZONS = [3, 5, 10]
 TRAIN_CUTOFF = "2025-01-01"  # 训练期 < 2025-01-01，验证期 >=
 
@@ -87,14 +88,16 @@ def welch_t(x: list[float]) -> tuple[float, float]:
 
 def event_study(strategy_name: str, dfs: dict[str, pd.DataFrame], index_df: pd.DataFrame) -> dict:
     """对策略做事件研究，返回各周期统计。"""
-    strategy = get_strategy(strategy_name)
+    # 每个标的使用独立策略实例，避免未来状态型策略跨股票污染。
+    # 当前脚本只运行 regime_cycle_four，但保留该函数接口供历史复盘。
     # 指数收益列（对齐到日期）
     index_df = index_df.set_index("date")["close"]
     index_ret = index_df.pct_change()
 
     events: list[dict] = []
     for sym, df in dfs.items():
-        out = strategy.generate_signals(df, is_backtest=True)
+        strategy = get_strategy(strategy_name)
+        out = strategy.generate_signals(df.copy(), is_backtest=True)
         df2 = out.reset_index(drop=True)
         buy_idx = df2.index[df2["signal"] == 1].tolist()
         for i in buy_idx:
