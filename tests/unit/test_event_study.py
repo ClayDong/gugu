@@ -500,6 +500,47 @@ class TestDeterministicRun:
         assert result.events[0].date == "2024-01-06"
         assert result.events[0].entry_date == bars.iloc[5]["date"].strftime("%Y-%m-%d")
 
+    def test_signal_far_outside_market_window_is_rejected(self) -> None:
+        bars = self._bars()
+        study = EventStudy(
+            StudyConfig(strategy_name="test", horizons=[1], entry_mode="close", cost_rate=0.0),
+            stock_loader=lambda symbol, days: bars,
+            index_loader=lambda symbol, days: bars,
+        )
+        result = study.run(
+            pd.DataFrame([{"symbol": "600519", "date": "2023-01-01", "entry": 10.0}]),
+            data_days=12,
+        )
+        assert result.n_events == 0
+        assert result.events == []
+
+    def test_timestamped_fill_price_and_date_are_preserved(self) -> None:
+        bars = self._bars()
+        study = EventStudy(
+            StudyConfig(strategy_name="test", horizons=[1], entry_mode="next_open", cost_rate=0.0),
+            stock_loader=lambda symbol, days: bars,
+            index_loader=lambda symbol, days: bars,
+        )
+        result = study.run(
+            pd.DataFrame(
+                [
+                    {
+                        "symbol": "600519",
+                        "date": bars.iloc[0]["date"],
+                        "entry": 11.25,
+                        "entry_source": "fill",
+                        "entry_date": bars.iloc[1]["date"],
+                    }
+                ]
+            ),
+            data_days=12,
+        )
+        assert result.n_events == 1
+        event = result.events[0]
+        assert event.entry == 11.25
+        assert event.entry_source == "fill"
+        assert event.entry_date == bars.iloc[1]["date"].strftime("%Y-%m-%d")
+
     def test_missing_benchmark_keeps_absolute_returns(self) -> None:
         bars = self._bars()
         study = EventStudy(

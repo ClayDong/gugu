@@ -189,8 +189,16 @@ class EventStudy(EventStudyRunnerMixin, EventStudyReportMixin):
         return int(matches[0]) if len(matches) else None
 
     @staticmethod
-    def _find_signal_index(stock_df: pd.DataFrame, signal_date: pd.Timestamp) -> int | None:
-        """优先匹配信号日；非交易日使用其后的第一个交易日。"""
+    def _find_signal_index(
+        stock_df: pd.DataFrame,
+        signal_date: pd.Timestamp,
+        *,
+        max_forward_gap_days: int = 7,
+    ) -> int | None:
+        """匹配信号交易日；远超行情窗口时 fail-closed。
+
+        非交易日只允许向后容忍一周，防止旧信号被错误映射到缓存窗口的第一根 K 线。
+        """
         if stock_df.empty or "date" not in stock_df.columns:
             return None
         target = _naive_timestamp(signal_date)
@@ -199,9 +207,12 @@ class EventStudy(EventStudyRunnerMixin, EventStudyReportMixin):
         if not exact.empty:
             return int(exact.index[0])
         future = dates[dates > target]
-        if not future.empty:
-            return int(future.index[0])
-        return None
+        if future.empty:
+            return None
+        candidate = future.index[0]
+        if (dates.loc[candidate] - target).days > max_forward_gap_days:
+            return None
+        return int(candidate)
 
     def _resolve_entry(
         self,
