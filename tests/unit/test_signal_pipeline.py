@@ -1124,6 +1124,38 @@ class TestRecordSignalHistory:
         finally:
             sp.gugu_config.PROJECT_ROOT = original_root
 
+    def test_record_signal_history_writes_reject_reason(self, tmp_path) -> None:
+        """被门禁拦截的信号必须携带统一 reject_reason，便于后续审计。"""
+        import json
+        from types import SimpleNamespace
+
+        import gugu.engine.signal_pipeline as sp
+
+        original_root = sp.gugu_config.PROJECT_ROOT
+        sp.gugu_config.PROJECT_ROOT = tmp_path
+
+        try:
+            signal = {
+                "symbol": "600519",
+                "direction": "buy",
+                "price": 1500.0,
+                "confidence": 0.8,
+                "strategies": ["sector_momentum"],
+                "gate_reason": "市场环境数据不足，仅观察",
+                "wisdom_filtered": True,
+                "suggested_position_ratio": 0.15,
+            }
+            risk_result = SimpleNamespace(allowed=False, message="risk blocked")
+            record_signal_history(signal, risk_result, None)
+
+            history_file = tmp_path / "data" / "signals_history.jsonl"
+            record = json.loads(history_file.read_text().strip())
+            assert record["execution_status"] == "not_submitted"
+            assert record["reject_reason"] == "市场环境数据不足，仅观察"
+            assert record["risk_allowed"] is False
+        finally:
+            sp.gugu_config.PROJECT_ROOT = original_root
+
     def test_record_signal_history_error_handling(self, tmp_path) -> None:
         """记录失败不抛异常，且必须触发告警回调（P0 静默失效防线）。
 

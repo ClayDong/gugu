@@ -1487,6 +1487,19 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
             if not _raw_name or _raw_name == _sym:
                 _raw_name = lookup_stock_name(_sym) or _raw_name
 
+            signal_reject_reason = (
+                signal.get("reject_reason")
+                or signal.get("gate_reason")
+                or signal.get("filter_reason")
+                or None
+            )
+            if (
+                signal_reject_reason is None
+                and risk_result is not None
+                and not getattr(risk_result, "allowed", True)
+            ):
+                signal_reject_reason = getattr(risk_result, "message", None)
+
             record = {
                 "timestamp": pd.Timestamp.now().isoformat(),
                 "signal_id": signal.get("signal_id"),
@@ -1521,6 +1534,7 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
                     if order_result is not None
                     else "not_submitted"
                 ),
+                "reject_reason": signal_reject_reason,
                 "fill_status": getattr(order_result, "fill_status", "unknown"),
                 "position_status": getattr(order_result, "position_status", "unknown"),
                 "position_closed": getattr(order_result, "position_closed", False),

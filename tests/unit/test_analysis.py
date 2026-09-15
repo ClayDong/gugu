@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from unittest import mock
 from unittest.mock import MagicMock, patch
@@ -27,6 +28,43 @@ from gugu.analysis.regime_detector import MultiPeriodRegimeDetector
 from gugu.analysis.strategy_pool import StrategyPool, StrategyWeight
 from gugu.analysis.signal_tracker import SignalTracker
 from gugu.analysis.attribution import AttributionAnalyzer
+
+
+def test_signal_tracker_report_writes_forward_returns_back_to_history(tmp_path) -> None:
+    """绩效报告必须回填 return_5d，否则后续统计永远停留在 pending。"""
+    history_path = tmp_path / "signals_history.jsonl"
+    history_path.write_text(
+        "\n".join(
+            [
+                '{"signal_id":"a","timestamp":"2026-01-05T09:30:00","symbol":"600001","direction":"buy","strategies":["s"]}',
+                '{"signal_id":"b","timestamp":"2026-01-06T09:30:00","symbol":"600001","direction":"buy","strategies":["s"]}',
+                '{"signal_id":"c","timestamp":"2026-01-07T09:30:00","symbol":"600001","direction":"buy","strategies":["s"]}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    tracker = SignalTracker()
+    tracker._history_path = history_path
+
+    async def fake_track(signals):
+        return [
+            {**signals[0], "return_5d": 0.05, "entry_price": 10.0, "price_source": "close"},
+            {**signals[1], "return_5d": -0.02, "entry_price": 10.0, "price_source": "close"},
+            {**signals[2], "return_5d": 0.03, "entry_price": 10.0, "price_source": "close"},
+        ]
+
+    tracker._track_signals = fake_track
+    tracker._dm.fetch_stock_history = __import__("asyncio").run(
+        _fake_index_fetch(_make_index_df(trend=0.3))
+    )
+    report = __import__("asyncio").run(tracker.generate_report(days=0))
+
+    assert report["forward_5d_signal_hit_rate"] == pytest.approx(2 / 3, abs=1e-4)
+    updated = [json.loads(line) for line in history_path.read_text().splitlines()]
+    assert updated[0]["return_5d"] == 0.05
+    assert updated[1]["return_5d"] == -0.02
+    assert updated[2]["return_5d"] == 0.03
 
 
 def test_signal_tracker_report_separates_forward_hit_rate() -> None:

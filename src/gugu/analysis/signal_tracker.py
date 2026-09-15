@@ -21,6 +21,7 @@ import pandas as pd
 
 from gugu.config import PROJECT_ROOT
 from gugu.data import data_manager
+from gugu.utils.atomic import atomic_write_text
 from gugu.utils.calendar import last_trading_day
 from gugu.utils.log import get_logger
 
@@ -112,6 +113,53 @@ class SignalTracker:
         logger.info("加载 {} 条信号记录（最近 {} 天）", len(records), days)
         return records
 
+    @staticmethod
+    def _record_key(record: dict[str, Any]) -> str:
+        """生成历史记录的稳定键；兼容旧记录没有 signal_id 的情况。"""
+        signal_id = str(record.get("signal_id") or record.get("execution_id") or "")
+        if signal_id:
+            return signal_id
+        ts = _normalize_timestamp(record.get("timestamp"))
+        if ts is None:
+            return ""
+        return f"{ts.date().isoformat()}_{record.get('symbol', '')}_{record.get('direction', '')}"
+
+    def _apply_tracked_updates(
+        self, records: list[dict[str, Any]], tracked: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """把追踪收益原子地写回原始历史记录。"""
+        tracked_map: dict[str, dict[str, Any]] = {}
+        for tracked_record in tracked:
+            key = self._record_key(tracked_record)
+            if key:
+                tracked_map[key] = tracked_record
+
+        updated: list[dict[str, Any]] = []
+        changed = 0
+        for record in records:
+            key = self._record_key(record)
+            if key and key in tracked_map:
+                tracked_record = tracked_map[key]
+                merged = {**record, **{k: v for k, v in tracked_record.items() if k != "error"}}
+                if merged != record:
+                    changed += 1
+                updated.append(merged)
+            else:
+                updated.append(record)
+        if changed:
+            logger.info("信号历史回填 {} 条追踪收益", changed)
+        return updated
+
+    def _write_history(self, records: list[dict[str, Any]]) -> None:
+        """以原子写方式更新信号历史，防止回填过程中断留下半截数据。"""
+        path = self._history_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = "".join(
+            json.dumps(record, ensure_ascii=False, allow_nan=False, separators=(",", ":")) + "\n"
+            for record in records
+        )
+        atomic_write_text(path, payload)
+
     async def generate_report(self, days: int = 30) -> dict[str, Any]:
         """生成信号绩效报告。
 
@@ -145,6 +193,14 @@ class SignalTracker:
 
         # 追踪买入信号收益（卖出信号收益需要持仓数据，暂不追踪）
         tracked = await self._track_signals(buy_signals)
+        if tracked:
+            try:
+                updated_records = self._apply_tracked_updates(records, tracked)
+                if updated_records != records:
+                    self._write_history(updated_records)
+                    logger.info("已回填 {} 条信号的前瞻收益", len(tracked))
+            except Exception as exc:
+                logger.warning("信号收益回填失败: {}", exc)
 
         # 按策略分组统计
         by_strategy = self._stats_by_strategy(tracked)
@@ -205,8 +261,7 @@ class SignalTracker:
                 if timestamp is None:
                     continue
                 event_id = (
-                    f"{timestamp.date().isoformat()}_{r.get('symbol', '')}_"
-                    f"{r.get('direction', '')}"
+                    f"{timestamp.date().isoformat()}_{r.get('symbol', '')}_{r.get('direction', '')}"
                 )
             seen[event_id] = r
         return list(seen.values())
