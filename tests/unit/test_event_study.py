@@ -541,6 +541,30 @@ class TestDeterministicRun:
         assert event.entry_source == "fill"
         assert event.entry_date == bars.iloc[1]["date"].strftime("%Y-%m-%d")
 
+    def test_fill_before_signal_date_is_rejected(self) -> None:
+        bars = self._bars()
+        study = EventStudy(
+            StudyConfig(strategy_name="test", horizons=[1], entry_mode="next_open", cost_rate=0.0),
+            stock_loader=lambda symbol, days: bars,
+            index_loader=lambda symbol, days: bars,
+        )
+        result = study.run(
+            pd.DataFrame(
+                [
+                    {
+                        "symbol": "600519",
+                        "date": bars.iloc[2]["date"],
+                        "entry": 10.5,
+                        "entry_source": "fill",
+                        "entry_date": bars.iloc[1]["date"],
+                    }
+                ]
+            ),
+            data_days=12,
+        )
+        assert result.n_events == 0
+        assert result.events == []
+
     def test_missing_benchmark_keeps_absolute_returns(self) -> None:
         bars = self._bars()
         study = EventStudy(

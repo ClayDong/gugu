@@ -274,6 +274,9 @@ class EventStudyRunnerMixin:
         )
         if entry_idx is None or entry_price is None or entry_date is None or entry_price <= 0:
             return None
+        # 成交不可能早于信号；异常记录直接排除，避免把未来信息倒灌进收益。
+        if entry_date < signal_timestamp:
+            return None
         event = StudyEvent(
             symbol=symbol,
             date=signal_timestamp.strftime("%Y-%m-%d"),
