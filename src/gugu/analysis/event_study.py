@@ -193,11 +193,12 @@ class EventStudy(EventStudyRunnerMixin, EventStudyReportMixin):
         stock_df: pd.DataFrame,
         signal_date: pd.Timestamp,
         *,
-        max_forward_gap_days: int = 7,
+        max_forward_gap_days: int = 14,
     ) -> int | None:
         """匹配信号交易日；远超行情窗口时 fail-closed。
 
-        非交易日只允许向后容忍一周，防止旧信号被错误映射到缓存窗口的第一根 K 线。
+        非交易日向后容忍最多 14 个自然日，覆盖春节/国庆等常规长假，
+        同时防止旧信号被错误映射到缓存窗口的第一根 K 线。
         """
         if stock_df.empty or "date" not in stock_df.columns:
             return None
