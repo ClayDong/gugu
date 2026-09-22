@@ -62,3 +62,37 @@ class TestManifestRuntimeGate:
             _manifest(tmp_path, "enabled", enabled=False).list_runtime_enabled("track_live") == []
         )
         assert _manifest(tmp_path, "enabled", enabled=False).list_runtime_enabled("paper") == []
+
+    def test_production_layered_drawdown_with_category(self, tmp_path):
+        """gate-v2 分层回撤：短线策略回撤 18%（<25% 旧阈值、≥15% 新阈值）传入 category 时
+        应被拦截；不传 category 时退化为默认 25% 阈值（仍通过）。
+
+        锁定 is_runtime_enabled 必须把 validation_gate.gate_category 透传给
+        GatePolicy.evaluate，否则短线策略的更严回撤门禁在生产准入中不生效。
+        """
+        metrics = {
+            "total_trades": 120,
+            "avg_return": 0.03,
+            "median_return": 0.02,
+            "avg_sharpe": 0.2,
+            "max_drawdown": 0.18,  # 介于 15% 与 25% 之间
+            "profitable_ratio": 0.6,
+            "profit_factor": 2.0,
+            "param_stability": 0.9,
+            "paper_signals": 40,
+            "paper_return": 0.01,
+        }
+        # 不传 category：默认 25% 阈值 → 0.18 < 0.25 → 通过
+        assert _manifest(tmp_path, "enabled", metrics=metrics).list_runtime_enabled(
+            "track_live"
+        ) == ["demo"]
+
+        # 传 category=trend（短线）→ 15% 阈值 → 0.18 >= 0.15 → 拦截
+        m = _manifest(tmp_path, "enabled", metrics=metrics)
+        m._data["signal_strategies"]["demo"]["validation_gate"]["gate_category"] = "trend"
+        assert m.list_runtime_enabled("track_live") == []
+
+        # 传 category=main_force（中长线）→ 25% 阈值 → 0.18 < 0.25 → 通过
+        m2 = _manifest(tmp_path, "enabled", metrics=metrics)
+        m2._data["signal_strategies"]["demo"]["validation_gate"]["gate_category"] = "main_force"
+        assert m2.list_runtime_enabled("track_live") == ["demo"]

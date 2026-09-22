@@ -135,7 +135,10 @@ class StrategyManifest:
             metrics = gate.get("metrics")
             if status != "enabled" or not isinstance(metrics, dict):
                 return False
-            return bool(GatePolicy.evaluate(metrics)["passed"])
+            # gate-v2 分层回撤：短线(trend/breakout/mean_revert) < 15%，
+            # 中长线(main_force) < 25%。category 缺失时退化为默认 25%。
+            category = gate.get("gate_category")
+            return bool(GatePolicy.evaluate(metrics, category=category)["passed"])
         if execution_mode == "paper":
             return status in {"enabled", "conditional_pass"}
         return False

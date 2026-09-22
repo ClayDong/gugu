@@ -11,6 +11,7 @@ signal_strategies:
       未通过；当前仅允许 paper 观察
     notes: confirm_days=1 防假突破
     validation_gate:
+      gate_category: breakout
       status: conditional_pass
       sample: 300+ 股票，750+ 交易日
       metrics:
@@ -33,6 +34,7 @@ signal_strategies:
     params_entry: strategy_defaults.yaml
     validation: 逻辑成立（震荡市 RSI 超卖反弹），但 manifest 登记的定量样本外指标缺失（total_trades=0, avg_sharpe=0.0, avg_return=0.0, profitable_ratio=0.0），无法复核、未满足 gate-v2；若确有 2026-07-26 的 Walk-Forward 结果须回填 metrics 后方可主张。当前仅允许 paper 观察
     validation_gate:
+      gate_category: mean_revert
       status: conditional_pass
       sample: 震荡市适用，RSI 超卖反弹逻辑
       metrics:
@@ -68,6 +70,7 @@ signal_strategies:
 
       '
     validation_gate:
+      gate_category: mean_revert
       status: conditional_pass
       sample: 100 股多股聚合回测
       metrics:
@@ -91,6 +94,7 @@ signal_strategies:
     validation: conditional_pass 2026-08-01 - 40股事件研究校准后验证期超额+0.37%(p=0.001)显著，2026衰减修复；引擎级(含时间止损)夏普+0.118，收益+14.16%
     notes: 核心规则：地量抄底（R01）、黄金分割买入（R02）、缩量回踩（R03）、量能背离（R04）、箱体震荡突破（R05）、均线粘合突破（R06）、龙抬头（R07）、量价齐升（R08）。
     validation_gate:
+      gate_category: mean_revert
       status: conditional_pass
       sample: 15 只活跃题材股，600 交易日（事件研究，2024-02~2026-07，2247信号）+ 1105只主板持仓回测审计（100只抽样）
       metrics:
@@ -126,6 +130,7 @@ signal_strategies:
       工程注意： - 换手率用 amount/(close×float_shares)，float_shares 需按股票配置（腾讯实时流通市值） - 依赖
       tencent_collector 的 amount 单位修正（科创板×1/主板×100） '
     validation_gate:
+      gate_category: trend
       status: in_review
       sample: 71 只跨行业股票 + 蓝筹负对照，600 交易日
       metrics:
@@ -147,6 +152,7 @@ signal_strategies:
     summary: 站上20日线+银山谷(MA20上穿MA60)+MACD金叉状态 → 潜伏期买入；跌破20日线+死亡谷+MACD死叉状态 → 幻灭期卖出。主升浪必须建立在MACD金叉状态
     params_entry: strategy_defaults.yaml
     validation_gate:
+      gate_category: trend
       status: in_review
       sample: 15股×600日事件研究（66事件，集中度11%，12/15股有信号）
       metrics:
@@ -166,7 +172,8 @@ signal_strategies:
     params_entry: strategy_defaults.yaml
     validation: conditional_pass 2026-09-02 - 新策略，待 Walk-Forward 验证
     validation_gate:
-      status: conditional_pass
+      gate_category: trend
+      status: pending
       sample: 待 Walk-Forward 验证
       metrics:
         total_trades: 0
@@ -185,7 +192,8 @@ signal_strategies:
     validation: conditional_pass 2026-09-03 - 新策略，待 Walk-Forward 验证
     notes: 核心哲学：只做龙头，只看龙头。四梁八柱（中军/跟随龙/老龙/补涨）健全时回踩低吸，情绪破位离场。
     validation_gate:
-      status: conditional_pass
+      gate_category: trend
+      status: pending
       sample: 待 Walk-Forward 验证
       metrics:
         total_trades: 0
@@ -202,7 +210,8 @@ signal_strategies:
     params_entry: strategy_defaults.yaml
     validation: conditional_pass 2026-09-03 - 复活归档策略，待 Walk-Forward 验证
     validation_gate:
-      status: conditional_pass
+      gate_category: breakout
+      status: pending
       metrics:
         total_trades: 0
         avg_return: 0.0
@@ -218,7 +227,8 @@ signal_strategies:
     params_entry: strategy_defaults.yaml
     validation: conditional_pass 2026-09-03 - 从 MingCe 移植，待 Walk-Forward 验证
     validation_gate:
-      status: conditional_pass
+      gate_category: mean_revert
+      status: pending
       metrics:
         total_trades: 0
         avg_return: 0.0
@@ -235,6 +245,7 @@ signal_strategies:
     validation: conditional_pass 2026-09-04 - 事件研究 116 样本 5日超额+2.18% p=0.001 显著；但当前
       300 天下跌市回测绝对收益为负（正alpha负beta），待 paper 观察
     validation_gate:
+      gate_category: mean_revert
       status: conditional_pass
       sample: 事件研究 116 样本（58 只缓存股票）
       metrics:
@@ -254,7 +265,8 @@ signal_strategies:
     params_entry: strategy_defaults.yaml
     validation: conditional_pass 2026-09-08 - 新增假设，待Walk-Forward和paper观察
     validation_gate:
-      status: conditional_pass
+      gate_category: trend
+      status: pending
       sample: 待 Walk-Forward 验证
       metrics:
         total_trades: 0
@@ -271,6 +283,7 @@ signal_strategies:
     params_entry: strategy_defaults.yaml
     validation: pending - 首版规则与数据契约已实现，尚无历史事件研究和 paper 样本
     validation_gate:
+      gate_category: trend
       status: pending
       sample: 尚无可审计事件样本
       metrics: {}
@@ -285,6 +298,7 @@ signal_strategies:
     params_entry: strategy_defaults.yaml
     validation: pending - 首版规则已实现，尚无事件研究和paper样本
     validation_gate:
+      gate_category: trend
       status: pending
       sample: 待事件研究验证
       metrics: {}
@@ -299,6 +313,7 @@ signal_strategies:
     params_entry: strategy_defaults.yaml
     validation: pending - 首版规则已实现，尚无事件研究和paper样本
     validation_gate:
+      gate_category: trend
       status: pending
       sample: 待事件研究验证
       metrics: {}
@@ -313,6 +328,7 @@ signal_strategies:
     params_entry: strategy_defaults.yaml
     validation: pending - 首版规则已实现，尚无事件研究和paper样本
     validation_gate:
+      gate_category: trend
       status: pending
       sample: 待事件研究验证
       metrics: {}
