@@ -7,7 +7,7 @@ signal_strategies:
     enabled: true
     summary: 识别箱体上下沿，突破上沿买入、跌破下沿卖出，配合成交量确认
     params_entry: strategy_defaults.yaml
-    validation: conditional_pass 2026-07-26 - 过往全市场回测 150 笔夏普 0.15/胜率 55%，最新 Walk-Forward
+    validation: Walk-Forward 未通过 2026-09-13 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 平均样本外收益 < 0; 盈亏比 < 1.5; 样本外交易次数 < 30
       未通过；当前仅允许 paper 观察
     notes: confirm_days=1 防假突破
     validation_gate:
@@ -31,7 +31,7 @@ signal_strategies:
     enabled: true
     summary: RSI 离开超卖区买入、离开超买区卖出
     params_entry: strategy_defaults.yaml
-    validation: Walk-Forward 通过 2026-07-26
+    validation: 逻辑成立（震荡市 RSI 超卖反弹），但 manifest 登记的定量样本外指标缺失（total_trades=0, avg_sharpe=0.0, avg_return=0.0, profitable_ratio=0.0），无法复核、未满足 gate-v2；若确有 2026-07-26 的 Walk-Forward 结果须回填 metrics 后方可主张。当前仅允许 paper 观察
     validation_gate:
       status: conditional_pass
       sample: 震荡市适用，RSI 超卖反弹逻辑
@@ -42,7 +42,7 @@ signal_strategies:
         avg_sharpe: 0.0
         avg_return: 0.0
         profitable_ratio: 0.0
-      next_action: 补充全市场量化的回测指标（收益/夏普/回撤/胜率）
+      next_action: 补充全市场量化的回测指标（收益/夏普/回撤/胜率），回填 metrics 后复验
   double_yin:
     name: 双阴钱袋子
     module: gugu.strategies.double_yin

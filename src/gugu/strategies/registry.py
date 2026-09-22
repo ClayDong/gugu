@@ -99,7 +99,7 @@ def get_runtime_strategy_names(
     mode = execution_mode or cfg.execution.mode
     candidates = cfg.strategy.get_enabled_for_regime(regime, mode)
     if mode in ("track_live", "signal_only", "live"):
-        # 生产模式必须同时满足 settings verified 白名单和 manifest 的 GatePolicy gate-v1。
+        # 生产模式必须同时满足 settings verified 白名单和 manifest 的 GatePolicy gate-v2。
         # 白名单只是人工意图声明，不能替代可复核的样本外证据。
         candidates = [name for name in candidates if name in cfg.strategy.verified_strategies]
         runtime_enabled = set(get_manifest().list_runtime_enabled(mode, set(candidates)))

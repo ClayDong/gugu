@@ -121,7 +121,7 @@ class StrategyManifest:
         """判断策略是否满足指定执行模式的运行时准入条件。
 
         production 模式除了 settings 白名单，还必须具备 manifest 的 ``enabled`` 标记、
-        ``status: enabled`` 和完整的 GatePolicy gate-v1 样本外证据。paper 模式仍允许
+        ``status: enabled`` 和完整的 GatePolicy gate-v2 样本外证据。paper 模式仍允许
         ``conditional_pass``，但只用于观察，不代表生产准入。
         """
         info = self.get_strategy(key)

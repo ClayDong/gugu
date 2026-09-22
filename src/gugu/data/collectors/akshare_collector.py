@@ -114,7 +114,10 @@ class AkshareCollector(BaseCollector):
         try:
             df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流")
         except Exception as e:
-            logger.error(f"akshare 行业资金流失败: {e}")
+            # 备用源失败属设计内降级路径（eastmoney 会兜底，上游还有缓存兜底），
+            # 记 WARNING 而非 ERROR，避免每次瞬时限流都污染 ERROR 统计
+            # （与同文件 fetch_stock_flow 及 eastmoney_collector 同类失败级别一致）。
+            logger.warning(f"akshare 行业资金流失败: {e}")
             self._flow_record_failure()
             raise
         self._flow_record_success()

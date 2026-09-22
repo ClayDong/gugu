@@ -549,7 +549,14 @@ class SchedulerJobsMixin:
                 logger.info("周参数优化 {}: stocks={}", s_name, stocks)
 
                 try:
-                    result = subprocess.run(
+                    # 必须用 asyncio.to_thread 放进线程执行：subprocess.run 是
+                    # 阻塞调用，若直接跑在事件循环里会饿死心跳任务（60s 写一次
+                    # heartbeat.json）→ watchdog 15min 阈值误判挂死 → auto-recover
+                    # 重启调度器（实证 2026-09-15 04:15 启发式优化 double_yin 超时
+                    # 阻塞 15min，心跳停留在 03:59:45，触发 heartbeat_stale 自愈重启）。
+                    # 放线程后事件循环保持响应，心跳照常新鲜。
+                    result = await asyncio.to_thread(
+                        subprocess.run,
                         cmd,
                         cwd=str(PROJECT_ROOT),
                         capture_output=True,
@@ -616,7 +623,11 @@ class SchedulerJobsMixin:
                 logger.info("启发式优化 {}: strategy={}, stocks={}", algorithm, s_name, stocks)
 
                 try:
-                    result = subprocess.run(
+                    # 同 _safe_optimize_params：阻塞 subprocess.run 必须进线程，
+                    # 否则饿死事件循环/心跳 → watchdog 误判挂死触发重启
+                    # （实证 2026-09-15 04:15 启发式优化阻塞导致 heartbeat_stale）。
+                    result = await asyncio.to_thread(
+                        subprocess.run,
                         cmd,
                         cwd=str(PROJECT_ROOT),
                         capture_output=True,

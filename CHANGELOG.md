@@ -1,5 +1,59 @@
 # 变更日志
 
+## 2026-09-15 — v0.9.50 参数优化任务阻塞事件循环修复（asyncio.to_thread）
+
+### 变更：告警评估员处置（2026-09-15 09:00 告警分诊）
+
+**背景**：分诊报当日 1 条 ERROR（04:15:15 `启发式优化 double_yin 超时（>15min），跳过`），
+且自愈记录显示 04:15:30 触发 heartbeat_stale 重启（成功 1 次，进程存活=True）。
+对抗性审查确认根因链：
+
+- 每半月 04:00 的启发式优化任务 `_safe_heuristic_optimize`（及周日 03:00 的
+  `_safe_optimize_params`）在 **asyncio 事件循环里直接跑阻塞的 `subprocess.run`**
+  （timeout 900s/1200s）。
+- double_yin 子进程超时 15min → 事件循环被阻塞 15min → 60s 心跳任务被饿死，
+  heartbeat.json 停留在 03:59:45 → watchdog 15min 阈值误判挂死 → auto-recover
+  重启调度器（04:15:27 新实例，盘前重启无扫描损失，当前心跳新鲜）。
+- 超时跳过本身是设计行为（单策略 15min 保护），**真正的问题是阻塞事件循环导致
+  误触发 watchdog 重启**，每月 1/15 + 每周日都会重演。
+
+**修复**：`src/gugu/engine/scheduler_jobs.py` 两处 `subprocess.run` 均改为
+`await asyncio.to_thread(subprocess.run, ...)`（沿用项目既有模式：market_filter /
+data/manager / collectors 均用 to_thread 包装阻塞调用）。事件循环保持响应，
+心跳照常新鲜，watchdog 不再误判。`subprocess.TimeoutExpired` 在线程内抛出后
+仍被协程捕获，超时跳过逻辑不变。
+
+**验证**
+- `pytest tests/unit/test_scheduler.py --timeout=30` → 8 passed
+- `ruff check src/gugu/engine/scheduler_jobs.py` → All checks passed
+- 重启 scheduler（launchctl kickstart）后心跳新鲜，无 ERROR 复现
+
+## 2026-09-14 — v0.9.49 akshare 行业资金流失败级别降级（ERROR→WARNING）
+
+### 变更：告警评估员处置（2026-09-14 12:31 告警分诊）
+
+**背景**：分诊报当日 2 条 ERROR（10:01:13/10:01:15 `akshare 行业资金流失败:
+RemoteDisconnected`）。对抗性审查确认：东财上游瞬时断连（10:01-10:02 一波
+连接被关闭），akshare 与 eastmoney 均按设计触发 1800s 资金流熔断 + 缓存兜底，
+扫描正常完成（30 条异动告警），后续扫描全部恢复，今日失败率 0.3%（4/1327），
+同类错误此前 3 天均为 0 次——纯瞬时降级，非代码失效。
+
+**🟡 顺手修复日志级别不一致（v0.9.25/v0.9.28 约定遗漏）**
+- 现象：`fetch_sector_flow` 失败记 ERROR，`fetch_stock_flow` 记 WARNING——
+  同一降级路径、两种级别，导致每次瞬时降级都污染 ERROR 统计、误触发分诊告警。
+- 根因：v0.9.25/v0.9.28 把"备用源失败属设计内降级路径→记 WARNING"（eastmoney
+  兜底 + 缓存兜底 + 1800s 熔断防刷屏）的约定落地时漏改了
+  `akshare_collector.fetch_sector_flow`（同文件 `fetch_stock_flow` 及
+  `eastmoney_collector.fetch_sector_flow` 均已 WARNING）。
+- 修复：`src/gugu/data/collectors/akshare_collector.py` line 117
+  `logger.error` → `logger.warning`，补注释对齐约定。纯日志级别调整，
+  不影响采集/熔断/兜底逻辑。
+
+**验证**
+- `pytest tests/unit/test_collectors.py tests/unit/test_data_manager.py`
+  → 52 passed
+- `ruff check src/gugu/data/collectors/akshare_collector.py` → All checks passed
+
 ## 2026-09-11 — v0.9.48 舆情新闻/公告双源失效修复（akshare 接口误用 + pandas arrow 正则）
 
 ### 变更：告警评估员处置（2026-09-11 12:30 告警分诊）
