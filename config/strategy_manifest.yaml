@@ -11,6 +11,18 @@ signal_strategies:
       未通过；当前仅允许 paper 观察
     notes: confirm_days=1 防假突破
     validation_gate:
+      gate_v2:
+        reviewed_at: 2026-09-23
+        passed: false
+        evidence_class: failed
+        category: breakout
+        failed_checks:
+        - median_return
+        - max_drawdown
+        - profit_factor
+        - param_stability
+        - paper_signals
+        note: "分层回撤 0.18≥0.15、参数稳定性 0.6、paper 信号 0、缺 median_return/profit_factor"
       gate_category: breakout
       status: conditional_pass
       sample: 300+ 股票，750+ 交易日
@@ -32,10 +44,26 @@ signal_strategies:
     enabled: true
     summary: RSI 离开超卖区买入、离开超买区卖出
     params_entry: strategy_defaults.yaml
-    validation: 逻辑成立（震荡市 RSI 超卖反弹），但 manifest 登记的定量样本外指标缺失（total_trades=0, avg_sharpe=0.0, avg_return=0.0, profitable_ratio=0.0），无法复核、未满足 gate-v2；若确有 2026-07-26 的 Walk-Forward 结果须回填 metrics 后方可主张。当前仅允许 paper 观察
+    validation: 逻辑成立（震荡市 RSI 超卖反弹），但 manifest 登记的定量样本外指标缺失（total_trades=0, avg_sharpe=0.0, avg_return=0.0, profitable_ratio=0.0），无法复核、未满足 gate-v2；若确有 2026-07-26 的 Walk-Forward 结果须回填 metrics 后方可主张。当前仅允许 paper 观察（total_trades=0 零证据）2026-09-23 gate-v2 重验未通过，status 改 pending（与 8 个零证据策略一致），不进入 paper 观察
     validation_gate:
+      gate_v2:
+        reviewed_at: 2026-09-23
+        passed: false
+        evidence_class: insufficient_evidence
+        category: mean_revert
+        failed_checks:
+        - total_trades
+        - median_return
+        - avg_sharpe
+        - max_drawdown
+        - profitable_ratio
+        - profit_factor
+        - param_stability
+        - paper_signals
+        - paper_return
+        note: "total_trades=0，全部指标 0/缺失，零证据"
       gate_category: mean_revert
-      status: conditional_pass
+      status: pending
       sample: 震荡市适用，RSI 超卖反弹逻辑
       metrics:
         suitable_regime: sideways
@@ -70,6 +98,21 @@ signal_strategies:
 
       '
     validation_gate:
+      gate_v2:
+        reviewed_at: 2026-09-23
+        passed: false
+        evidence_class: insufficient_evidence
+        category: mean_revert
+        failed_checks:
+        - total_trades
+        - median_return
+        - avg_sharpe
+        - max_drawdown
+        - profitable_ratio
+        - profit_factor
+        - param_stability
+        - paper_signals
+        note: "样本 80<100、avg_sharpe -0.02、回撤 0.22≥0.15、盈利比 0.48、稳定性 0.4、paper 0"
       gate_category: mean_revert
       status: conditional_pass
       sample: 100 股多股聚合回测
@@ -94,6 +137,22 @@ signal_strategies:
     validation: conditional_pass 2026-08-01 - 40股事件研究校准后验证期超额+0.37%(p=0.001)显著，2026衰减修复；引擎级(含时间止损)夏普+0.118，收益+14.16%
     notes: 核心规则：地量抄底（R01）、黄金分割买入（R02）、缩量回踩（R03）、量能背离（R04）、箱体震荡突破（R05）、均线粘合突破（R06）、龙抬头（R07）、量价齐升（R08）。
     validation_gate:
+      gate_v2:
+        reviewed_at: 2026-09-23
+        passed: false
+        evidence_class: insufficient_evidence
+        category: mean_revert
+        failed_checks:
+        - total_trades
+        - avg_return
+        - median_return
+        - avg_sharpe
+        - max_drawdown
+        - profitable_ratio
+        - profit_factor
+        - param_stability
+        - paper_signals
+        note: "metrics 为中文混排字符串不可解析；取持仓回测数回撤 0.24/盈利比 0.33/稳定性 0 仍失败"
       gate_category: mean_revert
       status: conditional_pass
       sample: 15 只活跃题材股，600 交易日（事件研究，2024-02~2026-07，2247信号）+ 1105只主板持仓回测审计（100只抽样）
@@ -245,6 +304,22 @@ signal_strategies:
     validation: conditional_pass 2026-09-04 - 事件研究 116 样本 5日超额+2.18% p=0.001 显著；但当前
       300 天下跌市回测绝对收益为负（正alpha负beta），待 paper 观察
     validation_gate:
+      gate_v2:
+        reviewed_at: 2026-09-23
+        passed: false
+        evidence_class: failed
+        category: mean_revert
+        failed_checks:
+        - avg_return
+        - median_return
+        - avg_sharpe
+        - max_drawdown
+        - profitable_ratio
+        - profit_factor
+        - param_stability
+        - paper_signals
+        - paper_return
+        note: "缺 avg_return/avg_sharpe/max_drawdown/profit_ratio/profit_factor/稳定性/paper 等 9 项"
       gate_category: mean_revert
       status: conditional_pass
       sample: 事件研究 116 样本（58 只缓存股票）
