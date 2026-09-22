@@ -140,31 +140,34 @@ signal_strategies:
       gate_v2:
         reviewed_at: 2026-09-23
         passed: false
-        evidence_class: insufficient_evidence
+        evidence_class: failed
         category: mean_revert
         failed_checks:
-        - total_trades
-        - avg_return
         - median_return
-        - avg_sharpe
         - max_drawdown
         - profitable_ratio
         - profit_factor
         - param_stability
         - paper_signals
-        note: "metrics 为中文混排字符串不可解析；取持仓回测数回撤 0.24/盈利比 0.33/稳定性 0 仍失败"
+        note: "持仓回测量化基准：回撤 0.2424>=0.15、盈利比 0.334<0.5、稳定性 0.0、缺 median_return/profit_factor、paper 0"
       gate_category: mean_revert
       status: conditional_pass
       sample: 15 只活跃题材股，600 交易日（事件研究，2024-02~2026-07，2247信号）+ 1105只主板持仓回测审计（100只抽样）
       metrics:
-        total_trades: 2247（事件研究） / 13371（持仓回测）
-        avg_return: 0.0109（事件研究） / 0.1348（持仓回测均值）
-        avg_sharpe: 0.0（事件研究更新前） / 0.02（持仓回测）
-        max_drawdown: 0.0（事件研究更新前） / -0.2424（持仓回测均值）
-        profitable_ratio: 0.0（事件研究更新前） / 0.3340（持仓回测）
+        # 量化基准=持仓回测审计（1105只主板，13371笔）；事件研究见 validation / event_study_*
+        total_trades: 13371
+        avg_return: 0.1348
+        avg_sharpe: 0.02
+        max_drawdown: 0.2424          # 持仓回测均值绝对值（原存 -0.2424，门禁回撤为非负幅值）
+        profitable_ratio: 0.334
         param_stability: 0.0
         paper_signals: 0
         paper_return: 0.0
+        event_study_total_trades: 2247
+        event_study_avg_return: 0.0109
+        event_study_avg_sharpe: 0.0
+        event_study_max_drawdown: 0.0
+        event_study_profitable_ratio: 0.0
       next_action: 持仓回测审计完成。事件研究低估13.11%，持仓回测+13.48%/Sharpe+0.02。正收益可验证但波动大，建议保持enabled，补充Sharpe>0的正股比例统计后考虑升级。
   price_volume_signal:
     name: 换手率+量比尾盘黄金信号
