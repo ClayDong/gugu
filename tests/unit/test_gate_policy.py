@@ -82,6 +82,24 @@ class TestGatePolicy:
         assert report["passed"] is False
         assert "profit_factor" in report["failed_checks"]
 
+    def test_negative_max_drawdown_rejected_false_pass(self):
+        """回归：负值回撤（如 -0.24）不得被 '数值 < 阈值' 规则假通过。"""
+        # mean_revert 分层门槛 15%；-0.24 < 0.15 本会被误判通过，加固后应判失败。
+        report = GatePolicy.evaluate(
+            _passing_metrics(max_drawdown=-0.24),
+            category="mean_revert",
+        )
+        assert report["passed"] is False
+        assert "max_drawdown" in report["failed_checks"]
+
+    def test_positive_max_drawdown_still_evaluated_normally(self):
+        """正值回撤仍按阈值正常评估，不受负值防御影响。"""
+        report = GatePolicy.evaluate(
+            _passing_metrics(max_drawdown=0.10),
+            category="mean_revert",
+        )
+        assert report["checks"]["max_drawdown"]["passed"] is True
+
 
 class TestCategoryDrawdown:
     """gate-v2: 按策略类型分层最大回撤门槛。"""
@@ -146,3 +164,25 @@ def test_classify_evidence_marks_full_sample_failure():
         }
     )
     assert GatePolicy.classify_evidence(verdict) == "failed"
+
+
+def test_classify_evidence_falls_back_to_total_trades():
+    """回归：manifest 派生裁决缺 oos_trades 时回退到 total_trades，不至于一律 insufficient。"""
+    metrics = {
+        "total_trades": 150,
+        "avg_return": 0.02,
+        "median_return": 0.01,
+        "avg_sharpe": 0.15,
+        "max_drawdown": 0.10,
+        "profitable_ratio": 0.55,
+        "profit_factor": 2.0,
+        "param_stability": 0.9,
+        "paper_signals": 40,
+        "paper_return": 0.01,
+    }
+    verdict = GatePolicy.evaluate(metrics, category="mean_revert")
+    assert verdict["passed"] is True
+    # 默认 sample_key=oos_trades 在 manifest 中缺失 → 回退 total_trades=150 ≥ 30
+    assert GatePolicy.classify_evidence(verdict) == "passed"
+    # 显式请求 oos_trades 且缺失时，仍按原语义判 insufficient_evidence
+    assert GatePolicy.classify_evidence(verdict, sample_key="oos_trades") == "insufficient_evidence"

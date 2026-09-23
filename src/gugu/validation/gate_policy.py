@@ -43,6 +43,10 @@ class GateRule:
             return False
         if not math.isfinite(numeric):
             return False
+        if self.direction == "lower" and numeric < 0:
+            # 回撤等"越低越好"的指标应为非负幅值；负值（如 -0.24）会令
+            # "数值 < 阈值" 规则假通过，视为数据错误直接判失败。
+            return False
         if self.direction == "higher":
             return numeric > self.threshold if self.strict else numeric >= self.threshold
         if self.direction == "lower":
@@ -140,11 +144,23 @@ class GatePolicy:
 
     @classmethod
     def classify_evidence(
-        cls, verdict: dict[str, Any], *, sample_key: str = "oos_trades", minimum: int = 30
+        cls, verdict: dict[str, Any], *, sample_key: str | None = None, minimum: int = 30
     ) -> str:
-        """区分通过、明确失败和样本不足，不降低任何 Gate 阈值。"""
+        """区分通过、明确失败和样本不足，不降低任何 Gate 阈值。
+
+        sample_key 为 None（默认）时走 manifest 兼容路径：优先取 oos_trades，
+        缺失则回退到 total_trades——因为 manifest 派生裁决常缺 oos_trades，
+        回退可避免把 manifest 派生裁决一律误判为 insufficient_evidence。
+        显式传入 sample_key（如 "oos_trades"）且缺失时，则诚实返回
+        insufficient_evidence，不静默回退。
+        """
         checks = verdict.get("checks") or {}
-        sample = checks.get(sample_key, {}).get("value")
+        if sample_key is None:
+            sample = checks.get("oos_trades", {}).get("value")
+            if sample is None:
+                sample = checks.get("total_trades", {}).get("value")
+        else:
+            sample = checks.get(sample_key, {}).get("value")
         try:
             if sample is None or float(sample) < minimum:
                 return "insufficient_evidence"
