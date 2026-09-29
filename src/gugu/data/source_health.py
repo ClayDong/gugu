@@ -143,6 +143,23 @@ class DataSourceHealthMonitor:
         except Exception as e:
             logger.warning("数据源健康日志轮转失败: {}", e)
 
+    def _iter_event_files(self) -> list[Path]:
+        """返回事件文件列表：实时文件 + 历史归档（按修改时间升序，轮转当天日期相同则实时文件最后）。
+
+        轮转（>5000 行）会把当日事件归档到 ``source_health_events.jsonl.<date>``，
+        摘要/分诊必须同时聚合归档文件，否则轮转当天统计丢失（实测 2026-09-29 轮转后
+        当日失败率被误报为 0/0，实际 9 failures / 1161 requests = 0.78%）。
+        """
+        files = [self._events_file]
+        try:
+            archives = sorted(
+                self._events_file.parent.glob(f"{self._events_file.name}.*"),
+                key=lambda p: p.stat().st_mtime,
+            )
+        except OSError:
+            archives = []
+        return files + archives
+
     def get_daily_summary(self, day: date | None = None) -> dict[str, Any]:
         """获取指定日期的数据源健康摘要。
 
@@ -172,32 +189,37 @@ class DataSourceHealthMonitor:
         failures = 0
 
         try:
-            if not self._events_file.exists():
+            found_any = False
+            for path in self._iter_event_files():
+                if not path.exists():
+                    continue
+                with path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            evt = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        ts = evt.get("timestamp", "")
+                        if not ts.startswith(target_str):
+                            continue
+                        found_any = True
+                        src = evt.get("source", "unknown")
+                        event = evt.get("event", "")
+                        stats[src][event] += 1
+                        if event in ("success", "failure", "fallback_used"):
+                            total += 1
+                        if event == "failure":
+                            failures += 1
+                        if event == "degraded":
+                            degraded_at[src] = datetime.fromisoformat(ts).timestamp()
+                            recovered_at[src] = None
+                        if event == "recovered" and degraded_at.get(src) is not None:
+                            recovered_at[src] = datetime.fromisoformat(ts).timestamp()
+            if not found_any:
                 return self._empty_summary(target)
-            with self._events_file.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        evt = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    ts = evt.get("timestamp", "")
-                    if not ts.startswith(target_str):
-                        continue
-                    src = evt.get("source", "unknown")
-                    event = evt.get("event", "")
-                    stats[src][event] += 1
-                    if event in ("success", "failure", "fallback_used"):
-                        total += 1
-                    if event == "failure":
-                        failures += 1
-                    if event == "degraded":
-                        degraded_at[src] = datetime.fromisoformat(ts).timestamp()
-                        recovered_at[src] = None
-                    if event == "recovered" and degraded_at.get(src) is not None:
-                        recovered_at[src] = datetime.fromisoformat(ts).timestamp()
         except Exception as e:
             logger.warning("读取数据源健康事件失败: {}", e)
             return self._empty_summary(target)

@@ -280,7 +280,7 @@ class DataManager:
                         )
                 return df
             except Exception as e:
-                logger.error("主源 {} 异常: {}", method, e)
+                logger.error("主源 {} 异常: {!r}", method, e)
                 async with self._get_lock():
                     await self._on_failure_locked(method)
 

@@ -246,20 +246,34 @@ def main() -> int:
     if ev.exists():
         today_prefix = now.date().isoformat()
         total = fails = 0
+        # 轮转（>5000 行）会把当日事件归档到 source_health_events.jsonl.<date>，
+        # 实时文件被清空 → 只读实时文件会漏统计（实测 2026-09-29 轮转后漏报 0/0）。
+        # 因此同时聚合历史归档文件，按当日时间戳过滤。
+        event_files = [ev]
         try:
-            with ev.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        e = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if e.get("timestamp", "").startswith(today_prefix):
-                        total += 1
-                        if e.get("event") == "failure":
-                            fails += 1
+            event_files += sorted(
+                DATA.glob("source_health_events.jsonl.*"),
+                key=lambda p: p.stat().st_mtime,
+            )
+        except OSError:
+            pass
+        try:
+            for path in event_files:
+                if not path.exists():
+                    continue
+                with path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            e = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if e.get("timestamp", "").startswith(today_prefix):
+                            total += 1
+                            if e.get("event") == "failure":
+                                fails += 1
             rate = fails / total if total else 0
             flag = "⚠️" if rate >= 0.5 else "✅"
             if rate >= 0.5:

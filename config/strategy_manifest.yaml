@@ -7,7 +7,7 @@ signal_strategies:
     enabled: true
     summary: 识别箱体上下沿，突破上沿买入、跌破下沿卖出，配合成交量确认
     params_entry: strategy_defaults.yaml
-    validation: Walk-Forward 未通过 2026-09-13 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 平均样本外收益 < 0; 盈亏比 < 1.5; 样本外交易次数 < 30
+    validation: Walk-Forward 未通过 2026-09-27 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 平均样本外收益 < 0; 盈亏比 < 1.5; 样本外交易次数 < 30
       未通过；当前仅允许 paper 观察
     notes: confirm_days=1 防假突破
     validation_gate:
@@ -44,7 +44,7 @@ signal_strategies:
     enabled: true
     summary: RSI 离开超卖区买入、离开超买区卖出
     params_entry: strategy_defaults.yaml
-    validation: 逻辑成立（震荡市 RSI 超卖反弹），但 manifest 登记的定量样本外指标缺失（total_trades=0, avg_sharpe=0.0, avg_return=0.0, profitable_ratio=0.0），无法复核、未满足 gate-v2；若确有 2026-07-26 的 Walk-Forward 结果须回填 metrics 后方可主张。当前仅允许 paper 观察（total_trades=0 零证据）2026-09-23 gate-v2 重验未通过，status 改 pending（与 8 个零证据策略一致），不进入 paper 观察
+    validation: Walk-Forward 未通过 2026-09-27 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 平均样本外收益 < 0; 盈亏比 < 1.5; 样本外交易次数 < 30
     validation_gate:
       gate_v2:
         reviewed_at: 2026-09-23
@@ -134,7 +134,7 @@ signal_strategies:
     enabled: true
     summary: 地量抄底+黄金分割买入+缩量回踩+量能背离+箱体震荡突破+均线粘合突破+龙抬头+量价齐升
     params_entry: strategy_defaults.yaml
-    validation: conditional_pass 2026-08-01 - 40股事件研究校准后验证期超额+0.37%(p=0.001)显著，2026衰减修复；引擎级(含时间止损)夏普+0.118，收益+14.16%
+    validation: Walk-Forward 未通过 2026-09-27 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 平均样本外收益 < 0; 盈亏比 < 1.5; 样本外交易次数 < 30
     notes: 核心规则：地量抄底（R01）、黄金分割买入（R02）、缩量回踩（R03）、量能背离（R04）、箱体震荡突破（R05）、均线粘合突破（R06）、龙抬头（R07）、量价齐升（R08）。
     validation_gate:
       gate_v2:
@@ -232,7 +232,7 @@ signal_strategies:
     summary: MA5>MA10(短期趋势) + close>MA20(中期确认) + 5日收益>0(动量) + volume>1.2×MA20量(放量)
       → 买入；跌破MA5或回撤8%止损 → 卖出
     params_entry: strategy_defaults.yaml
-    validation: conditional_pass 2026-09-02 - 新策略，待 Walk-Forward 验证
+    validation: Walk-Forward 未通过 2026-09-27 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 盈亏比 < 1.5; 样本外交易次数 < 30
     validation_gate:
       gate_category: trend
       status: pending
@@ -251,7 +251,7 @@ signal_strategies:
     summary: 龙头特征(近10日强势>7%/连续强势) + 趋势(close>MA5斜率向上) + 量能(vol5>vol20) + 回踩低吸(MA5附近<3%)
       → 买入；破MA5/量能枯竭/移动止损8% → 卖出
     params_entry: strategy_defaults.yaml
-    validation: conditional_pass 2026-09-03 - 新策略，待 Walk-Forward 验证
+    validation: Walk-Forward 未通过 2026-09-27 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 盈亏比 < 1.5; 样本外交易次数 < 30
     notes: 核心哲学：只做龙头，只看龙头。四梁八柱（中军/跟随龙/老龙/补涨）健全时回踩低吸，情绪破位离场。
     validation_gate:
       gate_category: trend
@@ -270,7 +270,7 @@ signal_strategies:
     enabled: true
     summary: 前日涨停 + 高开2% + 放量1.5x + 收阳回封 → 买入；跌破MA5+收阴/移动止损5% → 卖出
     params_entry: strategy_defaults.yaml
-    validation: conditional_pass 2026-09-03 - 复活归档策略，待 Walk-Forward 验证
+    validation: Walk-Forward 未通过 2026-09-27 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 盈亏比 < 1.5; 样本外交易次数 < 30
     validation_gate:
       gate_category: breakout
       status: pending
@@ -287,7 +287,7 @@ signal_strategies:
     enabled: true
     summary: 波动率+量能+动量合成情绪指标，冰点(<0.3)买入、高潮(>0.8)卖出
     params_entry: strategy_defaults.yaml
-    validation: conditional_pass 2026-09-03 - 从 MingCe 移植，待 Walk-Forward 验证
+    validation: Walk-Forward 未通过 2026-09-27 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 盈亏比 < 1.5; 样本外交易次数 < 30
     validation_gate:
       gate_category: mean_revert
       status: pending
@@ -304,7 +304,7 @@ signal_strategies:
     enabled: true
     summary: 14日周期二次探底不破前低+收阳 → 买入；跌破前低/移动止损8% → 卖出
     params_entry: strategy_defaults.yaml
-    validation: conditional_pass 2026-09-04 - 事件研究 116 样本 5日超额+2.18% p=0.001 显著；但当前
+    validation: Walk-Forward 未通过 2026-09-27 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 盈亏比 < 1.5; 样本外交易次数 < 30
       300 天下跌市回测绝对收益为负（正alpha负beta），待 paper 观察
     validation_gate:
       gate_v2:
@@ -341,7 +341,7 @@ signal_strategies:
     enabled: true
     summary: DIF/DEA零轴上方+金叉后回踩MA20/近5日低点确认买入；顶背离/趋势破坏/移动止损退出
     params_entry: strategy_defaults.yaml
-    validation: conditional_pass 2026-09-08 - 新增假设，待Walk-Forward和paper观察
+    validation: Walk-Forward 未通过 2026-09-27 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 盈亏比 < 1.5; 样本外交易次数 < 30
     validation_gate:
       gate_category: trend
       status: pending

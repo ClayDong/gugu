@@ -1,5 +1,57 @@
 # 变更日志
 
+## 2026-09-29 — v0.9.52 source_health 轮转后统计丢失修复（告警评估员处置）
+
+### 变更：告警评估员处置（2026-09-29 16:00 告警分诊，v0.9.51 修复的后续）
+
+**背景**：分诊报当日 1 条 ERROR（09:33:17 主源 sina fetch_stock_history 失败 1 次，
+tencent 终极兜底即时接管——四级冗余设计内降级，本应直接放过）。
+但对抗性审查发现更深一层**可观测性 bug**：15:10 事件文件轮转（>5000 行，归档到
+`source_health_events.jsonl.2026-09-29`，619KB）后，实时文件被清空，
+而 `get_daily_summary()` 与 `alert_triage.py` 只读实时文件 → 轮转当天统计丢失，
+今日实际 9 failures / 1161 requests = 0.78% 被误报成 "0% (0/0)"，
+失败率监控在轮转日完全失明（历史轮转日 08-12/08-17/08-24/08-31/09-07/09-11/09-23
+摘要均为 0/0，同根因）。
+
+**修复**：
+- `src/gugu/data/source_health.py`：`get_daily_summary` 新增 `_iter_event_files()`
+  聚合实时文件 + 全部 `source_health_events.jsonl.*` 归档，按目标日期时间戳过滤
+  （归档文件名=轮转日期，内容可能混多日，故必须按时间戳过滤）；无匹配事件返回空摘要。
+- `scripts/alert_triage.py`：第 6 节失败率同样聚合实时 + 归档文件。
+- 数据零改动：归档文件本就完整，只是读取口径修复；用修复后代码重算并回填
+  `source_health_daily.json` 的 2026-09-29 条目（1161 请求 / 9 失败 / 0.78%）。
+- scheduler 重启生效（PID 692 → 45463，心跳 16:07:39 新鲜），v0.9.51 的
+  manager.py `{!r}` 日志格式修复也随之进入运行进程。
+
+**验证**
+- `pytest tests/unit/test_source_health.py tests/unit/test_data_manager.py --timeout=60` → 20 passed
+- `ruff check src/gugu/data/source_health.py scripts/alert_triage.py tests/unit/test_source_health.py` → All checks passed
+- `.venv/bin/python scripts/alert_triage.py` → 第 6 节恢复真实口径：今日失败率 1% (9/1172)
+
+## 2026-09-29 — v0.9.51 主源异常日志可观测性修复（告警评估员处置）
+
+### 变更：告警评估员处置（2026-09-29 15:00 告警分诊）
+
+**背景**：分诊报当日 1 条 ERROR（09:33:17 `主源 fetch_stock_history 异常: `，异常消息为空）。
+对抗性审查确认根因链：
+
+- 09:33:06-07 网络抖动窗口，akshare / eastmoney 同时 `RemoteDisconnected`（远端断开），
+  09:33:17 主源 sina `fetch_stock_history` 超时失败。
+- `asyncio.wait_for` 超时抛 `TimeoutError`，其 `str(e) == ""` → 日志 `异常: {}` 输出空消息，
+  **零诊断价值**，分诊无法从日志行直接判断根因（需翻 source_health_events 交叉验证）。
+- source_health_events 证实 09:33:17 同秒 `failure sina` → `fallback_used tencent`，
+  四级冗余第 4 级（腾讯终极兜底）即时接管成功。当日失败率 1%（9/1130），信号扫描
+  data_health=ok（2 信号），心跳新鲜 → **降级本身是设计内行为，无需处置**。
+
+**修复**：`src/gugu/data/manager.py:283` 日志改用 `{!r}` 格式化异常，
+空消息异常也会输出类型（如 `TimeoutError()` / `RemoteDisconnected('...')`），
+后续分诊可直接从日志行判定根因类别。
+
+**验证**
+- `pytest tests/unit/test_data_manager.py tests/unit/test_data_manager_extended.py --timeout=30` → 31 passed
+- `ruff check src/gugu/data/manager.py` → All checks passed
+- 无需重启 scheduler（仅日志格式变更，不影响运行时行为）
+
 ## 2026-09-15 — v0.9.50 参数优化任务阻塞事件循环修复（asyncio.to_thread）
 
 ### 变更：告警评估员处置（2026-09-15 09:00 告警分诊）
