@@ -10,6 +10,7 @@ import asyncio
 import json
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta
 
 from gugu.data.stock_names import lookup_stock_name
@@ -548,6 +549,9 @@ class SchedulerJobsMixin:
                 ]
                 logger.info("周参数优化 {}: stocks={}", s_name, stocks)
 
+                # v0.9.53：单策略超时 1200s→1800s。double_yin Walk-Forward 实测
+                # 20min 跑 21640 回测行仍未完成（2026-09-27 超时），重策略需更多预算。
+                _t0 = time.monotonic()
                 try:
                     # 必须用 asyncio.to_thread 放进线程执行：subprocess.run 是
                     # 阻塞调用，若直接跑在事件循环里会饿死心跳任务（60s 写一次
@@ -561,23 +565,31 @@ class SchedulerJobsMixin:
                         cwd=str(PROJECT_ROOT),
                         capture_output=True,
                         text=True,
-                        timeout=1200,
+                        timeout=1800,
                     )
+                    _elapsed = time.monotonic() - _t0
                     if result.returncode == 0:
                         logger.info(
-                            "周参数优化 {} 完成: stdout={}",
+                            "周参数优化 {} 完成 ({:.0f}s): stdout={}",
                             s_name,
+                            _elapsed,
                             result.stdout[-300:] if result.stdout else "",
                         )
                     else:
                         logger.error(
-                            "周参数优化 {} 失败 rc={}: stderr={}",
+                            "周参数优化 {} 失败 rc={} ({:.0f}s): stderr={}",
                             s_name,
                             result.returncode,
+                            _elapsed,
                             result.stderr[-300:] if result.stderr else "",
                         )
                 except subprocess.TimeoutExpired:
-                    logger.error("周参数优化 {} 超时（>20min），跳过", s_name)
+                    _elapsed = time.monotonic() - _t0
+                    logger.error(
+                        "周参数优化 {} 超时（>30min，实际 {:.0f}s），跳过",
+                        s_name,
+                        _elapsed,
+                    )
         except subprocess.TimeoutExpired:
             logger.error("周参数优化超时（>1h），已终止")
         except Exception as e:
@@ -622,6 +634,11 @@ class SchedulerJobsMixin:
                 ]
                 logger.info("启发式优化 {}: strategy={}, stocks={}", algorithm, s_name, stocks)
 
+                # v0.9.53：单策略超时 900s→1800s。double_yin 为重策略（回测吞吐
+                # ~20 行/s，全量 PSO 评估≈18000 回测行），900s 恰好掐在收尾处，
+                # 2026-09-15 GA / 2026-10-01 PSO 两次全部超时（2/2 失败），
+                # 参数从未优化成功。1800s 覆盖完整工作量；加耗时观测便于校准。
+                _t0 = time.monotonic()
                 try:
                     # 同 _safe_optimize_params：阻塞 subprocess.run 必须进线程，
                     # 否则饿死事件循环/心跳 → watchdog 误判挂死触发重启
@@ -632,23 +649,34 @@ class SchedulerJobsMixin:
                         cwd=str(PROJECT_ROOT),
                         capture_output=True,
                         text=True,
-                        timeout=900,
+                        timeout=1800,
                     )
+                    _elapsed = time.monotonic() - _t0
                     if result.returncode == 0:
                         logger.info(
-                            "启发式优化 {} 完成: stdout={}",
+                            "启发式优化 {} 完成 ({:.0f}s): stdout={}",
                             s_name,
+                            _elapsed,
                             result.stdout[-300:] if result.stdout else "",
                         )
                     else:
                         logger.error(
-                            "启发式优化 {} 失败 rc={}: stderr={}",
+                            "启发式优化 {} 失败 rc={} ({:.0f}s): stderr={}",
                             s_name,
                             result.returncode,
+                            _elapsed,
                             result.stderr[-300:] if result.stderr else "",
                         )
                 except subprocess.TimeoutExpired:
-                    logger.error("启发式优化 {} 超时（>15min），跳过", s_name)
+                    _elapsed = time.monotonic() - _t0
+                    logger.error(
+                        "启发式优化 {} 超时（>30min，实际 {:.0f}s），跳过",
+                        s_name,
+                        _elapsed,
+                    )
+                except Exception:
+                    _elapsed = time.monotonic() - _t0
+                    logger.exception("启发式优化 {} 异常（{:.0f}s）", s_name, _elapsed)
         except Exception as e:
             logger.exception("启发式优化异常: {}", e)
 
