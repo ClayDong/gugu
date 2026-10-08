@@ -18,7 +18,7 @@ import json
 import re
 import shutil
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent

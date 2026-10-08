@@ -1,5 +1,24 @@
 # 变更日志
 
+## 2026-10-08 — v0.9.54 告警分诊脚本 NameError 修复（告警评估员处置）
+
+### 变更：告警评估员处置（2026-10-08 cron 脚本错误）
+
+**背景**：cron 报「data-collection script exited with code 1」。对抗性审查确认根因：
+`scripts/alert_triage.py` 第 229 行午休间隔判定使用 `time(11, 30)`，但顶部导入仅
+`from datetime import datetime, timedelta`（缺 `time`）。该分支在 `scan_ts` 存在时
+才走到（开盘首轮扫描完成后），此前分诊未触发；今日走到即 NameError → 分诊脚本
+崩溃 exit 1，告警评估链路中断（分诊数据无法产出，非系统业务异常）。
+
+**修复**：
+- `scripts/alert_triage.py`：导入补全为 `from datetime import datetime, time, timedelta`。
+- 修复后重跑分诊输出 **HEALTHY**（系统本身无异常，纯观测脚本 bug）。
+
+**验证**
+- `pytest tests/unit/test_alert_triage.py --timeout=30` → 8 passed
+- `ruff check scripts/alert_triage.py` → All checks passed
+- 不涉及 scheduler 运行时，无需重启调度器
+
 ## 2026-10-01 — v0.9.53 启发式优化超时预算上调 + 耗时观测（告警评估员处置）
 
 ### 变更：告警评估员处置（2026-10-01 告警分诊）
