@@ -372,41 +372,6 @@ def _count_in_window(events: pd.DataFrame, kline_cover: dict[str, tuple[str, str
     return total
 
 
-def _window_event_stats(
-    date_values: pd.Series,
-    code_values: pd.Series,
-    direction_values: pd.Series,
-    kline_cover: dict[str, tuple[str, str]],
-) -> tuple[int, int]:
-    """返回 (落在行情窗口内的行数, 去重后的独立事件数)。
-
-    一行不等于一个事件：同一笔增减持会因多个变动人拆成多行，一次公告可能出十几行。
-    直接用行数当样本量会系统性高估 N，所以按（标的, 日期, 方向）去重后再数。
-    """
-    if date_values.empty:
-        return 0, 0
-    events = pd.DataFrame(
-        {
-            "code": code_values.to_numpy(),
-            "dt": pd.to_datetime(date_values, errors="coerce").to_numpy(),
-            "direction": direction_values.to_numpy(),
-        }
-    ).dropna(subset=["dt"])
-    if events.empty:
-        return 0, 0
-    rows = 0
-    unique = 0
-    for code, group in events.groupby("code"):
-        window = kline_cover.get(code)
-        if not window:
-            continue
-        low, high = pd.Timestamp(window[0]), pd.Timestamp(window[1])
-        inside = group[(group["dt"] >= low) & (group["dt"] <= high)]
-        rows += len(inside)
-        unique += len(inside.drop_duplicates(subset=["dt", "direction"]))
-    return rows, unique
-
-
 def kline_coverage(directory: Path) -> dict[str, tuple[str, str]]:
     """每只标的行情实际覆盖的起止日。
 
@@ -453,15 +418,18 @@ def audit_kline_cache(directory: Path, pool_codes: set[str]) -> dict[str, Any]:
     latest: str | None = None
     errors: list[str] = []
     for path in files:
+        # 缓存目录里还有基准指数（_index.parquet）等非个股文件，它们的行数不该
+        # 混进"个股行情长度"的统计里
+        symbol = normalize_code(path.stem.split("_")[0])
+        if not symbol:
+            continue
         try:
             frame = pd.read_parquet(path)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{path.name}: {type(exc).__name__}")
             continue
         rows.append(len(frame))
-        symbol = normalize_code(path.stem.split("_")[0])
-        if symbol:
-            symbols.add(symbol)
+        symbols.add(symbol)
         if "date" in frame.columns:
             maximum = pd.to_datetime(frame["date"], errors="coerce").max()
             if pd.notna(maximum):

@@ -527,6 +527,27 @@ class TestRenderAndReport:
         assert report["kline"]["latest"] == "2026-07-15"
         assert report["kline"]["pool_hits"] == 1
 
+    def test_kline_cache_ignores_non_stock_files(self, tmp_path):
+        # 基准指数 _index.parquet 有 950 行，混进来会把"个股行情长度"统计拉偏
+        alt = tmp_path / "altalpha"
+        holder = tmp_path / "holder_structure"
+        kline = tmp_path / "parquet_cache"
+        for directory in (alt, holder, kline):
+            directory.mkdir()
+        _write_parquet(
+            kline / "600030_2d_none.parquet",
+            {"date": ["2026-07-14", "2026-07-15"], "close": [10.0, 11.0]},
+        )
+        _write_parquet(
+            kline / "_index.parquet",
+            {"date": [f"2026-07-{d:02d}" for d in range(1, 11)], "close": [1.0] * 10},
+        )
+        pool = tmp_path / "pool.json"
+        pool.write_text('{"events": [{"code": "600030"}]}', encoding="utf-8")
+        report = build_report(alt, holder, kline, pool, AS_OF)
+        assert report["kline"]["symbols"] == 1
+        assert report["kline"]["median_rows"] == 2  # 指数那 10 行没被算进来
+
     def test_render_markdown_has_new_columns(self, tmp_path):
         text = render_markdown(self._build(tmp_path))
         assert "重复因子" in text

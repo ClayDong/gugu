@@ -116,6 +116,9 @@ class MarginTradeCollector(AltAlphaCollector):
                     }
                 )
                 df_sz["market"] = "sz"
+                # 深市接口不返回交易日期，必须显式补上；否则 concat 后深市整边
+                # trade_date 为 NaN，按日对齐时半个市场直接消失（实测缺 47% 行）。
+                df_sz["trade_date"] = date_str
                 results.append(df_sz)
         except Exception:
             pass
