@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from gugu import __version__  # noqa: E402
 from gugu.engine.main import TradingEngine  # noqa: E402
 from gugu.engine.scheduler import TradingScheduler  # noqa: E402
 from gugu.utils.log import get_logger  # noqa: E402
@@ -51,7 +52,7 @@ if __name__ == "__main__":
     parser.add_argument("--daemon", action="store_true", help="守护进程模式（保活）")
     parser.add_argument("--report", action="store_true", help="单次模式结束后发送信号汇总")
     parser.add_argument("--reset-halt", action="store_true", help="重置 L2 熔断状态后执行")
-    parser.add_argument("--version", action="version", version="gugu 0.6.0")
+    parser.add_argument("--version", action="version", version=f"gugu {__version__}")
     args = parser.parse_args()
 
     if args.daemon:

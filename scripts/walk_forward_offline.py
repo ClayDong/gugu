@@ -47,6 +47,7 @@ from gugu.backtest.engine import walk_forward_optimize_multi_stock  # noqa: E402
 from gugu.config import PROJECT_ROOT  # noqa: E402
 from gugu.research.ledger import append_record, build_record  # noqa: E402
 from gugu.strategies.registry import get_strategy_cls  # noqa: E402
+from gugu import __version__  # noqa: E402
 from gugu.utils.log import get_logger  # noqa: E402
 
 # 复用 optimize_params.py 的参数网格、约束、解锁条件检查
@@ -88,16 +89,32 @@ _CACHE_DIR = PROJECT_ROOT / "data" / "parquet_cache"
 
 
 def load_stock_df(symbol: str) -> pd.DataFrame | None:
-    """从本地 parquet 缓存读取单股历史数据，优先取最长天数。"""
-    for days in [2000, 1000, 500, 365, 250, 200, 120, 60]:
-        f = _CACHE_DIR / f"{symbol}_{days}d.parquet"
-        if f.exists():
-            try:
-                df = pd.read_parquet(f)
-                if not df.empty:
-                    return df
-            except Exception as e:
-                logger.debug(f"读取 {f} 失败: {e}")
+    """从本地 parquet 缓存读取单股历史数据，优先取最长合格样本。
+
+    通过 data_gate 统一解析 ``{sym}_{days}d[_adjust].parquet`` 命名，
+    并拒绝「文件名写 500d、实际只有 200 行」的短样本冒充长历史。
+    """
+    from gugu.backtest.data_gate import (
+        iter_cache_files,
+        parse_cache_name,
+        validate_stock_history,
+    )
+
+    candidates: list[tuple[int, Path]] = []
+    for path in iter_cache_files(_CACHE_DIR):
+        parsed = parse_cache_name(path)
+        if parsed and parsed[0] == symbol:
+            candidates.append((parsed[1], path))
+    for days, path in sorted(candidates, reverse=True):
+        try:
+            df = pd.read_parquet(path)
+        except Exception as e:
+            logger.debug(f"读取 {path} 失败: {e}")
+            continue
+        clean = validate_stock_history(df, symbol=symbol, min_rows=days)
+        if clean is not None:
+            logger.info(f"{symbol} 采用 {path.name}（{len(clean)} 行）")
+            return clean
     return None
 
 
@@ -124,9 +141,11 @@ def select_stocks_from_cache(
         if len(selected) >= target_count:
             return selected
 
-    # 不足则从全市场缓存随机补充
+    # 不足则从全市场缓存随机补充（统一命名解析，兼容 *_500d_none.parquet）
     if len(selected) < target_count:
-        cache_files = list(_CACHE_DIR.glob("*_500d.parquet"))
+        from gugu.backtest.data_gate import iter_cache_files
+
+        cache_files = iter_cache_files(_CACHE_DIR, days=500)
         random.seed(42)  # 可复现
         random.shuffle(cache_files)
 
@@ -478,7 +497,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--show", action="store_true", help="显示当前策略参数")
     parser.add_argument("--notify", action="store_true", help="优化完成后推送飞书通知")
-    parser.add_argument("--version", action="version", version="gugu 0.6.0")
+    parser.add_argument("--version", action="version", version=f"gugu {__version__}")
     args = parser.parse_args()
 
     asyncio.run(

@@ -28,6 +28,7 @@ import yaml
 
 from gugu.config import PROJECT_ROOT
 from gugu.utils.log import get_logger
+from gugu.validation.evidence import validate_evidence
 from gugu.validation.gate_policy import GatePolicy
 
 logger = get_logger()
@@ -134,6 +135,12 @@ class StrategyManifest:
         if execution_mode in ("track_live", "signal_only", "live"):
             metrics = gate.get("metrics")
             if status != "enabled" or not isinstance(metrics, dict):
+                return False
+            # 去自证：metrics 必须与验证脚本生成的证据块哈希一致。
+            # 仅靠手填 metrics + status 不再能放行到生产（2026-11-04 评审 P0-2）。
+            evidence_ok, reason = validate_evidence(gate)
+            if not evidence_ok:
+                logger.warning("策略 {} 生产准入证据校验失败: {}", key, reason)
                 return False
             # gate-v2 分层回撤：短线(trend/breakout/mean_revert) < 15%，
             # 中长线(main_force) < 25%。category 缺失时退化为默认 25%。

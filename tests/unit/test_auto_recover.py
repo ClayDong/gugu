@@ -15,6 +15,7 @@ import json
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -297,7 +298,11 @@ def test_cleanup_never_touches_business_data(tmp_path: Path, monkeypatch):
 
 
 def test_script_auto_fix_returns_zero_when_all_healed(rec: AutoRecover, tmp_path: Path):
-    """全部自愈成功 → 退出码 0（不推送人工告警）。"""
+    """全部自愈成功 → 退出码 0（不推送人工告警）。
+
+    2026-11-04 整改：原用例只调 rec.run 后 ``assert True``，既没验证退出码
+    也没验证修复结果，是零断言假绿。现在同时验证真实修复结果与脚本返回码。
+    """
     from scripts.health_watchdog import _auto_fix_mode
 
     class Args:
@@ -307,9 +312,27 @@ def test_script_auto_fix_returns_zero_when_all_healed(rec: AutoRecover, tmp_path
     res = SchedulerHealthResult(
         ok=False, severity="high", message="⚠️ 调度器心跳超时：25 分钟未更新（>15 分钟）"
     )
-    # 用 test_mode 的 recover 实例模拟全部自愈
-    rec.run([res])
-    assert True  # 结构验证：自愈路径已覆盖
+    # 1) 真实自愈路径：告警必须产出 FixResult，且不需要人工升级
+    fixes = rec.run([res])
+    assert len(fixes) == 1
+    assert fixes[0].ok is True
+    assert fixes[0].escalation is False
+
+    # 2) 脚本 --auto-fix 退出码语义：全部自愈 → 0，且不推送告警
+    healed = FixResult(
+        fingerprint="scheduler_heartbeat",
+        ok=True,
+        root_cause="心跳超时（test_mode 短路）",
+        action="记录并跳过实际重启",
+        verified=True,
+        escalation=False,
+    )
+    with mock.patch("scripts.health_watchdog.AutoRecover") as mock_cls:
+        mock_cls.return_value.run.return_value = [healed]
+        with mock.patch("scripts.health_watchdog.push_alerts") as mock_push:
+            exit_code = _auto_fix_mode([res], tmp_path, Args())
+    assert exit_code == 0
+    mock_push.assert_not_called()
 
 
 def test_fingerprint_mapping(heartbeat_stale_result):

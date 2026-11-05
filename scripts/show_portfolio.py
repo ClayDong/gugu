@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from gugu import __version__  # noqa: E402
 from gugu.execution import PaperBroker  # noqa: E402
 from gugu.utils.log import get_logger  # noqa: E402
 
@@ -102,7 +103,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="gugu 持仓查看")
     parser.add_argument("--trades", action="store_true", help="查看交易记录")
     parser.add_argument("--all", action="store_true", help="查看全部（持仓+交易记录）")
-    parser.add_argument("--version", action="version", version="gugu 0.6.0")
+    parser.add_argument("--version", action="version", version=f"gugu {__version__}")
     args = parser.parse_args()
 
     broker = PaperBroker()

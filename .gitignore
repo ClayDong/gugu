@@ -69,6 +69,9 @@ scripts/probe_*.py
 scripts/rebound_*.py
 scripts/replicate_*.py
 scripts/scan_*.py
+# 例外：被 tests/unit/test_scan_price_volume_routing.py 引用，必须入库
+# 否则干净 clone 后该测试必然 ImportError（2026-11-04 评审 P0-1）
+!scripts/scan_price_volume.py
 scripts/verify_price_volume.py
 scripts/*.csv
 docs/validation/

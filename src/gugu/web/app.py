@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import contextlib
 import os
+import time
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, cast
 
@@ -128,6 +130,81 @@ def _require_admin_auth(x_api_key: str | None = Header(None, alias="X-API-Key"))
     return
 
 
+# ── P2-5：API 速率限制（内存滑动窗口） ──
+# 简单实现：按 IP + 接口路径维度限流，防止恶意调用和误操作刷屏
+# 不引入外部依赖，纯内存实现，适合单机部署场景
+
+
+class _SlidingWindowRateLimiter:
+    """滑动窗口速率限制器（内存实现）。
+
+    每个 (key, endpoint) 组合维护一个时间戳 deque，
+    窗口内超过 limit 则拒绝请求。自动清理过期记录。
+    """
+
+    def __init__(self) -> None:
+        self._windows: dict[str, deque[float]] = defaultdict(deque)
+
+    def check(self, key: str, endpoint: str, limit: int, window_seconds: int) -> bool:
+        """检查是否允许请求。True=允许，False=超限。"""
+        now = time.monotonic()
+        window_key = f"{key}:{endpoint}"
+        dq = self._windows[window_key]
+
+        # 清理窗口外的旧记录
+        cutoff = now - window_seconds
+        while dq and dq[0] < cutoff:
+            dq.popleft()
+
+        if len(dq) >= limit:
+            return False
+        dq.append(now)
+        return True
+
+    def reset(self, key: str, endpoint: str) -> None:
+        """重置某个 key 的计数（测试用）。"""
+        window_key = f"{key}:{endpoint}"
+        self._windows.pop(window_key, None)
+
+
+_global_rate_limiter = _SlidingWindowRateLimiter()
+
+
+def _get_client_ip(request: Request) -> str:
+    """获取客户端 IP（考虑反向代理）。"""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limit(limit: int, window_seconds: int = 60):
+    """生成速率限制 FastAPI 依赖。
+
+    Args:
+        limit: 窗口内最大请求数
+        window_seconds: 窗口大小（秒），默认 60 秒
+
+    Usage:
+        @app.post("/api/order", dependencies=[Depends(_rate_limit(10, 60))])
+    """
+
+    def limiter_dependency(request: Request) -> None:
+        # 用 IP + 接口路径 作为限流 key
+        client_ip = _get_client_ip(request)
+        endpoint = request.url.path
+        if not _global_rate_limiter.check(client_ip, endpoint, limit, window_seconds):
+            logger.warning(
+                "API 速率限制触发: %s -> %s (%d/%ds)", client_ip, endpoint, limit, window_seconds
+            )
+            raise HTTPException(
+                status_code=429,
+                detail=f"请求过于频繁，请稍后再试（限制 {limit} 次/{window_seconds} 秒）",
+            )
+
+    return limiter_dependency
+
+
 def _require_remote_api_key(x_api_key: str | None) -> None:
     """Require the admin key for remotely originated API requests."""
     import secrets
@@ -144,9 +221,108 @@ def _require_remote_api_key(x_api_key: str | None) -> None:
         raise HTTPException(status_code=403, detail="无效的 API Key")
 
 
+def hash_trading_password(password: str) -> str:
+    """生成交易密码的 PBKDF2-SHA256 哈希。
+
+    P0 安全加固：用于生成可存储在配置中的交易密码哈希。
+    使用 16 字节随机 salt + 100000 次迭代，输出格式：salt_hex$hash_hex。
+
+    Args:
+        password: 明文交易密码。
+
+    Returns:
+        "salt_hex$hash_hex" 格式的哈希字符串。
+    """
+    import hashlib
+    import os
+
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100_000)
+    return f"{salt.hex()}${dk.hex()}"
+
+
+def _verify_trading_password(password: str, hash_str: str) -> bool:
+    """验证交易密码是否匹配哈希。
+
+    使用恒定时间比较防止时序攻击。
+    """
+    import hashlib
+    import hmac
+
+    try:
+        salt_hex, hash_hex = hash_str.split("$", 1)
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(hash_hex)
+    except (ValueError, TypeError):
+        logger.warning("交易密码哈希格式错误")
+        return False
+
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100_000)
+    return hmac.compare_digest(dk, expected)
+
+
+def _require_trading_password(
+    x_trading_password: str | None = Header(None, alias="X-Trading-Password"),
+) -> None:
+    """交易操作二次确认：校验交易密码（P0 安全加固）。
+
+    语义：
+    - 未配置 trading_password_hash → 交易密码功能未启用，直接放行（仅 API Key 保护）；
+    - 已配置 + require_trading_password=False → 显式豁免，放行；
+    - 已配置 + require_trading_password=True（默认）→ 必须携带正确 X-Trading-Password。
+    """
+
+    try:
+        cfg = get_config()
+        pw_hash = cfg.web.trading_password_hash
+        require_pw = cfg.web.require_trading_password
+    except Exception:
+        pw_hash = ""
+        require_pw = True
+
+    # 未配置交易密码：live（真实下单）模式必须 fail-closed；
+    # paper / signal_only / track_live 保持原行为，避免把本地模拟盘锁死。
+    if not pw_hash:
+        try:
+            _exec_mode = get_config().execution.mode
+        except Exception:
+            _exec_mode = "paper"
+        if _exec_mode == "live":
+            raise HTTPException(
+                status_code=503,
+                detail="live 模式未配置交易密码，交易接口已禁用（fail-closed）",
+            )
+        return
+
+    # 显式关闭交易密码要求（仅限非 live 模式）
+    if not require_pw:
+        try:
+            _exec_mode = get_config().execution.mode
+        except Exception:
+            _exec_mode = "paper"
+        if _exec_mode == "live":
+            raise HTTPException(
+                status_code=503,
+                detail="live 模式禁止豁免交易密码二次确认",
+            )
+        return
+
+    if not x_trading_password:
+        raise HTTPException(
+            status_code=401,
+            detail="缺少交易密码（请求头 X-Trading-Password），交易操作需二次确认",
+        )
+
+    if not _verify_trading_password(x_trading_password, pw_hash):
+        logger.warning("Web 交易操作收到无效交易密码")
+        raise HTTPException(status_code=403, detail="交易密码错误")
+
+
 def create_app() -> FastAPI:
     """创建 FastAPI 应用实例。"""
-    app = FastAPI(title="gugu 交易仪表盘", version="0.6.0")
+    from gugu import __version__
+
+    app = FastAPI(title="gugu 交易仪表盘", version=__version__)
 
     @app.middleware("http")
     async def protect_remote_api(request: Request, call_next):
@@ -511,7 +687,14 @@ def create_app() -> FastAPI:
             logger.exception(f"相关性检查失败: {e}")
             return {"success": False, "message": str(e)[:200]}
 
-    @app.post("/api/halt/reset", dependencies=[Depends(_require_admin_auth)])
+    @app.post(
+        "/api/halt/reset",
+        dependencies=[
+            Depends(_require_admin_auth),
+            Depends(_require_trading_password),
+            Depends(_rate_limit(30, 60)),
+        ],
+    )
     async def reset_halt() -> dict[str, Any]:
         """手动解除 L2 熔断（使用 Web 单例 RiskManager）。"""
         risk = _get_web_risk(reload=True)
@@ -519,7 +702,14 @@ def create_app() -> FastAPI:
         logger.warning("L2 熔断已通过 Web 接口手动解除")
         return {"success": True, "message": "L2 熔断已手动解除"}
 
-    @app.post("/api/order", dependencies=[Depends(_require_admin_auth)])
+    @app.post(
+        "/api/order",
+        dependencies=[
+            Depends(_require_admin_auth),
+            Depends(_require_trading_password),
+            Depends(_rate_limit(10, 60)),
+        ],
+    )
     async def place_order(req: OrderRequest) -> dict[str, Any]:
         """通用模拟盘下单接口（买入/卖出）。
 
@@ -589,7 +779,14 @@ def create_app() -> FastAPI:
             logger.exception(f"模拟盘下单失败 {symbol}: {e}")
             return {"status": "error", "message": str(e)[:200]}
 
-    @app.post("/api/stop_loss/{symbol}", dependencies=[Depends(_require_admin_auth)])
+    @app.post(
+        "/api/stop_loss/{symbol}",
+        dependencies=[
+            Depends(_require_admin_auth),
+            Depends(_require_trading_password),
+            Depends(_rate_limit(10, 60)),
+        ],
+    )
     async def stop_loss(symbol: str) -> dict[str, Any]:
         """手动触发指定持仓的止损卖出。"""
         broker = _get_web_broker()
@@ -637,7 +834,14 @@ def create_app() -> FastAPI:
             logger.error(f"止损卖出 {symbol} 失败: {e}")
             return {"status": "error", "message": str(e)}
 
-    @app.post("/api/engine/run", dependencies=[Depends(_require_admin_auth)])
+    @app.post(
+        "/api/engine/run",
+        dependencies=[
+            Depends(_require_admin_auth),
+            Depends(_require_trading_password),
+            Depends(_rate_limit(5, 60)),
+        ],
+    )
     async def trigger_engine_run() -> dict[str, Any]:
         """触发一次交易循环。"""
         from gugu.engine.main import TradingEngine

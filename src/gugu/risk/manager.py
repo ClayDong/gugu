@@ -107,6 +107,9 @@ class RiskManager:
             self.t_plus_1 = rc.t_plus_1
             self.max_holding_days_warn = rc.max_holding_days_warn
             self.max_holding_days_halt = rc.max_holding_days_halt
+            # P2-2: 市值集中度硬限制
+            self._concentration_hhi_halt = getattr(rc, "concentration_hhi_halt", 0.40)
+            self._concentration_hhi_warn = getattr(rc, "concentration_hhi_warn", 0.25)
             cfg = config.flatten().get("risk", {})
         elif config is not None:
             cfg = config
@@ -125,6 +128,9 @@ class RiskManager:
             self.t_plus_1 = bool(cfg.get("t_plus_1", True))
             self.max_holding_days_warn = int(cfg.get("max_holding_days_warn", 30))
             self.max_holding_days_halt = int(cfg.get("max_holding_days_halt", 60))
+            # P2-2: 市值集中度硬限制
+            self._concentration_hhi_halt = float(cfg.get("concentration_hhi_halt", 0.40))
+            self._concentration_hhi_warn = float(cfg.get("concentration_hhi_warn", 0.25))
         else:
             rc = get_config().risk
             (
@@ -142,6 +148,9 @@ class RiskManager:
             self.t_plus_1 = rc.t_plus_1
             self.max_holding_days_warn = rc.max_holding_days_warn
             self.max_holding_days_halt = rc.max_holding_days_halt
+            # P2-2: 市值集中度硬限制
+            self._concentration_hhi_halt = getattr(rc, "concentration_hhi_halt", 0.40)
+            self._concentration_hhi_warn = getattr(rc, "concentration_hhi_warn", 0.25)
             cfg = get_config().flatten().get("risk", {})
         self._logger = get_logger()
         # P0 修复（P0-P1 审查 v0.8.2）：关键状态线程安全
@@ -184,17 +193,28 @@ class RiskManager:
     def reset_halt(self) -> None:
         """Reset halt state. Call at the start of a new trading day."""
         with self._lock:
+            from datetime import date as _date
+
+            today = _date.today().isoformat()
+            # 幂等写优化：只有状态真正变化时才落盘。日初/盘中重复调用
+            # reset_halt() 不应产生 N 次磁盘写（高并发下会形成写放大）。
+            changed = (
+                self._halted
+                or not self._explicit_halt_clear
+                or self._pending_halt_set
+                or self._last_reset_date != today
+                or self._last_halt_reset_time != 0.0
+            )
             if self._halted:
                 self._logger.info("Risk manager halt state reset")
             self._halted = False
             self._explicit_halt_clear = True
             self._pending_halt_set = False
-            from datetime import date as _date
-
-            self._last_reset_date = _date.today().isoformat()
+            self._last_reset_date = today
             # P1-3 修复：start-of-day 不设冷却（首日熔断器应立即生效）
             self._last_halt_reset_time = 0.0
-            self._save_halt_state()
+            if changed:
+                self._save_halt_state()
 
     def clear_halt_only(self) -> None:
         """仅清除 L2 熔断状态，不重置日初净值。
@@ -248,6 +268,55 @@ class RiskManager:
             min(daily_loss_halt, _SAFE_DAILY_LOSS_HALT),
             min(max_drawdown_halt, _SAFE_MAX_DRAWDOWN_HALT),
         )
+
+    @staticmethod
+    def _calc_post_trade_hhi(
+        target_symbol: str,
+        target_new_value: float,
+        portfolio: dict[str, Any],
+        post_trade_total: float,
+    ) -> float:
+        """P2-2：计算买入后的组合市值集中度 HHI 指数。
+
+        HHI = Σ(w_i²)，值越高表示集中度越高。
+        - 5 只等权股 = 0.2
+        - 3 只等权股 ≈ 0.333
+        - 1 只全仓 = 1.0
+
+        Args:
+            target_symbol: 待买入股票代码
+            target_new_value: 买入后该股的市值
+            portfolio: 当前持仓字典
+            post_trade_total: 买入后组合总市值
+
+        Returns:
+            HHI 指数（0~1）
+        """
+        if post_trade_total <= 0:
+            return 0.0
+
+        hhi = 0.0
+        for symbol, pos in portfolio.items():
+            if symbol == target_symbol:
+                # 用买入后的新市值计算
+                weight = target_new_value / post_trade_total
+            else:
+                pos_value = 0.0
+                if hasattr(pos, "market_value"):
+                    pos_value = float(pos.market_value)
+                elif hasattr(pos, "quantity") and hasattr(pos, "current_price"):
+                    pos_value = float(pos.quantity) * float(pos.current_price)
+                elif hasattr(pos, "avg_cost") and hasattr(pos, "quantity"):
+                    pos_value = float(pos.avg_cost) * float(pos.quantity)
+                weight = pos_value / post_trade_total if post_trade_total > 0 else 0.0
+            hhi += weight * weight
+
+        # 如果是新开仓（target_symbol 不在 portfolio 中），加上它的权重
+        if target_symbol not in portfolio:
+            weight = target_new_value / post_trade_total
+            hhi += weight * weight
+
+        return round(hhi, 4)
 
     def _load_halt_state(self) -> None:
         """P0 修复（v0.8.2）：从磁盘加载所有持久化状态。
@@ -475,15 +544,20 @@ class RiskManager:
                 ),
             )
 
-        # 行业分散约束：同行业持仓不超过上限
-        if symbol not in portfolio:
-            result = self._industry_constraint.check_buy(symbol, portfolio)
-            if not result["allowed"]:
-                return RiskCheckResult(
-                    level=RiskLevel.L1_POSITION,
-                    action=RiskAction.HALT,
-                    message=result["reason"],
-                )
+        # P2-2: 行业分散约束（新仓 + 加仓均检查）
+        # 数量限制只对新仓生效（防止同行业持仓过多）
+        # 市值权重限制对新仓和加仓都生效（防止单行业权重过高）
+        buy_value = quantity * price
+        total_value = cash + sum(p.quantity * p.current_price for p in portfolio.values())
+        result = self._industry_constraint.check_buy(
+            symbol, portfolio, buy_value=buy_value, portfolio_total_value=total_value
+        )
+        if not result["allowed"]:
+            return RiskCheckResult(
+                level=RiskLevel.L1_POSITION,
+                action=RiskAction.HALT,
+                message=result["reason"],
+            )
 
         # L1: single position ratio limit
         current_pos = portfolio.get(symbol)
@@ -515,6 +589,19 @@ class RiskManager:
                 message=(
                     f"{symbol} position ratio {new_ratio:.1%} exceeds limit "
                     f"{self.max_position_ratio:.1%}"
+                ),
+            )
+
+        # P2-2: 组合市值集中度 HHI 硬检查
+        # 计算买入后的组合 HHI 指数，超过 halt 阈值直接拒绝
+        post_hhi = self._calc_post_trade_hhi(symbol, new_symbol_value, portfolio, post_trade_total)
+        if post_hhi >= self._concentration_hhi_halt:
+            return RiskCheckResult(
+                level=RiskLevel.L1_POSITION,
+                action=RiskAction.HALT,
+                message=(
+                    f"买入后组合集中度 HHI={post_hhi:.3f} 超过硬限制 "
+                    f"{self._concentration_hhi_halt:.2f}，拒绝买入 {symbol}"
                 ),
             )
 
@@ -606,9 +693,13 @@ class RiskManager:
         # WARN 照常触发（由调用方决定是否抑制通知），冷却只防抖动。
         if loss_pct >= self.daily_loss_halt:
             with self._lock:
+                # 幂等写优化：熔断状态已是 True 时重复落盘内容完全相同
+                # （仅 updated_at 不同），高并发下会造成严重写放大。
+                state_changed = not self._halted
                 self._halted = True
                 self._pending_halt_set = True
-                self._save_halt_state()  # P0-2: 持久化熔断状态
+                if state_changed:
+                    self._save_halt_state()  # P0-2: 持久化熔断状态
             self._logger.warning(
                 "L2 HALT: daily loss {:.2%} >= {:.2%}, trading halted until reset()",
                 loss_pct,

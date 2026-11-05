@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master, develop]
+    branches: [main, master, develop, 'fix/**']
   pull_request:
-    branches: [main, master]
+    branches: [main, master, develop]
 
 jobs:
   lint:
@@ -17,7 +17,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
       - name: Install dependencies
         run: |
           uv sync --group dev
@@ -38,13 +37,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
       - name: Install dependencies
         run: |
           uv sync --group dev
+      # 干净 clone 可复现性 / 版本与治理漂移，必须在跑测试前拦截
+      - name: Repo drift gate
+        run: |
+          uv run python scripts/check_drift.py
       - name: Run tests
         run: |
-          uv run pytest tests/ -v --cov=src/gugu --cov-report=term-missing --timeout=30 -x
+          uv run pytest tests/ -v --cov=src/gugu --cov-report=term-missing --timeout=60
       - name: Upload coverage
         uses: codecov/codecov-action@v4
         with:

@@ -18,6 +18,11 @@ from functools import lru_cache
 from typing import Any
 
 from gugu.data.stock_names import lookup_stock_name
+from gugu.notifier.disclaimer import (
+    DISCLAIMER_TEXT,
+    performance_note,
+    resolve_win_rate,
+)
 
 # 优先级：signal["name"]（有效时）> stock_names 模块映射 > signal["symbol"]
 # _STOCK_NAMES 保留为兼容别名，实际查询通过 lookup_stock_name() 统一管理
@@ -474,15 +479,18 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
     perf = signal.get("performance_summary")
     if perf:
         sample_count = perf.get("sample_count", perf.get("total_signals", 0))
-        perf_lines = [
-            f"📈 **同类信号历史表现（n={sample_count}）**",
-            f"胜率：{perf.get('win_rate', 0):.0%}",
-            f"5日平均收益：{perf.get('avg_return_5d', 0):.1%}",
-        ]
-        if perf.get("best_return") is not None:
-            perf_lines.append(f"最佳：{perf['best_return']:.1%}")
-        if perf.get("worst_return") is not None:
-            perf_lines.append(f"最差：{perf['worst_return']:.1%}")
+        perf_lines = [f"📈 **同类信号历史表现（n={sample_count}）**"]
+        note = performance_note(sample_count)
+        if note:
+            # 小样本不得展示胜率/收益数字（旧代码 n>=3 就展示，且字段名错配恒为 0%）
+            perf_lines.append(note)
+        else:
+            perf_lines.append(f"胜率：{resolve_win_rate(perf):.0%}")
+            perf_lines.append(f"5日平均收益：{perf.get('avg_return_5d', 0):.1%}")
+            if perf.get("best_return") is not None:
+                perf_lines.append(f"最佳：{perf['best_return']:.1%}")
+            if perf.get("worst_return") is not None:
+                perf_lines.append(f"最差：{perf['worst_return']:.1%}")
         sections.append("\n".join(perf_lines))
 
     decision_chain_text = _format_decision_chain(signal.get("decision_chain", []))
@@ -573,14 +581,10 @@ def format_signal(signal: dict[str, Any]) -> dict[str, Any]:
         if data_labels:
             sections.append("---\n📊 **数据说明**: " + " | ".join(data_labels))
 
-    if (
-        signal.get("llm_pending") is False
-        and signal.get("wisdom_decision", {}).get("source") != "llm"
-    ):
-        sections.append(
-            "---\n⚠️ **仅通知模式**：此信号仅供参考，不构成交易建议。"
-            "系统不会自动执行任何交易操作，请自行判断决策。"
-        )
+    # 免责声明无条件注入：此前只在「非 LLM 来源」分支出现，LLM 解读时会
+    # 静默消失；且旧文案声称「系统不会自动执行任何交易操作」，与 paper
+    # 会自动模拟下单的事实不符。统一由 disclaimer 模块提供唯一文案。
+    sections.append("---\n" + DISCLAIMER_TEXT)
 
     return _card(title, template, sections, note="明策 · gugu · 信号通知", subtitle=subtitle)
 

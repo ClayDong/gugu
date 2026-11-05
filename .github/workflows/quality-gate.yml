@@ -2,9 +2,13 @@ name: Quality Gate
 
 on:
   push:
-    branches: [main, master, develop]
+    branches: [main, master, develop, 'fix/**']
   pull_request:
-    branches: [main, master]
+    branches: [main, master, develop]
+
+# 与 ci.yml 统一：Python 3.12 / 测试用 uv 环境 / pytest --timeout=60。
+# lint 与 security 仅做静态检查，使用独立安装的 ruff/mypy/bandit，
+# 不参与项目运行时依赖，避免双包管理器影响测试结果。
 
 jobs:
   # === 第一层：代码格式和类型检查 ===
@@ -16,9 +20,9 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Install static analysis tools
         run: |
           pip install ruff mypy
           pip install -e ".[dev]"
@@ -38,25 +42,30 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install dependencies
-        run: |
-          pip install -e ".[dev]"
+        run: uv sync --group dev
+
+      - name: Repo drift gate
+        run: uv run python scripts/check_drift.py
 
       - name: Run tests with coverage
         run: |
-          pytest tests/ -v --cov=src/gugu --cov-report=term-missing --cov-fail-under=70
+          uv run pytest tests/ -v --cov=src/gugu --cov-report=term-missing --cov-fail-under=70 --timeout=60
 
       - name: Quality gate (strict mode)
-        run: python scripts/quality_gate.py --mode strict
+        run: uv run python scripts/quality_gate.py --mode strict
 
       - name: Check debug code
-        run: python scripts/check_debug_code.py
+        run: uv run python scripts/check_debug_code.py
 
   # === 第三层：安全扫描 ===
   security:
@@ -68,13 +77,24 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install bandit
         run: pip install bandit
 
+      # 扫描本身不阻断（中低危为既有基线），但高危必须阻断合并
       - name: Run bandit security scan
         run: bandit -r src/gugu/ -c pyproject.toml -f json -o bandit-report.json || true
+
+      - name: Block on high severity findings
+        run: |
+          python -c "
+          import json, sys
+          report = json.load(open('bandit-report.json'))
+          high = [x for x in report.get('results', []) if x.get('issue_severity') == 'HIGH']
+          print('high severity findings:', len(high))
+          sys.exit(1 if high else 0)
+          "
 
       - name: Upload security report
         uses: actions/upload-artifact@v4
@@ -87,40 +107,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Repo drift gate
+        run: uv run python scripts/check_drift.py
 
       - name: Check doc-code consistency
         run: |
-          python -c "
+          uv run python -c "
           import yaml
           from pathlib import Path
 
-          # 读取配置
           settings = yaml.safe_load(Path('config/settings.yaml').read_text())
           manifest = yaml.safe_load(Path('config/strategy_manifest.yaml').read_text())
 
-          # 检查策略一致性
           verified = set(settings.get('strategy', {}).get('verified_strategies', []))
           experimental = set(settings.get('strategy', {}).get('experimental_strategies', []))
           manifest_enabled = {k for k, v in manifest.get('signal_strategies', {}).items() if v.get('enabled')}
 
-          # verified + experimental 应该覆盖 manifest 中启用的策略
           missing = manifest_enabled - verified - experimental
           if missing:
               print(f'ERROR: 策略在 manifest 中启用但不在 settings 中: {missing}')
               exit(1)
 
-          # 检查重叠
           overlap = verified & experimental
           if overlap:
               print(f'ERROR: 策略同时出现在 verified 和 experimental: {overlap}')
               exit(1)
 
-          print('✅ 文档一致性检查通过')
+          print('文档一致性检查通过')
           "
 
   # === 第五层：构建验证 ===
@@ -133,7 +158,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install build dependencies
         run: pip install hatch
@@ -142,4 +167,4 @@ jobs:
         run: hatch build
 
       - name: Verify package
-        run: hatch run python -c "import gugu; print('✅ Package import OK')"
+        run: hatch run python -c "import gugu; print('Package import OK')"

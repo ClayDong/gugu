@@ -243,9 +243,11 @@ class MLFactorModel:
                 return {"status": "skipped", "reason": "no_labels"}
             labels = self._prepare_labels_quantile(close)
 
-        # 对齐并丢弃中间标签
+        # P0 修复：按索引对齐标签（原代码用 labels.values[:len(aligned)] 位置对齐，
+        # 当 factor_df 与 close 的日期索引不一致时会导致标签错位，模型学到噪声）
         aligned = enhanced_df.copy()
-        aligned["_label"] = labels.values[: len(aligned)] if len(labels) >= len(aligned) else 0
+        label_series = labels.rename("_label")
+        aligned = aligned.join(label_series, how="inner")
         aligned = aligned[aligned["_label"] >= 0].dropna(subset=["_label"])
 
         # 丢弃特征列含 NaN 的行（因子计算中的移动平均窗口期会产生 NaN）
@@ -382,24 +384,61 @@ class MLFactorModel:
         logger.info("LightGBM v2 训练完成: {}", result)
         return result
 
-    def predict(self, factor_row: pd.Series | dict[str, float]) -> float:
-        """预测单只股票的涨跌概率。"""
+    def predict(
+        self,
+        factor_data: pd.Series | dict[str, float] | pd.DataFrame,
+    ) -> float:
+        """预测单只股票的涨跌概率。
+
+        P0 修复：支持传入带历史上下文的 DataFrame，以正确计算差分和移动平均特征。
+        强烈建议传入至少 5 行历史数据，确保特征工程（diff + MA5）与训练时一致。
+
+        - 如果传入 DataFrame：使用全部行做特征工程，返回最后一行的预测结果
+        - 如果传入 Series/dict（单行）：退化为单样本特征工程，差分特征为 0，
+          MA 特征等于原值。**与训练分布不一致，仅作兼容保留，不推荐使用。**
+
+        Args:
+            factor_data: 因子数据。推荐传入含历史上下文的 DataFrame（至少 5 行）。
+                        也支持单行的 Series 或 dict（向后兼容，但特征精度降低）。
+
+        Returns:
+            涨跌概率（0-1），>0.5 看涨。未训练时返回 0.5。
+        """
         if not self.is_trained or self.model is None:
             return 0.5
 
-        if isinstance(factor_row, dict):
-            factor_row = pd.Series(factor_row)
+        # 确定原始因子列名（不含 _diff / _ma5 等衍生特征）
+        base_cols = [c for c in self.feature_names if not c.endswith(("_diff", "_ma5"))]
+
+        # 统一转为 DataFrame 处理
+        if isinstance(factor_data, pd.DataFrame):
+            df = factor_data.copy()
+            if len(df) == 0:
+                return 0.5
+        elif isinstance(factor_data, pd.Series):
+            df = pd.DataFrame([factor_data])
+            logger.warning(
+                "MLFactorModel.predict 收到单行 Series，"
+                "差分/移动平均特征无法正确计算。"
+                "建议传入含历史上下文的 DataFrame（至少 5 行）。",
+            )
+        elif isinstance(factor_data, dict):
+            df = pd.DataFrame([factor_data])
+            logger.warning(
+                "MLFactorModel.predict 收到单行 dict，"
+                "差分/移动平均特征无法正确计算。"
+                "建议传入含历史上下文的 DataFrame（至少 5 行）。",
+            )
+        else:
+            logger.warning("MLFactorModel.predict 收到不支持的输入类型: {}", type(factor_data))
+            return 0.5
 
         # 应用因子反转
-        row = factor_row.copy()
         for col in self.reversed_factors:
-            if col in row.index:
-                row[col] = -row[col]
+            if col in df.columns:
+                df[col] = -df[col]
 
-        # 特征工程：对原始因子列做增强
-        base_cols = [c for c in self.feature_names if not c.endswith(("_diff", "_ma5"))]
-        df = pd.DataFrame([row])
-        # 只对存在的列做特征工程
+        # 特征工程：对存在的原始因子列做增强
         available_cols = [c for c in base_cols if c in df.columns]
         enhanced = _add_feature_engineering(df, available_cols)
         # 用 reindex 补齐所有训练特征列，缺失的填 0
@@ -409,7 +448,8 @@ class MLFactorModel:
             return 0.5
 
         proba = self.model.predict_proba(X)
-        return float(proba[0][1])
+        # 总是返回最后一行的预测（DataFrame 输入时对应最新时间点）
+        return float(proba[-1][1])
 
     def predict_batch(self, factor_df: pd.DataFrame) -> np.ndarray:
         """批量预测。"""
@@ -457,7 +497,8 @@ class MLFactorModel:
         if not path.exists():
             return False
         with path.open("rb") as f:
-            data = pickle.load(f)
+            # 仅加载项目本地训练产出的模型文件（非网络/外部不可信来源）
+            data = pickle.load(f)  # nosec B301
         self.orthogonalizer = data["orthogonalizer"]
         self.model = data["model"]
         self.feature_names = data["feature_names"]

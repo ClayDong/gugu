@@ -293,6 +293,374 @@ class TestAdminAuth:
         assert WebConfig().require_auth_for_sensitive is True
 
 
+class TestTradingPassword:
+    """交易密码二次确认机制测试（P0 安全加固）。"""
+
+    def test_trading_password_disabled_by_default(self) -> None:
+        """非 live（默认 paper）且未配置交易密码时直接放行。"""
+        from gugu.web.app import _require_trading_password
+
+        with mock.patch("gugu.web.app.get_config") as mock_cfg:
+            mock_cfg.return_value.web.trading_password_hash = ""
+            mock_cfg.return_value.web.require_trading_password = True
+            mock_cfg.return_value.execution.mode = "paper"
+            # 无密码 + 无 header，不应抛异常
+            _require_trading_password(None)
+
+    def test_live_without_trading_password_fails_closed(self) -> None:
+        """P0：live 模式未配置交易密码，交易接口必须 503 禁用。"""
+        from gugu.web.app import _require_trading_password
+
+        with mock.patch("gugu.web.app.get_config") as mock_cfg:
+            mock_cfg.return_value.web.trading_password_hash = ""
+            mock_cfg.return_value.web.require_trading_password = True
+            mock_cfg.return_value.execution.mode = "live"
+            with pytest.raises(HTTPException) as exc_info:
+                _require_trading_password(None)
+            assert exc_info.value.status_code == 503
+            assert "交易密码" in str(exc_info.value.detail)
+
+    def test_live_with_correct_password_is_allowed(self) -> None:
+        """live 模式配置了交易密码且校验通过时放行。"""
+        from gugu.web.app import _require_trading_password, hash_trading_password
+
+        with mock.patch("gugu.web.app.get_config") as mock_cfg:
+            mock_cfg.return_value.web.trading_password_hash = hash_trading_password("live_pw")
+            mock_cfg.return_value.web.require_trading_password = True
+            mock_cfg.return_value.execution.mode = "live"
+            _require_trading_password("live_pw")
+
+    def test_live_cannot_disable_password_requirement(self) -> None:
+        """P0：live 模式禁止用 require_trading_password=False 豁免二次确认。"""
+        from gugu.web.app import _require_trading_password, hash_trading_password
+
+        with mock.patch("gugu.web.app.get_config") as mock_cfg:
+            mock_cfg.return_value.web.trading_password_hash = hash_trading_password("live_pw")
+            mock_cfg.return_value.web.require_trading_password = False
+            mock_cfg.return_value.execution.mode = "live"
+            with pytest.raises(HTTPException) as exc_info:
+                _require_trading_password(None)
+            assert exc_info.value.status_code == 503
+
+    def test_require_trading_password_missing_header(self) -> None:
+        """配置了交易密码但请求未携带时，返回 401。"""
+        from gugu.web.app import _require_trading_password, hash_trading_password
+
+        pw_hash = hash_trading_password("test_trading_pw_123")
+        with mock.patch("gugu.web.app.get_config") as mock_cfg:
+            mock_cfg.return_value.web.trading_password_hash = pw_hash
+            mock_cfg.return_value.web.require_trading_password = True
+            with pytest.raises(HTTPException) as exc_info:
+                _require_trading_password(None)
+            assert exc_info.value.status_code == 401
+            assert "交易密码" in str(exc_info.value.detail)
+
+    def test_require_trading_password_wrong_password(self) -> None:
+        """交易密码错误时，返回 403。"""
+        from gugu.web.app import _require_trading_password, hash_trading_password
+
+        pw_hash = hash_trading_password("correct_password")
+        with mock.patch("gugu.web.app.get_config") as mock_cfg:
+            mock_cfg.return_value.web.trading_password_hash = pw_hash
+            mock_cfg.return_value.web.require_trading_password = True
+            with pytest.raises(HTTPException) as exc_info:
+                _require_trading_password("wrong_password")
+            assert exc_info.value.status_code == 403
+
+    def test_require_trading_password_correct(self) -> None:
+        """交易密码正确时，正常放行。"""
+        from gugu.web.app import _require_trading_password, hash_trading_password
+
+        pw_hash = hash_trading_password("my_secret_pw")
+        with mock.patch("gugu.web.app.get_config") as mock_cfg:
+            mock_cfg.return_value.web.trading_password_hash = pw_hash
+            mock_cfg.return_value.web.require_trading_password = True
+            # 正确密码不应抛异常
+            _require_trading_password("my_secret_pw")
+
+    def test_require_trading_password_bypassed_when_disabled(self) -> None:
+        """非 live 下 require_trading_password=False 时，即使配置了哈希也放行。"""
+        from gugu.web.app import _require_trading_password, hash_trading_password
+
+        pw_hash = hash_trading_password("some_password")
+        with mock.patch("gugu.web.app.get_config") as mock_cfg:
+            mock_cfg.return_value.web.trading_password_hash = pw_hash
+            mock_cfg.return_value.web.require_trading_password = False
+            mock_cfg.return_value.execution.mode = "paper"
+            # 显式关闭时，无密码也放行
+            _require_trading_password(None)
+
+    def test_hash_trading_password_produces_valid_format(self) -> None:
+        """hash_trading_password 输出 salt_hex$hash_hex 格式。"""
+        from gugu.web.app import hash_trading_password
+
+        h = hash_trading_password("test_password")
+        assert "$" in h
+        parts = h.split("$")
+        assert len(parts) == 2
+        # 16 字节 salt = 32 hex 字符
+        assert len(parts[0]) == 32
+        # SHA256 哈希 = 64 hex 字符
+        assert len(parts[1]) == 64
+
+    def test_hash_trading_password_unique_salt(self) -> None:
+        """每次哈希使用不同 salt，相同密码生成不同哈希。"""
+        from gugu.web.app import hash_trading_password
+
+        h1 = hash_trading_password("same_password")
+        h2 = hash_trading_password("same_password")
+        assert h1 != h2
+
+    def test_verify_constant_time_equivalence(self) -> None:
+        """验证函数对正确/错误密码的判定正确。"""
+        from gugu.web.app import _verify_trading_password, hash_trading_password
+
+        h = hash_trading_password("correct_horse_battery_staple")
+        assert _verify_trading_password("correct_horse_battery_staple", h) is True
+        assert _verify_trading_password("wrong_password", h) is False
+        assert _verify_trading_password("", h) is False
+
+    def test_verify_invalid_hash_format(self) -> None:
+        """格式错误的哈希不抛异常，返回 False。"""
+        from gugu.web.app import _verify_trading_password
+
+        assert _verify_trading_password("password", "invalid_format") is False
+        assert _verify_trading_password("password", "") is False
+        assert _verify_trading_password("password", "not$hex$$$") is False
+
+    def test_order_endpoint_requires_trading_password(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """下单端点在配置交易密码后需要 X-Trading-Password header。"""
+        from gugu.web.app import hash_trading_password
+
+        pw_hash = hash_trading_password("trade_pw_456")
+        # 先设置 API Key 认证
+        import os
+
+        os.environ["GUGU_ADMIN_API_KEY"] = "test_key"
+        monkeypatch.setattr(
+            "gugu.web.app._get_web_admin_api_key",
+            lambda: "test_key",
+        )
+        # 配置交易密码
+        monkeypatch.setattr(
+            "gugu.web.app.get_config",
+            lambda: type(
+                "Cfg",
+                (),
+                {
+                    "web": type(
+                        "W",
+                        (),
+                        {
+                            "require_auth_for_sensitive": True,
+                            "trading_password_hash": pw_hash,
+                            "require_trading_password": True,
+                        },
+                    )()
+                },
+            )(),
+        )
+        app = create_app()
+        client = TestClient(app)
+
+        with (
+            mock.patch("gugu.web.app._get_web_broker") as mock_broker_fn,
+            mock.patch("gugu.web.app._get_web_risk") as mock_risk_fn,
+            mock.patch("gugu.web.app._execution_mode", return_value="paper"),
+        ):
+            mock_broker = mock.MagicMock()
+            mock_broker.get_account.return_value.total_value = 100000.0
+            mock_broker.get_account.return_value.cash = 50000.0
+            mock_broker.get_portfolio.return_value = {}
+            mock_broker_fn.return_value = mock_broker
+
+            mock_risk = mock.MagicMock()
+            mock_risk.check_order.return_value.allowed = False
+            mock_risk.check_order.return_value.message = "risk check"
+            mock_risk_fn.return_value = mock_risk
+
+            # 只有 API Key，没有交易密码 → 401
+            resp = client.post(
+                "/api/order",
+                headers={"X-API-Key": "test_key"},
+                json={"symbol": "600519", "direction": "buy", "quantity": 100, "price": 100.0},
+            )
+            assert resp.status_code == 401
+            assert "交易密码" in resp.json()["detail"]
+
+    def test_web_config_has_trading_password_fields(self) -> None:
+        """WebConfig 包含交易密码相关字段。"""
+        from gugu.config.models import WebConfig
+
+        cfg = WebConfig()
+        assert hasattr(cfg, "trading_password_hash")
+        assert hasattr(cfg, "require_trading_password")
+        assert cfg.trading_password_hash == ""
+        assert cfg.require_trading_password is True
+
+
+class TestRateLimiter:
+    """P2-5：API 速率限制器测试。"""
+
+    def test_sliding_window_allows_within_limit(self) -> None:
+        """窗口内请求数未超限时全部放行。"""
+        from gugu.web.app import _SlidingWindowRateLimiter
+
+        rl = _SlidingWindowRateLimiter()
+        for i in range(5):
+            assert rl.check("test_ip", "/api/test", 5, 60) is True
+
+    def test_sliding_window_rejects_over_limit(self) -> None:
+        """超过窗口限制后拒绝请求。"""
+        from gugu.web.app import _SlidingWindowRateLimiter
+
+        rl = _SlidingWindowRateLimiter()
+        for i in range(5):
+            rl.check("test_ip", "/api/test", 5, 60)
+        # 第 6 次应被拒绝
+        assert rl.check("test_ip", "/api/test", 5, 60) is False
+
+    def test_sliding_window_per_endpoint(self) -> None:
+        """不同接口独立计数。"""
+        from gugu.web.app import _SlidingWindowRateLimiter
+
+        rl = _SlidingWindowRateLimiter()
+        for i in range(5):
+            rl.check("test_ip", "/api/a", 5, 60)
+        # /api/a 已满，但 /api/b 不受影响
+        assert rl.check("test_ip", "/api/a", 5, 60) is False
+        assert rl.check("test_ip", "/api/b", 5, 60) is True
+
+    def test_sliding_window_per_ip(self) -> None:
+        """不同 IP 独立计数。"""
+        from gugu.web.app import _SlidingWindowRateLimiter
+
+        rl = _SlidingWindowRateLimiter()
+        for i in range(5):
+            rl.check("ip_a", "/api/test", 5, 60)
+        assert rl.check("ip_a", "/api/test", 5, 60) is False
+        assert rl.check("ip_b", "/api/test", 5, 60) is True
+
+    def test_sliding_window_reset(self) -> None:
+        """reset 后可以重新请求。"""
+        from gugu.web.app import _SlidingWindowRateLimiter
+
+        rl = _SlidingWindowRateLimiter()
+        for i in range(5):
+            rl.check("test_ip", "/api/test", 5, 60)
+        assert rl.check("test_ip", "/api/test", 5, 60) is False
+        rl.reset("test_ip", "/api/test")
+        assert rl.check("test_ip", "/api/test", 5, 60) is True
+
+    def test_rate_limit_dependency_returns_429(self) -> None:
+        """速率限制依赖在超限时返回 429。"""
+        from gugu.web.app import _rate_limit, _global_rate_limiter
+
+        _global_rate_limiter.reset("127.0.0.1", "/api/test_limit")
+        limiter_fn = _rate_limit(2, 60)
+
+        # 模拟 Request 对象
+        class MockRequest:
+            class _Client:
+                host = "127.0.0.1"
+
+            client = _Client()
+
+            class _Url:
+                path = "/api/test_limit"
+
+            url = _Url()
+            headers = {}
+
+        req = MockRequest()
+        # 前 2 次放行
+        limiter_fn(req)
+        limiter_fn(req)
+        # 第 3 次抛 429
+        with pytest.raises(HTTPException) as exc_info:
+            limiter_fn(req)
+        assert exc_info.value.status_code == 429
+        assert "过于频繁" in str(exc_info.value.detail)
+
+        _global_rate_limiter.reset("127.0.0.1", "/api/test_limit")
+
+    def test_order_endpoint_has_rate_limit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """下单端点配置了速率限制（集成验证）。"""
+        import os
+
+        os.environ["GUGU_ADMIN_API_KEY"] = "test_key"
+        monkeypatch.setattr(
+            "gugu.web.app._get_web_admin_api_key",
+            lambda: "test_key",
+        )
+        monkeypatch.setattr(
+            "gugu.web.app.get_config",
+            lambda: type(
+                "Cfg",
+                (),
+                {
+                    "web": type(
+                        "W",
+                        (),
+                        {
+                            "require_auth_for_sensitive": True,
+                            "trading_password_hash": "",
+                            "require_trading_password": True,
+                        },
+                    )()
+                },
+            )(),
+        )
+        # 重置速率限制器
+        from gugu.web.app import _global_rate_limiter
+
+        _global_rate_limiter.reset("testclient", "/api/order")
+
+        app = create_app()
+        client = TestClient(app)
+
+        with (
+            mock.patch("gugu.web.app._get_web_broker") as mock_broker_fn,
+            mock.patch("gugu.web.app._get_web_risk") as mock_risk_fn,
+            mock.patch("gugu.web.app._execution_mode", return_value="paper"),
+        ):
+            mock_broker = mock.MagicMock()
+            mock_broker.get_account.return_value.total_value = 100000.0
+            mock_broker.get_account.return_value.cash = 50000.0
+            mock_broker.get_portfolio.return_value = {}
+            mock_broker_fn.return_value = mock_broker
+
+            mock_risk = mock.MagicMock()
+            mock_risk.check_order.return_value.allowed = False
+            mock_risk.check_order.return_value.message = "risk"
+            mock_risk_fn.return_value = mock_risk
+
+            # 未配置交易密码，放行（空密码 + require=True → 视为未启用）
+            # 这里验证的是速率限制是否在工作，所以先打满然后看 429
+            # 注意：TestClient 的 IP 是 testclient
+            for i in range(10):
+                resp = client.post(
+                    "/api/order",
+                    headers={"X-API-Key": "test_key"},
+                    json={"symbol": "600519", "direction": "buy", "quantity": 100, "price": 100.0},
+                )
+                # 前 10 次应该是正常响应（风控拒绝或其他）
+                assert resp.status_code != 429
+
+            # 第 11 次应该被速率限制
+            resp = client.post(
+                "/api/order",
+                headers={"X-API-Key": "test_key"},
+                json={"symbol": "600519", "direction": "buy", "quantity": 100, "price": 100.0},
+            )
+            assert resp.status_code == 429
+            assert "过于频繁" in resp.json()["detail"]
+
+        _global_rate_limiter.reset("testclient", "/api/order")
+
+
 class TestHaltEndpoint:
     """熔断重置端点测试。"""
 

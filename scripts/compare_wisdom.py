@@ -17,6 +17,7 @@ from pathlib import Path
 # 添加 src 到 path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from gugu import __version__  # noqa: E402
 from gugu.backtest import BacktestEngine  # noqa: E402
 from gugu.data import data_manager  # noqa: E402
 from gugu.strategies.registry import get_strategy  # noqa: E402
@@ -114,7 +115,7 @@ if __name__ == "__main__":
     parser.add_argument("--symbol", default="600519", help="股票代码")
     parser.add_argument("--strategy", default="turtle", help="策略名称")
     parser.add_argument("--days", type=int, default=120, help="回测天数")
-    parser.add_argument("--version", action="version", version="gugu 0.6.0")
+    parser.add_argument("--version", action="version", version=f"gugu {__version__}")
     args = parser.parse_args()
 
     asyncio.run(main(args.symbol, args.strategy, args.days))

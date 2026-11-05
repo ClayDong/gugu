@@ -25,6 +25,7 @@ from gugu.data.collectors.eastmoney_collector import EastmoneyCollector
 from gugu.data.collectors.fallback import SinaCollector
 from gugu.data.collectors.tencent_collector import TencentCollector
 from gugu.data.evidence import set_evidence
+from gugu.data.pit import trim_unfinished_intraday_bar
 from gugu.data.quality import (
     sanitize_dataframe,
     validate_sector_flow,
@@ -473,7 +474,11 @@ class DataManager:
     async def fetch_stock_history(self, symbol: str, days: int = 90) -> pd.DataFrame:
         # days 作为位置参数传递，确保 fetch_stock_history("600519") 与
         # fetch_stock_history("600519", days=90) 生成相同缓存键
-        return await self._call_with_fallback("fetch_stock_history", symbol, days)
+        df = await self._call_with_fallback("fetch_stock_history", symbol, days)
+        # PIT 隔离（2026-11-04 评审）：实时请求 / 内存缓存 / Parquet 缓存三条
+        # 返回路径都收敛到这里统一清洗，避免盘中把当日未完成日 K 当作已收盘
+        # 数据喂给策略。清洗幂等，且不改写缓存中的原始数据。
+        return trim_unfinished_intraday_bar(df)
 
     async def fetch_stock_realtime(self, symbols: list[str]) -> pd.DataFrame:
         return await self._call_with_fallback("fetch_stock_realtime", symbols)

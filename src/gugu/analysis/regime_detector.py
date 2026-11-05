@@ -69,6 +69,12 @@ class MultiPeriodRegimeDetector:
         self._cache_timestamp: float | None = None
         self._cache_ttl_seconds = 300
         self._enhancer = enhancer
+        # P2-3：状态转换冷却期（交易日），防止震荡市频繁切换导致调仓损耗
+        self._regime_cooldown_days: int = 2
+        self._last_confirmed_regime: str | None = None
+        self._last_regime_change_date: str | None = None
+        self._pending_regime: str | None = None
+        self._pending_regime_date: str | None = None
 
     async def detect(self) -> dict[str, Any]:
         """检测当前市场状态并返回总仓位建议。"""
@@ -169,6 +175,11 @@ class MultiPeriodRegimeDetector:
             else:
                 regime = "sideways"
 
+            # P2-3：状态转换冷却期（2 个交易日）
+            # 防止震荡市中 bull ↔ sideways ↔ bear 频繁切换导致无谓调仓
+            raw_regime = regime  # 原始检测结果
+            regime = self._apply_regime_cooldown(regime, today)
+
             total_limit = POSITION_LIMIT_MAP[regime]
             buy_allowed = regime in ("bull", "rally", "sideways")
             sell_required = regime in ("bear", "crash")
@@ -182,6 +193,13 @@ class MultiPeriodRegimeDetector:
                 "score": round(score, 3),
                 "volatility": round(volatility, 3),
                 "recent_return": round(recent_return, 3),
+                # P2-3：状态转换冷却期追踪
+                "raw_regime": raw_regime,
+                "regime_cooldown": {
+                    "confirmed": regime == raw_regime,
+                    "pending": self._pending_regime if regime != raw_regime else None,
+                    "cooldown_days": self._regime_cooldown_days,
+                },
                 "evidence": {
                     "daily": {
                         "signal": daily_evidence.signal,
@@ -344,6 +362,89 @@ class MultiPeriodRegimeDetector:
             return "bear"
         return "sideways"
 
+    def _apply_regime_cooldown(self, detected_regime: str, today_str: str) -> str:
+        """P2-3：应用状态转换冷却期。
+
+        当检测到的状态与上一次确认状态不同时，需要经过 N 个交易日
+        的连续确认才正式切换，防止震荡市频繁切换导致无谓调仓损耗。
+
+        算法：
+        - 首次检测到新状态 → 记录为 pending，返回旧状态
+        - 同一新状态连续确认 ≥ cooldown_days → 正式切换
+        - 中间检测结果变回旧状态 → 取消 pending
+
+        Args:
+            detected_regime: 本次检测到的原始状态
+            today_str: 今日日期字符串 YYYY-MM-DD
+
+        Returns:
+            经过冷却期过滤后的确认状态
+        """
+        from datetime import date
+
+        # 首次运行，直接确认
+        if self._last_confirmed_regime is None:
+            self._last_confirmed_regime = detected_regime
+            self._last_regime_change_date = today_str
+            return detected_regime
+
+        # 状态未变化，重置 pending
+        if detected_regime == self._last_confirmed_regime:
+            self._pending_regime = None
+            self._pending_regime_date = None
+            return detected_regime
+
+        # 状态发生变化
+        # 如果是同一个 pending 状态，检查冷却期是否已满
+        if detected_regime == self._pending_regime and self._pending_regime_date:
+            # 计算交易日差
+            try:
+                from gugu.utils.calendar import trading_days_between
+
+                pending_date = date.fromisoformat(self._pending_regime_date)
+                today = date.fromisoformat(today_str)
+                days_passed = trading_days_between(pending_date, today)
+            except (ValueError, ImportError):
+                # 回退到自然日
+                pending_date = date.fromisoformat(self._pending_regime_date)
+                today = date.fromisoformat(today_str)
+                days_passed = (today - pending_date).days
+
+            if days_passed >= self._regime_cooldown_days:
+                # 冷却期已满，正式切换
+                logger.info(
+                    "🔄 市场状态切换确认: %s → %s（冷却 %d 个交易日）",
+                    self._last_confirmed_regime,
+                    detected_regime,
+                    days_passed,
+                )
+                self._last_confirmed_regime = detected_regime
+                self._last_regime_change_date = today_str
+                self._pending_regime = None
+                self._pending_regime_date = None
+                return detected_regime
+            else:
+                # 冷却期未到，保持旧状态
+                logger.debug(
+                    "状态待确认: %s → %s（已 %d/%d 交易日）",
+                    self._last_confirmed_regime,
+                    detected_regime,
+                    days_passed,
+                    self._regime_cooldown_days,
+                )
+                return self._last_confirmed_regime
+        else:
+            # 新的待确认状态，开始计时
+            self._pending_regime = detected_regime
+            self._pending_regime_date = today_str
+            logger.info(
+                "🔍 检测到市场状态变化: %s → %s（待确认，冷却 %d 交易日）",
+                self._last_confirmed_regime,
+                detected_regime,
+                self._regime_cooldown_days,
+            )
+            return self._last_confirmed_regime
+
     def _fallback(self) -> dict[str, Any]:
         """安全降级：数据获取失败时返回保守设置。"""
         return {
@@ -355,6 +456,8 @@ class MultiPeriodRegimeDetector:
             "score": 0.0,
             "volatility": 0.0,
             "recent_return": 0.0,
+            "raw_regime": "sideways",
+            "regime_cooldown": {"confirmed": True, "pending": None, "cooldown_days": 2},
             "evidence": {},
             "reason": "数据获取失败，降级为保守模式",
         }

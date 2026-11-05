@@ -372,3 +372,85 @@ class TestUnlockConditionsReportStructure:
 
         # 空参数投票视为稳定性通过（无参数可比较）
         assert report["unlocked"] is True
+
+
+class TestMainAlgorithmRouting:
+    """v0.9.55 回归：ga/pso 必须路由到启发式优化，不得被 walk-forward 拦截。
+
+    修复前：main() 中 `if multi_stock or strategy_name:`（walk-forward 分支，
+    含 return）位于 `if algorithm in ("ga", "pso"):` 之前 → 调度器传参
+    `--strategy X --multi-stock pool --algorithm pso` 被静默拦截，实际跑全量
+    网格 Walk-Forward（double_yin 19683 组合 ≈8h）而非 PSO/GA。
+    """
+
+    @staticmethod
+    def _install_fakes(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+        calls: dict[str, int] = {}
+
+        async def fake_walk_fwd(*args: object, **kwargs: object) -> None:
+            calls["walk_forward"] = calls.get("walk_forward", 0) + 1
+
+        async def fake_heuristic(*args: object, **kwargs: object) -> None:
+            calls["heuristic"] = calls.get("heuristic", 0) + 1
+
+        monkeypatch.setattr("optimize_params.run_multi_stock_optimization", fake_walk_fwd)
+        monkeypatch.setattr("optimize_params.run_heuristic_optimization", fake_heuristic)
+        monkeypatch.setattr("optimize_params.load_defaults", lambda: {})
+        monkeypatch.setattr(
+            "optimize_params.get_strategy_stock_pool",
+            lambda name, defaults=None: "300750,601012,600438",
+        )
+        return calls
+
+    @staticmethod
+    async def _run_main(**overrides: object) -> None:
+        from optimize_params import main
+
+        kwargs: dict[str, object] = dict(
+            strategy_name="double_yin",
+            symbol="600519",
+            days=500,
+            n_splits=3,
+            write=False,
+            show=False,
+            force=False,
+            multi_stock="300750,601012,600438",
+            use_default_pool=False,
+            algorithm="pso",
+            population_size=3,
+            generations=2,
+            seed=None,
+        )
+        kwargs.update(overrides)
+        await main(**kwargs)
+
+    def test_pso_with_multi_stock_routes_to_heuristic(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """调度器传参（--algorithm pso --multi-stock）必须走启发式优化。"""
+        import asyncio
+
+        calls = self._install_fakes(monkeypatch)
+        asyncio.run(self._run_main(algorithm="pso"))
+        assert calls.get("heuristic") == 1
+        assert "walk_forward" not in calls
+
+    def test_ga_with_strategy_routes_to_heuristic(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """文档命令（--strategy X --algorithm ga，无 multi-stock）同样走启发式。"""
+        import asyncio
+
+        calls = self._install_fakes(monkeypatch)
+        asyncio.run(self._run_main(algorithm="ga", multi_stock=None))
+        assert calls.get("heuristic") == 1
+        assert "walk_forward" not in calls
+
+    def test_walk_forward_with_multi_stock_still_routes_to_grid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """默认算法 walk_forward + multi-stock 仍走网格（周参数优化不受影响）。"""
+        import asyncio
+
+        calls = self._install_fakes(monkeypatch)
+        asyncio.run(self._run_main(algorithm="walk_forward"))
+        assert calls.get("walk_forward") == 1
+        assert "heuristic" not in calls

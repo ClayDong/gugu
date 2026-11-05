@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -151,6 +152,70 @@ class TestGenerateReport:
         assert "胜率" in md
         assert "总收益" in md or "收益中位数" in md
         assert "盈亏比" in md
+
+
+class TestMultipleTestingCorrection:
+    """P1-A：多策略比较的显著性结论必须经多重检验校正，防止 cherry-pick。"""
+
+    def test_multi_strategy_report_shows_bonferroni(self):
+        """多策略报告必须显式标注 Bonferroni 校正与校正前后差异。"""
+        results = [
+            _make_mock_result("000001", "s1", total_return=0.2, sharpe=1.5, win_rate=0.7),
+            _make_mock_result("000002", "s1", total_return=0.2, sharpe=1.5, win_rate=0.7),
+            _make_mock_result("000001", "s2", total_return=0.01, sharpe=0.2, win_rate=0.4),
+            _make_mock_result("000002", "s2", total_return=-0.01, sharpe=0.1, win_rate=0.3),
+        ]
+        md = generate_report(results)
+        assert "Bonferroni" in md
+        assert "朴素显著" in md and "校正后显著" in md
+
+    def test_recommendation_driven_by_corrected_significance(self):
+        """朴素显著但校正后不显著的策略，不得给「建议保留」。"""
+        results = [
+            _make_mock_result("000001", "borderline", total_return=0.02, sharpe=0.6, win_rate=0.55),
+            _make_mock_result("000002", "borderline", total_return=0.02, sharpe=0.6, win_rate=0.55),
+            _make_mock_result("000001", "strong", total_return=0.5, sharpe=2.0, win_rate=0.9),
+            _make_mock_result("000002", "strong", total_return=0.5, sharpe=2.0, win_rate=0.9),
+        ]
+        # sorted(summaries) = ["borderline", "strong"]；强制 borderline 校正后不显著
+        fake = {
+            "n_tests": 2,
+            "naive_significant": 2,
+            "bonferroni": {
+                "method": "bonferroni",
+                "n_tests": 2,
+                "alpha": 0.05,
+                "adjusted_alpha": 0.025,
+                "rejected": [False, True],
+                "n_significant": 1,
+            },
+            "benjamini_hochberg": {
+                "method": "benjamini_hochberg",
+                "n_tests": 2,
+                "alpha": 0.05,
+                "fdr_threshold": 0.05,
+                "rejected": [False, True],
+                "n_significant": 1,
+            },
+        }
+        with patch("scripts.backtest_report_generator.report_correction", return_value=fake):
+            md = generate_report(results)
+        assert "strong" in md
+        borderline_keep = [
+            line for line in md.splitlines() if "borderline" in line and "建议保留" in line
+        ]
+        assert borderline_keep == [], "朴素显著但校正后不显著的策略不得给「建议保留」"
+
+    def test_single_strategy_correction_is_identity(self):
+        """单策略不触发校正说明（n=1 时校正与朴素等价），强显著仍给建议保留。"""
+        results = [
+            _make_mock_result("000001", "solo", total_return=0.2, sharpe=1.5, win_rate=0.7),
+            _make_mock_result("000002", "solo", total_return=0.18, sharpe=1.4, win_rate=0.68),
+            _make_mock_result("000003", "solo", total_return=0.22, sharpe=1.6, win_rate=0.72),
+        ]
+        md = generate_report(results)
+        assert "Bonferroni" not in md  # 单策略无需多重检验说明
+        assert "solo" in md
 
 
 class TestGenerateReportFromMetricsDict:

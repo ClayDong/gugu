@@ -19,6 +19,7 @@ from gugu.data import data_manager  # noqa: E402
 from gugu.notifier import FeishuNotifier  # noqa: E402
 from gugu.research.ledger import append_record, build_record  # noqa: E402
 from gugu.strategies.registry import get_strategy  # noqa: E402
+from gugu import __version__  # noqa: E402
 from gugu.utils.log import get_logger  # noqa: E402
 
 logger = get_logger()
@@ -87,7 +88,7 @@ if __name__ == "__main__":
     parser.add_argument("--strategy", default="turtle", help="策略名称")
     parser.add_argument("--days", type=int, default=120, help="回测天数")
     parser.add_argument("--notify", action="store_true", help="推送飞书")
-    parser.add_argument("--version", action="version", version="gugu 0.6.0")
+    parser.add_argument("--version", action="version", version=f"gugu {__version__}")
     args = parser.parse_args()
 
     asyncio.run(main(args.symbol, args.strategy, args.days, args.notify))

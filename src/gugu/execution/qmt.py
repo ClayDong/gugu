@@ -20,7 +20,7 @@ import time
 from datetime import datetime
 from typing import Any
 
-from gugu.config import env
+from gugu.config import env, get_config
 from gugu.execution.base import AccountInfo, BaseBroker, Direction, OrderResult
 from gugu.models import Position
 from gugu.utils.log import get_logger
@@ -192,6 +192,54 @@ class QmtBroker(BaseBroker):
 
     # ────────────────────── 下单 ──────────────────────
 
+    def _live_guard(self, direction: str) -> str | None:
+        """实盘硬闸：返回拒绝原因，None 表示允许下单。
+
+        2026-11-04 评审 P0：安全边界此前只在上层（Web 二次确认 / 实时扫描器开关），
+        QmtBroker 作为唯一能发出真实委托的出口却没有自检，emergency_buy_limit
+        或直接调用 order() 即可绕过。此处下沉为最后一道 fail-closed 防线。
+
+        - 非 live 模式：一律拒绝（QMT 只允许真实盘模式使用）；
+        - 买入：必须存在非空生产白名单 verified_strategies；
+        - 卖出/平仓：降低风险方向，允许（应急平仓不应被自动交易开关卡死）；
+        - 配置读取异常：一律拒绝。
+        """
+        try:
+            cfg = get_config()
+            mode = str(getattr(cfg.execution, "mode", "") or "")
+            verified = list(getattr(cfg.strategy, "verified_strategies", None) or [])
+        except Exception as exc:  # noqa: BLE001 - 安全闸必须 fail-closed
+            return f"无法读取执行配置，拒绝下单（fail-closed）：{exc}"
+        if mode != "live":
+            return f"execution.mode={mode or '未配置'}，QMT 实盘下单仅在 live 模式允许"
+        if str(direction).strip().lower() == "buy":
+            if not verified:
+                return "verified_strategies 为空，禁止实盘买入（无已验证策略）"
+            # P1-B 信任链闭环：白名单只是「人填的名单」，不能自证。还要求名单里的
+            # 策略在 manifest 中通过了证据哈希校验（validate_evidence）——否则只改
+            # settings.yaml 写个名字即可绕过 P0-2 的整条证据链打开实盘买入。
+            if not self._verified_evidence_backed(set(map(str, verified))):
+                return (
+                    "verified_strategies 中无任何策略通过 manifest 证据校验，"
+                    "禁止实盘买入（禁止只改白名单绕过证据链）"
+                )
+        return None
+
+    def _verified_evidence_backed(self, verified: set[str]) -> bool:
+        """白名单策略必须在 manifest 中通过证据校验（P1-B）。
+
+        复用 manifest.is_runtime_enabled 的 validate_evidence + GatePolicy 逻辑，
+        任何读取/校验异常一律 fail-closed 返回 False。
+        """
+        try:
+            from gugu.strategies.manifest import StrategyManifest
+
+            enabled = set(StrategyManifest().list_runtime_enabled("live", keys=verified))
+        except Exception as exc:  # noqa: BLE001 - 安全闸必须 fail-closed
+            logger.warning("QMT 实盘买入证据校验异常，fail-closed: {}", exc)
+            return False
+        return bool(enabled)
+
     def order(
         self,
         symbol: str,
@@ -229,6 +277,19 @@ class QmtBroker(BaseBroker):
                 0,
                 0,
                 message="QMT 未配置 account_id",
+            )
+
+        guard_reason = self._live_guard(direction)
+        if guard_reason:
+            logger.warning("QMT 下单被实盘硬闸拒绝: {}", guard_reason)
+            return OrderResult(
+                False,
+                symbol,
+                direction,
+                0,
+                0,
+                0,
+                message=guard_reason,
             )
 
         qmt_symbol = to_qmt_symbol(symbol)

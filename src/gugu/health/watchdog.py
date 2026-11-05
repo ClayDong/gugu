@@ -193,15 +193,20 @@ def check_signal_history_freshness(
             },
         )
 
-    # 交易日历对齐豁免（v0.9.33，2026-08-24 实证）：
-    # 周末/节假日后 last_scan_at 自然停留在上一交易日收盘（如周五 15:10），
+    # 交易日历对齐豁免（v0.9.33，2026-08-24 实证；v0.9.56 修正下界，2026-10-19 实证）：
+    # 周末/节假日后 last_scan_at 自然停留在上一交易日尾盘（如周五 14:54），
     # 墙钟 age_days 超 2 天即触发"信号历史失忆"误报，驱动 auto_recover 每小时
     # 无意义重启 scheduler（8/23-8/24 实证 7 次重启，根因从未变化——非交易日
-    # 本来就没有扫描任务，重启不会产生扫描）。若最近扫描时间 >= 最近一个
-    # 已完成交易日（last_trading_day 不含今天）的收盘时刻 → 扫描与交易日历对齐，
-    # 期间 0 信号不落盘属正常，不构成失忆。
-    # 真故障路径不受影响：盘中停摆时 scan_ts 必然早于最近交易日收盘（如周五
-    # 09:25 停摆 < 周五 15:00 收盘）→ 不豁免 → 仍走 age_days 告警。
+    # 本来就没有扫描任务，重启不会产生扫描）。若最近扫描时间落在最近一个
+    # 已完成交易日（last_trading_day 不含今天）的尾盘对齐窗口
+    # [14:00, 17:00) → 扫描与交易日历对齐，期间 0 信号不落盘属正常，不构成失忆。
+    # v0.9.56 修正：原窗口 [15:00, 17:00) 以"收盘时刻"为下界，但末次完整扫描
+    # 实测 10-14/15/16 收尾于 14:54-14:59（均早于 15:00，realtime 扫描不写
+    # signal_scan.json），导致正常交易日永不命中豁免 → 10-18 17:00 ~ 10-19 04:10
+    # 连续 8 次误报"失忆"，每次 kickstart 均为 no-op（进程存活时无 -k 不重启）。
+    # 下界放宽至 14:00：覆盖正常尾扫波动，同时真故障路径仍不受影响——盘中停摆
+    # 时 scan_ts 早于尾盘（如周五 09:25 停摆 < 14:00）→ 不豁免 → 仍走 age_days
+    # 告警；残余盲区（周五 14:00-15:00 间停摆）由心跳检查兜底。
     if scan_ts is not None:
         scan = scan or {}  # scan_ts 非空 ⇒ scan 非空（静态分析防御）
         try:
@@ -212,14 +217,14 @@ def check_signal_history_freshness(
             ltd = last_trading_day()
             if ltd is not None:
                 cutoff = datetime.combine(ltd, _time(15, 0))
-                # 只豁免收盘后短时间内的尾扫；过晚的时间戳通常意味着
+                # 上界仍为收盘后 2h：过晚的时间戳通常意味着
                 # 测试/写入链路异常，不能把它当作交易日收盘对齐。
-                if cutoff <= scan_ts <= cutoff + timedelta(hours=2):
+                if cutoff - timedelta(hours=1) <= scan_ts <= cutoff + timedelta(hours=2):
                     return SignalHistoryResult(
                         ok=True,
                         message=(
-                            f"信号扫描与最近交易日收盘对齐（{scan_ts:%m-%d %H:%M} ≥ "
-                            f"{ltd} 15:00），周末/节假日无信号落盘属正常"
+                            f"信号扫描与最近交易日尾盘对齐（{scan_ts:%m-%d %H:%M} ∈ "
+                            f"{ltd} 14:00-17:00），周末/节假日无信号落盘属正常"
                         ),
                         last_write=last_ts.isoformat(),
                         boot_time=boot_latest.isoformat(),

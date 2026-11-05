@@ -634,10 +634,11 @@ class SchedulerJobsMixin:
                 ]
                 logger.info("启发式优化 {}: strategy={}, stocks={}", algorithm, s_name, stocks)
 
-                # v0.9.53：单策略超时 900s→1800s。double_yin 为重策略（回测吞吐
-                # ~20 行/s，全量 PSO 评估≈18000 回测行），900s 恰好掐在收尾处，
-                # 2026-09-15 GA / 2026-10-01 PSO 两次全部超时（2/2 失败），
-                # 参数从未优化成功。1800s 覆盖完整工作量；加耗时观测便于校准。
+                # v0.9.53：单策略超时 900s→1800s。历史"double_yin 启发式优化超时"
+                # 三次（09-15 / 10-01 / 10-15）的真因是 optimize_params.py 路由
+                # bug：ga/pso 被 walk-forward 多股分支拦截，静默跑全量网格
+                # （19683 组合 ≈ 8h）而非 PSO——v0.9.55 已修复路由。1800s 保留作
+                # 启发式搜索兜底预算；加耗时观测便于校准。
                 _t0 = time.monotonic()
                 try:
                     # 同 _safe_optimize_params：阻塞 subprocess.run 必须进线程，

@@ -76,3 +76,31 @@ def last_trading_day(ref: date | None = None, max_lookback: int = 15) -> date:
         d -= timedelta(days=1)
     # 兜底：返回自然日昨天
     return ref - timedelta(days=1)
+
+
+def trading_days_between(start: date, end: date, max_lookback: int = 30) -> int:
+    """计算两个日期之间的交易日数（不含 start，含 end 之前的交易日）。
+
+    P1 修复：用于缓存新鲜度判定，替代自然日计算，
+    避免长假后首个交易日误删有效缓存（如国庆后第1天，自然日=7但交易日=1）。
+
+    Args:
+        start: 起始日期（较早的日期）
+        end: 结束日期（较晚的日期）
+        max_lookback: 最大回溯天数（防止极端情况循环过多）
+
+    Returns:
+        交易日数量。如果 end <= start 返回 0。
+    """
+    if end <= start:
+        return 0
+    count = 0
+    d = end - timedelta(days=1)
+    limit = max(max_lookback, (end - start).days)
+    for _ in range(limit):
+        if d < start:
+            break
+        if is_trading_day(d):
+            count += 1
+        d -= timedelta(days=1)
+    return count

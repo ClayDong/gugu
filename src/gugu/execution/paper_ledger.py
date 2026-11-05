@@ -33,6 +33,11 @@ class ExecutionContext:
     market_env_snapshot: dict[str, Any] | None = None
     exit_reason: str = ""
     parent_signal_id: str = ""
+    # P1 风控增强：止损触发时的跳空缺口追踪
+    # 当 stop_price > 0 且成交价低于止损价时，记录缺口幅度，
+    # 用于分析极端行情下止损失效风险（跳空低开导致实际亏损超预期）。
+    stop_price: float = 0.0
+    gap_from_stop_pct: float = 0.0
 
     @classmethod
     def from_signal(cls, signal: dict[str, Any]) -> ExecutionContext:

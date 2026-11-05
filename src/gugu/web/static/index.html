@@ -23,8 +23,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:20px}
 .card h2{font-size:14px;color:#8b949e;margin-bottom:12px;text-transform:uppercase;letter-spacing:.5px}
 .card .value{font-size:28px;font-weight:600}
-.card .value.positive{color:#3fb950}
-.card .value.negative{color:#f85149}
+.card .value.positive{color:#f85149}
+.card .value.negative{color:#3fb950}
 .card .value.neutral{color:#e1e4e8}
 .card .sub{font-size:12px;color:#8b949e;margin-top:4px}
 .risk-badge{display:inline-block;padding:4px 10px;border-radius:12px;font-size:12px;font-weight:600}
@@ -39,8 +39,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .stage-downtrend{background:#2d1b1b;color:#f85149}
 .danger-badge{display:inline-block;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600;background:#4c0519;color:#f85149}
 .danger-none{display:none}
-.signal-dir-buy{color:#3fb950;font-weight:600}
-.signal-dir-sell{color:#f85149;font-weight:600}
+.signal-dir-buy{color:#f85149;font-weight:600}
+.signal-dir-sell{color:#3fb950;font-weight:600}
 .signal-filtered{color:#d29922;font-size:11px}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{text-align:left;color:#8b949e;font-weight:500;padding:8px 12px;border-bottom:1px solid #21262d}
@@ -252,13 +252,13 @@ async function refresh(){
   // Portfolio detail with trailing stop
   if(portfolioDetail&&portfolioDetail.positions.length){
     document.getElementById('portfolio-detail').innerHTML=`<table><thead><tr>
-      <th>代码</th><th>名称</th><th>数量</th><th>成本</th><th>现价</th><th>盈亏%</th><th>止损价</th><th>移动止损</th><th>危险信号</th>
+      <th>代码</th><th>名称</th><th>数量</th><th>成本</th><th>现价</th><th>市值</th><th>盈亏%</th><th>止损价</th><th>移动止损</th><th>危险信号</th>
     </tr></thead><tbody>${portfolioDetail.positions.map(p=>{
       const ts=p.trailing_stop;
       const tsInfo=ts?`止损 ¥${fmt(ts.current_stop_price)} | 最高 ¥${fmt(ts.highest_price)} | 破谷 ${ts.valley_break_count}次`:'--';
       const ds=p.danger_signals&&p.danger_signals.length?p.danger_signals.map(d=>DANGER_CN[d]||d).join(', '):'';
       const dsBadge=ds?`<span class="danger-badge">${ds}</span>`:'<span style="color:#8b949e">无</span>';
-      return `<tr><td>${p.symbol}</td><td>${p.name||'--'}</td><td>${p.quantity}</td><td>${fmt(p.avg_cost)}</td><td>${fmt(p.current_price)}</td><td class="${cls(p.profit_ratio)}">${fmtPct(p.profit_ratio*100)}</td><td>${p.stop_loss_price?'¥'+fmt(p.stop_loss_price):'--'}</td><td style="font-size:11px;color:#8b949e">${tsInfo}</td><td>${dsBadge}</td></tr>`;
+      return `<tr><td>${p.symbol}</td><td>${p.name||'--'}</td><td>${p.quantity}</td><td>${fmt(p.avg_cost)}</td><td>${fmt(p.current_price)}</td><td>${p.market_value!=null?'¥'+fmt(p.market_value):'--'}</td><td class="${cls(p.profit_ratio)}">${fmtPct(p.profit_ratio*100)}</td><td>${p.stop_loss_price?'¥'+fmt(p.stop_loss_price):'--'}</td><td style="font-size:11px;color:#8b949e">${tsInfo}</td><td>${dsBadge}</td></tr>`;
     }).join('')}</tbody></table>`;
   }else{
     document.getElementById('portfolio-detail').innerHTML='<div class="empty">暂无持仓</div>';
@@ -271,7 +271,7 @@ async function refresh(){
       <th>日期</th><th>代码</th><th>名称</th><th>方向</th><th>价格</th><th>数量</th><th>佣金</th><th>印花税</th>
     </tr></thead><tbody>${recent.map(t=>`<tr>
       <td>${t.date}</td><td>${t.symbol}</td><td>${t.name||'--'}</td>
-      <td style="color:${t.direction==='buy'?'#3fb950':'#f85149'}">${t.direction==='buy'?'买入':'卖出'}</td>
+      <td style="color:${t.direction==='buy'?'#f85149':'#3fb950'}">${t.direction==='buy'?'买入':'卖出'}</td>
       <td>${fmt(t.price)}</td><td>${t.quantity}</td><td>${fmt(t.commission)}</td><td>${fmt(t.stamp_tax)}</td>
     </tr>`).join('')}</tbody></table>
     <div class="sub" style="margin-top:8px">共 ${trades.count} 笔，显示最近 20 笔</div>`;
@@ -333,5 +333,8 @@ function toggleChain(idx){
   if(el){el.style.display=el.style.display==='none'?'':'none';}
 }
 </script>
+<div id="gugu-disclaimer" style="max-width:1100px;margin:24px auto 12px;padding:12px 16px;border-top:1px solid #30363d;color:#b4b2a9;font-size:12px;line-height:1.6;text-align:center;">
+  免责声明：本页为模拟盘 / 观察数据，仅供研究参考，不构成投资建议。信号由量化模型自动生成，历史表现与模拟盘盈亏不代表未来收益；请自行判断并承担风险。
+</div>
 </body>
 </html>

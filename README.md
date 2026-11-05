@@ -5,7 +5,7 @@
 [![CI](https://github.com/dong4j/gugu/actions/workflows/ci.yml/badge.svg)](https://github.com/dong4j/gugu/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Coverage](https://img.shields.io/badge/coverage-69%25-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-pytest-blue.svg)]()
 
 ---
 
@@ -19,13 +19,13 @@
 - **多周期趋势确认** — 周线/日线趋势一致性检查，防止逆势操作
 
 ### 📊 策略体系
-- **多策略信号融合** — 36 个注册策略（趋势/均值回归/突破/主力行为/ML 多因子/公众号战法），支持 weighted/majority/any 融合模式
+- **多策略信号融合** — 16 个注册策略（以 `config/strategy_manifest.yaml` 实测为准，由 `scripts/check_drift.py` 在 CI 中校验）
 - **当前启用策略** — `box_breakout`（箱体突破）+ `double_yin`（双阴钱袋子）+ `rsi_reversal`（RSI 反转），按市场状态分流启用
 - **公众号战法策略**（v0.9.5）— `regime_cycle_four`（四周期模型）/ `death_valley_rebound`（幻灭期修复反弹）/ `bollinger_oversold_rebound`（布林下轨超跌反弹），15 股 600 日事件研究验证显著（10日超额 +2.4%~+3.7%，p<0.01）
 - **ML 多因子策略** — `ml_factor`：LightGBM + PCA 正交化（窗口内拟合消除前视偏差），Walk-Forward 训练，用 26 个 Alpha 因子预测涨跌方向
 - **因子 IC 分析** — `FactorICAnalyzer` 计算因子时序 IC/IR，筛选 |IC|>0.03 且 |IR|>0.3 的有效因子
 - **策略准入门禁** — `scripts/validate_strategy_gate.py` 统一 9 项门槛（交易数/收益/夏普/回撤/盈利比/参数稳定性/paper 信号/paper 收益），结构化判断是否可启用，`--notify` 推送飞书验证报告
-- **策略注册中心** — 36 个策略统一登记到 `strategy_manifest.yaml`，启用策略必须包含 `validation_gate` 结构化验证记录
+- **策略注册中心** — 16 个策略统一登记到 `strategy_manifest.yaml`，启用策略必须包含 `validation_gate` 结构化验证记录
 - **市场状态自适应** — 4 类策略分类（趋势/均值回归/突破/主力行为），5 种市场状态动态调整权重乘数
 - **Walk-Forward 参数优化** — 滚动窗口网格搜索 + 多股聚合训练，4 项解锁条件门控自动写回
 - **自优化调度闭环** — 周日 03:00 自动跑多股聚合 Walk-Forward，6 只行业代表股，失败不污染生产参数
@@ -203,7 +203,7 @@ python scripts/build_kb_index.py --force
 
 ## 测试
 
-**2121 单元测试通过 + 44 集成测试通过**（当前本机 Python 3.14 验证结果，`--timeout=20` 防挂起）。
+**测试数量以 `pytest --collect-only -q` 实时结果为准**（2026-11-04 实测 2404 collected / 2255 passed），不在此写死快照数字。覆盖率以 CI 报告为准，不由 README 声明。
 
 ```bash
 # 运行全部测试

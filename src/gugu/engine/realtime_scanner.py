@@ -213,9 +213,35 @@ class RealtimeSignalScanner:
             allow_auto = self._auto_trade
         else:
             try:
-                cfg = get_config()
-                allow_auto = not cfg.execution.confirm_required
+                allow_auto = not get_config().execution.confirm_required
             except Exception:
+                allow_auto = False
+
+        # 实盘硬闸（2026-11-04 评审 P0）：无论 auto_trade 来自构造参数还是配置，
+        # 生产白名单为空都不得自动下单。此前仅改 confirm_required=false 一个
+        # 配置项即可打开实盘自动委托，属于单点绕过。
+        try:
+            cfg = get_config()
+            verified = [str(x) for x in (getattr(cfg.strategy, "verified_strategies", None) or [])]
+        except Exception:
+            verified = []
+        if allow_auto and not verified:
+            logger.warning("live 自动下单已拒绝：verified_strategies 为空（禁止单点配置绕过）")
+            allow_auto = False
+
+        # 信号必须可追溯到白名单内的策略。未标注策略的老信号不额外放行买入委托；
+        # 明确标注但不在白名单的信号一律拒绝，避免「白名单有 A、实际跑的是 B」。
+        if allow_auto:
+            names = signal.get("strategies")
+            names = [str(x) for x in names] if isinstance(names, (list, tuple)) else []
+            single = str(signal.get("strategy") or "").strip()
+            if single:
+                names.append(single)
+            if not names or not any(name in verified for name in names):
+                logger.warning(
+                    "live 自动下单已拒绝：信号策略 {} 不在 verified_strategies 白名单内",
+                    names or "<未标注>",
+                )
                 allow_auto = False
 
         if not allow_auto:

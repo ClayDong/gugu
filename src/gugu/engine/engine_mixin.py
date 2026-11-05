@@ -769,7 +769,10 @@ class EngineOpsMixin:
     def _write_heartbeat(self, status: str) -> None:
         """写入心跳文件，便于外部监控。"""
         hb_dir = PROJECT_ROOT / "data"
-        hb_dir.mkdir(exist_ok=True)
+        # 先判存在再创建：避免对已存在目录发起 mkdir 系统调用（部分宿主/沙箱
+        # 会把 mkdir 代理成 EEXIST），语义与 mkdir(exist_ok=True) 等价。
+        if not hb_dir.exists():
+            hb_dir.mkdir(parents=True, exist_ok=True)
         path = hb_dir / "heartbeat.json"
         history_path = hb_dir / "heartbeat_history.jsonl"
 

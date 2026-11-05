@@ -393,7 +393,10 @@ class SignalPipeline:
             validation_status = str(capability.get("validation_status", "")).lower()
             if signal.get("direction") == "buy" and (
                 not validation_status
-                or validation_status in {"experimental", "in_review", "unknown"}
+                # conditional_pass（gate-v2 未通过）也必须标注「仅供观察」：
+                # 此前只拦 experimental/in_review/unknown，导致 4 个未通过
+                # 门禁的策略以「买入信号」原样推送（2026-11-04 评审 P0-4）。
+                or validation_status in {"experimental", "in_review", "unknown", "conditional"}
             ):
                 signal["observation_only"] = True
                 signal["validation_note"] = "策略尚未完成生产验证，仅供观察，不执行买入"
@@ -1346,7 +1349,9 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
     try:
         with _signal_history_lock:
             hb_dir = gugu_config.PROJECT_ROOT / "data"
-            hb_dir.mkdir(exist_ok=True)
+            # 先判存在再创建，避免对已存在目录发起 mkdir（宿主/沙箱 EEXIST）
+            if not hb_dir.exists():
+                hb_dir.mkdir(parents=True, exist_ok=True)
             path = hb_dir / "signals_history.jsonl"
             decision_chain: list[dict] = []
 

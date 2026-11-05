@@ -1,24 +1,45 @@
-"""前视偏差修复单元测试（2026-08-07, AUDIT_LOOKAHEAD_20260807）
+"""PIT 盘中隔离回归测试（2026-11-04 自证循环整改）。
 
-验证 engine_mixin._scan_signals 的盘中K线隔离逻辑:
-1. 盘中(<15:00)且数据源已含当日未完成K线（最后一行日期==今日）: 剔除最后一行
-2. 盘中(<15:00)但数据源只到昨日已收盘bar（A股日K源盘中常态）: 保留最后一行
-   ⚠️ 2026-08-11 修复：原实现盘中无条件 iloc[:-1]，把昨日完整bar也删掉，
-   策略基于 2 个交易日前数据计算（实证: 2026-08-11 10:19 日志 最后bar=2026-08-07，
-   而缓存最后bar=08-10）。正确语义: 仅当最后一行日期==今日才剔除。
-3. 收盘后(≥15:00): 完整K线保留
-4. 剔除后数据不足返回 None
+原文件在测试内部自行实现 ``_should_trim()`` 并只测自己，而生产代码中根本
+不存在对应逻辑——测试永远绿，线上零防线。本文件改为：
+
+1. 直接测生产函数 ``gugu.data.pit`` 的判定与清洗语义；
+2. 真实调用 ``DataManager.fetch_stock_history``，验证 PIT 清洗确实发生在
+   统一返回口（实时请求 / 内存缓存 / Parquet 缓存三条路径都经此处）。
+
+语义基线（2026-08-11 事故复盘）：
+- 盘中 (<15:00) 且最后一根 bar 日期 == 今天：剔除（未完成 K 线是未来信息）；
+- 盘中但数据源只到昨日已收盘 bar：保留（A 股日 K 源盘中常态，无条件
+  ``iloc[:-1]`` 会让策略基于 2 个交易日前的数据计算）；
+- 收盘后 (>=15:00)：完整保留。
 """
 
 from __future__ import annotations
 
+from datetime import datetime
+from unittest.mock import AsyncMock, patch
+
 import pandas as pd
 import pytest
 
-from gugu.engine.engine_mixin import EngineOpsMixin
+from gugu.data.pit import should_trim_intraday_bar, trim_unfinished_intraday_bar
 
 
-def _make_df(n=30, end="2026-08-07"):
+class _FrozenClock:
+    """替换 pit.datetime，注入可复现的时刻 2026-08-11 10:30（盘中）。"""
+
+    @classmethod
+    def now(cls) -> datetime:
+        return datetime(2026, 8, 11, 10, 30)
+
+
+class _FrozenClockAfterClose:
+    @classmethod
+    def now(cls) -> datetime:
+        return datetime(2026, 8, 11, 15, 5)
+
+
+def _make_df(n: int = 30, end: str = "2026-08-07") -> pd.DataFrame:
     dates = pd.bdate_range(end=end, periods=n)
     return pd.DataFrame(
         {
@@ -32,67 +53,107 @@ def _make_df(n=30, end="2026-08-07"):
     )
 
 
-def _should_trim(df: pd.DataFrame, now_hm: str, today: str) -> bool:
-    """复刻修复后的剔除判定逻辑（与 engine_mixin._scan_signals 一致）。"""
-    if now_hm >= "15:00" or "date" not in df.columns:
-        return False
-    last_bar_date = pd.Timestamp(df["date"].iloc[-1]).date()
-    return last_bar_date == pd.Timestamp(today).date()
+def _append_today_bar(df: pd.DataFrame, today: str = "2026-08-11") -> pd.DataFrame:
+    return pd.concat(
+        [
+            df,
+            pd.DataFrame(
+                [
+                    {
+                        "date": pd.Timestamp(today),
+                        "open": 15.0,
+                        "high": 15.5,
+                        "low": 14.5,
+                        "close": 15.2,
+                        "volume": 1200000,
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
 
 
-class TestIntradayLookaheadFix:
-    """盘中K线隔离逻辑(修复的核心判断)"""
+class TestIntradayPitGuard:
+    """生产函数的语义契约。"""
 
-    def test_intraday_drops_row_when_last_bar_is_today(self):
-        """盘中(10:30) + 数据源已含当日bar(最后一行==今日): 剔除最后一行"""
-        df = _make_df(30, end="2026-08-07")
-        # 模拟数据源盘中已含当日未完成bar
-        df_today = pd.concat(
-            [
-                df,
-                pd.DataFrame(
-                    [
-                        {
-                            "date": pd.Timestamp("2026-08-11"),
-                            "open": 15.0,
-                            "high": 15.5,
-                            "low": 14.5,
-                            "close": 15.2,
-                            "volume": 1200000,
-                        }
-                    ]
-                ),
-            ],
-            ignore_index=True,
+    def test_should_trim_when_last_bar_is_today(self) -> None:
+        df = _append_today_bar(_make_df(30, end="2026-08-10"))
+        assert should_trim_intraday_bar(df, now_hm="10:30", today=datetime(2026, 8, 11).date())
+        with patch("gugu.data.pit.datetime", _FrozenClock):
+            clean = trim_unfinished_intraday_bar(df)
+        assert len(clean) == 30
+        assert pd.Timestamp(clean["date"].iloc[-1]).date() == datetime(2026, 8, 10).date()
+
+    def test_keeps_last_row_when_source_only_has_yesterday(self) -> None:
+        df = _make_df(30, end="2026-08-10")
+        assert not should_trim_intraday_bar(df, now_hm="10:30", today=datetime(2026, 8, 11).date())
+        with patch("gugu.data.pit.datetime", _FrozenClock):
+            clean = trim_unfinished_intraday_bar(df)
+        assert len(clean) == 30
+        assert pd.Timestamp(clean["date"].iloc[-1]).date() == datetime(2026, 8, 10).date()
+
+    def test_after_close_keeps_full_history(self) -> None:
+        df = _append_today_bar(_make_df(30, end="2026-08-10"))
+        assert not should_trim_intraday_bar(df, now_hm="15:05", today=datetime(2026, 8, 11).date())
+        with patch("gugu.data.pit.datetime", _FrozenClockAfterClose):
+            clean = trim_unfinished_intraday_bar(df)
+        assert len(clean) == 31
+
+    def test_short_df_after_drop_keeps_only_closed_bar(self) -> None:
+        """剔除后样本不足时只保留已收盘 bar，样本量由 data_gate.min_rows 拒绝。"""
+        df = _append_today_bar(_make_df(1, end="2026-08-10"))
+        with patch("gugu.data.pit.datetime", _FrozenClock):
+            clean = trim_unfinished_intraday_bar(df)
+        assert len(clean) == 1
+        assert pd.Timestamp(clean["date"].iloc[-1]).date() == datetime(2026, 8, 10).date()
+
+    def test_attrs_preserved_and_trim_is_idempotent(self) -> None:
+        df = _append_today_bar(_make_df(5, end="2026-08-10"))
+        df.attrs["source"] = "tencent"
+        with patch("gugu.data.pit.datetime", _FrozenClock):
+            first = trim_unfinished_intraday_bar(df)
+            second = trim_unfinished_intraday_bar(first)
+        assert first.attrs["source"] == "tencent"
+        assert len(first) == len(second) == 5
+        assert second.attrs["source"] == "tencent"
+
+    def test_missing_or_invalid_date_is_untouched(self) -> None:
+        assert not should_trim_intraday_bar(
+            pd.DataFrame({"close": [1.0]}),
+            now_hm="10:30",
+            today=datetime(2026, 8, 11).date(),
         )
-        assert _should_trim(df_today, "10:30", "2026-08-11")
-        trimmed = df_today.iloc[:-1].copy()
-        assert len(trimmed) == 30  # 当日未完成K线被剔除
-        assert pd.Timestamp(trimmed["date"].iloc[-1]).date() == pd.Timestamp("2026-08-07").date()
+        with patch("gugu.data.pit.datetime", _FrozenClock):
+            clean = trim_unfinished_intraday_bar(pd.DataFrame({"close": [1.0]}))
+        assert len(clean) == 1
 
-    def test_intraday_keeps_last_row_when_source_only_has_yesterday(self):
-        """盘中(10:30) + 数据源只到昨日bar(最后一行==昨日): 保留最后一行
-        ——2026-08-11 修复点：A股日K源盘中不含当日bar，最后一行是昨日已收盘bar，
-        无条件剔除会让策略数据停在 2 个交易日前。"""
-        df = _make_df(30, end="2026-08-10")  # 最后一行=昨日(2026-08-10)已收盘
-        assert not _should_trim(df, "10:30", "2026-08-11")
-        assert len(df) == 30  # 完整保留，不剔除
-        assert pd.Timestamp(df["date"].iloc[-1]).date() == pd.Timestamp("2026-08-10").date()
 
-    def test_after_15h_keeps_full(self):
-        """收盘后(15:05): 保留完整K线"""
-        df = _make_df(30)
-        assert not _should_trim(df, "15:05", "2026-08-11")
-        assert len(df) == 30
+class TestProductionCallSite:
+    """验证清洗真的挂在 DataManager 统一返回口，而不是又一个自证测试。"""
 
-    def test_short_df_after_drop(self):
-        """剔除后数据不足(<2行): 触发保护"""
-        df = _make_df(2, end="2026-08-11")
-        assert _should_trim(df, "10:30", "2026-08-11")
-        trimmed = df.iloc[:-1].copy()
-        assert len(trimmed) == 1
-        assert len(trimmed) < 2  # 触发 len(df)<2 保护, 返回 None
+    @pytest.mark.asyncio
+    async def test_fetch_stock_history_applies_pit_guard(self) -> None:
+        from gugu.data.manager import DataManager
 
-    def test_mixin_has_scan_signals(self):
-        """确认修复所在函数存在(防止重构删除)"""
-        assert hasattr(EngineOpsMixin, "_scan_signals")
+        df = _append_today_bar(_make_df(30, end="2026-08-10"))
+        df.attrs["source"] = "akshare"
+        dm = DataManager.__new__(DataManager)
+        dm._call_with_fallback = AsyncMock(return_value=df)
+        with patch("gugu.data.pit.datetime", _FrozenClock):
+            result = await dm.fetch_stock_history("sh600000", days=120)
+        dm._call_with_fallback.assert_awaited_once_with("fetch_stock_history", "sh600000", 120)
+        assert len(result) == 30, "盘中当日未完成 K 线必须在统一返回口被剔除"
+        assert pd.Timestamp(result["date"].iloc[-1]).date() == datetime(2026, 8, 10).date()
+        assert result.attrs["source"] == "akshare", "清洗不得丢弃数据血缘 attrs"
+
+    @pytest.mark.asyncio
+    async def test_fetch_stock_history_after_close_returns_full(self) -> None:
+        from gugu.data.manager import DataManager
+
+        df = _append_today_bar(_make_df(30, end="2026-08-10"))
+        dm = DataManager.__new__(DataManager)
+        dm._call_with_fallback = AsyncMock(return_value=df)
+        with patch("gugu.data.pit.datetime", _FrozenClockAfterClose):
+            result = await dm.fetch_stock_history("sh600000", days=120)
+        assert len(result) == 31

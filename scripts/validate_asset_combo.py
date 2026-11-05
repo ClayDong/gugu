@@ -53,22 +53,26 @@ def _is_stock(code: str) -> bool:
 
 
 def load_stocks(min_rows: int = 250) -> dict[str, pd.DataFrame]:
-    """优先加载 500d 长历史数据；若无则降级到 90d。"""
+    """优先加载 500d 长历史数据；若无则降级到较短但明确标注的样本。
+
+    统一走 data_gate：兼容 ``*_500d_none.parquet`` 命名，并拒绝短样本
+    冒充长历史（旧实现直接 glob 全部 parquet 且静默跳过不足 min_rows 的文件）。
+    """
+    from gugu.backtest.data_gate import iter_cache_files, validate_stock_history
+
     stocks: dict[str, pd.DataFrame] = {}
-    for f in glob.glob(str(CACHE_DIR / "*.parquet")):
+    for f in iter_cache_files(CACHE_DIR):
         code = Path(f).stem.split("_")[0]
         if not _is_stock(code):
             continue
         try:
             df = pd.read_parquet(f)
-            if "date" not in df.columns or "close" not in df.columns:
+            clean = validate_stock_history(df, symbol=code, min_rows=min_rows)
+            if clean is None:
                 continue
-            if len(df) < min_rows:
-                continue
-            df["date"] = pd.to_datetime(df["date"])
-            # 同一代码优先保留 500d 长历史
-            if code not in stocks or len(df) > len(stocks[code]):
-                stocks[code] = df.sort_values("date").reset_index(drop=True)
+            # 同一代码优先保留更长的历史
+            if code not in stocks or len(clean) > len(stocks[code]):
+                stocks[code] = clean
         except Exception:
             continue
     return stocks

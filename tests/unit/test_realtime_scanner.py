@@ -79,6 +79,112 @@ class TestQmtBrokerSafety:
         qty2 = 250
         assert max(100, int(qty2 // 100 * 100)) == 200
 
+    # ── 实盘硬闸（2026-11-04 评审 P0）──
+
+    @staticmethod
+    def _connected_broker():
+        """构造「已连接且配置齐全」的 broker，用于验证硬闸而非连接检查。"""
+        with patch("gugu.execution.qmt.env") as mock_env:
+            mock_env.return_value.qmt_account_id = "123456"
+            mock_env.return_value.qmt_path = "/tmp/qmt"  # nosec B108: 测试 mock 路径
+            broker = QmtBroker()
+        broker._connected = True
+        broker._account = MagicMock()
+        broker._trader = MagicMock()
+        broker._trader.order_stock.return_value = 1001
+        return broker
+
+    @patch("gugu.execution.qmt.get_config")
+    def test_non_live_mode_rejects_order(self, mock_cfg):
+        """非 live 模式，QMT 一律不得发出真实委托。"""
+        mock_cfg.return_value.execution.mode = "paper"
+        mock_cfg.return_value.strategy.verified_strategies = ["box_breakout"]
+        broker = self._connected_broker()
+        result = broker.order("sh600000", "buy", 100, 10.0)
+        assert result.success is False
+        assert "live" in result.message
+        broker._trader.order_stock.assert_not_called()
+
+    @patch("gugu.execution.qmt.get_config")
+    def test_live_without_verified_strategy_rejects_buy(self, mock_cfg):
+        """live 但生产白名单为空：禁止实盘买入。"""
+        mock_cfg.return_value.execution.mode = "live"
+        mock_cfg.return_value.strategy.verified_strategies = []
+        broker = self._connected_broker()
+        result = broker.order("sh600000", "buy", 100, 10.0)
+        assert result.success is False
+        assert "verified_strategies" in result.message
+        broker._trader.order_stock.assert_not_called()
+
+    @patch("gugu.execution.qmt.get_config")
+    def test_emergency_buy_cannot_bypass_guard(self, mock_cfg):
+        """emergency_buy_limit 不再能绕过执行模式与白名单硬闸。"""
+        mock_cfg.return_value.execution.mode = "live"
+        mock_cfg.return_value.strategy.verified_strategies = []
+        broker = self._connected_broker()
+        result = broker.emergency_buy_limit("sh600000", 100, 10.0)
+        assert result.success is False
+        broker._trader.order_stock.assert_not_called()
+
+    @patch("gugu.strategies.manifest.StrategyManifest")
+    @patch("gugu.execution.qmt.get_config")
+    def test_live_with_verified_strategy_allows_buy(self, mock_cfg, mock_manifest_cls):
+        """live + 白名单策略 + manifest 证据通过 → 买入委托可提交。"""
+        mock_cfg.return_value.execution.mode = "live"
+        mock_cfg.return_value.strategy.verified_strategies = ["box_breakout"]
+        mock_manifest_cls.return_value.list_runtime_enabled.return_value = ["box_breakout"]
+        broker = self._connected_broker()
+        result = broker.order("sh600000", "buy", 100, 10.0)
+        assert result.success is True
+        broker._trader.order_stock.assert_called_once()
+
+    @patch("gugu.strategies.manifest.StrategyManifest")
+    @patch("gugu.execution.qmt.get_config")
+    def test_live_buy_rejected_when_whitelist_lacks_manifest_evidence(
+        self, mock_cfg, mock_manifest_cls
+    ):
+        """P1-B：白名单有名字，但 manifest 无证据通过 → 拒绝（防只改配置绕过证据链）。"""
+        mock_cfg.return_value.execution.mode = "live"
+        mock_cfg.return_value.strategy.verified_strategies = ["handwritten_fake"]
+        mock_manifest_cls.return_value.list_runtime_enabled.return_value = []
+        broker = self._connected_broker()
+        result = broker.order("sh600000", "buy", 100, 10.0)
+        assert result.success is False
+        assert "证据" in result.message
+        broker._trader.order_stock.assert_not_called()
+
+    @patch("gugu.strategies.manifest.StrategyManifest")
+    @patch("gugu.execution.qmt.get_config")
+    def test_live_evidence_check_failure_fails_closed(self, mock_cfg, mock_manifest_cls):
+        """P1-B：manifest 证据校验异常时 fail-closed，绝不裸奔。"""
+        mock_cfg.return_value.execution.mode = "live"
+        mock_cfg.return_value.strategy.verified_strategies = ["box_breakout"]
+        mock_manifest_cls.side_effect = RuntimeError("manifest unreadable")
+        broker = self._connected_broker()
+        result = broker.order("sh600000", "buy", 100, 10.0)
+        assert result.success is False
+        broker._trader.order_stock.assert_not_called()
+
+    @patch("gugu.execution.qmt.get_config")
+    def test_live_sell_is_allowed_without_whitelist(self, mock_cfg):
+        """卖出/平仓是降风险方向，不应被自动交易白名单卡死。"""
+        mock_cfg.return_value.execution.mode = "live"
+        mock_cfg.return_value.strategy.verified_strategies = []
+        broker = self._connected_broker()
+        result = broker.order("sh600000", "sell", 100, 10.0)
+        assert result.success is True
+        broker._trader.order_stock.assert_called_once()
+
+    @patch("gugu.execution.qmt.get_config")
+    def test_config_read_failure_fails_closed(self, mock_cfg):
+        """配置读取异常时 fail-closed，绝不裸奔。"""
+        mock_cfg.side_effect = RuntimeError("config unavailable")
+        broker = self._connected_broker()
+        result = broker.order("sh600000", "buy", 100, 10.0)
+        assert result.success is False
+        assert "fail-closed" in result.message
+        broker._trader.order_stock.assert_not_called()
+
 
 # ────────────────────── 实时推荐引擎 ──────────────────────
 
@@ -225,7 +331,11 @@ class TestRealtimeScanner:
     @patch("gugu.engine.realtime_scanner.is_trading_day", return_value=True)
     @patch("gugu.engine.realtime_scanner.is_trading_time", return_value=True)
     async def test_live_auto_execute(self, mock_time, mock_day):
-        """live + confirm_required=False → 自动下单。"""
+        """live + confirm_required=False + 白名单内策略 → 自动下单。
+
+        2026-11-04 安全加固后，自动下单还需满足两个前置条件：
+        verified_strategies 非空，且信号可追溯到白名单内策略。
+        """
         from gugu.engine.realtime_scanner import RealtimeSignalScanner
 
         engine = self._make_engine()
@@ -234,17 +344,76 @@ class TestRealtimeScanner:
             "direction": "buy",
             "price": 10.5,
             "suggested_quantity": 200,
+            "strategy": "box_breakout",
         }
         engine._scan_signals = AsyncMock(return_value=[signal])
         scanner = RealtimeSignalScanner(engine)
         with patch("gugu.engine.realtime_scanner.get_config") as mock_cfg:
             mock_cfg.return_value.execution.mode = "live"
             mock_cfg.return_value.execution.confirm_required = False
+            mock_cfg.return_value.strategy.verified_strategies = ["box_breakout"]
             await scanner.run_cycle()
         engine._broker.order.assert_called_once()
         args = engine._broker.order.call_args[0]
         assert args[0] == "sh600000"
         assert args[1] == "buy"
+
+    @pytest.mark.asyncio
+    @patch("gugu.engine.realtime_scanner.is_trading_day", return_value=True)
+    @patch("gugu.engine.realtime_scanner.is_trading_time", return_value=True)
+    async def test_live_confirm_false_with_empty_whitelist_no_execute(self, mock_time, mock_day):
+        """P0：仅把 confirm_required 改成 false 不得打开实盘自动下单。"""
+        from gugu.engine.realtime_scanner import RealtimeSignalScanner
+
+        engine = self._make_engine()
+        engine._scan_signals = AsyncMock(
+            return_value=[{"symbol": "sh600000", "direction": "buy", "strategy": "box_breakout"}]
+        )
+        scanner = RealtimeSignalScanner(engine)
+        with patch("gugu.engine.realtime_scanner.get_config") as mock_cfg:
+            mock_cfg.return_value.execution.mode = "live"
+            mock_cfg.return_value.execution.confirm_required = False
+            mock_cfg.return_value.strategy.verified_strategies = []
+            await scanner.run_cycle()
+        engine._broker.order.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("gugu.engine.realtime_scanner.is_trading_day", return_value=True)
+    @patch("gugu.engine.realtime_scanner.is_trading_time", return_value=True)
+    async def test_explicit_auto_trade_cannot_bypass_whitelist(self, mock_time, mock_day):
+        """P0：构造参数 auto_trade=True 也不能绕过生产白名单。"""
+        from gugu.engine.realtime_scanner import RealtimeSignalScanner
+
+        engine = self._make_engine()
+        engine._scan_signals = AsyncMock(
+            return_value=[{"symbol": "sh600000", "direction": "buy", "strategy": "box_breakout"}]
+        )
+        scanner = RealtimeSignalScanner(engine, auto_trade=True)
+        with patch("gugu.engine.realtime_scanner.get_config") as mock_cfg:
+            mock_cfg.return_value.execution.mode = "live"
+            mock_cfg.return_value.execution.confirm_required = True
+            mock_cfg.return_value.strategy.verified_strategies = []
+            await scanner.run_cycle()
+        engine._broker.order.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("gugu.engine.realtime_scanner.is_trading_day", return_value=True)
+    @patch("gugu.engine.realtime_scanner.is_trading_time", return_value=True)
+    async def test_live_unverified_signal_strategy_no_execute(self, mock_time, mock_day):
+        """P0：白名单里有 A，但信号来自未验证策略 B 时不得下单。"""
+        from gugu.engine.realtime_scanner import RealtimeSignalScanner
+
+        engine = self._make_engine()
+        engine._scan_signals = AsyncMock(
+            return_value=[{"symbol": "sh600000", "direction": "buy", "strategy": "rebound_system"}]
+        )
+        scanner = RealtimeSignalScanner(engine)
+        with patch("gugu.engine.realtime_scanner.get_config") as mock_cfg:
+            mock_cfg.return_value.execution.mode = "live"
+            mock_cfg.return_value.execution.confirm_required = False
+            mock_cfg.return_value.strategy.verified_strategies = ["box_breakout"]
+            await scanner.run_cycle()
+        engine._broker.order.assert_not_called()
 
     @pytest.mark.asyncio
     @patch("gugu.engine.realtime_scanner.is_trading_day", return_value=True)

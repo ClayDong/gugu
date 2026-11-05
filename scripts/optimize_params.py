@@ -44,6 +44,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from gugu import __version__  # noqa: E402
 from gugu.analysis.optimization_pools import (
     DEFAULT_REPRESENTATIVE_STOCKS,
     get_strategy_stock_pool,
@@ -1278,7 +1279,12 @@ async def main(
         return
 
     # P1-2 新增：使用默认50只代表性股票池
-    if use_default_pool and not multi_stock:
+    # v0.9.55：ga/pso 必须先路由到启发式优化——walk-forward 分支含 return，
+    # 若不加守卫，--algorithm ga/pso 带 --multi-stock/--strategy 会被静默拦截，
+    # 实际跑全量网格 Walk-Forward：double_yin 网格 19683 组合 ×5 股 ×3 窗口
+    # ≈ 295k 回测 ≈ 8h，远超 1800s 预算 → 2026-09-15 / 10-01 / 10-15 三次
+    # "启发式优化超时"（实为网格，从未跑过 PSO/GA）。
+    if algorithm not in ("ga", "pso") and use_default_pool and not multi_stock:
         symbols = DEFAULT_REPRESENTATIVE_STOCKS
         print(f"\n使用默认代表性股票池（{len(symbols)} 只）进行多股聚合优化")
         print(f"覆盖行业：白酒/医药/银行/保险/券商/房地产/家电/汽车/电子/新能源/互联网/消费")
@@ -1312,8 +1318,10 @@ async def main(
                     continue
         return
 
-    # P2 新增：多股聚合模式（解决单股过拟合）
-    if multi_stock or strategy_name:
+    # P2 新增：多股聚合模式（解决单股过拟合）—— 仅 walk_forward 走此分支
+    # v0.9.55：同上，ga/pso 必须落到启发式分支（该分支完整支持 multi_stock /
+    # 策略自动池 / default-pool）。
+    if algorithm not in ("ga", "pso") and (multi_stock or strategy_name):
         # 解析股票列表（逗号分隔）；若未指定则按策略类型自动匹配
         if multi_stock:
             symbols = [s.strip().zfill(6) for s in multi_stock.split(",") if s.strip()]
@@ -1531,7 +1539,7 @@ if __name__ == "__main__":
         default=None,
         help="随机种子（默认=None，仅 GA/PSO 生效，用于结果复现）",
     )
-    parser.add_argument("--version", action="version", version="gugu 0.6.0")
+    parser.add_argument("--version", action="version", version=f"gugu {__version__}")
     args = parser.parse_args()
 
     asyncio.run(

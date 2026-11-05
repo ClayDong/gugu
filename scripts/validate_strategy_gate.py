@@ -15,19 +15,31 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from gugu.strategies.registry import get_runtime_strategy_names  # noqa: E402
+from gugu.validation.evidence import build_evidence  # noqa: E402
 from gugu.validation.gate_policy import GatePolicy  # noqa: E402
 
 GATE_THRESHOLDS = GatePolicy.thresholds()
 
 
 def evaluate_gate(strategy: str, metrics: dict[str, Any]) -> dict[str, Any]:
-    """根据统一门槛评估策略是否允许启用。"""
+    """根据统一门槛评估策略是否允许启用。
+
+    通过时附带带 metrics 哈希的 evidence 块，供 manifest.validation_gate.gate_v2
+    使用；运行时会重新校验该哈希，杜绝「手填数字自证通过」。
+    """
     report = GatePolicy.evaluate(metrics)
-    return {
+    result: dict[str, Any] = {
         "date": str(date.today()),
         "strategy": strategy,
         **report,
     }
+    if report.get("passed") is True:
+        result["evidence"] = build_evidence(
+            metrics,
+            evidence_class="walk_forward_oos",
+            source=f"validate_strategy_gate.py:{strategy}",
+        )
+    return result
 
 
 def _load_metrics(path: str) -> dict[str, Any]:

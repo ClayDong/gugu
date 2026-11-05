@@ -1,8 +1,8 @@
 [project]
 name = "gugu"
-version = "0.6.0"
+version = "0.9.59"
 description = "Automated A-share signal monitoring system with multi-perspective analysis, risk control, and Feishu notification"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "akshare>=1.12.0",
     "pandas>=2.0",

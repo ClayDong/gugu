@@ -226,8 +226,28 @@ class StopLossManager:
         # 执行止损卖出
         sold_count = 0
         for symbol, price, available, pos in stop_list:
+            stop_price = float(pos.stop_loss_price or 0.0)
+            # P1 风控增强：跳空缺口追踪
+            # 如果现价显著低于止损价（跳空低开），记录缺口幅度并告警，
+            # 防止"止损价=成交价"的认知偏差导致实际亏损超预期。
+            gap_pct = 0.0
+            if stop_price > 0 and price < stop_price:
+                gap_pct = (stop_price - price) / stop_price
+                if gap_pct >= 0.03:  # 缺口 >= 3% 视为显著跳空
+                    logger.warning(
+                        "⚠️ 止损跳空风险: {} 止损价={:.2f} 现价={:.2f} 缺口={:.2%} "
+                        "（实际亏损将大于止损预期）",
+                        symbol,
+                        stop_price,
+                        price,
+                        gap_pct,
+                    )
             logger.info(
-                "止损触发: {} 现价 {} <= 止损价 {}，执行卖出", symbol, price, pos.stop_loss_price
+                "止损触发: {} 现价 {} <= 止损价 {}，执行卖出"
+                + (f" [跳空缺口 {gap_pct:.2%}]" if gap_pct >= 0.01 else ""),
+                symbol,
+                price,
+                stop_price,
             )
             event_engine.put(
                 EVENT_STOP_LOSS,
@@ -260,6 +280,9 @@ class StopLossManager:
                     market_env_snapshot=getattr(pos, "entry_market_env", None),
                     exit_reason="stop_loss",
                     parent_signal_id=getattr(pos, "entry_signal_id", ""),
+                    # P1 风控增强：注入止损价和跳空缺口，便于成交账本追踪
+                    stop_price=stop_price,
+                    gap_from_stop_pct=gap_pct,
                 )
                 if getattr(broker, "supports_execution_context", False):
                     result = broker.order(
@@ -293,10 +316,21 @@ class StopLossManager:
 
                     alert_key = f"stop_loss:{symbol}"
                     if self._should_alert is None or self._should_alert(alert_key):
+                        # P1 风控增强：跳空缺口显著时升级告警级别
+                        gap_info = ""
+                        alert_level = "warn"
+                        if gap_pct >= 0.03:
+                            gap_info = f"\n⚠️ 跳空缺口: {gap_pct:.2%}（实际亏损大于止损预期）"
+                            alert_level = "halt"
+                        elif gap_pct >= 0.01:
+                            gap_info = f"\n跳空缺口: {gap_pct:.2%}"
                         notify_ok = await notifier.notify_risk_alert(
                             {
-                                "level": "warn",
-                                "message": f"止损卖出: {symbol} {result.quantity}股 @ {result.price}",
+                                "level": alert_level,
+                                "message": (
+                                    f"止损卖出: {symbol} {result.quantity}股 @ {result.price}"
+                                    f"{gap_info}"
+                                ),
                                 "suggestion": "止损价由移动止损引擎管理，已自动执行",
                             },
                             dedup_key=f"stop_loss_sold_{symbol}_{date.today().isoformat()}",
@@ -326,13 +360,21 @@ class StopLossManager:
                             )
                             name = lookup_stock_name(symbol) or symbol
                             pnl = (price - pos.avg_cost) * int(available)
+                            # P1 风控增强：跳空缺口提示
+                            gap_warn = ""
+                            if gap_pct >= 0.03:
+                                gap_warn = (
+                                    f"\n⚠️ 跳空缺口 {gap_pct:.2%}："
+                                    f"实际成交价可能低于止损价 {stop_price:.2f}，亏损将大于预期"
+                                )
                             notify_ok = await notifier.notify_risk_alert(
                                 {
                                     "level": "halt",
                                     "message": (
                                         f"止损提醒（需手动执行）: {name}({symbol}) 现价 ￥{price:.2f} "
-                                        f"≤ 止损价 ￥{pos.stop_loss_price:.2f}，"
+                                        f"≤ 止损价 ￥{stop_price:.2f}，"
                                         f"持仓盈亏约 ￥{pnl:+,.2f}"
+                                        f"{gap_warn}"
                                     ),
                                     "suggestion": (
                                         f"track_live 模式不自动下单，请手动在券商APP以 ￥{price:.2f} 附近挂单，"

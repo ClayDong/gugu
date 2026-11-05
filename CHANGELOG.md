@@ -1,5 +1,160 @@
 # 变更日志
 
+## 2026-10-20 — v0.9.59 换手量比观察消息路由修正（发开悟之路群，不再发 Hermes 对话框）
+
+**背景**：用户反馈 10-19 的"📡 换手+量比选股观察"推送发到了 Hermes 机器人
+P2P 对话框，应发"开悟之路"群。
+
+**根因**：`scripts/scan_price_volume.py` 的 `_push_feishu_text` 默认取
+`.env FEISHU_CHAT_ID`（系统通知目标 = bot P2P 对话框），而项目早已有
+`FEISHU_BUSINESS_CHAT_ID`（业务群 = 开悟之路，已通过飞书 API 列群核实
+oc_599b…49c3b 的群名为"开悟之路"）。业务消息却路由到系统目标——
+属于与"红涨绿跌"同类的**配置约定映射缺陷**（约定已存在但代码没用对）。
+
+**修复**：
+1. `scripts/scan_price_volume.py` 默认路由改为
+   `--chat 参数 > FEISHU_BUSINESS_CHAT_ID（业务群）> FEISHU_CHAT_ID（兜底）`，
+   docstring 与 `--push/--chat` help 同步更新
+2. 已把 10-19 该条消息原样补发至"开悟之路"群（发送验证 code==0）
+
+**验证**：补发成功；脚本 `--preview` 路径无回归。
+3. 新增 tests/unit/test_scan_price_volume_routing.py（3 契约断言）：
+   默认=业务群 / 无业务群回退系统 chat / --chat 显式最高优先——
+   路由从此有测试锁定，回归直接失败。
+
+## 2026-10-20 — v0.9.58 呈现层契约防线落地 + emoji 编码损坏修复（元审查产出）
+
+**背景**：复盘"红涨绿跌/市值列为何逃过多专家 review"，根因为领域约定无单一事实源、
+review 只审代码逻辑不审领域映射。落地三层防线时发现外部编辑器将
+intraday_monitor.py 中 9 处 4 字节 emoji（🔴🟢）损坏为 U+FFFD（3 字节 ⚠️ 完好），
+新增"顶背离"功能时引入——再次印证根因，即刻成为防线 2 的首个实战拦截对象。
+
+**修复**：
+1. 恢复 9 处损坏 emoji（按流入=🔴/流出=🟢语义逐处还原，全文件 0 U+FFFD）
+2. 新增 docs/DOMAIN_CONVENTIONS.md：领域约定单一事实源
+   （方向色红涨绿跌、方向色与状态色分离、单位、交易时段、呈现完整性、编码红线、review 用户视角终审环节）
+3. 新增 tests/unit/test_presentation_contract.py（11 个契约断言）：
+   - Web UI 四处方向色正反断言（positive=红/负=negative=绿/买入=红/卖出=绿）
+   - 持仓表必须含市值列（呈现完整性）
+   - flow_formatter/intraday_monitor 流入🔴流出🟢一一对应断言
+   - 全 src 目录 U+FFFD 扫描 + 全源码 UTF-8 合法性（编码红线）
+4. 版本号 0.9.57 → 0.9.58（__init__.py / pyproject.toml 同步）
+
+**验证**：pytest test_presentation_contract.py + test_intraday_monitor.py → 35 passed 全绿。
+
+**方法论沉淀**（供后续 review 引用）：review 清单增加终审三问——
+① 我审的是代码还是用户看到的东西？② 领域约定有对照基准吗？③ 运行实测过吗？
+
+## 2026-10-20 — v0.9.57 A股红涨绿跌约定修正 + 持仓详情补市值列（用户反馈）
+
+**背景**：用户反馈 Web 仪表盘两处显示问题：① 红涨绿跌颜色颠倒（当前是美股约定
+绿涨红跌，A 股应为红涨绿跌）；② 持仓详情表没有市值列（API 已返回
+`market_value`，前端未展示）。
+
+**修复**：
+1. `src/gugu/web/static/index.html`（方向/涨跌语义颜色互换，状态语义保持不变）：
+   - `.value.positive` #3fb950绿 → #f85149红（涨/盈利=红）
+   - `.value.negative` #f85149红 → #3fb950绿（跌/亏损=绿）
+   - `.signal-dir-buy` 绿→红，`.signal-dir-sell` 红→绿（买入=红，卖出=绿）
+   - 交易记录表行内买卖颜色同步互换
+   - 保持不变：风控正常=绿、熔断=红、✓/✗、数据质量徽章等状态语义色
+2. 持仓详情表新增"市值"列：表头 + `${p.market_value}` 单元格（空值显示 `--`）；
+   API `/api/portfolio` 本就返回 `market_value`（app.py:365），纯前端缺失
+3. `src/gugu/engine/intraday_monitor.py` 资金流 emoji 统一为系统既有约定
+   （`flow_formatter.py`：流入=🔴，流出=🟢），修正 9 处矛盾用法：
+   超大单/主力净占比/连续流入流出/持仓流出/行业流向（流入 5 处🟢→🔴，
+   流出 4 处🔴→🟢）；severity 告警级别不受影响
+
+**验证**：
+- `pytest tests/unit/test_intraday_monitor.py test_intraday_alert.py
+  test_flow_report.py test_web_api.py` → 179 passed 全绿（测试断言均不含
+  emoji 前缀，无破坏）
+- 临时启动 web 服务，curl 实测服务端下发 HTML：CSS 四处颜色已互换、
+  表头含"市值"列、市值单元格渲染代码均在（line 26/27/42/43/255/261）
+- `/api/portfolio` 当前 `positions:[]`（空仓），市值列将在建仓后展示真实数据
+
+**其他**：告警评估员 cron 报 `HTTP 429 inference exceeds tpm/rpm limit`
+为 AI 推理服务限流（瞬时），非系统代码问题，下一轮 cron 自动恢复，无需修改。
+
+## 2026-10-19 — v0.9.56 信号历史豁免窗口修正（周末 8 连误报"失忆"→ 尾盘对齐不再误报）
+
+### 变更：告警评估员处置（2026-10-19 cron 脚本错误）
+
+**背景**：分诊异常清单 2 条 ERROR（09:30:45 主源 fetch_stock_realtime TimeoutError、
+09:30:49 eastmoney 快照 ConnectionError，均瞬时、降级链已吸收，今日失败率 1%），
+另见 10-18 17:00 ~ 10-19 04:10 **连续 8 次**自愈记录 `SignalHistoryResult:signal_history_stale`
+（根因始终是 `signal_scan.last_scan_at=2026-10-16T14:54:25`）。对抗性审查确认真因：
+
+- watchdog `check_signal_history_freshness` 的交易日历对齐豁免窗口为
+  `[最近交易日 15:00, 17:00)`，以"收盘时刻"为下界；
+- 但末次**完整**扫描写 signal_scan.json 实测收尾于 **14:54-14:59**（10-14/15/16 实证，
+  14:55 后为 realtime 扫描，不写 signal_scan.json）——**正常交易日豁免永不命中**；
+- 周末墙钟 age_days 超 2 天后必误报"信号历史失忆"，驱动 auto_recover 每小时
+  `launchctl kickstart`（进程存活时无 `-k` 是 no-op，scheduler boot_time 始终
+  10-16T00:35:25 未变），自愈记录 ok=true 但根因从未变化 → 纯噪声闭环。
+
+**修复**（`src/gugu/health/watchdog.py`）：
+- 豁免窗口下界 15:00 → **14:00**（`[14:00, 17:00)`）：覆盖正常尾扫波动；
+- 真故障路径不受影响：周五 09:25 停摆 < 14:00 仍不豁免 → 走 age_days 告警；
+- 残余盲区（周五 14:00-15:00 间停摆）由心跳检查兜底。
+
+**验证**
+- 新增回归测试 `test_signal_history_weekend_stale_scan_tail_aligned_no_alert`：
+  末次扫描 14:54 跨周末 → 豁免（ok=True, calendar_aligned=True）；
+- 既有测试 `test_signal_history_scan_before_last_close_still_alerts`（09:25 仍告警）
+  与 `test_signal_history_weekend_stale_scan_aligned_no_alert`（15:10 仍豁免）不受影响；
+- `pytest tests/unit/test_health_watchdog.py --timeout=30` 32 passed 全绿；
+- `ruff check src/gugu/health/watchdog.py tests/unit/test_health_watchdog.py` 通过；
+- 修复对象是独立 watchdog cron 脚本（每 5 分钟全新加载），不涉及调度器运行时逻辑，
+  无需重启 scheduler；下一周末/节假日不再产生失忆误报。
+
+**放过的项**：09:30 两条 ERROR 为开盘瞬时网络抖动（09:30:04 all_sources_failed 后
+09:30:13 sina 恢复，10:01 亦有 1 次 fallback 后 10:03 恢复），四级冗余设计内降级，
+今日失败率 1%（3/500），不构成告警条件。
+
+## 2026-10-15 — v0.9.55 启发式优化路由 bug 修复（跑 8h 网格而非 PSO）+ 早停 NaN 防护（告警评估员处置）
+
+### 变更：告警评估员处置（2026-10-15 cron 脚本错误）
+
+**背景**：cron 报 exit 1，分诊异常清单 1 条 ERROR：04:30:12
+`启发式优化 double_yin 超时（>30min，实际 1800s），跳过`。对抗性审查确认真因：
+
+`scripts/optimize_params.py::main()` 路由顺序 bug：`if multi_stock or strategy_name:`
+（walk-forward 多股分支，含 `return`）位于 `if algorithm in ("ga", "pso"):` 之前。
+调度器 `_safe_heuristic_optimize` 传参 `--strategy X --multi-stock pool --algorithm pso`
+被 walk-forward 分支拦截 → **启发式优化从未真正运行 PSO/GA**，实际在跑全量网格
+Walk-Forward：double_yin 网格 9 参数 ×3 = 19,683 组合 ×5 股 ×3 窗口 ≈ 295k 回测
+≈ 8h，远超 1800s 预算 → 被杀。这与三连败（09-15 GA / 10-01 PSO / 10-15 PSO"超时"）
+及日志中"byte 级相同回测行"（网格组合对 603259 的 trades 不变）完全吻合；周参数
+优化注释里 double_yin"20min 21640 回测行未完成"（2026-09-27）同为该网格量级。
+
+**修复**：
+- `scripts/optimize_params.py`：walk-forward 两个入口分支加
+  `algorithm not in ("ga", "pso")` 守卫，ga/pso 必定路由到 `run_heuristic_optimization`
+  （启发式分支本就完整支持 multi_stock / 策略自动池 / default-pool）。
+- `src/gugu/analysis/heuristic_optimizer.py`：新增 `_is_meaningful_improvement`
+  （非有限得分按"无改进"处理），修复全 -inf 景观下 `-inf - -inf = NaN` 比较为
+  False、早停计数器永不递增的 bug（GA/PSO 双修）；PSO 初始种群全 -inf 时提前
+  拒绝并输出可诊断警告（策略在股票池 trades≥3 样本不足）。
+- `src/gugu/engine/scheduler_jobs.py`：更新误导性注释（1800s 预算根因说明）。
+
+**验证**
+- 新增回归测试：`tests/unit/test_optimize_params.py` 断言 ga/pso + multi-stock
+  路由到启发式分支、walk_forward + multi-stock 仍走网格。
+- 新增单测：全 -inf 适应度下 PSO 提前终止（不跑满世代）。
+- `pytest tests/unit/test_heuristic_optimizer.py tests/unit/test_optimize_params.py` 全绿
+- `ruff check scripts/optimize_params.py src/gugu/analysis/heuristic_optimizer.py` 通过
+- 修复后实测 `--strategy double_yin --multi-stock ... --algorithm pso --population 3
+  --generations 2` 输出「开始启发式优化」并在数十秒内完成（修复前输出「开始多股
+  聚合 Walk-Forward 优化 ≈29524s」）。
+- 修复对象是子进程脚本（每次运行全新加载），不涉及调度器运行时逻辑变更，
+  无需重启调度器；下次 11-01 04:00 起启发式优化真正生效。
+
+**遗留观察（未动，需用户决策）**：双阴策略优化股票池 4/5 只为大市值股，500 天
+几乎不触发双阴信号（trades<3 被 fitness 丢弃）；周日周参数优化（walk-forward 网格）
+对 double_yin 同样会撞 1800s 预算。建议后续评估：调整 double_yin 优化股票池
+（选中小市值/高换手标的）或缩减其网格维度。
+
 ## 2026-10-08 — v0.9.54 告警分诊脚本 NameError 修复（告警评估员处置）
 
 ### 变更：告警评估员处置（2026-10-08 cron 脚本错误）

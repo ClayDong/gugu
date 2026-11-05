@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -116,6 +117,24 @@ class BaseHeuristicOptimizer(ABC):
             logger.debug(f"适应度计算失败: {e}")
             return -float("inf"), None
 
+    def _is_meaningful_improvement(self, new_score: float, old_score: float) -> bool:
+        """判断得分是否构成真实改进（早停用）。
+
+        v0.9.55 防护：非有限得分必须显式处理，否则当适应度全为 -inf 时
+        `-inf - (-inf) = NaN`，NaN 与任何数比较均为 False → 早停计数器永不
+        递增、优化跑满全部世代撞超时预算（实证：double_yin 2026-09-15 /
+        10-01 / 10-15 三次启发式优化全部超时，日志全为 byte 级相同回测行）。
+        """
+        if math.isnan(new_score) or math.isnan(old_score):
+            return False
+        if not math.isfinite(old_score) and math.isfinite(new_score):
+            # 从 -inf（初始值）首次进入有限域 = 实质改进
+            return True
+        if not math.isfinite(new_score):
+            # 新值非有限（全 -inf 景观）→ 无改进
+            return False
+        return new_score - old_score >= self.early_stop_min_improvement
+
 
 class GAOptimizer(BaseHeuristicOptimizer):
     """遗传算法参数优化器。"""
@@ -191,8 +210,9 @@ class GAOptimizer(BaseHeuristicOptimizer):
                     f"GA 第{gen + 1}代: 最优得分={gen_best_score:.4f}, 参数={gen_best_params}"
                 )
 
-            # P2-4: Early Stopping
-            if gen_best_score - best_score < self.early_stop_min_improvement:
+            # P2-4: Early Stopping（v0.9.55：非有限得分按"无改进"处理，
+            # 修复全 -inf 景观下 -inf - -inf = NaN 导致早停失效、跑满世代）
+            if not self._is_meaningful_improvement(gen_best_score, best_score):
                 _no_improve_count += 1
             else:
                 _no_improve_count = 0
@@ -323,6 +343,23 @@ class PSOOptimizer(BaseHeuristicOptimizer):
             score, _ = self._evaluate(p)
             personal_best.append((score, p.copy()))
 
+        # v0.9.55：初始种群适应度全为 -inf（策略在当前股票池上 trades≥3 样本
+        # 不足）→ 继续搜索既无意义又会跑满世代撞超时预算，直接拒绝并输出
+        # 可诊断警告（实证：double_yin 股票池 4/5 只 500 天 0 交易）。
+        if not any(math.isfinite(pb[0]) for pb in personal_best):
+            logger.warning(
+                "PSO 初始种群适应度全为 -inf（策略在当前股票池 trades≥3 样本"
+                "不足），参数优化无意义，提前跳过"
+            )
+            return OptimizationResult(
+                best_params=particles[0].copy(),
+                best_score=-float("inf"),
+                best_metrics={},
+                history=[],
+                generations=0,
+                population_size=self.population_size,
+            )
+
         global_best_score = max(pb[0] for pb in personal_best)
         global_best_params = personal_best[0][1].copy()
 
@@ -379,10 +416,9 @@ class PSOOptimizer(BaseHeuristicOptimizer):
                     f"参数={global_best_params}"
                 )
 
-            # P2-4: Early Stopping
-            if (
-                _prev_score is not None
-                and global_best_score - _prev_score < self.early_stop_min_improvement
+            # P2-4: Early Stopping（v0.9.55：同 GA，非有限得分按"无改进"处理）
+            if _prev_score is not None and not self._is_meaningful_improvement(
+                global_best_score, _prev_score
             ):
                 _no_improve_count += 1
             else:

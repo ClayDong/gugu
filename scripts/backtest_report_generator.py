@@ -29,6 +29,7 @@ import numpy as np
 
 from gugu.backtest import BacktestResult
 from gugu.utils.atomic import atomic_write_text
+from gugu.validation.multiple_testing import report_correction
 
 # 需要计算分布统计的核心指标
 _CORE_METRICS = [
@@ -75,11 +76,27 @@ def generate_report(results: list[BacktestResult]) -> str:
     for sname, group in strategy_groups.items():
         summaries[sname] = _compute_strategy_summary(sname, group)
 
+    # 2026-11-05 P1-A：多重检验校正。多策略并行比较时，朴素 p<0.05 会把
+    # 「试很多组挑出最好一组」误判为 alpha（cherry-pick）。对每个策略的收益
+    # 显著性做 Bonferroni 校正，「建议保留」只认校正后显著；naive 判定保留作对照。
+    sorted_names = sorted(summaries.keys())
+    p_values = [summaries[n]["significance"]["p_value"] for n in sorted_names]
+    correction = report_correction(p_values)
+    for name, kept in zip(sorted_names, correction["bonferroni"]["rejected"], strict=True):
+        summaries[name]["significance"]["significant_corrected"] = kept
+
     lines: list[str] = []
     lines.append(f"# 多策略回测对比报告")
     lines.append(f"")
     lines.append(f"**生成日期**: {today}")
     lines.append(f"**股票样本数**: {len(results)} 条记录（{len(strategy_groups)} 个策略）")
+    if len(sorted_names) > 1:
+        lines.append(
+            f"**显著性判定**: 已对 {len(sorted_names)} 个策略做 Bonferroni 校正"
+            f"（阈值 {correction['bonferroni']['adjusted_alpha']:.4f}）；"
+            f"朴素显著 {correction['naive_significant']} 个，校正后显著 "
+            f"{correction['bonferroni']['n_significant']} 个"
+        )
     lines.append(f"")
 
     # ── 1. 策略总览汇总表 ──
@@ -104,10 +121,14 @@ def generate_report(results: list[BacktestResult]) -> str:
         mean_hd = s["avg_hold_days"]["mean"]
         sig = s["significance"]
         sig_str = f"t={sig['t_stat']:.2f}, p={sig['p_value']:.4f}"
-        if sig["significant"]:
+        # ✅/❌ 由校正后显著性驱动；naive 与校正不一致时显式标注，不掩盖差异
+        corrected = sig.get("significant_corrected", sig["significant"])
+        if corrected:
             sig_str += " ✅"
         else:
             sig_str += " ❌"
+            if sig["significant"] and not corrected:
+                sig_str += "(朴素显著/校正后不显著)"
         lines.append(
             f"| {sname} | {n} "
             f"| {_pct(med_ret)} "
@@ -213,12 +234,17 @@ def generate_report(results: list[BacktestResult]) -> str:
         sig = summaries[sname]["significance"]
         ret_med = summaries[sname]["total_return"]["median"]
         sharpe_med = summaries[sname]["sharpe"]["median"]
-        if sig["significant"] and ret_med > 0 and sharpe_med > 0.5:
+        # 「建议保留」只认 Bonferroni 校正后的显著性，防止多策略比较中的
+        # cherry-pick 被包装成「建议保留」（2026-11-05 P1-A）。
+        corrected = sig.get("significant_corrected", sig["significant"])
+        if corrected and ret_med > 0 and sharpe_med > 0.5:
             lines.append(
-                f"- ✅ **{sname}**: 收益显著为正 (p={sig['p_value']:.4f}), 夏普 {sharpe_med:.2f} → 建议保留"
+                f"- ✅ **{sname}**: 收益显著为正 (校正后, p={sig['p_value']:.4f}), 夏普 {sharpe_med:.2f} → 建议保留"
             )
-        elif not sig["significant"]:
-            lines.append(f"- ⚠️ **{sname}**: 收益不显著 (p={sig['p_value']:.4f}) → 需更多数据验证")
+        elif not corrected:
+            lines.append(
+                f"- ⚠️ **{sname}**: 校正后收益不显著 (p={sig['p_value']:.4f}) → 需更多数据验证"
+            )
         elif ret_med < 0 or sharpe_med < 0:
             lines.append(
                 f"- ❌ **{sname}**: 收益中位数 {_pct(ret_med)}, 夏普 {sharpe_med:.2f} → 建议禁用或调优"

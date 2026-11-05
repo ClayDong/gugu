@@ -139,39 +139,43 @@ class ParquetPersistentCache:
             # 检查 freshness：最后一条数据日期
             if "date" in df.columns:
                 last_date = pd.to_datetime(df["date"].iloc[-1])
-                calendar_days = (ref_time - last_date.to_pydatetime()).days
-                # 盘中（交易日 9:30-15:00）必须包含当日 bar：策略信号基于最新 K线
-                # 计算，陈旧缓存会导致突破/均线/动量信号失真（2026-08-05 实测
-                # 120d 缓存停在 8/4，盘中扫描仍直接命中，信号全错）。
-                # 非盘中容忍最多 7 天老化（覆盖长假场景如春节/国庆 5 个交易日）
-                from gugu.utils.calendar import is_trading_day
+                last_date_only = last_date.date()
+                ref_date = ref_time.date()
+                # P1 修复：用交易日而非自然日计算缓存新鲜度
+                # 长假后首个交易日（如国庆后第一天），自然日已过 7 天但交易日仅 1 天，
+                # 此时缓存仍是最新可用数据，不应判定过期。
+                from gugu.utils.calendar import is_trading_day, trading_days_between
 
                 now_min = ref_time.hour * 60 + ref_time.minute
-                is_intraday = is_trading_day(ref_time.date()) and 9 * 60 + 30 <= now_min <= 15 * 60
-                # P0 修复（2026-08-05 信号黑洞根因）：
-                # 缓存陈旧判定的正确语义——「当前时段数据源可得的最新日期」：
-                #   - 交易日盘后（>15:00）：当日 K线已生成，缓存必须含当日 bar
-                #     （calendar_days==0）。原实现盘后容忍 7 天 → 盘中 14:47
-                #     写入的 8/4 缓存在 16:57 盘后仍命中 → 收盘验证/绩效用错数据
-                #   - 交易日盘中/盘前（<=15:00）：日K线源无当日 bar，
-                #     最新可得 = 昨日收盘 → 允许 calendar_days<=1。
-                #     不能要求当日（否则缓存永远 miss + 重拉仍是昨日 → 性能灾难）
-                #   - 非交易日：容忍 7 天老化（长假场景）
-                if is_intraday:
-                    # 盘中：数据源最新可达昨日（当日 K线未生成）
-                    max_stale_days = 1
-                elif is_trading_day(ref_time.date()):
-                    # 盘后：当日 K线已生成，必须含当日 bar
-                    max_stale_days = 0
+                is_intraday = is_trading_day(ref_date) and 9 * 60 + 30 <= now_min <= 15 * 60
+
+                # 计算交易日差（从缓存最后日期到当前日期之间的交易日数）
+                if last_date_only >= ref_date:
+                    trading_days_stale = 0
                 else:
-                    max_stale_days = 7
-                if calendar_days > max_stale_days:
+                    trading_days_stale = trading_days_between(last_date_only, ref_date)
+
+                # 新鲜度阈值（交易日）：
+                #   - 交易日盘后（>15:00）：当日 K线已生成，缓存必须含当日 bar
+                #     （trading_days_stale==0）。
+                #   - 交易日盘中/盘前（<=15:00）：日K线源无当日 bar，
+                #     最新可得 = 昨日收盘 → 允许 trading_days_stale<=1。
+                #   - 非交易日：容忍 5 个交易日老化（约一周交易周，覆盖长假）
+                if is_intraday:
+                    max_stale = 1
+                elif is_trading_day(ref_date):
+                    max_stale = 0
+                else:
+                    max_stale = 5
+
+                if trading_days_stale > max_stale:
                     logger.debug(
-                        "Parquet 缓存过期: {} {}d, 最后日期={}, 距今 {} 天, 盘中={}",
+                        "Parquet 缓存过期: {} {}d, 最后日期={}, 距今 {} 交易日(自然日{}天), 盘中={}",
                         symbol,
                         days,
-                        last_date.date(),
-                        calendar_days,
+                        last_date_only,
+                        trading_days_stale,
+                        (ref_date - last_date_only).days,
                         is_intraday,
                     )
                     path.unlink(missing_ok=True)

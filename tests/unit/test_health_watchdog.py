@@ -169,6 +169,43 @@ def test_signal_history_scan_before_last_close_still_alerts(tmp_path: Path, monk
     assert res.severity == "high"
 
 
+def test_signal_history_weekend_stale_scan_tail_aligned_no_alert(tmp_path: Path, monkeypatch):
+    """(v0.9.56) 周五末次完整扫描收尾于 14:54（早于 15:00 收盘，10-14/15/16 实证
+    末次写入 14:54-14:59，realtime 扫描不写 signal_scan.json）跨周末：墙钟超 2 天。
+
+    原豁免窗口 [15:00, 17:00) 以收盘时刻为下界 → 正常交易日永不命中 →
+    10-18 17:00 ~ 10-19 04:10 连续 8 次误报"信号历史失忆"，驱动 auto_recover
+    每小时 kickstart（进程存活时无 -k 是 no-op）。v0.9.56 下界放宽至 14:00 →
+    尾盘对齐应豁免，不再误报；09:25 停摆等真故障仍走 age_days 告警（见
+    test_signal_history_scan_before_last_close_still_alerts）。
+    """
+    hist = tmp_path / "signals_history.jsonl"
+    hist.write_text(
+        json.dumps({"timestamp": (datetime.now() - timedelta(days=4)).isoformat()}) + "\n",
+        encoding="utf-8",
+    )
+    scan = tmp_path / "signal_scan.json"
+    last_session = (datetime.now() - timedelta(days=3)).date()
+    scan.write_text(
+        json.dumps({"last_scan_at": datetime.combine(last_session, time(14, 54)).isoformat()}),
+        encoding="utf-8",
+    )
+    boot = tmp_path / "scheduler_boot.json"
+    boot.write_text(
+        json.dumps({"boot_time": (datetime.now() - timedelta(days=5)).isoformat(), "pid": 123}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "gugu.utils.calendar.last_trading_day",
+        lambda ref=None, max_lookback=15: last_session,
+    )
+    res = check_signal_history_freshness(
+        history_path=hist, boot_path=boot, scan_path=scan, data_dir=tmp_path
+    )
+    assert res.ok is True, f"周末尾盘对齐不应误报失忆: {res}"
+    assert res.details.get("calendar_aligned") is True
+
+
 # ========== 调度器心跳 ==========
 
 

@@ -247,6 +247,12 @@ def test_cooldown_warn_still_fires() -> None:
 
 def test_risk_manager_thread_safety() -> None:
     mgr = RiskManager({"daily_loss_halt": 0.05})
+    # 本用例只验证「并发访问不抛异常」，不验证磁盘持久化。5 个线程交替
+    # 翻转 halted / peak，会让几乎每次调用都触发文件锁 + 原子写（数百次 IO），
+    # 在沙箱或慢盘上可达分钟级，反而掩盖了真正的线程安全断言。
+    # 持久化由 test_safety_invariants.py（reload 恢复）与
+    # test_e2e_trading_day.py（L2 熔断落盘）单独覆盖。
+    mgr._save_halt_state = lambda: None  # type: ignore[method-assign]
     errors: list[Exception] = []
 
     def hammer_halt() -> None:

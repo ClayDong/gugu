@@ -7,7 +7,7 @@ signal_strategies:
     enabled: true
     summary: 识别箱体上下沿，突破上沿买入、跌破下沿卖出，配合成交量确认
     params_entry: strategy_defaults.yaml
-    validation: Walk-Forward 未通过 2026-09-27 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 平均样本外收益 < 0; 盈亏比 < 1.5; 样本外交易次数 < 30
+    validation: Walk-Forward 未通过 2026-10-18 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 盈亏比 < 1.5; 样本外交易次数 < 30
       未通过；当前仅允许 paper 观察
     notes: confirm_days=1 防假突破
     validation_gate:
@@ -134,7 +134,7 @@ signal_strategies:
     enabled: true
     summary: 地量抄底+黄金分割买入+缩量回踩+量能背离+箱体震荡突破+均线粘合突破+龙抬头+量价齐升
     params_entry: strategy_defaults.yaml
-    validation: Walk-Forward 未通过 2026-09-27 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 平均样本外收益 < 0; 盈亏比 < 1.5; 样本外交易次数 < 30
+    validation: Walk-Forward 未通过 2026-10-18 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 平均样本外收益 < 0; 盈亏比 < 1.5; 样本外交易次数 < 30
     notes: 核心规则：地量抄底（R01）、黄金分割买入（R02）、缩量回踩（R03）、量能背离（R04）、箱体震荡突破（R05）、均线粘合突破（R06）、龙抬头（R07）、量价齐升（R08）。
     validation_gate:
       gate_v2:
@@ -304,7 +304,7 @@ signal_strategies:
     enabled: true
     summary: 14日周期二次探底不破前低+收阳 → 买入；跌破前低/移动止损8% → 卖出
     params_entry: strategy_defaults.yaml
-    validation: Walk-Forward 未通过 2026-09-27 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 盈亏比 < 1.5; 样本外交易次数 < 30
+    validation: Walk-Forward 未通过 2026-10-18 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 平均样本外收益 < 0; 盈亏比 < 1.5; 样本外交易次数 < 30
       300 天下跌市回测绝对收益为负（正alpha负beta），待 paper 观察
     validation_gate:
       gate_v2:

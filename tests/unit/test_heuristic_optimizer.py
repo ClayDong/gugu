@@ -515,3 +515,59 @@ class TestIntegrationScenarios:
         score, metrics = ga._evaluate({"x": 5.0})
         assert score == -float("inf")
         assert metrics is None
+
+
+class TestEarlyStopWithNonFiniteFitness:
+    """v0.9.55 回归：全 -inf 适应度景观下早停必须生效（NaN 比较防护）。
+
+    修复前：-inf - -inf = NaN，NaN 与任何数比较均为 False → 早停计数器永不
+    递增 → 优化跑满全部世代 → double_yin 三次启发式优化全部 30min 超时。
+    """
+
+    def test_pso_bails_when_all_fitness_negative_inf(self) -> None:
+        """初始种群全 -inf：应提前跳过，不做世代搜索（曾跑满 20 代撞超时）。"""
+        spaces = [ParamSpace(name="x", min_val=0, max_val=10, is_int=True)]
+        call_count = 0
+
+        def flat_fitness(params: dict[str, float]) -> float:
+            nonlocal call_count
+            call_count += 1
+            return -float("inf")
+
+        pso = PSOOptimizer(
+            param_spaces=spaces,
+            fitness_func=flat_fitness,
+            population_size=30,
+            generations=20,
+            seed=42,
+        )
+        result = pso.optimize(verbose=True)
+
+        assert result.generations == 0
+        assert result.best_score == -float("inf")
+        # 仅初始种群评估（30 次），未进入世代循环（修复前 30 + 20×30 + 1 = 631）
+        assert call_count == 30
+
+    def test_ga_early_stops_on_all_negative_inf(self) -> None:
+        """GA 全 -inf：早停计数器应递增并在 patience 代后停止（曾 NaN 失效跑满 20 代）。"""
+        spaces = [ParamSpace(name="x", min_val=0, max_val=10, is_int=True)]
+        call_count = 0
+
+        def flat_fitness(params: dict[str, float]) -> float:
+            nonlocal call_count
+            call_count += 1
+            return -float("inf")
+
+        ga = GAOptimizer(
+            param_spaces=spaces,
+            fitness_func=flat_fitness,
+            population_size=8,
+            generations=20,
+            seed=42,
+        )
+        result = ga.optimize(verbose=True)
+
+        # patience=5 → 第 5 代早停：5×8 = 40 次评估（GA 无最终复评；
+        # 修复前 -inf - -inf = NaN，计数器永不递增 → 20×8 = 160，跑满世代）
+        assert call_count == 40
+        assert result.best_score == -float("inf")

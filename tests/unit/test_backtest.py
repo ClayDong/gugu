@@ -65,6 +65,30 @@ def low_vol_df() -> pd.DataFrame:
     )
 
 
+@pytest.fixture
+def drawdown_df() -> pd.DataFrame:
+    """先涨后急跌行情：用于真正触发移动止损退出。
+
+    2026-11-04 整改：原先的 low_vol_df 是单调上涨，认知引擎不会产生任何
+    trailing_stop_exit，导致对应测试零断言通过。
+    """
+    n = 60
+    dates = pd.date_range("2026-01-01", periods=n, freq="B").date
+    close = np.concatenate([np.linspace(100, 130, 30), np.linspace(130, 80, 30)])
+    volume = np.full(n, 10e6)
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": close - 0.3,
+            "high": close + 0.5,
+            "low": close - 0.5,
+            "close": close,
+            "volume": volume,
+            "amount": volume * close,
+        }
+    )
+
+
 class FixedSignalStrategy(Strategy):
     """测试用固定信号策略。"""
 
@@ -73,6 +97,19 @@ class FixedSignalStrategy(Strategy):
     def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
         result = df.copy()
         result["signal"] = [1, -1, -1, 0][: len(result)]
+        result["confidence"] = 1.0
+        return result
+
+
+class BuyOnceStrategy(Strategy):
+    """第 10 根 bar 买入一次，之后不产生策略卖出，便于观察移动止损退出。"""
+
+    name = "buy_once_test"
+
+    def _generate_signals_impl(self, df: pd.DataFrame) -> pd.DataFrame:
+        result = df.copy()
+        result["signal"] = 0
+        result.iloc[10, result.columns.get_loc("signal")] = 1
         result["confidence"] = 1.0
         return result
 
@@ -299,15 +336,21 @@ def test_backtest_cognitive_log_reduces_trades(low_vol_df):
     assert len(r_cog.trades) <= len(r_base.trades) + 5  # 容忍小幅波动
 
 
-def test_backtest_cognitive_engine_trailing_stop_exits(low_vol_df):
-    """认知引擎的移动止损应产生 EXIT 信号而非策略卖出。"""
-    engine = BacktestEngine(enable_cognitive_engine=True)
-    strategy = BoxBreakoutStrategy(params={"short_window": 5, "long_window": 10})
-    result = engine.run(strategy, low_vol_df, "000001")
-    # 验证 cognitive_log 中的 trailing_stop_exit 是合法值
-    for entry in result.cognitive_log:
-        if entry.get("action") == "trailing_stop_exit":
-            assert "stop_price" in entry or "close" in entry
+def test_backtest_cognitive_engine_trailing_stop_exits(drawdown_df):
+    """认知引擎的移动止损应产生 EXIT 信号并真实卖出。
+
+    2026-11-04 整改：原用例用低波动上涨行情，实测 cognitive_log 为空，
+    循环体一次都不执行，属于零断言假绿。改用先涨后急跌行情，硬断言
+    至少产生一次 trailing_stop_exit 并校验字段与成交。
+    """
+    engine = BacktestEngine(enable_cognitive_engine=True, initial_capital=100_000)
+    result = engine.run(BuyOnceStrategy(), drawdown_df, "600000")
+    exits = [e for e in result.cognitive_log if e.get("action") == "trailing_stop_exit"]
+    assert exits, "先涨后急跌行情应至少触发一次移动止损退出"
+    for entry in exits:
+        assert "stop_price" in entry or "close" in entry
+        assert entry["signal"] == "exit"
+    assert any(t.direction == "sell" for t in result.trades), "退出信号必须落到卖出成交"
 
 
 class TestTransactionCosts:
@@ -388,16 +431,18 @@ class TestTransactionCosts:
         strategy = BoxBreakoutStrategy(params={"short_window": 3, "long_window": 8})
         # 使用沪市股票（600开头）确保有过户费
         result = engine.run(strategy, trend_df, "600000")
-        if len(result.trades) >= 2:
-            buy_trade = [t for t in result.trades if t.direction == "buy"][0]
-            sell_trade = [t for t in result.trades if t.direction == "sell"][-1]
-            # 买入应有过户费（沪市）
-            assert buy_trade.transfer_fee >= 0
-            # 卖出应有印花税和过户费
-            assert sell_trade.stamp_tax > 0
-            # 佣金应≥5元
-            assert buy_trade.commission >= 5.0
-            assert sell_trade.commission >= 5.0
+        # 2026-11-04 整改：原为 `if len(result.trades) >= 2:`，数据不满足时
+        # 整段费用断言被静默跳过。改为硬断言前提，保证用例永远有实质断言。
+        assert len(result.trades) >= 2, "趋势行情应产生完整买卖闭环"
+        buy_trade = [t for t in result.trades if t.direction == "buy"][0]
+        sell_trade = [t for t in result.trades if t.direction == "sell"][-1]
+        # 买入应有过户费（沪市）
+        assert buy_trade.transfer_fee >= 0
+        # 卖出应有印花税和过户费
+        assert sell_trade.stamp_tax > 0
+        # 佣金应≥5元
+        assert buy_trade.commission >= 5.0
+        assert sell_trade.commission >= 5.0
 
     def test_backtest_equity_accounts_for_fees(self, trend_df):
         """回测权益曲线应反映交易费用（不能100%完美零成本）。"""
@@ -408,9 +453,11 @@ class TestTransactionCosts:
         strategy = BoxBreakoutStrategy(params={"short_window": 3, "long_window": 8})
         result_with_fee = engine.run(strategy, trend_df, "600000")
         result_no_fee = engine_no_fee.run(strategy, trend_df, "600000")
-        if len(result_with_fee.trades) > 0:
-            # 有费用的回测最终权益应≤无费用回测（考虑滑点和费用）
-            final_with_fee = result_with_fee.equity_curve.iloc[-1]
-            final_no_fee = result_no_fee.equity_curve.iloc[-1]
-            # 允许微小差异（随机数），但有费用不应显著高于无费用
-            assert final_with_fee <= final_no_fee * 1.02  # 容忍2%以内的随机差异
+        # 2026-11-04 整改：原为 `if len(result_with_fee.trades) > 0:`，
+        # 无成交时整段断言被跳过。改为硬断言前提。
+        assert len(result_with_fee.trades) > 0, "趋势行情应产生交易"
+        # 有费用的回测最终权益应≤无费用回测（考虑滑点和费用）
+        final_with_fee = result_with_fee.equity_curve.iloc[-1]
+        final_no_fee = result_no_fee.equity_curve.iloc[-1]
+        # 允许微小差异（随机数），但有费用不应显著高于无费用
+        assert final_with_fee <= final_no_fee * 1.02  # 容忍2%以内的随机差异

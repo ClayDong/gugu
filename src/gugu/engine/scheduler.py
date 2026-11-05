@@ -683,7 +683,9 @@ class TradingScheduler(SchedulerJobsMixin):
             from gugu.config import PROJECT_ROOT
 
             boot_path = PROJECT_ROOT / "data" / "scheduler_boot.json"
-            boot_path.parent.mkdir(exist_ok=True)
+            # 先判存在再创建，避免对已存在目录发起 mkdir（宿主/沙箱 EEXIST）
+            if not boot_path.parent.exists():
+                boot_path.parent.mkdir(parents=True, exist_ok=True)
             now_iso = datetime.now().isoformat()
             pid = os.getpid()
 

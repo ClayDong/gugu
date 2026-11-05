@@ -42,6 +42,12 @@ class RiskConfig(BaseModel):
     daily_loss_halt: float = Field(default=0.05, ge=0.0, le=1.0, description="日亏熔断阈值")
     max_total_positions: int = Field(default=5, ge=1, description="最大持仓数")
     max_same_industry: int = Field(default=2, ge=1, description="同行业最大持仓数")
+    max_same_industry_value_ratio: float = Field(
+        default=0.30, ge=0.0, le=1.0, description="同行业市值占比上限（P2-2）"
+    )
+    concentration_hhi_halt: float = Field(
+        default=0.40, ge=0.0, le=1.0, description="持仓集中度HHI硬限制阈值（P2-2）"
+    )
     t_plus_1: bool = Field(default=True, description="T+1 限制（系统默认开启）")
     max_holding_days_warn: int = Field(
         default=30, ge=1, description="持仓 N 天未盈利 → 警告减半仓（防阴跌套牢）"
@@ -51,6 +57,18 @@ class RiskConfig(BaseModel):
     )
     max_drawdown_halt: float = Field(
         default=0.15, ge=0.0, le=1.0, description="组合最大回撤熔断阈值"
+    )
+    # P2-4：回撤预警阈值（8% 回撤 → 仓位 7 折）
+    max_drawdown_warn: float = Field(
+        default=0.08, ge=0.0, le=1.0, description="组合最大回撤预警阈值（仓位打7折）"
+    )
+    # P2-2：持仓集中度 HHI 预警阈值（>0.25 视为偏高，降低单股上限）
+    concentration_hhi_warn: float = Field(
+        default=0.25, ge=0.0, le=1.0, description="持仓集中度HHI预警阈值"
+    )
+    # P2-2：最大单股市值占比预警阈值（超过则严控新仓）
+    max_single_weight_warn: float = Field(
+        default=0.25, ge=0.0, le=1.0, description="最大单股市值占比预警阈值"
     )
 
 
@@ -457,6 +475,24 @@ class WebConfig(BaseModel):
             "默认 True（安全）；设为 False 仅限本机开发显式豁免。"
         ),
     )
+    trading_password_hash: str = Field(
+        default="",
+        description=(
+            "交易密码哈希（PBKDF2-SHA256，格式：salt_hex$hash_hex）。"
+            "P0 安全加固：下单、止损、解除熔断等交易操作需要交易密码二次确认。"
+            "为空时交易密码功能禁用（仅 API Key 保护）。"
+            '生成方式：python -c "from gugu.web.app import hash_trading_password; '
+            "print(hash_trading_password('your_password'))\""
+        ),
+    )
+    require_trading_password: bool = Field(
+        default=True,
+        description=(
+            "是否对交易操作（下单、止损、解除熔断）要求交易密码二次确认。"
+            "默认 True。仅在 trading_password_hash 已配置时生效。"
+            "设为 False 仅限本机开发显式豁免。"
+        ),
+    )
 
 
 class PerspectiveConfig(BaseModel):
@@ -696,10 +732,15 @@ def flatten_config(app_config: AppConfig) -> dict[str, Any]:
             "daily_loss_halt": app_config.risk.daily_loss_halt,
             "max_total_positions": app_config.risk.max_total_positions,
             "max_same_industry": app_config.risk.max_same_industry,
+            "max_same_industry_value_ratio": app_config.risk.max_same_industry_value_ratio,
+            "concentration_hhi_halt": app_config.risk.concentration_hhi_halt,
+            "concentration_hhi_warn": app_config.risk.concentration_hhi_warn,
+            "max_single_weight_warn": app_config.risk.max_single_weight_warn,
             "t_plus_1": app_config.risk.t_plus_1,
             "max_holding_days_warn": app_config.risk.max_holding_days_warn,
             "max_holding_days_halt": app_config.risk.max_holding_days_halt,
             "max_drawdown_halt": app_config.risk.max_drawdown_halt,
+            "max_drawdown_warn": app_config.risk.max_drawdown_warn,
         },
         "execution": {
             "mode": app_config.execution.mode,

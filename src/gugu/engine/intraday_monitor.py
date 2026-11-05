@@ -219,7 +219,7 @@ class IntradayMonitor:
                         severity="info",
                         direction="buy",
                         value=super_large_net,
-                        message=f"🟢 {name}({symbol}) 超大单净流入 {super_large_net:.2f}亿",
+                        message=f"🔴 {name}({symbol}) 超大单净流入 {super_large_net:.2f}亿",
                     )
                 )
 
@@ -233,7 +233,7 @@ class IntradayMonitor:
                         severity="warning",
                         direction="sell",
                         value=super_large_net,
-                        message=f"🔴 {name}({symbol}) 超大单净流出 {abs(super_large_net):.2f}亿",
+                        message=f"🟢 {name}({symbol}) 超大单净流出 {abs(super_large_net):.2f}亿",
                     )
                 )
 
@@ -248,7 +248,7 @@ class IntradayMonitor:
                         severity="info",
                         direction="buy",
                         value=main_pct,
-                        message=f"🟢 {name}({symbol}) 主力净占比 {main_pct:.2f}%",
+                        message=f"🔴 {name}({symbol}) 主力净占比 {main_pct:.2f}%",
                     )
                 )
 
@@ -262,7 +262,7 @@ class IntradayMonitor:
                         severity="warning",
                         direction="sell",
                         value=main_pct,
-                        message=f"🔴 {name}({symbol}) 主力净占比 {main_pct:.2f}%",
+                        message=f"🟢 {name}({symbol}) 主力净占比 {main_pct:.2f}%",
                     )
                 )
 
@@ -289,7 +289,7 @@ class IntradayMonitor:
                             direction="buy",
                             value=recent_main_net,
                             message=(
-                                f"🟢 {name}({symbol}) 连续{consecutive_days}日主力净流入"
+                                f"🔴 {name}({symbol}) 连续{consecutive_days}日主力净流入"
                                 f"累计 {recent_main_net:.2f}亿"
                             ),
                         )
@@ -305,7 +305,7 @@ class IntradayMonitor:
                             direction="sell",
                             value=recent_main_net,
                             message=(
-                                f"🔴 {name}({symbol}) 连续{consecutive_days}日主力净流出"
+                                f"🟢 {name}({symbol}) 连续{consecutive_days}日主力净流出"
                                 f"累计 {abs(recent_main_net):.2f}亿"
                             ),
                         )
@@ -326,7 +326,7 @@ class IntradayMonitor:
                         direction="sell",
                         value=main_net,
                         message=(
-                            f"🔴 持仓 {name}({symbol}) 主力净流出{abs(main_net):.2f}亿，建议关注"
+                            f"🟢 持仓 {name}({symbol}) 主力净流出{abs(main_net):.2f}亿，建议关注"
                         ),
                     )
                 )
@@ -367,7 +367,7 @@ class IntradayMonitor:
                             direction="buy",
                             value=main_net,
                             message=(
-                                f"🟢 行业 {sector} 资金流入 {main_net:.2f}亿"
+                                f"🔴 行业 {sector} 资金流入 {main_net:.2f}亿"
                                 f"（涨幅 {change_pct:.2f}%）"
                             ),
                         )
@@ -384,7 +384,7 @@ class IntradayMonitor:
                             direction="sell",
                             value=main_net,
                             message=(
-                                f"🔴 行业 {sector} 资金流出 {abs(main_net):.2f}亿"
+                                f"🟢 行业 {sector} 资金流出 {abs(main_net):.2f}亿"
                                 f"（涨幅 {change_pct:.2f}%）"
                             ),
                         )

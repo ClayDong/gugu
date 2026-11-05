@@ -88,12 +88,22 @@ class TestEventEngine:
         assert stop_results == ["stop"]
 
     def test_no_handler_no_error(self) -> None:
-        """未注册事件类型不应报错。"""
+        """未注册事件类型不报错，也不得误触发其它已注册处理器。
+
+        2026-11-04 整改：原用例以 ``assert True`` 收尾（零断言假绿），
+        改为显式验证分发隔离性。
+        """
         engine = EventEngine()
-        # 推送未注册的事件类型
+        calls: list[str] = []
+        engine.register(EVENT_STOP_LOSS, lambda event: calls.append(event["type"]))
+        # 推送未注册的事件类型：不应报错，也不应触发任何 handler
         engine.put(EVENT_CYCLE_START)
         engine.put("unknown_event_type")
-        assert True  # 未抛出异常
+        assert calls == []
+        assert "unknown_event_type" not in engine._handlers
+        # 已注册事件仍可正常分发，证明引擎本身处于工作状态
+        engine.put(EVENT_STOP_LOSS)
+        assert calls == [EVENT_STOP_LOSS]
 
     def test_handler_exception_isolation(self) -> None:
         """单个处理器异常不影响其他处理器。"""

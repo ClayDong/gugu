@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from gugu import __version__  # noqa: E402
 from gugu.config import get_config  # noqa: E402
 from gugu.data import data_manager as dm  # noqa: E402
 from gugu.engine.main import TradingEngine  # noqa: E402
@@ -221,7 +222,7 @@ if __name__ == "__main__":
         metavar="N",
         help="循环间隔分钟数（signal_only 模式，0=单次）",
     )
-    parser.add_argument("--version", action="version", version="gugu 0.6.0")
+    parser.add_argument("--version", action="version", version=f"gugu {__version__}")
     args = parser.parse_args()
 
     if args.dry_run:
