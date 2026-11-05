@@ -48,7 +48,7 @@ DEFAULT_COST = 0.004
 DEFAULT_HORIZON = 5
 DEFAULT_DAYS = 700
 DEFAULT_START = "2024-02-01"
-DEFAULT_CACHE = PROJECT_ROOT / "data" / "kline_cache"
+DEFAULT_CACHE = PROJECT_ROOT / "data" / "parquet_cache"
 
 MIN_HISTORY_ROWS = 60
 MIN_CLUSTER_SAMPLES = 5
@@ -232,6 +232,25 @@ class AlwaysOnStrategy:
         return out
 
 
+def baseline_events(
+    frames: dict[str, pd.DataFrame],
+    index_df: pd.DataFrame,
+    *,
+    horizon: int = DEFAULT_HORIZON,
+    cost_rate: float = DEFAULT_COST,
+    start: str = DEFAULT_START,
+) -> Events:
+    """同池「每天都买」的无条件事件集合，供所有策略/规则做配对对照。"""
+    return collect_events(
+        AlwaysOnStrategy(),
+        frames,
+        index_df,
+        horizon=horizon,
+        cost_rate=cost_rate,
+        start=start,
+    )
+
+
 def baseline_stat(
     frames: dict[str, pd.DataFrame],
     index_df: pd.DataFrame,
@@ -241,15 +260,46 @@ def baseline_stat(
     start: str = DEFAULT_START,
 ) -> dict[str, Any]:
     """同池「每天都买」的无条件超额，作为所有策略数字的对照组。"""
-    events = collect_events(
-        AlwaysOnStrategy(),
-        frames,
-        index_df,
-        horizon=horizon,
-        cost_rate=cost_rate,
-        start=start,
-    )
+    events = baseline_events(frames, index_df, horizon=horizon, cost_rate=cost_rate, start=start)
     return build_stat(AlwaysOnStrategy.name, events)
+
+
+def net_alpha(
+    rule_events: Events,
+    baseline_events_: Events,
+    *,
+    min_symbol_samples: int = MIN_CLUSTER_SAMPLES,
+) -> dict[str, Any]:
+    """规则相对「同池每天都买」的净 alpha，按标的配对检验。
+
+    为什么必须配对而不是拿两个均值相减：池子自身的漂移在 3 日口径是 -0.16%、
+    10 日口径是 +0.25%（会变号），直接减点估计既没有误差，也无法判断"这点
+    差距是不是噪声"。
+
+    做法：对每只标的，先算该标的规则事件的均值，再减去同标的无条件均值，
+    得到 39 个配对差值，最后对这些差值做 t 检验。配对单位是标的，
+    信号重叠造成的伪独立被压到标的层面——和 `t_symbol` 同一套保守逻辑。
+
+    返回的 ``pairs`` 是真正参与检验的标的数；规则过稀（单标的不足
+    ``min_symbol_samples`` 笔）时该标的被剔除，``pairs`` 会明显小于标的池，
+    这时 alpha 只能当线索。
+    """
+    diffs: list[float] = []
+    for symbol, values in rule_events.per_symbol.items():
+        base = baseline_events_.per_symbol.get(symbol)
+        if not values or not base:
+            continue
+        if len(values) < min_symbol_samples or len(base) < min_symbol_samples:
+            continue
+        diffs.append(sum(values) / len(values) - sum(base) / len(base))
+    if len(diffs) < T_MIN_SAMPLES:
+        return {"pairs": len(diffs), "mean_alpha": None, "t_alpha": None, "positive_ratio": None}
+    return {
+        "pairs": len(diffs),
+        "mean_alpha": sum(diffs) / len(diffs),
+        "t_alpha": _nan_to_none(t_stat(diffs)),
+        "positive_ratio": sum(1 for d in diffs if d > 0) / len(diffs),
+    }
 
 
 def render_markdown(stats: list[dict[str, Any]], meta: dict[str, Any]) -> str:
@@ -262,35 +312,37 @@ def render_markdown(stats: list[dict[str, Any]], meta: dict[str, Any]) -> str:
         f"- 基准：{meta.get('index', DEFAULT_INDEX)}",
         f"- 标的数：{meta.get('symbols', 0)}",
         "",
-        "| 策略 | 密度 | 事件数 | 5日净超额 | 胜率 | t(事件) | t(按标的) |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| 策略 | 密度 | 事件数 | 5日净超额 | 净alpha | 胜率 | t(按标的) | t(净alpha) |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in stats:
         if not row["samples"]:
-            lines.append(f"| {row['strategy']} | {row['density']:.1%} | 0 | — | — | — | — |")
+            lines.append(f"| {row['strategy']} | {row['density']:.1%} | 0 | — | — | — | — | — |")
             continue
         lines.append(
             f"| {row['strategy']} | {row['density']:.1%} | {row['samples']} "
-            f"| {row['mean_excess']:+.2%} | {row['win_rate']:.0%} "
-            f"| {_fmt_t(row['t_event'])} | {_fmt_t(row['t_symbol'])} |"
+            f"| {row['mean_excess']:+.2%} | {_fmt_alpha(row)} | {row['win_rate']:.0%} "
+            f"| {_fmt_t(row['t_symbol'])} | {_fmt_t(row.get('t_alpha'))} |"
         )
     baseline = meta.get("baseline")
     if isinstance(baseline, dict) and baseline.get("samples"):
         lines.append(
             f"| （对照）{baseline['strategy']} | {baseline['density']:.0%} "
-            f"| {baseline['samples']} | {baseline['mean_excess']:+.2%} "
-            f"| {baseline['win_rate']:.0%} | {_fmt_t(baseline['t_event'])} "
-            f"| {_fmt_t(baseline['t_symbol'])} |"
+            f"| {baseline['samples']} | {baseline['mean_excess']:+.2%} | — "
+            f"| {baseline['win_rate']:.0%} | {_fmt_t(baseline['t_symbol'])} | — |"
         )
         lines += [
             "",
             "> 对照行是「同池每天都买」的无条件超额，代表池子自身的漂移。"
             "策略行减去它才是策略贡献；不减去就把 beta 当成了 alpha。",
+            "> 净alpha = 逐标的（策略事件均值 − 同标的无条件均值）后做配对检验，"
+            "|t| < 2 表示扣掉池子漂移后与零无法区分。",
         ]
     lines += [
         "",
         "> 密度 = 发买入信号的交易日 / 全部交易日。密度越高说明条件越不筛选。",
         "> t(按标的) 是保守口径，判断 edge 是否真实优先看它。",
+        "> 逐事件的 t 值（信号重叠时会虚高）只在 --json 里给，不进度量表。",
         "> 本表只做统计，不含任何调参建议——负超额的策略不是靠调参能救的。",
     ]
     return "\n".join(lines)
@@ -298,6 +350,11 @@ def render_markdown(stats: list[dict[str, Any]], meta: dict[str, Any]) -> str:
 
 def _fmt_t(value: float | None) -> str:
     return "—" if value is None else f"{value:+.2f}"
+
+
+def _fmt_alpha(row: dict[str, Any]) -> str:
+    value = row.get("mean_alpha")
+    return "—" if value is None else f"{value:+.2%}"
 
 
 def load_pool(pool_file: Path) -> list[str]:
@@ -442,6 +499,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    base_events = baseline_events(
+        frames, index_df, horizon=args.horizon, cost_rate=args.cost, start=args.start
+    )
+
     stats: list[dict[str, Any]] = []
     for name in args.strategies:
         try:
@@ -457,7 +518,9 @@ def main(argv: list[str] | None = None) -> int:
             cost_rate=args.cost,
             start=args.start,
         )
-        stats.append(build_stat(name, events))
+        stat = build_stat(name, events)
+        stat.update(net_alpha(events, base_events))
+        stats.append(stat)
 
     meta = {
         "start": args.start,
@@ -466,9 +529,7 @@ def main(argv: list[str] | None = None) -> int:
         "index": args.index,
         "symbols": len(frames),
         "failed": failed,
-        "baseline": baseline_stat(
-            frames, index_df, horizon=args.horizon, cost_rate=args.cost, start=args.start
-        ),
+        "baseline": build_stat(AlwaysOnStrategy.name, base_events),
     }
     if args.json:
         print(json.dumps({"meta": meta, "stats": stats}, ensure_ascii=False, indent=1))

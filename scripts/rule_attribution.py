@@ -44,12 +44,14 @@ from strategy_scoreboard import (  # noqa: E402
     DEFAULT_HORIZON,
     DEFAULT_INDEX,
     DEFAULT_START,
-    baseline_stat,
+    AlwaysOnStrategy,
+    baseline_events,
     build_stat,
     collect_events,
     load_frames,
     load_index,
     load_pool,
+    net_alpha,
 )
 
 DEFAULT_STRATEGIES = ("linjudaye",)
@@ -92,36 +94,31 @@ def attribute(
     horizon: int,
     cost_rate: float,
     start: str,
+    base_events: Any = None,
 ) -> list[dict[str, Any]]:
-    """返回 [全集] + 每条规则 的统计行。"""
+    """返回 [全集] + 每条规则 的统计行。
+
+    传了 ``base_events``（同池无条件事件）时，每行额外带 ``mean_alpha`` /
+    ``t_alpha`` / ``pairs``——即扣掉池子漂移、按标的配对检验之后还剩多少。
+    """
     sample = next(iter(frames.values()))
-    rows = [
-        build_stat(
-            "全集 OR（现状）",
-            collect_events(
-                RuleSubset(strategy, None),
-                frames,
-                index_df,
-                horizon=horizon,
-                cost_rate=cost_rate,
-                start=start,
-            ),
+    subsets = [("全集 OR（现状）", None)]
+    subsets += [(name, (name,)) for name in rule_names(strategy, sample)]
+
+    rows: list[dict[str, Any]] = []
+    for label, rules in subsets:
+        events = collect_events(
+            RuleSubset(strategy, rules),
+            frames,
+            index_df,
+            horizon=horizon,
+            cost_rate=cost_rate,
+            start=start,
         )
-    ]
-    for name in rule_names(strategy, sample):
-        rows.append(
-            build_stat(
-                name,
-                collect_events(
-                    RuleSubset(strategy, (name,)),
-                    frames,
-                    index_df,
-                    horizon=horizon,
-                    cost_rate=cost_rate,
-                    start=start,
-                ),
-            )
-        )
+        row = build_stat(label, events)
+        if base_events is not None:
+            row.update(net_alpha(events, base_events))
+        rows.append(row)
     return rows
 
 
@@ -136,32 +133,36 @@ def render_markdown(rows: list[dict[str, Any]], meta: dict[str, Any]) -> str:
         f"- 基准：{meta['index']}",
         f"- 标的数：{meta['symbols']}",
         "",
-        "| 规则 | 密度 | 事件数 | 净超额 | 胜率 | t(事件) | t(按标的) |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| 规则 | 密度 | 事件数 | 净超额 | 净alpha | 胜率 | t(按标的) | t(净alpha) |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in rows:
         if not row["samples"]:
-            lines.append(f"| {row['strategy']} | {row['density']:.1%} | 0 | — | — | — | — |")
+            lines.append(f"| {row['strategy']} | {row['density']:.1%} | 0 | — | — | — | — | — |")
             continue
         t_sym = "—" if row["t_symbol"] is None else f"{row['t_symbol']:+.2f}"
-        t_ev = "—" if row["t_event"] is None else f"{row['t_event']:+.2f}"
+        alpha = row.get("mean_alpha")
+        alpha_txt = "—" if alpha is None else f"{alpha:+.2%}"
+        t_alpha = "—" if row.get("t_alpha") is None else f"{row['t_alpha']:+.2f}"
         lines.append(
             f"| {row['strategy']} | {row['density']:.1%} | {row['samples']} "
-            f"| {row['mean_excess']:+.2%} | {row['win_rate']:.0%} | {t_ev} | {t_sym} |"
+            f"| {row['mean_excess']:+.2%} | {alpha_txt} | {row['win_rate']:.0%} "
+            f"| {t_sym} | {t_alpha} |"
         )
     baseline = meta.get("baseline")
     if isinstance(baseline, dict) and baseline.get("samples"):
         t_sym = "—" if baseline["t_symbol"] is None else f"{baseline['t_symbol']:+.2f}"
-        t_ev = "—" if baseline["t_event"] is None else f"{baseline['t_event']:+.2f}"
         lines.append(
             f"| （对照）{baseline['strategy']} | {baseline['density']:.0%} "
-            f"| {baseline['samples']} | {baseline['mean_excess']:+.2%} "
-            f"| {baseline['win_rate']:.0%} | {t_ev} | {t_sym} |"
+            f"| {baseline['samples']} | {baseline['mean_excess']:+.2%} | — "
+            f"| {baseline['win_rate']:.0%} | {t_sym} | — |"
         )
         lines += [
             "",
             "> 对照行是「同池每天都买」的无条件超额，代表池子自身的漂移。"
             "规则行减去它才是规则贡献。",
+            "> 净alpha = 逐标的（规则事件均值 − 同标的无条件均值）后做配对检验。"
+            "这一步必须做：池子漂移在 3 日口径为负、10 日口径为正，会变号。",
         ]
     lines += [
         "",
@@ -208,6 +209,9 @@ def main(argv: list[str] | None = None) -> int:
 
     payload: list[dict[str, Any]] = []
     supported = 0
+    base_events = baseline_events(
+        frames, index_df, horizon=args.horizon, cost_rate=args.cost, start=args.start
+    )
     for name in args.strategies:
         try:
             strategy = get_strategy(name)
@@ -226,6 +230,7 @@ def main(argv: list[str] | None = None) -> int:
             horizon=args.horizon,
             cost_rate=args.cost,
             start=args.start,
+            base_events=base_events,
         )
         meta = {
             "strategy": name,
@@ -235,9 +240,7 @@ def main(argv: list[str] | None = None) -> int:
             "index": args.index,
             "symbols": len(frames),
             "failed": failed,
-            "baseline": baseline_stat(
-                frames, index_df, horizon=args.horizon, cost_rate=args.cost, start=args.start
-            ),
+            "baseline": build_stat(AlwaysOnStrategy.name, base_events),
         }
         if args.json:
             payload.append({"meta": meta, "rules": rows})

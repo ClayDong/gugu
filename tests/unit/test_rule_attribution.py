@@ -133,3 +133,87 @@ def test_main_errors_when_pool_missing(tmp_path) -> None:
 
     code = mod.main(["--pool-file", str(tmp_path / "nope.json"), "--cache-dir", str(tmp_path)])
     assert code == 1
+
+
+# ── 净 alpha：扣掉池子漂移 ───────────────────────────────
+
+
+def test_attribute_without_baseline_has_no_net_alpha() -> None:
+    """不给对照就不出净 alpha 字段，避免渲染层把缺失当成 0。"""
+    frames, index = _frame_and_index()
+    rows = attribute(_FakeRules(), frames, index, horizon=2, cost_rate=0.0, start="2024-01-01")
+
+    assert all("mean_alpha" not in r for r in rows)
+
+
+def _three_symbols(rows: int = 80) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
+    """净 alpha 是逐标的配对检验，至少要 3 只标的才谈得上 t 值。"""
+    frames, index = _frame_and_index(rows)
+    return {f"S{i}": frames["X"].copy() for i in range(3)}, index
+
+
+def test_attribute_attaches_net_alpha_when_baseline_given() -> None:
+    from scripts.strategy_scoreboard import AlwaysOnStrategy, baseline_events
+
+    frames, index = _three_symbols()
+    base = baseline_events(frames, index, horizon=2, cost_rate=0.0, start="2024-01-01")
+    rows = attribute(
+        _FakeRules(),
+        frames,
+        index,
+        horizon=2,
+        cost_rate=0.0,
+        start="2024-01-01",
+        base_events=base,
+    )
+
+    assert all("mean_alpha" in r and "t_alpha" in r and "pairs" in r for r in rows)
+    assert rows[1]["pairs"] == 3
+    # 规则 A 每天都发信号，等价于无条件基准，净 alpha 必须是 0
+    assert rows[1]["mean_alpha"] == pytest.approx(0.0)
+    assert AlwaysOnStrategy.name == "同池无条件基准"
+
+
+def test_attribute_net_alpha_none_when_symbols_fewer_than_three() -> None:
+    """标的不足 3 只时如实不给 alpha，不能凭一两只标的宣布有 edge。"""
+    from scripts.strategy_scoreboard import baseline_events
+
+    frames, index = _frame_and_index(80)
+    base = baseline_events(frames, index, horizon=2, cost_rate=0.0, start="2024-01-01")
+    rows = attribute(
+        _FakeRules(),
+        frames,
+        index,
+        horizon=2,
+        cost_rate=0.0,
+        start="2024-01-01",
+        base_events=base,
+    )
+
+    assert rows[1]["pairs"] == 1
+    assert rows[1]["mean_alpha"] is None
+
+
+def test_render_markdown_shows_net_alpha_column() -> None:
+    frames, index = _three_symbols()
+    from scripts.strategy_scoreboard import AlwaysOnStrategy, baseline_events, build_stat
+
+    base = baseline_events(frames, index, horizon=2, cost_rate=0.0, start="2024-01-01")
+    rows = attribute(
+        _FakeRules(), frames, index, horizon=2, cost_rate=0.0, start="2024-01-01", base_events=base
+    )
+    meta = {
+        "strategy": "demo",
+        "start": "2024-03-01",
+        "cost": 0.0,
+        "horizon": 2,
+        "index": "sh000300",
+        "symbols": 3,
+        "baseline": build_stat(AlwaysOnStrategy.name, base),
+    }
+
+    text = render_markdown(rows, meta)
+
+    assert "净alpha" in text
+    assert "配对检验" in text
+    assert "会变号" in text

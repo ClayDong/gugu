@@ -536,3 +536,175 @@ def test_render_markdown_omits_baseline_when_no_samples() -> None:
     text = render_markdown([], {"baseline": baseline})
 
     assert "（对照）" not in text
+
+
+# ── 净 alpha：扣掉池子漂移后的配对检验 ──────────────────
+
+
+def _events(mapping: dict[str, list[float]]) -> "object":
+    from scripts.strategy_scoreboard import Events
+
+    return Events(per_symbol=mapping)
+
+
+def test_net_alpha_pairs_by_symbol_not_by_event() -> None:
+    """配对单位必须是标的：一只标的信号再多，也不能一票否决其他标的。
+
+    逐事件平均会是 (0.01*10 + 0.02*10 + 0.03*200)/220 ≈ 2.8%，被 C 的样本量
+    拖偏；逐标的平均是 (1% + 2% + 3%)/3 = 2%。
+    """
+    from scripts.strategy_scoreboard import net_alpha
+
+    rule = _events({"A": [0.01] * 10, "B": [0.02] * 10, "C": [0.03] * 200})
+    base = _events({"A": [0.0] * 10, "B": [0.0] * 10, "C": [0.0] * 10})
+
+    got = net_alpha(rule, base)
+
+    assert got["pairs"] == 3
+    assert got["mean_alpha"] == pytest.approx(0.02)
+
+
+def test_net_alpha_is_zero_when_rule_equals_baseline() -> None:
+    from scripts.strategy_scoreboard import net_alpha
+
+    same = {
+        "A": [0.01, 0.02, 0.03, 0.04, 0.05],
+        "B": [0.02, 0.01, 0.0, 0.03, 0.01],
+        "C": [-0.01, -0.02, 0.0, 0.01, 0.02],
+    }
+    got = net_alpha(_events(same), _events(same))
+
+    assert got["pairs"] == 3
+    assert got["mean_alpha"] == pytest.approx(0.0)
+    # 差值全为 0，没有方差，t 不能报成 0 冒充"确认无效"
+    assert got["t_alpha"] is None
+
+
+def test_net_alpha_skips_symbols_with_thin_rule_samples() -> None:
+    """单标的规则事件不足 5 笔时不参与配对——不拿一笔交易代表一只标的。"""
+    from scripts.strategy_scoreboard import net_alpha
+
+    rule = _events({"A": [0.05]})  # 只有 1 笔
+    base = _events({"A": [0.0] * 10})
+
+    got = net_alpha(rule, base)
+
+    assert got["pairs"] == 0
+    assert got["mean_alpha"] is None
+    assert got["t_alpha"] is None
+    assert got["positive_ratio"] is None
+
+
+def test_net_alpha_reports_none_below_three_pairs() -> None:
+    from scripts.strategy_scoreboard import net_alpha
+
+    rule = _events({"A": [0.01] * 6, "B": [0.02] * 6})
+    base = _events({"A": [0.0] * 6, "B": [0.0] * 6})
+
+    got = net_alpha(rule, base)
+
+    assert got["pairs"] == 2
+    assert got["mean_alpha"] is None
+    assert got["t_alpha"] is None
+
+
+def test_net_alpha_ignores_symbol_missing_from_baseline() -> None:
+    """基准里没有这只标的，就没有对照组，不能拿别的标的凑。"""
+    from scripts.strategy_scoreboard import net_alpha
+
+    rule = _events({"A": [0.01] * 6, "Z": [0.09] * 6})
+    base = _events({"A": [0.0] * 6})
+
+    got = net_alpha(rule, base)
+
+    assert got["pairs"] == 1
+    assert got["mean_alpha"] is None
+
+
+def test_net_alpha_reports_positive_ratio_and_sign() -> None:
+    from scripts.strategy_scoreboard import net_alpha
+
+    rule = _events({"A": [0.03] * 6, "B": [0.03] * 6, "C": [-0.01] * 6})
+    base = _events({"A": [0.0] * 6, "B": [0.0] * 6, "C": [0.0] * 6})
+
+    got = net_alpha(rule, base)
+
+    assert got["mean_alpha"] == pytest.approx((0.03 + 0.03 - 0.01) / 3)
+    assert got["positive_ratio"] == pytest.approx(2 / 3)
+    assert got["t_alpha"] is not None
+
+
+def test_baseline_events_stat_matches_baseline_stat() -> None:
+    from scripts.strategy_scoreboard import AlwaysOnStrategy, baseline_events, baseline_stat
+
+    frames = {"X": _long_frame(80, base=10.0, step=0.005)}
+    bench = _long_frame(base=100.0, step=0.002)
+
+    direct = baseline_stat(frames, bench, horizon=2, cost_rate=0.001)
+    via = build_stat(
+        AlwaysOnStrategy.name, baseline_events(frames, bench, horizon=2, cost_rate=0.001)
+    )
+
+    assert direct == via
+
+
+def test_render_markdown_shows_net_alpha_columns() -> None:
+    stats = [
+        {
+            "strategy": "demo",
+            "density": 0.3,
+            "samples": 100,
+            "mean_excess": 0.001,
+            "win_rate": 0.5,
+            "t_event": 1.0,
+            "t_symbol": 0.5,
+            "pairs": 39,
+            "mean_alpha": 0.0012,
+            "t_alpha": 0.4,
+            "positive_ratio": 0.55,
+        }
+    ]
+
+    text = render_markdown(stats, {"symbols": 39})
+
+    assert "净alpha" in text
+    assert "+0.12%" in text
+    assert "+0.40" in text
+
+
+def test_render_markdown_marks_missing_net_alpha() -> None:
+    stats = [
+        {
+            "strategy": "demo",
+            "density": 0.3,
+            "samples": 100,
+            "mean_excess": 0.001,
+            "win_rate": 0.5,
+            "t_event": 1.0,
+            "t_symbol": 0.5,
+            "pairs": 2,
+            "mean_alpha": None,
+            "t_alpha": None,
+            "positive_ratio": None,
+        }
+    ]
+
+    text = render_markdown(stats, {"symbols": 39})
+    row = next(line for line in text.splitlines() if line.startswith("| demo |"))
+
+    assert row.count("—") >= 2
+
+
+def test_default_cache_matches_backfill_tool() -> None:
+    """体检表必须读补数工具写的那个目录。
+
+    2026-11-05 实际踩到：体检表默认 data/kline_cache，补数工具写
+    data/parquet_cache，于是 `--strategies ...` 不带 --cache-dir 时会静默
+    回退联网、被限流后报「基准不可用」——数据明明在本地。这类漂移不报错，
+    只给出错误的"没数据"，所以钉一条测试。
+    """
+    import scripts.backfill_history as backfill
+    import scripts.strategy_scoreboard as board
+
+    assert board.DEFAULT_CACHE == backfill.DEFAULT_CACHE
+    assert board.DEFAULT_CACHE.name == "parquet_cache"
