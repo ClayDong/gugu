@@ -202,6 +202,62 @@ def date_cluster_stat(rows: list[dict[str, Any]]) -> tuple[int, float | None]:
     return len(means), (None if math.isnan(value) else value)
 
 
+def day_selection_alpha(
+    rows: list[dict[str, Any]],
+    base_events: Events,
+) -> dict[str, Any]:
+    """同一信号日内，「信号股票」相对「池子其余股票」的差额。
+
+    为什么必须这样拆：策略的每一笔收益，等价于它选中的那个 (日期, 标的) 上的
+    无条件收益——入场价、出场价、成本完全相同，所以"同日同标的"相减恒为 0，
+    拆不出任何东西。真正能拆的是**同一天里它买的股票 vs 池子其他股票**：
+
+        策略超额 = 那一天的池子整体超额（择时）+ 当日选股差额（选股）
+
+    前者是"买对了日子"，后者才是"挑对了股票"。若选股差额与 0 无法区分，
+    那这套规则本质上只是一枚市场状态指示器，不是选股器。
+
+    聚类单位仍然是日期：同一天的所有标的共享同一个市场冲击。
+    """
+    pool_by_date: dict[str, list[float]] = {}
+    for row in base_events.rows:
+        pool_by_date.setdefault(str(row["date"]), []).append(float(row["excess"]))
+
+    pool_values: list[float] = []
+    diffs_by_event: list[float] = []
+    diffs_by_date: dict[str, list[float]] = {}
+    for row in rows:
+        date = str(row["date"])
+        pool = pool_by_date.get(date)
+        if not pool:
+            continue
+        pool_mean = sum(pool) / len(pool)
+        gap = float(row["excess"]) - pool_mean
+        pool_values.append(pool_mean)
+        diffs_by_event.append(gap)
+        diffs_by_date.setdefault(date, []).append(gap)
+
+    if not diffs_by_event:
+        return {
+            "selection_alpha": None,
+            "t_selection": None,
+            "p_selection": None,
+            "pool_same_day": None,
+            "selection_dates": 0,
+        }
+    # 均值按事件加权，与净超额同口径，保证「净超额 = 同日池子 + 选股alpha」精确成立；
+    # t 值按日期聚类，因为同一天的所有标的共享同一个市场冲击。
+    date_means = [sum(v) / len(v) for v in diffs_by_date.values()]
+    value = t_stat(date_means) if len(date_means) >= 3 else math.nan
+    return {
+        "selection_alpha": sum(diffs_by_event) / len(diffs_by_event),
+        "t_selection": None if math.isnan(value) else value,
+        "p_selection": t_p_value(None if math.isnan(value) else value, len(date_means) - 1),
+        "pool_same_day": sum(pool_values) / len(pool_values),
+        "selection_dates": len(date_means),
+    }
+
+
 def summarize(
     label: str,
     rows: list[dict[str, Any]],
@@ -226,6 +282,11 @@ def summarize(
         "mean_alpha": None,
         "t_alpha": None,
         "positive_ratio": None,
+        "selection_alpha": None,
+        "t_selection": None,
+        "p_selection": None,
+        "pool_same_day": None,
+        "selection_dates": 0,
         "insufficient": len(rows) < MIN_BUCKET_EVENTS,
     }
     if stat["insufficient"]:
@@ -237,6 +298,7 @@ def summarize(
     stat["dates"], stat["t_date"] = date_cluster_stat(rows)
     stat["p_date"] = t_p_value(stat["t_date"], stat["dates"] - 1)
     stat["p_alpha"] = t_p_value(stat["t_alpha"], stat["pairs"] - 1)
+    stat.update(day_selection_alpha(rows, base_events))
     return stat
 
 
@@ -292,9 +354,9 @@ def render_markdown(rows: list[dict[str, Any]], meta: dict[str, Any]) -> str:
         f"- 标的数：{meta['symbols']}",
         f"- 分桶数：{meta['buckets']}（按广度排序后等事件数切分）",
         "",
-        "| 分组 | 广度区间 | 事件数 | 信号日数 | 净超额 | 净alpha | 胜率 "
-        "| t(按标的) | t(按日) | p(按日, FDR) | t(净alpha) |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| 分组 | 广度区间 | 事件数 | 信号日数 | 净超额 | 同日池子 "
+        "| 选股alpha | t(选股) | t(按日) | p(按日, FDR) |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in rows:
         span = "—"
@@ -302,22 +364,20 @@ def render_markdown(rows: list[dict[str, Any]], meta: dict[str, Any]) -> str:
             span = f"{row['breadth_min']:.0%}~{row['breadth_max']:.0%}"
         if row.get("insufficient"):
             lines.append(
-                f"| {row['bucket']} | {span} | {row['events']} | 样本不足 | — | — | — | — | — |"
+                f"| {row['bucket']} | {span} | {row['events']} | 样本不足 | — | — | — | — | — | — |"
             )
             continue
         lines.append(
             f"| {row['bucket']} | {span} | {row['events']} | {row['dates']} "
-            f"| {_fmt_pct(row['mean_excess'])} | {_fmt_pct(row['mean_alpha'])} "
-            f"| {row['win_rate']:.0%} | {_fmt_t(row['t_symbol'])} "
-            f"| {_fmt_t(row['t_date'])} | {_fmt_p(row.get('p_date_fdr'))} "
-            f"| {_fmt_t(row['t_alpha'])} |"
+            f"| {_fmt_pct(row['mean_excess'])} | {_fmt_pct(row.get('pool_same_day'))} "
+            f"| {_fmt_pct(row.get('selection_alpha'))} | {_fmt_t(row.get('t_selection'))} "
+            f"| {_fmt_t(row['t_date'])} | {_fmt_p(row.get('p_date_fdr'))} |"
         )
     baseline = meta.get("baseline") or {}
     if baseline.get("samples"):
         lines.append(
             f"| （对照）{baseline['strategy']} | 100% | {baseline['samples']} | — "
-            f"| {_fmt_pct(baseline['mean_excess'])} | — | {baseline['win_rate']:.0%} "
-            f"| {_fmt_t(baseline['t_symbol'])} | — | — | — |"
+            f"| {_fmt_pct(baseline['mean_excess'])} | — | — | — | — | — |"
         )
     lines += [
         "",
@@ -331,7 +391,10 @@ def render_markdown(rows: list[dict[str, Any]], meta: dict[str, Any]) -> str:
         "不校正时最大的那个 t 天然偏大。",
         "> 同一信号日全池属同一个广度值，因此分桶等价于按日期分组；"
         "t(净alpha) 的按标的配对会重复计数，仅作参考。",
-        "> 净alpha 与净超额口径不同（逐标的等权 vs 逐事件加权），不可相加。",
+        "> 同日池子 = 同一批信号日上、全池不分信号的无条件超额；"
+        "选股alpha = 信号股票当日均值 − 池子当日均值，按日聚类检验。",
+        "> 两者关系：净超额 ≈ 同日池子（买对日子）+ 选股alpha（挑对股票）。"
+        "若选股alpha 与 0 无法区分，这套规则只是市场状态指示器，不是选股器。",
     ]
     return "\n".join(lines)
 

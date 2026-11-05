@@ -398,3 +398,158 @@ def test_apply_fdr_marks_buckets_and_skips_overall_row() -> None:
     from scripts.density_hypothesis import bh_adjusted_p
 
     assert [r["p_date_fdr"] for r in rows[1:]] == pytest.approx(bh_adjusted_p([0.04, 0.02, 0.01]))
+
+
+# ── 选股 vs 择时：同日池子与选股差额必须分开 ──────────────
+
+
+def test_day_selection_alpha_measures_within_day_gap() -> None:
+    """同一天：信号股票 +3%，池子其余 0% -> 选股 alpha = +3%。"""
+    from scripts.density_hypothesis import day_selection_alpha
+
+    base_rows = [
+        _row("A", "2024-03-01", 0.03),
+        _row("B", "2024-03-01", 0.0),
+        _row("C", "2024-03-01", 0.0),
+        _row("A", "2024-03-04", 0.01),
+        _row("B", "2024-03-04", 0.01),
+        _row("C", "2024-03-04", 0.01),
+    ]
+    base = events_from_rows(base_rows)
+    base.rows = base_rows
+    picked = [_row("A", "2024-03-01", 0.03), _row("A", "2024-03-04", 0.01)]
+
+    got = day_selection_alpha(picked, base)
+
+    # 3/1：信号 A 3% vs 池子均值 1% -> +2pp；3/4：A 1% vs 池子 1% -> 0
+    assert got["selection_alpha"] == pytest.approx(0.01)
+    assert got["selection_dates"] == 2
+
+
+def test_day_selection_alpha_is_zero_when_picking_everything() -> None:
+    """全池一起买时，选股差额必须是 0——这就是"择时而非选股"的定义。"""
+    from scripts.density_hypothesis import day_selection_alpha
+
+    base_rows = [
+        _row("A", "2024-03-01", 0.05),
+        _row("B", "2024-03-01", -0.01),
+        _row("A", "2024-03-04", 0.02),
+        _row("B", "2024-03-04", 0.04),
+        _row("A", "2024-03-05", -0.02),
+        _row("B", "2024-03-05", 0.0),
+    ]
+    base = events_from_rows(base_rows)
+    base.rows = base_rows
+
+    got = day_selection_alpha(list(base_rows), base)
+
+    assert got["selection_alpha"] == pytest.approx(0.0)
+    assert got["selection_dates"] == 3
+
+
+def test_day_selection_alpha_reports_pool_mean_on_same_days() -> None:
+    from scripts.density_hypothesis import day_selection_alpha
+
+    base_rows = [
+        _row("A", "2024-03-01", 0.04),
+        _row("B", "2024-03-01", 0.02),
+        _row("A", "2024-03-04", 0.10),
+        _row("B", "2024-03-04", 0.10),
+    ]
+    base = events_from_rows(base_rows)
+    base.rows = base_rows
+
+    got = day_selection_alpha([_row("A", "2024-03-01", 0.04)], base)
+
+    # 只用被选中的那一天算池子均值，不能把 3/4 的高收益混进来
+    assert got["pool_same_day"] == pytest.approx(0.03)
+
+
+def test_day_selection_alpha_handles_no_common_dates() -> None:
+    from scripts.density_hypothesis import day_selection_alpha
+
+    base = events_from_rows([_row("A", "2024-03-01", 0.01)])
+
+    got = day_selection_alpha([_row("A", "2030-01-01", 0.01)], base)
+
+    assert got["selection_alpha"] is None
+    assert got["selection_dates"] == 0
+
+
+def test_summarize_reports_selection_fields() -> None:
+    rows = [_row("A", "2024-03-01", 0.02) for _ in range(MIN_BUCKET_EVENTS)]
+    for row in rows:
+        row["breadth"] = 0.5
+    base_rows = [_row("A", "2024-03-01", 0.0), _row("B", "2024-03-01", 0.0)]
+    base = events_from_rows(base_rows)
+    base.rows = base_rows
+
+    stat = summarize("高广度", rows, base)
+
+    assert stat["selection_alpha"] == pytest.approx(0.02)
+    assert stat["selection_dates"] == 1
+    assert stat["p_selection"] is None  # 只有一个日期，不给 p
+
+
+def test_render_markdown_shows_selection_decomposition() -> None:
+    rows = [
+        {
+            "bucket": "高广度（全池共振）",
+            "events": 445,
+            "dates": 38,
+            "breadth_min": 0.15,
+            "breadth_max": 0.97,
+            "insufficient": False,
+            "samples": 445,
+            "mean_excess": 0.0102,
+            "mean_alpha": 0.0116,
+            "win_rate": 0.46,
+            "t_symbol": 1.79,
+            "t_date": 0.77,
+            "t_alpha": 2.00,
+            "p_date_fdr": 0.712,
+            "pool_same_day": 0.0098,
+            "selection_alpha": 0.0004,
+            "t_selection": 0.05,
+        }
+    ]
+    meta = {
+        "strategy": "demo",
+        "start": "2024-02-01",
+        "cost": 0.004,
+        "horizon": 5,
+        "index": "sh000300",
+        "symbols": 39,
+        "buckets": 3,
+    }
+
+    text = render_markdown(rows, meta)
+
+    assert "同日池子" in text
+    assert "选股alpha" in text
+    assert "只是市场状态指示器，不是选股器" in text
+
+
+def test_decomposition_closes_exactly() -> None:
+    """净超额 = 同日池子 + 选股alpha，两项之和必须精确等于第一项。
+
+    三项都按事件加权。若这层恒等式不闭合，读者会把"权重口径差异"当成发现。
+    """
+    from scripts.density_hypothesis import day_selection_alpha
+
+    base_rows = [
+        _row("A", "2024-03-01", 0.03),
+        _row("B", "2024-03-01", 0.01),
+        _row("A", "2024-03-04", 0.00),
+        _row("B", "2024-03-04", 0.02),
+    ]
+    base = events_from_rows(base_rows)
+    base.rows = base_rows
+    picked = [_row("A", "2024-03-01", 0.03), _row("B", "2024-03-04", 0.02)]
+
+    got = day_selection_alpha(picked, base)
+    mean_excess = sum(r["excess"] for r in picked) / len(picked)
+
+    assert got["pool_same_day"] + got["selection_alpha"] == pytest.approx(mean_excess)
+    # 3/1 池子均值 2%，A 3% -> +1pp；3/4 池子均值 1%，B 2% -> +1pp
+    assert got["selection_alpha"] == pytest.approx(0.01)
