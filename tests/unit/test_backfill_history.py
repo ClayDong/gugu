@@ -160,7 +160,9 @@ def test_load_pool_missing_file(tmp_path: Path) -> None:
 
 
 def test_main_errors_without_symbols(tmp_path: Path) -> None:
-    code = main(["--pool-file", str(tmp_path / "nope.json"), "--cache-dir", str(tmp_path)])
+    code = main(
+        ["--pool-file", str(tmp_path / "nope.json"), "--cache-dir", str(tmp_path), "--index", ""]
+    )
     assert code == 1
 
 
@@ -172,7 +174,9 @@ def test_main_returns_error_when_every_fetch_fails(tmp_path: Path, monkeypatch) 
         "gugu.analysis.event_study_data.fetch_stock_klines",
         lambda symbol, days: (_ for _ in ()).throw(RuntimeError("blocked")),
     )
-    code = backfill.main(["--symbols", "600519", "--cache-dir", str(tmp_path / "cache")])
+    code = backfill.main(
+        ["--symbols", "600519", "--cache-dir", str(tmp_path / "cache"), "--index", ""]
+    )
     assert code == 1
 
 
@@ -185,10 +189,29 @@ def test_main_writes_file_and_is_idempotent(tmp_path: Path, monkeypatch) -> None
         lambda symbol, days: frame.copy(),
     )
     cache = tmp_path / "cache"
-    assert backfill.main(["--symbols", "600519", "--cache-dir", str(cache)]) == 0
+    argv = ["--symbols", "600519", "--cache-dir", str(cache), "--index", ""]
+    assert backfill.main(argv) == 0
     written = list(cache.glob("*.parquet"))
     assert len(written) == 1 and written[0].name == "600519_10d_none.parquet"
 
     # 第二次运行不得重复写入更短/同长的文件
-    assert backfill.main(["--symbols", "600519", "--cache-dir", str(cache)]) == 0
+    assert backfill.main(argv) == 0
     assert len(list(cache.glob("*.parquet"))) == 1
+
+
+def test_main_backfills_benchmark_index(tmp_path: Path, monkeypatch) -> None:
+    """基准指数必须一起补：指数只有 200 行时，800 行窗口算不出超额。"""
+    import scripts.backfill_history as backfill
+
+    frame = _frame(10)
+    monkeypatch.setattr(
+        "gugu.analysis.event_study_data.fetch_stock_klines", lambda symbol, days: frame.copy()
+    )
+    monkeypatch.setattr(
+        "gugu.analysis.event_study_data.fetch_index_klines", lambda code, days: frame.copy()
+    )
+    cache = tmp_path / "cache"
+    code = backfill.main(["--symbols", "600519", "--cache-dir", str(cache), "--index", "sh000300"])
+    assert code == 0
+    names = sorted(p.name for p in cache.glob("*.parquet"))
+    assert names == ["000300_10d_none.parquet", "600519_10d_none.parquet"]

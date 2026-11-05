@@ -34,6 +34,7 @@ import sys
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -44,6 +45,7 @@ if str(PROJECT_ROOT / "src") not in sys.path:
 DEFAULT_CACHE = PROJECT_ROOT / "data" / "parquet_cache"
 DEFAULT_POOL_FILE = PROJECT_ROOT / "data" / "linjudaye_event_study_40.json"
 DEFAULT_DAYS = 800
+DEFAULT_INDEX = "sh000300"
 REQUIRED_COLUMNS = ("date", "open", "high", "low", "close", "volume")
 
 
@@ -145,6 +147,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pool-file", default=str(DEFAULT_POOL_FILE))
     parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
     parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE))
+    parser.add_argument(
+        "--index",
+        default=DEFAULT_INDEX,
+        help="同时补基准指数（超额收益必需）；传空字符串跳过",
+    )
     parser.add_argument("--dry-run", action="store_true", help="只打印计划，不写文件")
     parser.add_argument(
         "--keep-today",
@@ -156,10 +163,19 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    from gugu.analysis.event_study_data import fetch_stock_klines
+    from gugu.analysis.event_study_data import fetch_index_klines, fetch_stock_klines
 
-    symbols = args.symbols or load_pool(Path(args.pool_file))
-    if not symbols:
+    symbols = [s.strip() for s in (args.symbols or load_pool(Path(args.pool_file))) if s.strip()]
+    tasks: list[tuple[str, Any]] = [
+        (s, lambda s=s: fetch_stock_klines(s, args.days)) for s in symbols
+    ]
+    # 基准指数必须一起补：超额收益全靠它。指数缓存若只有 200 行，
+    # 800 行窗口根本算不出基准，结论会静默变成"n/a"。
+    if args.index:
+        tasks.append(
+            (str(args.index).strip()[-6:], lambda: fetch_index_klines(args.index, args.days))
+        )
+    if not tasks:
         print(f"没有可用标的：--symbols 为空且 {args.pool_file} 取不到池", file=sys.stderr)
         return 1
 
@@ -169,9 +185,9 @@ def main(argv: list[str] | None = None) -> int:
     drop_date = None if args.keep_today else str(date.today())
 
     plans: list[Plan] = []
-    for symbol in symbols:
+    for symbol, fetch in tasks:
         try:
-            fetched = fetch_stock_klines(symbol, args.days)
+            fetched = fetch()
         except Exception as exc:  # noqa: BLE001 — 单只失败不中断整批
             plans.append(
                 Plan(symbol=symbol, action="no_data", reason=f"拉取异常 {type(exc).__name__}")
@@ -189,9 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     skipped = [p for p in plans if p.action == "skip_existing"]
     failed = [p for p in plans if p.action == "no_data"]
 
-    print(
-        f"标的 {len(symbols)} 只 | 写入 {len(written)} | 跳过 {len(skipped)} | 失败 {len(failed)}"
-    )
+    print(f"标的 {len(tasks)} 只 | 写入 {len(written)} | 跳过 {len(skipped)} | 失败 {len(failed)}")
     if written:
         rows = [p.rows for p in written]
         print(
