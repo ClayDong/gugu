@@ -57,11 +57,18 @@ T_MIN_SAMPLES = 3
 
 @dataclass
 class Events:
-    """一次采集的原始结果：逐标的的净超额序列 + 信号密度计数。"""
+    """一次采集的原始结果：逐标的的净超额序列 + 信号密度计数。
+
+    ``signal_dates`` 与 ``rows`` 是为「按信号发生时的信息分桶」准备的：
+    分桶条件必须只用信号当时可知的东西，否则就是拿未来收益挑样本。
+    两者都是附加字段，不影响 ``density`` / ``returns`` 的既有口径。
+    """
 
     per_symbol: dict[str, list[float]] = field(default_factory=dict)
     signal_days: int = 0
     total_days: int = 0
+    signal_dates: dict[str, list[str]] = field(default_factory=dict)
+    rows: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def density(self) -> float:
@@ -157,7 +164,9 @@ def collect_events(
         for i in range(len(df)):
             if not buy[i]:
                 continue
-            if str(df.loc[i, "date"]) < start:
+            signal_date = str(df.loc[i, "date"])
+            events.signal_dates.setdefault(symbol, []).append(signal_date)
+            if signal_date < start:
                 continue
             entry_idx = i + 1
             if entry_idx + horizon >= len(df):
@@ -175,6 +184,7 @@ def collect_events(
             if excess is None:
                 continue
             events.per_symbol.setdefault(symbol, []).append(excess)
+            events.rows.append({"symbol": symbol, "date": signal_date, "excess": excess})
     return events
 
 
