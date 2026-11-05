@@ -301,11 +301,15 @@ signal_strategies:
     module: gugu.strategies.two_b_reversal
     class: TwoBReversalStrategy
     source: 邻居大爷 R-LN06 2B点（mulan-quant 规则库）
-    enabled: true
+    enabled: false
+    disabled_at: "2026-11-05"
+    disabled_reason: 扣掉同池漂移后方向为负且达显著 - 3 日净alpha -0.12%(t=-2.00, 39 只全池 16 只为正)，5 日 -0.10%(t=-1.27)，10 日 -0.02%(t=-0.17)；
+      叠加 Walk-Forward 样本外 Sharpe -0.360、参数三窗口不一致。负号非单票驱动（最差标的 -1.06%，去掉后仍 -0.10%），属全池广泛小幅跑输，非调参可救。
     summary: 14日周期二次探底不破前低+收阳 → 买入；跌破前低/移动止损8% → 卖出
     params_entry: strategy_defaults.yaml
     validation: Walk-Forward 未通过 2026-10-18 - 样本外 Sharpe ≤ 0; 参数稳定性 <80%; 平均样本外收益 < 0; 盈亏比 < 1.5; 样本外交易次数 < 30
       300 天下跌市回测绝对收益为负（正alpha负beta），待 paper 观察
+      2026-11-05 关闭：同口径体检表 + 净alpha 双重否决（详见 disabled_reason）
     validation_gate:
       gate_v2:
         reviewed_at: 2026-09-23

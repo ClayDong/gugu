@@ -163,6 +163,7 @@ def render_markdown(rows: list[dict[str, Any]], meta: dict[str, Any]) -> str:
             "规则行减去它才是规则贡献。",
             "> 净alpha = 逐标的（规则事件均值 − 同标的无条件均值）后做配对检验。"
             "这一步必须做：池子漂移在 3 日口径为负、10 日口径为正，会变号。",
+            "> 净alpha 逐标的等权、净超额逐事件加权，两者口径不同，不可相加。",
         ]
     lines += [
         "",

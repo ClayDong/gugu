@@ -337,6 +337,7 @@ def render_markdown(stats: list[dict[str, Any]], meta: dict[str, Any]) -> str:
             "策略行减去它才是策略贡献；不减去就把 beta 当成了 alpha。",
             "> 净alpha = 逐标的（策略事件均值 − 同标的无条件均值）后做配对检验，"
             "|t| < 2 表示扣掉池子漂移后与零无法区分。",
+            "> 净alpha 逐标的等权、净超额逐事件加权，两者口径不同，不可相加。",
         ]
     lines += [
         "",

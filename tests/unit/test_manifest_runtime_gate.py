@@ -226,3 +226,41 @@ class TestEvidenceBoundToCodeVersion:
             evidence_patch={"code_fingerprint": "b" * 64},
         )
         assert m.list_runtime_enabled("paper") == ["demo"]
+
+
+# ── 策略关闭必须带证据，且不许被静默改回 ─────────────────
+
+
+class TestRetiredStrategy:
+    """two_b_reversal 于 2026-11-05 关闭。
+
+    关闭依据不是"感觉不行"，而是两条独立证据同向：
+    扣掉同池漂移后 3 日净 alpha -0.12%（t=-2.00，39 只中 16 只为正），
+    以及 Walk-Forward 样本外 Sharpe -0.360、三窗口参数互不一致。
+
+    钉这条测试的目的：`enabled: false` 是唯一挡住它重回 paper 的开关，
+    而 manifest 是纯文本。若有人为了"多一个策略试试"把它翻回 true，
+    测试会立刻失败，并被迫面对 disabled_reason。
+    """
+
+    def test_realtime_manifest_blocks_paper_and_production(self):
+        m = StrategyManifest()
+        assert m.is_runtime_enabled("two_b_reversal", "paper") is False
+        assert m.is_runtime_enabled("two_b_reversal", "track_live") is False
+        assert "two_b_reversal" not in m.list_runtime_enabled("paper")
+
+    def test_manifest_records_evidence_for_the_retirement(self):
+        info = StrategyManifest().get_strategy("two_b_reversal")
+        assert info is not None
+        assert info["enabled"] is False
+        reason = str(info.get("disabled_reason") or "")
+        # 数字必须写进 manifest，而不是只活在对话里
+        assert "t=-2.00" in reason
+        assert "0.360" in reason
+        assert info.get("disabled_at") == "2026-11-05"
+
+    def test_strategy_class_still_importable_for_backtest(self):
+        """关闭的是运行时准入，不是代码。回测仍要能调到它，否则无法复验结论。"""
+        from gugu.strategies.registry import get_strategy
+
+        assert get_strategy("two_b_reversal").name == "two_b_reversal"

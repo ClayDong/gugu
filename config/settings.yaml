@@ -42,7 +42,6 @@ strategy:
     - dragon_head
     - huamulan_ghost_breakout
     - sentiment_cycle
-    - two_b_reversal
     - macd_zero_axis
     - yege_mainline_explosion
     - binge_714
@@ -59,7 +58,6 @@ strategy:
     - dragon_head
     - huamulan_ghost_breakout
     - sentiment_cycle
-    - two_b_reversal
     - macd_zero_axis
     - yege_mainline_explosion
     - binge_714
@@ -71,7 +69,6 @@ strategy:
     - rsi_reversal
     - sector_momentum
     - sentiment_cycle
-    - two_b_reversal
     - macd_zero_axis
     - yege_mainline_explosion
     - binge_714
@@ -91,7 +88,6 @@ strategy:
   - dragon_head
   - huamulan_ghost_breakout
   - sentiment_cycle
-  - two_b_reversal
   - macd_zero_axis
   - yege_mainline_explosion
   - binge_714
@@ -110,7 +106,6 @@ strategy:
     dragon_head: 0.25
     huamulan_ghost_breakout: 0.15
     sentiment_cycle: 0.15
-    two_b_reversal: 0.2
     macd_zero_axis: 0.2
     yege_mainline_explosion: 0.1
     binge_714: 0.15
