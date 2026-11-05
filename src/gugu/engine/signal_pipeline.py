@@ -72,6 +72,7 @@ from gugu.filters.industry_constraint import IndustryConstraint
 from gugu.filters.money_flow import MoneyFlowFilter
 from gugu.models.decision import evaluate_entry_gate
 from gugu.utils.atomic import append_jsonl
+from gugu.utils.evidence_guard import guard_evidence_path
 from gugu.utils.log import get_logger
 from gugu.wisdom import WisdomAdvisor
 
@@ -1353,6 +1354,8 @@ def record_signal_history(signal: dict[str, Any], risk_result: Any, order_result
             if not hb_dir.exists():
                 hb_dir.mkdir(parents=True, exist_ok=True)
             path = hb_dir / "signals_history.jsonl"
+            # 证据文件守卫：测试模式下一律重定向，避免夹具被当成前向信号证据
+            path = guard_evidence_path(path)
             decision_chain: list[dict] = []
 
             stage_info = signal.get("stage", {})

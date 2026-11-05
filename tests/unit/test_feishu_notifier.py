@@ -497,6 +497,53 @@ async def test_notify_daily_report_sends_report(mock_env):
 
 
 @pytest.mark.asyncio
+async def test_signal_performance_and_daily_validation_share_one_digest(mock_env):
+    """绩效卡与次日验证卡共用 aggregate_key，同一天只应刷出一条汇总。
+
+    UX 优化（2026-11-05）：两者都在讲「信号胜率/收益」，此前绩效卡直接单发、
+    次日验证进 digest，收盘后用户先后收到两条高度重叠的内容。合并后一次
+    digest 就能看完，且仍保留两张卡各自的标题与小节。
+    """
+    requests: list[httpx.Request] = []
+    mock_client = httpx.AsyncClient(transport=httpx.MockTransport(_ok_handler(requests)))
+    notifier = FeishuNotifier()
+    notifier._client = mock_client
+
+    try:
+        perf = {
+            "total_signals": 8,
+            "buy_count": 6,
+            "sell_count": 2,
+            "forward_5d_signal_hit_rate": 0.55,
+            "avg_return_5d": 0.012,
+        }
+        validation = {"total_signals": 5, "valid_count": 5, "win_rate": 0.6}
+
+        assert await notifier.notify_signal_performance(perf) is True
+        assert await notifier.notify_signal_daily_validation(validation) is True
+        # 两张卡都还在缓冲里，没有立刻发出去
+        assert requests == []
+
+        aggregate_key = f"signal_validation:{time.strftime('%Y-%m-%d')}"
+        assert len(notifier._digest_buffer.peek(aggregate_key)) == 2
+
+        assert await notifier.flush_digest(aggregate_key) is True
+        # 1 次 token + 1 条消息：合并成一条，不是两条
+        assert len(requests) == 2
+
+        body = json.loads(requests[1].content)
+        content = json.loads(body["content"])
+        titles = str(content["elements"])
+        assert "信号绩效验证" in titles
+        assert "信号次日验证" in titles
+
+        # 刷新后桶已清空，不会重复发
+        assert notifier._digest_buffer.peek(aggregate_key) == []
+    finally:
+        await mock_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_digest_flush_failure_keeps_buffered_cards(mock_env, tmp_path):
     """Digest 外部发送失败时，缓冲桶必须保留等待下一次刷新。"""
     notifier = FeishuNotifier()

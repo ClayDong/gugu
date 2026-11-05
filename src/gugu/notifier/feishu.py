@@ -1834,6 +1834,31 @@ class FeishuNotifier:
             logger.warning("发送持仓认知报告失败: {}", e)
             return False
 
+    async def notify_signal_performance(self, report: dict[str, Any]) -> bool:
+        """发送信号绩效验证卡。
+
+        UX 优化（2026-11-05）：绩效卡与次日验证卡主题重叠（都讲信号胜率/收益），
+        此前绩效卡 15:20 直接单发、次日验证 15:25 进 digest，收盘后用户收到两条
+        「信号表现」。现统一进 digest 并共用 aggregate_key=signal_validation:date，
+        与次日验证合并为一条信号汇总，减少重复打扰。
+        """
+        if not self._signal_enabled:
+            return False
+        try:
+            from gugu.notifier.formatter import build_signal_performance_card
+
+            card = build_signal_performance_card(report)
+            return await self._send_business_card(
+                card,
+                event_type="signal_performance",
+                tier=NotificationTier.DIGEST,
+                aggregate_key=f"signal_validation:{time.strftime('%Y-%m-%d')}",
+                defer_digest=True,
+            )
+        except Exception as e:
+            logger.warning("发送信号绩效验证失败: {}", e)
+            return False
+
     async def notify_signal_daily_validation(self, report: dict[str, Any]) -> bool:
         """发送信号 T+1 次日验证报告卡片。"""
         if not self._signal_enabled:

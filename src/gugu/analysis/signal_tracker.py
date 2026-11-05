@@ -23,6 +23,7 @@ from gugu.config import PROJECT_ROOT
 from gugu.data import data_manager
 from gugu.utils.atomic import atomic_write_text
 from gugu.utils.calendar import last_trading_day
+from gugu.utils.evidence_guard import guard_evidence_path
 from gugu.utils.log import get_logger
 
 logger = get_logger()
@@ -151,8 +152,16 @@ class SignalTracker:
         return updated
 
     def _write_history(self, records: list[dict[str, Any]]) -> None:
-        """以原子写方式更新信号历史，防止回填过程中断留下半截数据。"""
-        path = self._history_path
+        """以原子写方式更新信号历史，防止回填过程中断留下半截数据。
+
+        2026-11-05：本方法是测试夹具污染生产证据文件的实际通道——
+        ``self._history_path`` 在 ``__init__`` 时由导入期绑定的 ``PROJECT_ROOT``
+        算出，conftest patch ``gugu.config.PROJECT_ROOT`` 影响不到它，
+        于是测试里回填的前瞻收益被直接写进了仓库 ``data/signals_history.jsonl``
+        （实测残留 3 条 symbol 000001-000003 的合成信号）。写入前统一过
+        evidence_guard，测试模式下自动重定向到临时目录。
+        """
+        path = guard_evidence_path(self._history_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = "".join(
             json.dumps(record, ensure_ascii=False, allow_nan=False, separators=(",", ":")) + "\n"

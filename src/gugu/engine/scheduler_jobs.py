@@ -27,6 +27,24 @@ from gugu.utils.log import get_logger
 
 logger = get_logger()
 
+
+def _report_has_data(report: object, *, min_samples: int = 3) -> bool:
+    """报告是否含可推送的实质内容（无数据时不应打扰用户）。
+
+    UX 优化（2026-11-05）：信号绩效/次日验证在样本不足时仍会生成「暂无数据」
+    灰卡并定时推送，天天发等于纯噪音。空内容只记日志、不推送；采集失败等
+    数据异常仍走 notify_error 告警——「没有新信息」和「数据出问题」不能混为一谈。
+    """
+    if not isinstance(report, dict):
+        return False
+    if report.get("message"):
+        return False
+    try:
+        return int(report.get("total_signals", 0) or 0) >= min_samples
+    except (TypeError, ValueError):
+        return False
+
+
 # 优化股票池统一由 gugu.analysis.optimization_pools 维护，避免与 scripts/optimize_params.py 重复定义
 
 
@@ -111,8 +129,11 @@ class SchedulerJobsMixin:
                 )
                 await self._engine.notifier.notify_screener_validation(results)
             else:
-                logger.info("尾盘验证: 无结果（昨日无选股记录或行情获取失败）")
-                await self._engine.notifier.notify_screener_validation([])
+                # UX 优化（2026-11-05）：无验证样本时不再推「暂无验证结果」空卡。
+                # 这条 9:35 的卡片此前无论有无数据都发，连续无选股记录的日子等于
+                # 天天一条空通知。无结果只记日志；真正取数失败已在 except 分支
+                # 走 notify_error，两者语义不混。
+                logger.info("尾盘验证: 无结果（昨日无选股记录或行情获取失败），跳过推送")
         except Exception as e:
             logger.exception("尾盘选股验证异常: {}", e)
             try:
@@ -865,17 +886,24 @@ class SchedulerJobsMixin:
             logger.exception("RSI 专项扫描异常: {}", e)
 
     async def _safe_signal_performance(self) -> None:
-        """信号绩效验证推送（15:20，非交易日跳过）。"""
+        """信号绩效验证推送（15:20，非交易日跳过）。
+
+        UX 优化（2026-11-05）：本任务此前用 send_business_card 直接单发，而 15:25
+        的次日验证进 digest，收盘后用户会先后收到两条都在讲「信号胜率/收益」的
+        卡片。现改为 notify_signal_performance：与次日验证共用 digest 聚合键，
+        同一天只出一条信号汇总；样本不足时直接不推。
+        """
         if not is_trading_day():
             return
         try:
             from gugu.analysis.signal_tracker import SignalTracker
-            from gugu.notifier.formatter import build_signal_performance_card
 
             tracker = SignalTracker()
             report = await tracker.generate_report(days=30)
-            card = build_signal_performance_card(report)
-            await self._engine.notifier.send_business_card(card)
+            if not _report_has_data(report):
+                logger.info("信号绩效验证: 样本不足或无数据，跳过推送（避免空卡噪音）")
+                return
+            await self._engine.notifier.notify_signal_performance(report)
 
             total = report.get("total_signals", 0)
             forward_hit_rate = report.get("forward_5d_signal_hit_rate", 0)
@@ -909,6 +937,10 @@ class SchedulerJobsMixin:
 
             tracker = SignalTracker()
             report = await tracker.generate_daily_validation_report()
+            if not _report_has_data(report):
+                # UX 优化（2026-11-05）：无 T+1 样本时不推「样本数不足」灰卡。
+                logger.info("信号次日验证: 样本不足或无数据，跳过推送（避免空卡噪音）")
+                return
             await self._engine.notifier.notify_signal_daily_validation(report)
 
             total = report.get("total_signals", 0)

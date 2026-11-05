@@ -7,6 +7,7 @@ signals_history.jsonl 当作成交账本。
 
 from __future__ import annotations
 
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -15,9 +16,34 @@ from typing import Any
 
 from gugu import config as gugu_config
 from gugu.utils.atomic import append_jsonl
+from gugu.utils.evidence_guard import guard_evidence_path
 from gugu.utils.log import get_logger
 
 logger = get_logger()
+
+# 证据等级：只有真实每日运行产生的成交才算「前向证据」。
+# 历史回放、测试夹具、手工构造的行必须显式标成其它等级，否则会被
+# check_forward_evidence 当成前向验证样本——正是评审里批评的「自证」。
+EVIDENCE_FORWARD_PAPER = "forward_paper"
+EVIDENCE_REPLAY = "replay"
+EVIDENCE_FIXTURE = "fixture"
+_VALID_EVIDENCE_CLASSES = frozenset({EVIDENCE_FORWARD_PAPER, EVIDENCE_REPLAY, EVIDENCE_FIXTURE})
+
+
+def resolve_evidence_class(explicit: str = "") -> str:
+    """决定本条成交的证据等级。
+
+    优先用显式参数，其次读 ``GUGU_EVIDENCE_CLASS`` 环境变量，默认前向 paper。
+    回放脚本与测试必须主动声明为 replay/fixture，默认值只给真实运行用。
+    """
+    value = (explicit or os.environ.get("GUGU_EVIDENCE_CLASS", "") or "").strip().lower()
+    if not value:
+        return EVIDENCE_FORWARD_PAPER
+    if value not in _VALID_EVIDENCE_CLASSES:
+        # 非法等级不静默降级为前向，统一按最低可信度处理。
+        logger.warning("未知证据等级 {!r}，按 fixture 处理（不得用于前向验证）", value)
+        return EVIDENCE_FIXTURE
+    return value
 
 
 @dataclass(frozen=True)
@@ -79,9 +105,13 @@ def ledger_path() -> Path:
 
 
 def append_fill(record: dict[str, Any]) -> None:
-    """追加一笔成交，写失败不阻塞 PaperBroker 成交。"""
+    """追加一笔成交，写失败不阻塞 PaperBroker 成交。
+
+    账本是前向证据源，写入前必须过 evidence_guard：测试模式下不会被
+    写到仓库 data/ 里，避免测试夹具冒充已验证样本。
+    """
     try:
-        append_jsonl(ledger_path(), record)
+        append_jsonl(guard_evidence_path(ledger_path()), record)
     except Exception as exc:
         # 成交状态已在 broker 持久化，账本失败不能回滚模拟成交，但必须留痕。
         logger.error(
@@ -175,11 +205,13 @@ def build_fill_record(
     realized_pnl: float | None,
     outcome_status: str,
     exit_reason: str = "",
+    evidence_class: str = "",
 ) -> dict[str, Any]:
     ctx = context or ExecutionContext()
     data = {
         "execution_id": execution_id,
         "created_at": datetime.now().isoformat(timespec="seconds"),
+        "evidence_class": resolve_evidence_class(evidence_class),
         "signal_id": ctx.signal_id,
         "parent_signal_id": ctx.parent_signal_id,
         "strategy": ctx.strategy,

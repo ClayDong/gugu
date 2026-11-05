@@ -101,3 +101,45 @@ def test_paper_old_order_call_remains_compatible(tmp_path):
     assert result.success
     assert result.execution_id
     assert result.realized_pnl is None
+
+
+# ========== 证据等级（2026-11-05） ==========
+
+
+def _ledger_rows(tmp_path) -> list[dict]:
+    return [
+        json.loads(line)
+        for line in (tmp_path / "data" / "paper_execution_ledger.jsonl").read_text().splitlines()
+    ]
+
+
+def test_default_evidence_class_is_forward_paper(tmp_path, monkeypatch):
+    """真实运行的成交默认标 forward_paper，才可能计入前向验证。"""
+    monkeypatch.delenv("GUGU_EVIDENCE_CLASS", raising=False)
+    monkeypatch.setattr("gugu.config.PROJECT_ROOT", tmp_path)
+    broker = PaperBroker(initial_capital=100_000, state_file=tmp_path / "state.json")
+    broker.set_market_context("600519", prev_close=100.0)
+    assert broker.order("600519", "buy", 100, 100.0).success
+
+    assert _ledger_rows(tmp_path)[-1]["evidence_class"] == "forward_paper"
+
+
+def test_env_overrides_evidence_class(tmp_path, monkeypatch):
+    """回放脚本通过环境变量声明 replay，成交不得被当成前向证据。"""
+    monkeypatch.setenv("GUGU_EVIDENCE_CLASS", "replay")
+    monkeypatch.setattr("gugu.config.PROJECT_ROOT", tmp_path)
+    broker = PaperBroker(initial_capital=100_000, state_file=tmp_path / "state.json")
+    broker.set_market_context("600519", prev_close=100.0)
+    assert broker.order("600519", "buy", 100, 100.0).success
+
+    assert _ledger_rows(tmp_path)[-1]["evidence_class"] == "replay"
+
+
+def test_unknown_evidence_class_falls_back_to_fixture(monkeypatch):
+    """非法等级不静默升级为前向，统一按最低可信度 fixture 处理。"""
+    from gugu.execution.paper_ledger import resolve_evidence_class
+
+    monkeypatch.setenv("GUGU_EVIDENCE_CLASS", "trust-me-bro")
+    assert resolve_evidence_class() == "fixture"
+    assert resolve_evidence_class("REPLAY") == "replay"
+    assert resolve_evidence_class("forward_paper") == "forward_paper"

@@ -63,14 +63,19 @@ def _make_repo(
     if test_source:
         (tmp_path / "tests/test_sample.py").write_text(test_source, encoding="utf-8")
     if with_forward_evidence:
-        # 30 条已实现盈亏、覆盖 10 个交易日，全部写入真实 JSONL 账本
+        # 30 条已实现盈亏、覆盖 10 个交易日，字段与 paper_ledger.build_fill_record 一致。
+        # 必须带 evidence_class=forward_paper 与 direction=sell，否则会被
+        # check_forward_evidence 判为「回放/夹具」而不计入（2026-11-05）。
         data_dir = tmp_path / "data"
         if not data_dir.exists():
             data_dir.mkdir()
         rows = [
             json.dumps(
                 {
-                    "date": f"2026-11-{1 + i % 10:02d}",
+                    "execution_id": f"exec{i:04d}",
+                    "created_at": f"2026-11-{1 + i % 10:02d}T15:00:00",
+                    "evidence_class": "forward_paper",
+                    "direction": "sell",
                     "symbol": f"sh60000{i % 5}",
                     "realized_pnl": 1.0 if i % 2 else -0.5,
                 }
