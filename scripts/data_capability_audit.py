@@ -80,6 +80,7 @@ DATE_COLUMNS = (
     "date",
 )
 CODE_COLUMNS = ("code", "symbol", "股票代码")
+DIRECTION_COLUMNS = ("direction", "变动方向", "增减持")
 
 # A 股最早数据在 1990 年之后；数值 0 / 缺失被压成 1970-01-01，低于此线一律判退化。
 MIN_VALID_YEAR = 1990
@@ -97,6 +98,8 @@ ONE_YEAR_DAYS = 250
 MIN_EVENT_DAYS = 60
 # 池内命中低于这个数，事件研究只能得到个例，不构成统计证据
 MIN_POOL_HITS = 5
+# 行情窗口内的池内事件数低于这个量级，样本撑不起检验（项目既有前向验证用 N=41）
+MIN_POOL_EVENTS = 30
 
 FILENAME_DATE = re.compile(r"(\d{4})-?(\d{2})-?(\d{2})")
 
@@ -116,6 +119,9 @@ class DatasetAudit:
     distinct_dates: int = 0
     codes: int = 0
     pool_hits: int = 0
+    pool_events: int = 0
+    # None = 未统计（日期退化或无行情覆盖），与"统计结果为 0"必须区分
+    pool_events_in_window: int | None = None
     date_source: str = "列"
     degenerate_date: bool = False
     date_null_rows: int = 0
@@ -145,6 +151,8 @@ class DatasetAudit:
             "distinct_dates": self.distinct_dates,
             "codes": self.codes,
             "pool_hits": self.pool_hits,
+            "pool_events": self.pool_events,
+            "pool_events_in_window": self.pool_events_in_window,
             "date_source": self.date_source,
             "degenerate_date": self.degenerate_date,
             "date_null_rows": self.date_null_rows,
@@ -233,14 +241,26 @@ def adequacy_label(distinct_dates: int) -> str:
     return "不可用"
 
 
-def audit_dataset(name: str, files: list[Path], pool_codes: set[str]) -> DatasetAudit:
-    """读取一组文件，统计日期覆盖 / 股票覆盖 / 池子命中。"""
+def audit_dataset(
+    name: str,
+    files: list[Path],
+    pool_codes: set[str],
+    kline_cover: dict[str, tuple[str, str]] | None = None,
+) -> DatasetAudit:
+    """读取一组文件，统计日期覆盖 / 股票覆盖 / 池子命中 / 池内事件样本。
+
+    ``kline_cover`` 给的是每只标的行情实际覆盖的起止日。事件发生得再早，没有对应
+    行情也算不出收益，所以"池内事件数"必须限定在这个窗口内——否则会把三十年的
+    历史事件当成可用样本。
+    """
     audit = DatasetAudit(name=name, files=len(files))
     column_dates: set[str] = set()
     file_dates: set[str] = set()
     codes: set[str] = set()
     # 逐行比对低优先级时间列是否等于最高优先级列：全等即冗余，不能当独立信息用
     equal_counts: dict[str, list[int]] = {}
+    # 池内行的（标的, 日期, 方向）三元组，跨文件汇总后统一去重
+    pool_frames: list[pd.DataFrame] = []
 
     for path in files:
         snapshot = filename_date(path.name)
@@ -279,11 +299,30 @@ def audit_dataset(name: str, files: list[Path], pool_codes: set[str]) -> Dataset
                 bucket[1] += int(pair.sum())
 
         code_column = pick_column(list(frame.columns), CODE_COLUMNS)
+        direction_column = pick_column(list(frame.columns), DIRECTION_COLUMNS)
         if code_column:
-            for value in frame[code_column].dropna().unique():
-                normalized = normalize_code(value)
-                if normalized:
-                    codes.add(normalized)
+            # 只对唯一值做规范化再映射回来：350 万行逐行跑正则会慢到不可用
+            mapping = {v: normalize_code(v) for v in frame[code_column].dropna().unique()}
+            codes.update(c for c in mapping.values() if c)
+            if pool_codes and audit.date_column:
+                normalized_series = frame[code_column].map(mapping)
+                in_pool = normalized_series.isin(pool_codes)
+                if int(in_pool.sum()):
+                    pool_frames.append(
+                        pd.DataFrame(
+                            {
+                                "code": normalized_series[in_pool].to_numpy(),
+                                "dt": pd.to_datetime(
+                                    frame.loc[in_pool, audit.date_column], errors="coerce"
+                                ).to_numpy(),
+                                "direction": (
+                                    frame.loc[in_pool, direction_column].to_numpy()
+                                    if direction_column
+                                    else None
+                                ),
+                            }
+                        )
+                    )
 
     if column_dates:
         dates = column_dates
@@ -291,8 +330,9 @@ def audit_dataset(name: str, files: list[Path], pool_codes: set[str]) -> Dataset
     elif file_dates:
         dates = file_dates
         audit.date_source = "文件名"
-        # 列里有值但全被判退化：那是 0 填充，不是日期
+        # 列里有值但全被判退化：那是 0 填充，不是日期。此时事件窗口无法按列日期算
         audit.degenerate_date = audit.date_null_rows > 0
+        audit.pool_events_in_window = None
     else:
         dates = set()
 
@@ -306,7 +346,93 @@ def audit_dataset(name: str, files: list[Path], pool_codes: set[str]) -> Dataset
     )
     audit.codes = len(codes)
     audit.pool_hits = len(codes & pool_codes)
+    if pool_frames:
+        events = pd.concat(pool_frames, ignore_index=True).dropna(subset=["dt"])
+        # 同一事件会在 24 份快照里各出现一次，且一次公告会因多个变动人拆成多行；
+        # 只有（标的, 日期, 方向）三元组去重后的数字才是真实样本量
+        events = events.drop_duplicates(subset=["code", "dt", "direction"])
+        audit.pool_events = int(len(events))
+        if kline_cover and audit.date_source == "列":
+            audit.pool_events_in_window = _count_in_window(events, kline_cover)
     return audit
+
+
+def _count_in_window(events: pd.DataFrame, kline_cover: dict[str, tuple[str, str]]) -> int:
+    """统计落在各标的自身行情覆盖区间内的事件数。
+
+    事件有三十年历史、行情只有三年，可用样本就是这三年里的那些，不是全部。
+    """
+    total = 0
+    for code, group in events.groupby("code"):
+        window = kline_cover.get(code)
+        if not window:
+            continue
+        low, high = pd.Timestamp(window[0]), pd.Timestamp(window[1])
+        total += int(((group["dt"] >= low) & (group["dt"] <= high)).sum())
+    return total
+
+
+def _window_event_stats(
+    date_values: pd.Series,
+    code_values: pd.Series,
+    direction_values: pd.Series,
+    kline_cover: dict[str, tuple[str, str]],
+) -> tuple[int, int]:
+    """返回 (落在行情窗口内的行数, 去重后的独立事件数)。
+
+    一行不等于一个事件：同一笔增减持会因多个变动人拆成多行，一次公告可能出十几行。
+    直接用行数当样本量会系统性高估 N，所以按（标的, 日期, 方向）去重后再数。
+    """
+    if date_values.empty:
+        return 0, 0
+    events = pd.DataFrame(
+        {
+            "code": code_values.to_numpy(),
+            "dt": pd.to_datetime(date_values, errors="coerce").to_numpy(),
+            "direction": direction_values.to_numpy(),
+        }
+    ).dropna(subset=["dt"])
+    if events.empty:
+        return 0, 0
+    rows = 0
+    unique = 0
+    for code, group in events.groupby("code"):
+        window = kline_cover.get(code)
+        if not window:
+            continue
+        low, high = pd.Timestamp(window[0]), pd.Timestamp(window[1])
+        inside = group[(group["dt"] >= low) & (group["dt"] <= high)]
+        rows += len(inside)
+        unique += len(inside.drop_duplicates(subset=["dt", "direction"]))
+    return rows, unique
+
+
+def kline_coverage(directory: Path) -> dict[str, tuple[str, str]]:
+    """每只标的行情实际覆盖的起止日。
+
+    事件研究真正的窗口由行情决定：有 30 年事件但只有 3 年行情，可用样本就是 3 年
+    内的那些，而不是 30 年。这份 map 用来把"池内事件行数"压到"真正可回测的行数"。
+    """
+    cover: dict[str, tuple[str, str]] = {}
+    for path in sorted(directory.glob("*.parquet")):
+        symbol = normalize_code(path.stem.split("_")[0])
+        if not symbol:
+            continue
+        try:
+            frame = pd.read_parquet(path)
+        except Exception:  # noqa: BLE001 — 坏文件在 audit_kline_cache 里报，这里跳过
+            continue
+        if "date" not in frame.columns:
+            continue
+        stamps = pd.to_datetime(frame["date"], errors="coerce").dropna()
+        if stamps.empty:
+            continue
+        low, high = stamps.min().strftime("%Y-%m-%d"), stamps.max().strftime("%Y-%m-%d")
+        previous = cover.get(symbol)
+        if previous:
+            low, high = min(low, previous[0]), max(high, previous[1])
+        cover[symbol] = (low, high)
+    return cover
 
 
 def audit_kline_cache(directory: Path, pool_codes: set[str]) -> dict[str, Any]:
@@ -389,6 +515,9 @@ def verdict_for(target: dict[str, Any], pool_size: int) -> tuple[str, str]:
     hits = target["pool_hits"]
     if hits < MIN_POOL_HITS:
         return "需补数据", f"池内仅 {hits}/{pool_size} 只命中，事件样本只够个例"
+    window_events = target.get("pool_events_in_window")
+    if window_events is not None and window_events < MIN_POOL_EVENTS:
+        return "需补数据", f"行情窗口内池内仅 {window_events} 条样本，撑不起检验"
     if target["adequacy"] == "只够可行性":
         return "需补数据", "观测天数不足，只能判断方向是否存在"
     return "可做", ""
@@ -433,6 +562,7 @@ def direction_feasibility(
                     "adequacy": "缺数据",
                     "freshness": "无数据",
                     "pool_hits": 0,
+                    "pool_events_in_window": None,
                     "verdict": "不可做",
                     "note": note,
                 }
@@ -449,6 +579,7 @@ def direction_feasibility(
                 "adequacy": target["adequacy"],
                 "freshness": target["freshness"],
                 "pool_hits": target["pool_hits"],
+                "pool_events_in_window": target.get("pool_events_in_window"),
                 "verdict": verdict,
                 "note": f"{note}；{reason}" if reason else note,
             }
@@ -499,13 +630,15 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "## 方向可行性",
         "",
-        "| 方向 | 依赖数据集 | 不同日期 | 可用性 | 新鲜度 | 池内命中 | 判断 | 说明 |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| 方向 | 依赖数据集 | 不同日期 | 可用性 | 新鲜度 | 池内命中 | 池内样本 | 判断 | 说明 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in report["directions"]:
+        events = row.get("pool_events_in_window")
         lines.append(
             f"| {row['direction']} | {row['datasets']} | {row['distinct_dates']} "
             f"| {row['adequacy']} | {row['freshness']} | {row['pool_hits']} "
+            f"| {'—' if events is None else events} "
             f"| **{row['verdict']}** | {row['note']} |"
         )
     lines += [
@@ -518,9 +651,14 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"> 新鲜度阈值：≤{FRESH_DAYS} 天=新鲜；≤{STALE_DAYS}=偏旧；≤{COLD_DAYS}=陈旧；更久=过期。",
         "> 池内命中 = 该数据集覆盖的股票里，有多少只属于我们自己的标的池。"
         "为 0 说明数据再长也用不上这个池子，得先扩池——这是不可做的一票否决项。",
-        f"> 判断口径：「可做」= 够一年且池内命中 ≥{MIN_POOL_HITS} 只；"
-        f"「需补数据」= 方向没被证伪，但天数或池内命中不够（<{MIN_POOL_HITS} 只），"
-        "补历史/扩池后可复审；「不可做」= 池内零命中、无日期或已过期。",
+        f"> 判断口径：「可做」= 够一年且池内命中 ≥{MIN_POOL_HITS} 只、"
+        f"行情窗口内池内样本 ≥{MIN_POOL_EVENTS} 条；"
+        f"「需补数据」= 方向没被证伪，但天数、池内命中或样本量不够，补历史/扩池后可复审；"
+        "「不可做」= 池内零命中、无日期或已过期。",
+        "> 池内样本 = 池内**独立事件数**（按标的+日期+方向去重）中，落在各标的"
+        "**自身行情覆盖区间**内的部分。一行不等于一个事件：一次公告会因多个变动人"
+        "拆成多行，24 份快照又各存一份，去重后才是真实样本量；事件有三十年、"
+        "行情只有三年时，可用样本就是三年内的那些。",
         "> 日期来源「文件名」= 列里的日期不可用（缺失或全为 0 被压成 1970-01-01），"
         "退回用快照文件名日期，仅代表观测日，不代表事件发生日。",
     ]
@@ -540,10 +678,12 @@ def build_report(
     families = collect_families(altdir)
     # 股东户数目录用日期当文件名，目录本身即数据集身份
     families.update(collect_families(holderdir, default_name="holder_structure"))
+    # 事件样本必须限定在行情能算收益的区间内，否则会把三十年历史当成可用样本
+    cover = kline_coverage(klinedir)
 
     audits: dict[str, dict[str, Any]] = {}
     for name, files in sorted(families.items()):
-        audits[name] = audit_dataset(name, files, pool_codes).as_dict(as_of)
+        audits[name] = audit_dataset(name, files, pool_codes, cover).as_dict(as_of)
 
     notes: list[str] = []
     for name, row in audits.items():

@@ -20,6 +20,7 @@ import pandas as pd
 import pytest
 
 from scripts.data_capability_audit import (
+    MIN_POOL_EVENTS,
     MIN_POOL_HITS,
     adequacy_label,
     audit_dataset,
@@ -268,6 +269,97 @@ class TestAuditDataset:
         assert row["adequacy"] == "不可用"
         assert row["date_source"] == "列"
 
+    def test_pool_window_is_none_without_kline_cover(self, tmp_path):
+        # 没给行情覆盖就不能算窗口内样本；None 表示"没统计"，与"统计为 0"不同
+        path = tmp_path / "20260715_demo.parquet"
+        _write_parquet(path, {"trade_date": ["2026-07-15"], "code": ["600030"]})
+        row = _audit("demo", [path], {"600030"})
+        assert row["pool_events"] == 1
+        assert row["pool_events_in_window"] is None
+
+
+class TestPoolSampleDeduplication:
+    """样本量必须去重，否则会被重复快照和多个变动人系统性放大。"""
+
+    def _frame(self, path, rows):
+        _write_parquet(path, rows)
+
+    def test_same_event_across_snapshots_counted_once(self, tmp_path):
+        # 三份滚动全量快照各存了同一笔增持 → 样本量是 1，不是 3
+        for day in ("20260715", "20260716", "20260717"):
+            self._frame(
+                tmp_path / f"{day}_insider_trading.parquet",
+                {
+                    "code": ["600030"],
+                    "change_date": ["2026-07-10"],
+                    "direction": ["增持"],
+                },
+            )
+        files = sorted(tmp_path.glob("*.parquet"))
+        audit = audit_dataset("insider_trading", files, {"600030"})
+        assert audit.pool_events == 1
+
+    def test_multiple_insiders_on_same_day_counted_once(self, tmp_path):
+        # 一次公告因多个变动人拆成 3 行，但只发生了一个事件
+        path = tmp_path / "20260715_insider_trading.parquet"
+        self._frame(
+            path,
+            {
+                "code": ["600030"] * 3,
+                "change_date": ["2026-07-10"] * 3,
+                "direction": ["增持"] * 3,
+            },
+        )
+        audit = audit_dataset("insider_trading", [path], {"600030"})
+        assert audit.pool_events == 1
+
+    def test_opposite_directions_same_day_counted_separately(self, tmp_path):
+        path = tmp_path / "20260715_insider_trading.parquet"
+        self._frame(
+            path,
+            {
+                "code": ["600030", "600030"],
+                "change_date": ["2026-07-10", "2026-07-10"],
+                "direction": ["增持", "减持"],
+            },
+        )
+        audit = audit_dataset("insider_trading", [path], {"600030"})
+        assert audit.pool_events == 2
+
+    def test_events_outside_kline_window_excluded(self, tmp_path):
+        # 事件在 1994 年，行情只到 2023 年之后 → 算不出收益，不能算可用样本
+        path = tmp_path / "20260715_insider_trading.parquet"
+        self._frame(
+            path,
+            {
+                "code": ["600030", "600030"],
+                "change_date": ["1994-08-10", "2026-07-10"],
+                "direction": ["增持", "增持"],
+            },
+        )
+        cover = {"600030": ("2023-07-03", "2026-11-04")}
+        audit = audit_dataset("insider_trading", [path], {"600030"}, cover)
+        assert audit.pool_events == 2
+        assert audit.pool_events_in_window == 1
+
+    def test_window_uses_each_symbol_own_coverage(self, tmp_path):
+        # 两只标的行情起点不同，窗口必须逐标的算，不能取全池最早起点
+        path = tmp_path / "20260715_insider_trading.parquet"
+        self._frame(
+            path,
+            {
+                "code": ["600030", "600031"],
+                "change_date": ["2024-01-10", "2024-01-10"],
+                "direction": ["增持", "增持"],
+            },
+        )
+        cover = {
+            "600030": ("2023-07-03", "2026-11-04"),
+            "600031": ("2025-01-02", "2026-11-04"),
+        }
+        audit = audit_dataset("insider_trading", [path], {"600030", "600031"}, cover)
+        assert audit.pool_events_in_window == 1
+
 
 class TestVerdict:
     def _target(self, **overrides):
@@ -276,6 +368,7 @@ class TestVerdict:
             "adequacy": "够一年",
             "freshness": "偏旧",
             "distinct_dates": 6037,
+            "pool_events_in_window": 82,
         }
         base.update(overrides)
         return base
@@ -284,6 +377,23 @@ class TestVerdict:
         verdict, reason = verdict_for(self._target(), 39)
         assert verdict == "可做"
         assert reason == ""
+
+    def test_thin_sample_beats_long_history(self):
+        # 行情窗口内只有 12 条样本：数据再长也检验不出东西
+        verdict, reason = verdict_for(self._target(pool_events_in_window=12), 39)
+        assert verdict == "需补数据"
+        assert "12" in reason
+
+    def test_sample_unknown_does_not_block(self):
+        # 未统计窗口样本（日期退化）时不该被这条规则误伤
+        assert verdict_for(self._target(pool_events_in_window=None), 39)[0] == "可做"
+
+    def test_sample_threshold_boundary(self):
+        assert verdict_for(self._target(pool_events_in_window=MIN_POOL_EVENTS), 39)[0] == "可做"
+        assert (
+            verdict_for(self._target(pool_events_in_window=MIN_POOL_EVENTS - 1), 39)[0]
+            == "需补数据"
+        )
 
     def test_zero_pool_hits_vetoes_regardless_of_history(self):
         # 一票否决：6037 个交易日也不行
@@ -325,6 +435,8 @@ class TestDirectionFeasibility:
             "distinct_dates": 6037,
             "codes": 5115,
             "pool_hits": 39,
+            "pool_events": 674,
+            "pool_events_in_window": 82,
             "date_source": "列",
             "degenerate_date": False,
             "date_null_rows": 0,
@@ -425,6 +537,9 @@ class TestRenderAndReport:
         assert "需补数据" in text
         assert "一票否决" in text
         assert "1970-01-01" in text
+        # 样本量口径必须写清"去重"，否则会被行数骗
+        assert "池内样本" in text
+        assert "独立事件数" in text
 
     def test_report_json_serializable(self, tmp_path):
         import json
