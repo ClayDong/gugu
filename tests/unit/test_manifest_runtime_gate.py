@@ -1,8 +1,9 @@
 """manifest 验证状态到运行时角色的映射测试。
 
 2026-11-04 更新：生产准入新增 evidence 完整性校验（防自证循环）。
+2026-11-05 更新：证据必须绑定策略代码指纹，策略改版后旧证据立即失效。
 原有语义（分层回撤 / paper 观察 / enabled=false）全部保留，
-并补充「手写 metrics 无法放行」的负向测试。
+并补充「手写 metrics 无法放行」「改版后旧证据无法放行」的负向测试。
 """
 
 from __future__ import annotations
@@ -12,7 +13,11 @@ from pathlib import Path
 import yaml
 
 from gugu.strategies.manifest import StrategyManifest
+from gugu.validation.code_fingerprint import declared_params, strategy_fingerprint
 from gugu.validation.evidence import build_evidence
+
+# 夹具用一个真实存在的策略模块，这样「当前代码指纹」是可解析的真值。
+DEMO_MODULE = "gugu.strategies.two_b_reversal"
 
 VALID_METRICS = {
     "total_trades": 120,
@@ -28,6 +33,13 @@ VALID_METRICS = {
 }
 
 
+def _fingerprint(key: str = "demo") -> str:
+    """与 manifest 运行时同一套算法：模块源码 + 声明参数。"""
+    value = strategy_fingerprint(DEMO_MODULE, params=declared_params(key))
+    assert value, "测试夹具依赖的策略模块必须可解析"
+    return value
+
+
 def _manifest(
     tmp_path: Path,
     status: str,
@@ -36,6 +48,7 @@ def _manifest(
     *,
     with_evidence: bool = True,
     evidence_patch: dict | None = None,
+    module: str | None = DEMO_MODULE,
 ) -> StrategyManifest:
     gate: dict = {"status": status}
     if metrics is not None:
@@ -44,13 +57,17 @@ def _manifest(
         evidence = build_evidence(
             metrics,
             evidence_class="walk_forward_oos",
+            code_fingerprint=_fingerprint(),
             generated_at="2026-11-04T00:00:00",
             source="unit-test",
         )
         if evidence_patch:
             evidence.update(evidence_patch)
         gate["gate_v2"] = evidence
-    data = {"signal_strategies": {"demo": {"enabled": enabled, "validation_gate": gate}}}
+    entry: dict = {"enabled": enabled, "validation_gate": gate}
+    if module is not None:
+        entry["module"] = module
+    data = {"signal_strategies": {"demo": entry}}
     path = tmp_path / "manifest.yaml"
     path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
     return StrategyManifest(path)
@@ -156,3 +173,56 @@ class TestEvidenceCannotBeSelfAttested:
         assert _manifest(
             tmp_path, "conditional_pass", metrics=VALID_METRICS, with_evidence=False
         ).list_runtime_enabled("paper") == ["demo"]
+
+
+class TestEvidenceBoundToCodeVersion:
+    """证据必须绑定策略代码版本，否则改版后旧指标会继续冒充有效。
+
+    现实来源：two_b_reversal 在 2026-09-04 改过退出逻辑，但 manifest 里
+    2026-09-23 复核的 ``excess_5d=+2.18%`` 一直留在 metrics 里。用项目自己的
+    四种标准口径（收盘/次开 × 有/无成本）重跑，最高只到 +0.31%。
+    哈希只能证明数字没被改，证明不了数字还对应当前代码。
+    """
+
+    def test_fingerprint_mismatch_is_rejected(self, tmp_path):
+        m = _manifest(
+            tmp_path,
+            "enabled",
+            metrics=VALID_METRICS,
+            evidence_patch={"code_fingerprint": "b" * 64},
+        )
+        assert m.list_runtime_enabled("track_live") == []
+
+    def test_missing_fingerprint_is_rejected(self, tmp_path):
+        m = _manifest(
+            tmp_path,
+            "enabled",
+            metrics=VALID_METRICS,
+            evidence_patch={"code_fingerprint": ""},
+        )
+        assert m.list_runtime_enabled("track_live") == []
+
+    def test_unresolvable_module_blocks_production(self, tmp_path):
+        """模块解析不到就不能校验代码版本，必须拒绝而不是跳过。"""
+        m = _manifest(tmp_path, "enabled", metrics=VALID_METRICS, module="gugu.not_exist_xyz")
+        assert m.list_runtime_enabled("track_live") == []
+
+    def test_module_missing_from_manifest_blocks_production(self, tmp_path):
+        m = _manifest(tmp_path, "enabled", metrics=VALID_METRICS, module=None)
+        assert m.list_runtime_enabled("track_live") == []
+
+    def test_current_code_fingerprint_is_exposed(self, tmp_path):
+        """指纹必须可被外部审计复算，否则无法离线核对证据是否过期。"""
+        m = _manifest(tmp_path, "enabled", metrics=VALID_METRICS)
+        assert m.current_code_fingerprint("demo") == _fingerprint()
+        assert m.current_code_fingerprint("missing") is None
+
+    def test_paper_mode_ignores_code_fingerprint(self, tmp_path):
+        """代码版本校验只约束生产准入；paper 仍按 status 放行。"""
+        m = _manifest(
+            tmp_path,
+            "conditional_pass",
+            metrics=VALID_METRICS,
+            evidence_patch={"code_fingerprint": "b" * 64},
+        )
+        assert m.list_runtime_enabled("paper") == ["demo"]

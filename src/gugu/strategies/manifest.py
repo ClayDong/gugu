@@ -28,6 +28,7 @@ import yaml
 
 from gugu.config import PROJECT_ROOT
 from gugu.utils.log import get_logger
+from gugu.validation.code_fingerprint import declared_params, strategy_fingerprint
 from gugu.validation.evidence import validate_evidence
 from gugu.validation.gate_policy import GatePolicy
 
@@ -118,6 +119,20 @@ class StrategyManifest:
             return str(status) if status is not None else None
         return None
 
+    def current_code_fingerprint(self, key: str) -> str | None:
+        """按 manifest 声明的 module 与默认参数，算出该策略当前的代码指纹。
+
+        解析不到模块源码时返回 None——调用方应据此**拒绝**准入而不是跳过校验，
+        否则「模块改名/路径写错」会变成一条静默的放行通道。
+        """
+        info = self.get_strategy(key)
+        if not isinstance(info, dict):
+            return None
+        module = str(info.get("module") or "").strip()
+        if not module:
+            return None
+        return strategy_fingerprint(module, params=declared_params(key))
+
     def is_runtime_enabled(self, key: str, execution_mode: str = "paper") -> bool:
         """判断策略是否满足指定执行模式的运行时准入条件。
 
@@ -138,7 +153,15 @@ class StrategyManifest:
                 return False
             # 去自证：metrics 必须与验证脚本生成的证据块哈希一致。
             # 仅靠手填 metrics + status 不再能放行到生产（2026-11-04 评审 P0-2）。
-            evidence_ok, reason = validate_evidence(gate)
+            # 2026-11-05 补强：证据还必须绑定当前策略代码版本，否则策略改版后
+            # 旧证据会继续冒充有效（two_b_reversal 的 +2.18% 就是这样留下来的）。
+            current_fingerprint = self.current_code_fingerprint(key)
+            if current_fingerprint is None:
+                logger.warning("策略 {} 无法解析模块源码，拒绝生产准入（无法校验代码版本）", key)
+                return False
+            evidence_ok, reason = validate_evidence(
+                gate, expected_code_fingerprint=current_fingerprint
+            )
             if not evidence_ok:
                 logger.warning("策略 {} 生产准入证据校验失败: {}", key, reason)
                 return False

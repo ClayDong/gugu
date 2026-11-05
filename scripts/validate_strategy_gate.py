@@ -14,18 +14,32 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from gugu.strategies.manifest import get_manifest  # noqa: E402
 from gugu.strategies.registry import get_runtime_strategy_names  # noqa: E402
+from gugu.validation.code_fingerprint import declared_params, strategy_fingerprint  # noqa: E402
 from gugu.validation.evidence import build_evidence  # noqa: E402
 from gugu.validation.gate_policy import GatePolicy  # noqa: E402
 
 GATE_THRESHOLDS = GatePolicy.thresholds()
 
 
+def _code_fingerprint(strategy: str) -> str | None:
+    """取该策略当前代码指纹；模块解析不到时返回 None。"""
+    info = get_manifest().get_strategy(strategy)
+    if not isinstance(info, dict):
+        return None
+    module = str(info.get("module") or "").strip()
+    if not module:
+        return None
+    return strategy_fingerprint(module, params=declared_params(strategy))
+
+
 def evaluate_gate(strategy: str, metrics: dict[str, Any]) -> dict[str, Any]:
     """根据统一门槛评估策略是否允许启用。
 
-    通过时附带带 metrics 哈希的 evidence 块，供 manifest.validation_gate.gate_v2
-    使用；运行时会重新校验该哈希，杜绝「手填数字自证通过」。
+    通过时附带带 metrics 哈希与代码指纹的 evidence 块，供
+    manifest.validation_gate.gate_v2 使用；运行时既校验哈希也重算代码指纹，
+    杜绝「手填数字自证通过」和「改版后旧证据继续冒充有效」。
     """
     report = GatePolicy.evaluate(metrics)
     result: dict[str, Any] = {
@@ -34,11 +48,18 @@ def evaluate_gate(strategy: str, metrics: dict[str, Any]) -> dict[str, Any]:
         **report,
     }
     if report.get("passed") is True:
-        result["evidence"] = build_evidence(
-            metrics,
-            evidence_class="walk_forward_oos",
-            source=f"validate_strategy_gate.py:{strategy}",
-        )
+        fingerprint = _code_fingerprint(strategy)
+        if fingerprint is None:
+            # 无法绑定代码版本就不产出证据：宁可让运行时拒绝，也不给一条
+            # 「不知道对应哪版代码」的放行路径。
+            result["evidence_error"] = "strategy_module_unresolved"
+        else:
+            result["evidence"] = build_evidence(
+                metrics,
+                evidence_class="walk_forward_oos",
+                code_fingerprint=fingerprint,
+                source=f"validate_strategy_gate.py:{strategy}",
+            )
     return result
 
 
