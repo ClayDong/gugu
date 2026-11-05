@@ -460,6 +460,18 @@ def _fmt_p(value: float | None) -> str:
     return "—" if value is None else f"{value:.3f}"
 
 
+def _fdr_significant_count(correction: dict[str, Any]) -> int:
+    """BH-FDR 校正后仍显著的组合数。
+
+    ``report_correction()`` 把 ``n_significant`` 放在 ``benjamini_hochberg`` 子字典里，
+    顶层只有 ``n_tests`` / ``naive_significant`` / ``bonferroni`` / ``benjamini_hochberg``。
+    早先这里写成 ``correction.get("n_significant", 0)``，于是脚注永远打印 0，
+    而表格逐行标「是」——报告自己跟自己矛盾。真值只能从子字典取。
+    """
+    bh = correction.get("benjamini_hochberg") or {}
+    return int(bh.get("n_significant", 0))
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     lines = [
         "# 内部人增减持事件研究",
@@ -514,7 +526,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "等权（t 检验实际用的统计量）。同一标的反复出现时两者权重不同，可以不同号，"
         "别只看其中一个就下结论。",
         f"> 多重检验：共 {corr.get('n_tests', 0)} 个可比组合，"
-        f"按 BH-FDR 校正（加粗 = 校正后仍显著，{corr.get('n_significant', 0)} 个）。",
+        f"按 BH-FDR 校正（加粗 = 校正后仍显著，{_fdr_significant_count(corr)} 个）。",
         f"> placebo p = 保持标的与事件条数不变、把日期在标的可用区间内随机重排 "
         f"{PLACEBO_DRAWS} 次后，随机情况下差额不低于观测值的比例。"
         "事件聚集且同一标的反复出现时，参数 t 检验偏乐观，这个数更接近实际。",

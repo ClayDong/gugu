@@ -550,3 +550,83 @@ def test_min_events_constant_is_sane():
     # 阈值本身要有意义：太小会把噪声当结论，太大任何事件研究都做不成
     assert 10 <= MIN_EVENTS <= 50
     assert math.isfinite(MIN_EVENTS)
+
+
+class TestFdrFootnote:
+    """报告脚注与表格必须说同一件事。
+
+    真出过这个错：``report_correction()`` 把 ``n_significant`` 放在
+    ``benjamini_hochberg`` 子字典里，脚注却按顶层键取，``.get(..., 0)`` 兜底成 0。
+    于是表格逐行标「是」、脚注写「0 个」，报告自己跟自己矛盾。之前所有组合恰好
+    都不显著，这个矛盾一直没暴露；一出现真信号就自打脸。
+    """
+
+    def test_reads_n_significant_from_bh_subdict(self):
+        from scripts.insider_event_study import _fdr_significant_count
+
+        correction = {
+            "n_tests": 12,
+            "benjamini_hochberg": {"rejected": [True, True, False], "n_significant": 2},
+        }
+        assert _fdr_significant_count(correction) == 2
+
+    def test_missing_key_gives_zero_not_crash(self):
+        from scripts.insider_event_study import _fdr_significant_count
+
+        assert _fdr_significant_count({"n_tests": 3}) == 0
+        assert _fdr_significant_count({}) == 0
+
+    def test_footnote_count_matches_bold_rows(self):
+        """端到端：脚注数字必须等于表格里标「是」的行数。"""
+        from scripts.insider_event_study import _fdr_significant_count, render_markdown
+
+        results = [
+            {
+                "direction": "增持",
+                "lag": 1,
+                "horizon": 5,
+                "events": 100,
+                "clusters": 10,
+                "sufficient": True,
+                "mean_excess": 0.004,
+                "t_excess": 3.0,
+                "mean_gap": 0.003,
+                "mean_gap_cluster": 0.003,
+                "t_symbol": 2.9,
+                "p_symbol": 0.004,
+                "placebo_p": 0.01,
+                "fdr_significant": True,
+            },
+            {
+                "direction": "减持",
+                "lag": 1,
+                "horizon": 5,
+                "events": 100,
+                "clusters": 10,
+                "sufficient": True,
+                "mean_excess": 0.001,
+                "t_excess": 0.5,
+                "mean_gap": 0.001,
+                "mean_gap_cluster": 0.001,
+                "t_symbol": 0.5,
+                "p_symbol": 0.6,
+                "placebo_p": 0.5,
+                "fdr_significant": False,
+            },
+        ]
+        correction = {
+            "n_tests": 2,
+            "benjamini_hochberg": {"rejected": [True, False], "n_significant": 1},
+        }
+        text = render_markdown(
+            {
+                "universe": {"kind": "oos", "size": 10, "seed": 1},
+                "events_total": 200,
+                "events_dropped": 0,
+                "cost": 0.004,
+                "results": results,
+                "correction": correction,
+            }
+        )
+        assert "校正后仍显著，1 个" in text
+        assert _fdr_significant_count(correction) == text.count("| 是 |")
