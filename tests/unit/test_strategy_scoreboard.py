@@ -399,3 +399,140 @@ def test_resolve_index_falls_back_to_dated_benchmark(tmp_path) -> None:
 
     _write(tmp_path / "000300_9d_none.parquet", 9)
     assert resolve_index_file("sh000300", tmp_path).name == "000300_9d_none.parquet"
+
+
+# ── 对照组：同池无条件基准 ───────────────────────────────
+
+
+def _long_frame(rows: int = 80, *, base: float = 10.0, step: float = 0.0) -> pd.DataFrame:
+    """构造足够长（>= MIN_HISTORY_ROWS）的行情表，供 baseline_stat 使用。"""
+    dates = pd.date_range("2024-01-01", periods=rows, freq="D").strftime("%Y-%m-%d").tolist()
+    return _frame(dates, base=base, step=step)
+
+
+def test_always_on_strategy_signals_every_row_without_mutating_input() -> None:
+    from scripts.strategy_scoreboard import AlwaysOnStrategy
+
+    frame = _frame(DATES, base=10.0, step=0.01)
+    out = AlwaysOnStrategy().generate_signals(frame, is_backtest=True)
+
+    assert list(out["signal"]) == [1] * len(DATES)
+    assert "signal" not in frame.columns
+
+
+def test_baseline_density_is_one_hundred_percent() -> None:
+    """对照组必须是"每天都能成交"，密度 100% 才叫无条件基准。"""
+    from scripts.strategy_scoreboard import baseline_stat
+
+    stat = baseline_stat({"X": _long_frame()}, _long_frame(base=100.0), horizon=3, cost_rate=0.0)
+
+    assert stat["density"] == pytest.approx(1.0)
+    assert stat["samples"] > 0
+
+
+def test_baseline_excess_is_exactly_negative_cost_when_prices_flat() -> None:
+    """价格不动时，无条件超额只能等于被扣掉的那笔成本，一分不多。"""
+    from scripts.strategy_scoreboard import baseline_stat
+
+    flat = _long_frame(base=10.0, step=0.0)
+    bench = _long_frame(base=100.0, step=0.0)
+    stat = baseline_stat({"X": flat}, bench, horizon=3, cost_rate=0.004)
+
+    assert stat["mean_excess"] == pytest.approx(-0.004)
+    # 每个事件完全一样，方差为 0，t 值无意义 -> None，不能凑成 0
+    assert stat["t_event"] is None
+    assert stat["t_symbol"] is None
+
+
+def test_baseline_respects_cost_rate() -> None:
+    from scripts.strategy_scoreboard import baseline_stat
+
+    flat = _long_frame(base=10.0, step=0.0)
+    bench = _long_frame(base=100.0, step=0.0)
+
+    free = baseline_stat({"X": flat}, bench, horizon=3, cost_rate=0.0)
+    paid = baseline_stat({"X": flat}, bench, horizon=3, cost_rate=0.02)
+
+    assert free["mean_excess"] == pytest.approx(0.0)
+    assert paid["mean_excess"] == pytest.approx(-0.02)
+
+
+def test_baseline_picks_up_pool_drift_against_benchmark() -> None:
+    """池子涨得比基准快时无条件超额必须为正——这正是"beta 冒充 alpha"的来源。"""
+    from scripts.strategy_scoreboard import baseline_stat
+
+    pool = _long_frame(base=10.0, step=0.01)  # 每日 +1%
+    bench = _long_frame(base=100.0, step=0.0)  # 基准不动
+    stat = baseline_stat({"X": pool}, bench, horizon=3, cost_rate=0.0)
+
+    assert stat["mean_excess"] > 0
+
+
+def test_baseline_ignores_symbols_shorter_than_min_history() -> None:
+    from scripts.strategy_scoreboard import baseline_stat
+
+    frames = {"LONG": _long_frame(80), "SHORT": _frame(DATES[:10], base=10.0)}
+    bench = _long_frame(base=100.0)
+    only_long = baseline_stat({"LONG": _long_frame(80)}, bench, horizon=3, cost_rate=0.0)
+
+    stat = baseline_stat(frames, bench, horizon=3, cost_rate=0.0)
+    assert stat["samples"] == only_long["samples"]
+    assert stat["density"] == pytest.approx(1.0)
+
+
+def test_baseline_without_benchmark_returns_empty_not_zero() -> None:
+    from scripts.strategy_scoreboard import baseline_stat
+
+    stat = baseline_stat({"X": _long_frame()}, pd.DataFrame(), horizon=3)
+
+    assert stat["samples"] == 0
+    assert stat["mean_excess"] is None
+
+
+def test_render_markdown_shows_baseline_row_and_caveat() -> None:
+    stats = [
+        {
+            "strategy": "demo",
+            "density": 0.3,
+            "samples": 100,
+            "mean_excess": 0.001,
+            "win_rate": 0.5,
+            "t_event": 1.0,
+            "t_symbol": 0.5,
+        }
+    ]
+    baseline = {
+        "strategy": "同池无条件基准",
+        "density": 1.0,
+        "samples": 1000,
+        "mean_excess": -0.0004,
+        "win_rate": 0.43,
+        "t_event": -0.96,
+        "t_symbol": -0.37,
+    }
+    text = render_markdown(stats, {"baseline": baseline})
+
+    assert "（对照）同池无条件基准" in text
+    assert "100%" in text
+    assert "beta" in text and "alpha" in text
+
+
+def test_render_markdown_omits_baseline_when_absent() -> None:
+    text = render_markdown([], {"symbols": 0})
+
+    assert "（对照）" not in text
+
+
+def test_render_markdown_omits_baseline_when_no_samples() -> None:
+    baseline = {
+        "strategy": "同池无条件基准",
+        "density": 0.0,
+        "samples": 0,
+        "mean_excess": None,
+        "win_rate": None,
+        "t_event": None,
+        "t_symbol": None,
+    }
+    text = render_markdown([], {"baseline": baseline})
+
+    assert "（对照）" not in text

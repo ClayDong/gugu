@@ -215,6 +215,43 @@ def _nan_to_none(value: float) -> float | None:
     return None if math.isnan(value) else value
 
 
+class AlwaysOnStrategy:
+    """对照基准：每个交易日都发买入信号。
+
+    用途是量化「池子本身」相对指数的漂移。2026-11-05 实测：这套 39 只池
+    在 10 日持有期上的无条件超额是 +0.25%（t=+4.89）——也就是说任何策略
+    在 10 日口径下只要跟着池子走就会显示为正。不做这一步对照，
+    就会把池子的 beta 当成策略的 alpha。
+    """
+
+    name = "同池无条件基准"
+
+    def generate_signals(self, df: pd.DataFrame, is_backtest: bool = False) -> pd.DataFrame:
+        out = df.copy()
+        out["signal"] = 1
+        return out
+
+
+def baseline_stat(
+    frames: dict[str, pd.DataFrame],
+    index_df: pd.DataFrame,
+    *,
+    horizon: int = DEFAULT_HORIZON,
+    cost_rate: float = DEFAULT_COST,
+    start: str = DEFAULT_START,
+) -> dict[str, Any]:
+    """同池「每天都买」的无条件超额，作为所有策略数字的对照组。"""
+    events = collect_events(
+        AlwaysOnStrategy(),
+        frames,
+        index_df,
+        horizon=horizon,
+        cost_rate=cost_rate,
+        start=start,
+    )
+    return build_stat(AlwaysOnStrategy.name, events)
+
+
 def render_markdown(stats: list[dict[str, Any]], meta: dict[str, Any]) -> str:
     lines = [
         "# 策略同口径体检表",
@@ -237,6 +274,19 @@ def render_markdown(stats: list[dict[str, Any]], meta: dict[str, Any]) -> str:
             f"| {row['mean_excess']:+.2%} | {row['win_rate']:.0%} "
             f"| {_fmt_t(row['t_event'])} | {_fmt_t(row['t_symbol'])} |"
         )
+    baseline = meta.get("baseline")
+    if isinstance(baseline, dict) and baseline.get("samples"):
+        lines.append(
+            f"| （对照）{baseline['strategy']} | {baseline['density']:.0%} "
+            f"| {baseline['samples']} | {baseline['mean_excess']:+.2%} "
+            f"| {baseline['win_rate']:.0%} | {_fmt_t(baseline['t_event'])} "
+            f"| {_fmt_t(baseline['t_symbol'])} |"
+        )
+        lines += [
+            "",
+            "> 对照行是「同池每天都买」的无条件超额，代表池子自身的漂移。"
+            "策略行减去它才是策略贡献；不减去就把 beta 当成了 alpha。",
+        ]
     lines += [
         "",
         "> 密度 = 发买入信号的交易日 / 全部交易日。密度越高说明条件越不筛选。",
@@ -416,6 +466,9 @@ def main(argv: list[str] | None = None) -> int:
         "index": args.index,
         "symbols": len(frames),
         "failed": failed,
+        "baseline": baseline_stat(
+            frames, index_df, horizon=args.horizon, cost_rate=args.cost, start=args.start
+        ),
     }
     if args.json:
         print(json.dumps({"meta": meta, "stats": stats}, ensure_ascii=False, indent=1))

@@ -44,6 +44,7 @@ from strategy_scoreboard import (  # noqa: E402
     DEFAULT_HORIZON,
     DEFAULT_INDEX,
     DEFAULT_START,
+    baseline_stat,
     build_stat,
     collect_events,
     load_frames,
@@ -148,6 +149,20 @@ def render_markdown(rows: list[dict[str, Any]], meta: dict[str, Any]) -> str:
             f"| {row['strategy']} | {row['density']:.1%} | {row['samples']} "
             f"| {row['mean_excess']:+.2%} | {row['win_rate']:.0%} | {t_ev} | {t_sym} |"
         )
+    baseline = meta.get("baseline")
+    if isinstance(baseline, dict) and baseline.get("samples"):
+        t_sym = "—" if baseline["t_symbol"] is None else f"{baseline['t_symbol']:+.2f}"
+        t_ev = "—" if baseline["t_event"] is None else f"{baseline['t_event']:+.2f}"
+        lines.append(
+            f"| （对照）{baseline['strategy']} | {baseline['density']:.0%} "
+            f"| {baseline['samples']} | {baseline['mean_excess']:+.2%} "
+            f"| {baseline['win_rate']:.0%} | {t_ev} | {t_sym} |"
+        )
+        lines += [
+            "",
+            "> 对照行是「同池每天都买」的无条件超额，代表池子自身的漂移。"
+            "规则行减去它才是规则贡献。",
+        ]
     lines += [
         "",
         "> 密度 = 该规则命中且可评估的交易日 / 全部交易日。",
@@ -220,6 +235,9 @@ def main(argv: list[str] | None = None) -> int:
             "index": args.index,
             "symbols": len(frames),
             "failed": failed,
+            "baseline": baseline_stat(
+                frames, index_df, horizon=args.horizon, cost_rate=args.cost, start=args.start
+            ),
         }
         if args.json:
             payload.append({"meta": meta, "rules": rows})
