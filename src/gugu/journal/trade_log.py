@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from gugu.utils.atomic import append_jsonl
+from gugu.utils.evidence_guard import guard_evidence_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 JOURNAL_PATH = PROJECT_ROOT / "data" / "trade_journal.jsonl"
@@ -78,7 +79,7 @@ def log_trade_event(
         record["extra"] = extra
 
     with suppress(Exception):  # 日志写失败不阻塞交易
-        append_jsonl(JOURNAL_PATH, record)
+        append_jsonl(guard_evidence_path(JOURNAL_PATH), record)
 
 
 def log_signal_blocked(

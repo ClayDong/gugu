@@ -80,9 +80,10 @@ def test_all_redirects_share_one_directory(monkeypatch) -> None:
 
 
 def test_protected_filenames_cover_evidence_sources() -> None:
-    """证据源清单必须覆盖门槛脚本实际读取的两个文件。"""
+    """证据源清单必须覆盖门槛脚本与漏斗分析实际读取的文件。"""
     assert "signals_history.jsonl" in EVIDENCE_FILENAMES
     assert "paper_execution_ledger.jsonl" in EVIDENCE_FILENAMES
+    assert "trade_journal.jsonl" in EVIDENCE_FILENAMES
 
 
 # ========== 写入点接线回归（对应 2026-11-05 实际泄漏） ==========
@@ -118,6 +119,20 @@ def test_paper_ledger_append_does_not_touch_repo_data(monkeypatch) -> None:
     before = repo_file.read_bytes() if repo_file.exists() else b""
 
     paper_ledger.append_fill({"execution_id": "x", "symbol": "600001", "direction": "buy"})
+
+    after = repo_file.read_bytes() if repo_file.exists() else b""
+    assert after == before
+
+
+def test_trade_journal_does_not_touch_repo_data(monkeypatch) -> None:
+    """决策审计日志同样受保护——信号漏斗分析依赖它，不能被夹具污染。"""
+    from gugu.journal.trade_log import log_signal_blocked
+
+    monkeypatch.setenv("GUGU_TEST_MODE", "1")
+    repo_file = _repo_data_dir() / "trade_journal.jsonl"
+    before = repo_file.read_bytes() if repo_file.exists() else b""
+
+    log_signal_blocked("600519", "test_strategy", "测试拦截原因")
 
     after = repo_file.read_bytes() if repo_file.exists() else b""
     assert after == before

@@ -75,7 +75,8 @@ class MarketEnvironment:
             }
         """
         limit_up_count = 0  # 涨停数
-        sealed_count = 0  # 封板数（涨停且未炸板，即收阳）
+        sealed_count = 0  # 收盘封住涨停的家数（盘中曾涨停的子集）
+        touched_limit_count = 0  # 盘中曾触及涨停的家数（封板率的分母）
         relay_candidates = 0  # 接力候选（前日涨停的股票数）
         relay_success = 0  # 接力成功（前日涨停 + 今日高开）
         valid_samples = 0
@@ -86,14 +87,26 @@ class MarketEnvironment:
             valid_samples += 1
             close = df["close"].values
             open_p = df["open"].values
+            high = df["high"].values if "high" in df else close
             daily_ret = (close[-1] / close[-2] - 1) if close[-2] > 0 else 0
             prev_ret = (close[-2] / close[-3] - 1) if len(close) >= 3 and close[-3] > 0 else 0
 
-            # 涨停检测（涨幅 > 9.5%）
+            # 涨停价近似（沿用 9.5% 口径，与下方 limit_up_count 判定保持一致）
+            limit_price = close[-2] * 1.095 if close[-2] > 0 else 0.0
+            touched_limit = limit_price > 0 and high[-1] >= limit_price
+            closed_at_limit = limit_price > 0 and close[-1] >= limit_price
+
+            # 涨停检测（收盘涨幅 > 9.5%）——语义保持不变：用于冰点/空仓判断
             if daily_ret > 0.095:
                 limit_up_count += 1
-                # 封板：涨停且收阳
-                if close[-1] > open_p[-1]:
+
+            # 封板率：分母是「盘中曾涨停」，分子是「收盘仍封在涨停价」。
+            # 原实现用 close > open 判封板，把一字板（open == close == 涨停价）
+            # 判成「未封板」，反而让最强的形态被打板风控否决——方向是反的。
+            # 炸板（盘中触及涨停但收盘回落）才是真正的「未封板」。
+            if touched_limit:
+                touched_limit_count += 1
+                if closed_at_limit:
                     sealed_count += 1
 
             # 接力检测：前日涨停 + 今日高开
@@ -102,8 +115,17 @@ class MarketEnvironment:
                 if open_p[-1] > close[-2]:  # 高开
                     relay_success += 1
 
-        seal_rate = sealed_count / limit_up_count if limit_up_count > 0 else 0
-        relay_rate = relay_success / relay_candidates if relay_candidates > 0 else 0
+        # 封板率/接力率是「比率型」指标：分母为 0 意味着没有可判断的样本，
+        # 而不是「成功率为 0」。原实现用 ``else 0`` 把「无样本」压成 0%，
+        # 再经 ``can_relay = 0 >= 0.6`` 判为 False，最终由 should_avoid_relay
+        # 否决信号——这是把「不知道」当成「不合格」，属于逻辑错误。
+        #
+        # 2026-11-05 实证：data/trade_journal.jsonl 144 条记录 100% 被拦，
+        # 其中 45 条明确写「接力成功率0%低于60%」。自选股池只有 18 只，
+        # 「前日涨停」的候选长期为 0，于是该指标恒为 0、拦截永久生效，
+        # 策略信号永远进不了成交。改为 None 表示不可判断。
+        seal_rate = sealed_count / touched_limit_count if touched_limit_count > 0 else None
+        relay_rate = relay_success / relay_candidates if relay_candidates > 0 else None
 
         # ── 冰点判断 ──────────────────────────────────
         is_ice = (limit_up_count < self.ice_point_limit) or (
@@ -131,19 +153,22 @@ class MarketEnvironment:
             "asof": datetime.now().isoformat(timespec="seconds"),
             "sample_count": valid_samples,
             "limit_up_count": limit_up_count,
-            "seal_rate": round(seal_rate, 2),
-            "relay_rate": round(relay_rate, 2),
+            "touched_limit_count": touched_limit_count,
+            "relay_candidate_count": relay_candidates,
+            # None = 无样本，无法计算比率；调用方必须区分「无法判断」与「0 分」
+            "seal_rate": None if seal_rate is None else round(seal_rate, 2),
+            "relay_rate": None if relay_rate is None else round(relay_rate, 2),
             "ice_point": is_ice,
             "mode": mode,
             "advice": advice,
-            "can_board": seal_rate >= self.min_seal_rate,
-            "can_relay": relay_rate >= self.min_relay_rate,
+            "can_board": None if seal_rate is None else seal_rate >= self.min_seal_rate,
+            "can_relay": None if relay_rate is None else relay_rate >= self.min_relay_rate,
         }
         logger.info(
-            "市场环境: 涨停=%d 封板率=%.0f%% 接力率=%.0f%% 模式=%s",
+            "市场环境: 涨停={} 封板率={} 接力率={} 模式={}",
             limit_up_count,
-            seal_rate * 100,
-            relay_rate * 100,
+            "n/a" if seal_rate is None else f"{seal_rate:.0%}",
+            "n/a" if relay_rate is None else f"{relay_rate:.0%}",
             mode,
         )
         return result
@@ -155,10 +180,24 @@ def should_empty_position(env: dict) -> bool:
 
 
 def should_avoid_board(env: dict) -> bool:
-    """是否应该避免打板。"""
-    return not env.get("can_board", False)
+    """是否应该避免打板。
+
+    ``can_board`` 为 None 表示「池内没有涨停样本，封板率无法计算」。
+    此时不做否决——用无样本的伪 0 分去否决信号，会让策略长期无法交易。
+    """
+    can_board = env.get("can_board")
+    if can_board is None:
+        return False
+    return not can_board
 
 
 def should_avoid_relay(env: dict) -> bool:
-    """是否应该避免接力。"""
-    return not env.get("can_relay", False)
+    """是否应该避免接力。
+
+    ``can_relay`` 为 None 表示「池内无前日涨停股，接力成功率无法计算」。
+    同理不做否决；有样本且低于阈值时仍然拦截。
+    """
+    can_relay = env.get("can_relay")
+    if can_relay is None:
+        return False
+    return not can_relay

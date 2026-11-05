@@ -275,9 +275,13 @@ class SignalPipeline:
             if should_empty_position(precomputed_env):
                 return f"涨停稀少({precomputed_env.get('limit_up_count', 0)}只)，空仓等机会"
             if "ghost_breakout" in strategy_name and should_avoid_board(precomputed_env):
-                return f"封板率{precomputed_env.get('seal_rate', 0):.0%}低于70%，不打板"
+                # seal_rate 为 None 时 should_avoid_board 已返回 False，走不到这里；
+                # 用 or 0 兜底只为防御格式化异常，不改变判定语义。
+                rate = precomputed_env.get("seal_rate") or 0
+                return f"封板率{rate:.0%}低于70%，不打板"
             if "dragon_head" in strategy_name and should_avoid_relay(precomputed_env):
-                return f"接力成功率{precomputed_env.get('relay_rate', 0):.0%}低于60%，不接力"
+                rate = precomputed_env.get("relay_rate") or 0
+                return f"接力成功率{rate:.0%}低于60%，不接力"
 
         return None
 

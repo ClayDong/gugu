@@ -30,11 +30,15 @@ from gugu.utils.log import get_logger
 
 logger = get_logger()
 
-# 受保护的前向证据文件名（只保护证据文件，不干扰其它运行时状态）
+# 受保护的前向证据文件（只保护证据与决策审计文件，不干扰其它运行时状态）
 EVIDENCE_FILENAMES = frozenset(
     {
         "signals_history.jsonl",
         "paper_execution_ledger.jsonl",
+        # trade_journal.jsonl 记录每次信号/拦截/成交，是「信号漏斗」分析与
+        # 策略淘汰的唯一依据。它由 trade_log.JOURNAL_PATH 模块常量决定路径，
+        # 同样绕不过导入期绑定，必须一并保护。
+        "trade_journal.jsonl",
     }
 )
 
