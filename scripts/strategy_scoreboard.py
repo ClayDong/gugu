@@ -269,10 +269,10 @@ def load_frames(
     frames: dict[str, pd.DataFrame] = {}
     failed: list[str] = []
     for symbol in symbols:
-        path = cache_dir / f"{symbol}.parquet"
-        if path.exists():
+        cached = resolve_cache_file(symbol, cache_dir)
+        if cached is not None:
             try:
-                frames[symbol] = pd.read_parquet(path)
+                frames[symbol] = pd.read_parquet(cached)
                 continue
             except Exception:  # noqa: BLE001 — 缓存损坏则回退联网
                 pass
@@ -286,26 +286,67 @@ def load_frames(
             continue
         frames[symbol] = df
         try:
-            df.to_parquet(path)
+            df.to_parquet(cache_dir / f"{symbol}.parquet")
         except Exception:  # noqa: BLE001 — 写缓存失败不影响本次统计
             pass
     return frames, failed
+
+
+def resolve_cache_file(symbol: str, cache_dir: Path) -> Path | None:
+    """在缓存目录里找这只标的最长的行情文件。
+
+    兼容两种布局：本工具自己的 ``{symbol}.parquet``，以及仓库
+    ``data/parquet_cache/`` 的 ``{symbol}_{天数}d[_复权].parquet``。
+    同标的存在多档时取行数最多的——短档撑不起 5 日窗口加基准对齐。
+
+    标的池里常写成 ``sh600519`` 这种带交易所前缀的形式，而缓存文件名是
+    6 位纯数字，所以两种写法都要试，否则会静默回退到联网。
+    """
+    directory = Path(cache_dir)
+    keys = [str(symbol).strip()]
+    digits = str(symbol).strip()[-6:]
+    if digits and digits not in keys:
+        keys.append(digits)
+    for key in keys:
+        exact = directory / f"{key}.parquet"
+        if exact.is_file():
+            return exact
+    best: Path | None = None
+    best_rows = -1
+    for key in keys:
+        for path in sorted(directory.glob(f"{key}_*d*.parquet")):
+            try:
+                rows = len(pd.read_parquet(path))
+            except Exception:  # noqa: BLE001 — 坏文件跳过，不影响其他候选
+                continue
+            if rows > best_rows:
+                best, best_rows = path, rows
+    return best
+
+
+def resolve_index_file(index_code: str, cache_dir: Path) -> Path | None:
+    """找基准缓存；``sh000300`` 先试 ``_index.parquet``，再试 ``000300_*d*``。"""
+    directory = Path(cache_dir)
+    cached = directory / "_index.parquet"
+    if cached.is_file():
+        return cached
+    return resolve_cache_file(str(index_code).strip()[-6:], directory)
 
 
 def load_index(index_code: str, cache_dir: Path, days: int) -> pd.DataFrame:
     from gugu.analysis.event_study_data import fetch_index_klines
 
     cache_dir.mkdir(parents=True, exist_ok=True)
-    path = cache_dir / "_index.parquet"
-    if path.exists():
+    cached = resolve_index_file(index_code, cache_dir)
+    if cached is not None:
         try:
-            return pd.read_parquet(path)
+            return pd.read_parquet(cached)
         except Exception:  # noqa: BLE001
             pass
     df = fetch_index_klines(index_code, days)
     if df is not None and not df.empty:
         try:
-            df.to_parquet(path)
+            df.to_parquet(cache_dir / "_index.parquet")
         except Exception:  # noqa: BLE001
             pass
         return df

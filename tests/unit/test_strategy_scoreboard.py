@@ -345,3 +345,57 @@ def test_main_returns_error_when_index_unavailable(tmp_path, monkeypatch) -> Non
 
     code = main(["--pool-file", str(pool), "--cache-dir", str(tmp_path / "cache")])
     assert code == 1
+
+
+# ── 缓存解析：能不能直接读仓库 data/parquet_cache ──────────────
+
+
+def _write(path, rows: int) -> None:
+    _frame(DATES[:rows] if rows <= len(DATES) else DATES).to_parquet(path)
+
+
+def test_resolve_prefers_exact_symbol_file(tmp_path) -> None:
+    from scripts.strategy_scoreboard import resolve_cache_file
+
+    _write(tmp_path / "600519.parquet", 5)
+    _write(tmp_path / "600519_100d_none.parquet", 10)
+    assert resolve_cache_file("600519", tmp_path).name == "600519.parquet"
+
+
+def test_resolve_picks_longest_dated_file(tmp_path) -> None:
+    from scripts.strategy_scoreboard import resolve_cache_file
+
+    _write(tmp_path / "600519_5d_none.parquet", 5)
+    _write(tmp_path / "600519_12d_none.parquet", 12)
+    _write(tmp_path / "600519_8d_qfq.parquet", 8)
+    assert resolve_cache_file("600519", tmp_path).name == "600519_12d_none.parquet"
+
+
+def test_resolve_handles_exchange_prefix(tmp_path) -> None:
+    """标的池常写 sh600519，缓存文件名是 600519_XXXd，必须能对上。"""
+    from scripts.strategy_scoreboard import resolve_cache_file
+
+    _write(tmp_path / "600519_10d_none.parquet", 10)
+    assert resolve_cache_file("sh600519", tmp_path).name == "600519_10d_none.parquet"
+    assert resolve_cache_file("sz000858", tmp_path) is None
+
+
+def test_resolve_returns_none_when_absent(tmp_path) -> None:
+    from scripts.strategy_scoreboard import resolve_cache_file
+
+    assert resolve_cache_file("600519", tmp_path) is None
+
+
+def test_resolve_index_prefers_index_file(tmp_path) -> None:
+    from scripts.strategy_scoreboard import resolve_index_file
+
+    _write(tmp_path / "_index.parquet", 5)
+    _write(tmp_path / "000300_10d_none.parquet", 10)
+    assert resolve_index_file("sh000300", tmp_path).name == "_index.parquet"
+
+
+def test_resolve_index_falls_back_to_dated_benchmark(tmp_path) -> None:
+    from scripts.strategy_scoreboard import resolve_index_file
+
+    _write(tmp_path / "000300_9d_none.parquet", 9)
+    assert resolve_index_file("sh000300", tmp_path).name == "000300_9d_none.parquet"
