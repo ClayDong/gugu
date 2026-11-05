@@ -30,6 +30,7 @@ VALID_METRICS = {
     "param_stability": 0.9,
     "paper_signals": 40,
     "paper_return": 0.01,
+    "selection_alpha": 0.0005,
 }
 
 

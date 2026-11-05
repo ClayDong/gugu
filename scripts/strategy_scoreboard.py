@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from scipy import stats as sps
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT / "src") not in sys.path:
@@ -77,6 +78,17 @@ class Events:
     @property
     def returns(self) -> list[float]:
         return [v for values in self.per_symbol.values() for v in values]
+
+
+def t_p_value(value: float | None, df: int) -> float | None:
+    """双侧 p 值（精确 t 分布），供需要"t 到底多罕见"的地方共用。
+
+    不用正态近似：df 只有 38 时，t=2.0 在 t 分布下 p=0.052、正态下 p=0.046，
+    恰好横跨 0.05 这条线，而这条线正是要判断的地方。
+    """
+    if value is None or df < 1:
+        return None
+    return float(2 * sps.t.sf(abs(float(value)), df))
 
 
 def t_stat(values: list[float]) -> float:
@@ -274,6 +286,62 @@ def baseline_stat(
     return build_stat(AlwaysOnStrategy.name, events)
 
 
+def selection_alpha(
+    rows: list[dict[str, Any]],
+    base_events: Events,
+) -> dict[str, Any]:
+    """同一信号日内，「信号股票」相对「池子其余股票」的差额。
+
+    为什么必须这样拆：策略的每一笔收益，等价于它选中的那个 (日期, 标的) 上的
+    无条件收益——入场价、出场价、成本完全相同，所以"同日同标的"相减恒为 0，
+    拆不出任何东西。真正能拆的是**同一天里它买的股票 vs 池子其他股票**：
+
+        策略超额 = 那一天的池子整体超额（择时）+ 当日选股差额（选股）
+
+    前者是"买对了日子"，后者才是"挑对了股票"。若选股差额与 0 无法区分，
+    那这套规则本质上只是一枚市场状态指示器，不是选股器。
+
+    聚类单位仍然是日期：同一天的所有标的共享同一个市场冲击。
+    """
+    pool_by_date: dict[str, list[float]] = {}
+    for row in base_events.rows:
+        pool_by_date.setdefault(str(row["date"]), []).append(float(row["excess"]))
+
+    pool_values: list[float] = []
+    diffs_by_event: list[float] = []
+    diffs_by_date: dict[str, list[float]] = {}
+    for row in rows:
+        date = str(row["date"])
+        pool = pool_by_date.get(date)
+        if not pool:
+            continue
+        pool_mean = sum(pool) / len(pool)
+        gap = float(row["excess"]) - pool_mean
+        pool_values.append(pool_mean)
+        diffs_by_event.append(gap)
+        diffs_by_date.setdefault(date, []).append(gap)
+
+    if not diffs_by_event:
+        return {
+            "selection_alpha": None,
+            "t_selection": None,
+            "p_selection": None,
+            "pool_same_day": None,
+            "selection_dates": 0,
+        }
+    # 均值按事件加权，与净超额同口径，保证「净超额 = 同日池子 + 选股alpha」精确成立；
+    # t 值按日期聚类，因为同一天的所有标的共享同一个市场冲击。
+    date_means = [sum(v) / len(v) for v in diffs_by_date.values()]
+    value = t_stat(date_means) if len(date_means) >= 3 else math.nan
+    return {
+        "selection_alpha": sum(diffs_by_event) / len(diffs_by_event),
+        "t_selection": None if math.isnan(value) else value,
+        "p_selection": t_p_value(None if math.isnan(value) else value, len(date_means) - 1),
+        "pool_same_day": sum(pool_values) / len(pool_values),
+        "selection_dates": len(date_means),
+    }
+
+
 def net_alpha(
     rule_events: Events,
     baseline_events_: Events,
@@ -322,24 +390,28 @@ def render_markdown(stats: list[dict[str, Any]], meta: dict[str, Any]) -> str:
         f"- 基准：{meta.get('index', DEFAULT_INDEX)}",
         f"- 标的数：{meta.get('symbols', 0)}",
         "",
-        "| 策略 | 密度 | 事件数 | 5日净超额 | 净alpha | 胜率 | t(按标的) | t(净alpha) |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| 策略 | 密度 | 事件数 | 净超额 | 净alpha | 选股alpha | t(选股) | 胜率 | t(按标的) |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in stats:
         if not row["samples"]:
-            lines.append(f"| {row['strategy']} | {row['density']:.1%} | 0 | — | — | — | — | — |")
+            lines.append(
+                f"| {row['strategy']} | {row['density']:.1%} | 0 | — | — | — | — | — | — |"
+            )
             continue
         lines.append(
             f"| {row['strategy']} | {row['density']:.1%} | {row['samples']} "
-            f"| {row['mean_excess']:+.2%} | {_fmt_alpha(row)} | {row['win_rate']:.0%} "
-            f"| {_fmt_t(row['t_symbol'])} | {_fmt_t(row.get('t_alpha'))} |"
+            f"| {row['mean_excess']:+.2%} | {_fmt_alpha(row)} "
+            f"| {_fmt_alpha_key(row, 'selection_alpha')} "
+            f"| {_fmt_t(row.get('t_selection'))} "
+            f"| {row['win_rate']:.0%} | {_fmt_t(row['t_symbol'])} |"
         )
     baseline = meta.get("baseline")
     if isinstance(baseline, dict) and baseline.get("samples"):
         lines.append(
             f"| （对照）{baseline['strategy']} | {baseline['density']:.0%} "
-            f"| {baseline['samples']} | {baseline['mean_excess']:+.2%} | — "
-            f"| {baseline['win_rate']:.0%} | {_fmt_t(baseline['t_symbol'])} | — |"
+            f"| {baseline['samples']} | {baseline['mean_excess']:+.2%} | — | — | — "
+            f"| {baseline['win_rate']:.0%} | {_fmt_t(baseline['t_symbol'])} |"
         )
         lines += [
             "",
@@ -348,6 +420,9 @@ def render_markdown(stats: list[dict[str, Any]], meta: dict[str, Any]) -> str:
             "> 净alpha = 逐标的（策略事件均值 − 同标的无条件均值）后做配对检验，"
             "|t| < 2 表示扣掉池子漂移后与零无法区分。",
             "> 净alpha 逐标的等权、净超额逐事件加权，两者口径不同，不可相加。",
+            "> 选股alpha = 同一信号日里（策略所买股票均值 − 池子其余股票均值），按日聚类。"
+            "它若不大于 0，正超额只来自「买对了日子」，策略只是市场状态指示器，"
+            "不能作为选股能力证据——门禁已要求选股alpha > 0。",
         ]
     lines += [
         "",
@@ -365,6 +440,11 @@ def _fmt_t(value: float | None) -> str:
 
 def _fmt_alpha(row: dict[str, Any]) -> str:
     value = row.get("mean_alpha")
+    return "—" if value is None else f"{value:+.2%}"
+
+
+def _fmt_alpha_key(row: dict[str, Any], key: str) -> str:
+    value = row.get(key)
     return "—" if value is None else f"{value:+.2%}"
 
 
@@ -484,6 +564,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE))
     parser.add_argument("--json", action="store_true", help="输出机器可读 JSON")
+    parser.add_argument(
+        "--gate-metrics",
+        action="store_true",
+        help="只输出可实测的准入指标（选股alpha），供 validate_strategy_gate.py 使用",
+    )
     return parser
 
 
@@ -531,6 +616,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         stat = build_stat(name, events)
         stat.update(net_alpha(events, base_events))
+        stat.update(selection_alpha(events.rows, base_events))
         stats.append(stat)
 
     meta = {
@@ -542,6 +628,22 @@ def main(argv: list[str] | None = None) -> int:
         "failed": failed,
         "baseline": build_stat(AlwaysOnStrategy.name, base_events),
     }
+    if args.gate_metrics:
+        # 只交出这张表真能测出来的东西。其余门禁指标（回测收益、Sharpe、paper 信号）
+        # 必须来自各自的报告，不在这里编造默认值——缺指标就应当失败，不该被填平。
+        payload = {
+            row["strategy"]: {
+                "selection_alpha": row.get("selection_alpha"),
+                "selection_alpha_t": row.get("t_selection"),
+                "selection_dates": row.get("selection_dates"),
+                "net_alpha": row.get("mean_alpha"),
+                "samples": row["samples"],
+            }
+            for row in stats
+            if row["samples"]
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=1))
+        return 0
     if args.json:
         print(json.dumps({"meta": meta, "stats": stats}, ensure_ascii=False, indent=1))
     else:

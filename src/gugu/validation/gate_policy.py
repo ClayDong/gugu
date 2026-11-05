@@ -7,6 +7,14 @@ gate-v2 变更（2026-09-10）：
 - 新增 profit_factor ≥ 1.5（盈亏比，弥补只看胜率不看盈亏比的缺口）
 - max_drawdown 按策略类型分层：短线(trend/breakout/mean_revert) < 15%，中长线(main_force) < 25%
 - evaluate() 新增可选 category 参数，按类型覆盖 max_drawdown 规则
+
+gate-v2 变更（2026-11-05）：
+- 新增 selection_alpha > 0（选股 alpha）。仅要求「超额 > 0」不够：策略的每笔
+  收益等价于其所选 (日期, 标的) 上的无条件收益，因此超额完全可以由「买对了
+  日子」贡献——那是 beta 择时，不是选股能力。实测（39 只池、2024-02 起）三个
+  在用策略的净alpha 为正/接近零，但拆开后选股alpha 全部为负：
+  box_breakout -0.20%、linjudaye -0.06%、double_yin -0.15%。缺失该指标一律失败，
+  不提供默认值，否则等于给「没测过」发通行证。
 """
 
 from __future__ import annotations
@@ -71,6 +79,12 @@ class GatePolicy:
         "param_stability": GateRule(0.80, "higher", "参数稳定性 ≥ 80%"),
         "paper_signals": GateRule(30, "higher", "paper 信号数 ≥ 30"),
         "paper_return": GateRule(0.0, "higher", "paper 收益 ≥ 0"),
+        # 选股能力：扣掉「同池漂移 + 池子同期涨幅」之后，策略还必须真的挑中了
+        # 更好的股票。用 strict 是刻意的：恰好等于 0 意味着与池子其他股票无差别，
+        # 那是市场状态指示器，不是选股策略。
+        "selection_alpha": GateRule(
+            0.0, "higher", "选股alpha > 0（同日相对池子其余股票）", strict=True
+        ),
     }
 
     # 参数写回和实验策略升级使用的最小样本外门禁。

@@ -144,6 +144,7 @@ def test_validate_strategy_gate_emits_matching_evidence() -> None:
         "param_stability": 0.8,
         "paper_signals": 35,
         "paper_return": 0.02,
+        "selection_alpha": 0.0005,
     }
     report = script.evaluate_gate("box_breakout", metrics)
     assert report["passed"] is True

@@ -61,6 +61,8 @@ from strategy_scoreboard import (  # noqa: E402
     load_index,
     load_pool,
     net_alpha,
+    selection_alpha,
+    t_p_value,
     t_stat,
 )
 
@@ -133,17 +135,6 @@ def events_from_rows(rows: list[dict[str, Any]]) -> Events:
     return events
 
 
-def t_p_value(value: float | None, df: int) -> float | None:
-    """双侧 p 值（精确 t 分布）。
-
-    不用正态近似：df 只有 38 时，t=2.0 在 t 分布下 p=0.052、正态下 p=0.046，
-    恰好横跨 0.05 这条线，而这条线正是要判断的地方。
-    """
-    if value is None or df < 1:
-        return None
-    return float(2 * sps.t.sf(abs(float(value)), df))
-
-
 def bh_adjusted_p(p_values: list[float]) -> list[float]:
     """BH 校正后的 p 值（逐项）。
 
@@ -202,62 +193,6 @@ def date_cluster_stat(rows: list[dict[str, Any]]) -> tuple[int, float | None]:
     return len(means), (None if math.isnan(value) else value)
 
 
-def day_selection_alpha(
-    rows: list[dict[str, Any]],
-    base_events: Events,
-) -> dict[str, Any]:
-    """同一信号日内，「信号股票」相对「池子其余股票」的差额。
-
-    为什么必须这样拆：策略的每一笔收益，等价于它选中的那个 (日期, 标的) 上的
-    无条件收益——入场价、出场价、成本完全相同，所以"同日同标的"相减恒为 0，
-    拆不出任何东西。真正能拆的是**同一天里它买的股票 vs 池子其他股票**：
-
-        策略超额 = 那一天的池子整体超额（择时）+ 当日选股差额（选股）
-
-    前者是"买对了日子"，后者才是"挑对了股票"。若选股差额与 0 无法区分，
-    那这套规则本质上只是一枚市场状态指示器，不是选股器。
-
-    聚类单位仍然是日期：同一天的所有标的共享同一个市场冲击。
-    """
-    pool_by_date: dict[str, list[float]] = {}
-    for row in base_events.rows:
-        pool_by_date.setdefault(str(row["date"]), []).append(float(row["excess"]))
-
-    pool_values: list[float] = []
-    diffs_by_event: list[float] = []
-    diffs_by_date: dict[str, list[float]] = {}
-    for row in rows:
-        date = str(row["date"])
-        pool = pool_by_date.get(date)
-        if not pool:
-            continue
-        pool_mean = sum(pool) / len(pool)
-        gap = float(row["excess"]) - pool_mean
-        pool_values.append(pool_mean)
-        diffs_by_event.append(gap)
-        diffs_by_date.setdefault(date, []).append(gap)
-
-    if not diffs_by_event:
-        return {
-            "selection_alpha": None,
-            "t_selection": None,
-            "p_selection": None,
-            "pool_same_day": None,
-            "selection_dates": 0,
-        }
-    # 均值按事件加权，与净超额同口径，保证「净超额 = 同日池子 + 选股alpha」精确成立；
-    # t 值按日期聚类，因为同一天的所有标的共享同一个市场冲击。
-    date_means = [sum(v) / len(v) for v in diffs_by_date.values()]
-    value = t_stat(date_means) if len(date_means) >= 3 else math.nan
-    return {
-        "selection_alpha": sum(diffs_by_event) / len(diffs_by_event),
-        "t_selection": None if math.isnan(value) else value,
-        "p_selection": t_p_value(None if math.isnan(value) else value, len(date_means) - 1),
-        "pool_same_day": sum(pool_values) / len(pool_values),
-        "selection_dates": len(date_means),
-    }
-
-
 def summarize(
     label: str,
     rows: list[dict[str, Any]],
@@ -298,7 +233,7 @@ def summarize(
     stat["dates"], stat["t_date"] = date_cluster_stat(rows)
     stat["p_date"] = t_p_value(stat["t_date"], stat["dates"] - 1)
     stat["p_alpha"] = t_p_value(stat["t_alpha"], stat["pairs"] - 1)
-    stat.update(day_selection_alpha(rows, base_events))
+    stat.update(selection_alpha(rows, base_events))
     return stat
 
 

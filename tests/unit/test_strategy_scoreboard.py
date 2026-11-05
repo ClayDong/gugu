@@ -668,8 +668,11 @@ def test_render_markdown_shows_net_alpha_columns() -> None:
     text = render_markdown(stats, {"symbols": 39})
 
     assert "净alpha" in text
+    assert "选股alpha" in text
     assert "+0.12%" in text
-    assert "+0.40" in text
+    # 夹具没给 t_selection，这一列必须是破折号而不是 0
+    row = next(line for line in text.splitlines() if line.startswith("| demo |"))
+    assert row.count("—") >= 1
 
 
 def test_render_markdown_marks_missing_net_alpha() -> None:

@@ -20,6 +20,7 @@ def _passing_metrics(**overrides: float) -> dict:
         "param_stability": 0.80,
         "paper_signals": 30,
         "paper_return": 0.0,
+        "selection_alpha": 0.0001,
     }
     base.update(overrides)
     return base
@@ -179,6 +180,7 @@ def test_classify_evidence_falls_back_to_total_trades():
         "param_stability": 0.9,
         "paper_signals": 40,
         "paper_return": 0.01,
+        "selection_alpha": 0.0005,
     }
     verdict = GatePolicy.evaluate(metrics, category="mean_revert")
     assert verdict["passed"] is True
@@ -186,3 +188,51 @@ def test_classify_evidence_falls_back_to_total_trades():
     assert GatePolicy.classify_evidence(verdict) == "passed"
     # 显式请求 oos_trades 且缺失时，仍按原语义判 insufficient_evidence
     assert GatePolicy.classify_evidence(verdict, sample_key="oos_trades") == "insufficient_evidence"
+
+
+class TestSelectionAlpha:
+    """选股 alpha 门禁（2026-11-05 新增）。
+
+    为什么单列一组：这条规则不是"再多一个指标"，它纠正的是一个会反复出现
+    的误判——把池子同期涨幅当成策略能力。实测三个在用策略净alpha 为正或近零，
+    拆开后选股alpha 全部为负。所以它的边界必须被钉死，尤其是"恰好 0"。
+    """
+
+    def test_missing_selection_alpha_fails(self):
+        metrics = _passing_metrics()
+        metrics.pop("selection_alpha")
+        report = GatePolicy.evaluate(metrics)
+
+        assert report["passed"] is False
+        assert "selection_alpha" in report["failed_checks"]
+
+    def test_zero_selection_alpha_fails(self):
+        """恰好 0 意味着与池子其他股票无差别：那是市场状态指示器，不是选股策略。"""
+        report = GatePolicy.evaluate(_passing_metrics(selection_alpha=0.0))
+
+        assert report["passed"] is False
+        assert "selection_alpha" in report["failed_checks"]
+
+    def test_negative_selection_alpha_fails(self):
+        """实测值：box_breakout -0.20%、linjudaye -0.06%、double_yin -0.15%。"""
+        for value in (-0.0020, -0.0006, -0.0015):
+            report = GatePolicy.evaluate(_passing_metrics(selection_alpha=value))
+            assert report["passed"] is False
+            assert "selection_alpha" in report["failed_checks"]
+
+    def test_positive_selection_alpha_passes(self):
+        report = GatePolicy.evaluate(_passing_metrics(selection_alpha=0.0001))
+
+        assert report["passed"] is True
+        assert report["checks"]["selection_alpha"]["passed"] is True
+
+    def test_non_finite_selection_alpha_fails(self):
+        for value in (math.nan, math.inf, "N/A", None):
+            report = GatePolicy.evaluate(_passing_metrics(selection_alpha=value))
+            assert report["passed"] is False
+            assert "selection_alpha" in report["failed_checks"]
+
+    def test_selection_alpha_is_in_thresholds(self):
+        """阈值映射必须包含它，否则报告层会漏印这条检查。"""
+        assert GatePolicy.thresholds()["selection_alpha"] == 0.0
+        assert "selection_alpha" in GatePolicy.rules()

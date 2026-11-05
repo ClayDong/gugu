@@ -96,6 +96,9 @@ class TestStrategyGateScript:
                 "param_stability": 0.8,
                 "paper_signals": 35,
                 "paper_return": 0.02,
+                # 2026-11-05 起门禁还要求选股alpha > 0：仅超额达标不足以证明
+                # 策略在选股，池子同期涨幅也能造出超额。
+                "selection_alpha": 0.0008,
             },
         )
         assert report["passed"] is True
