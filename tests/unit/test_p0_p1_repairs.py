@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+import _thread
 from pathlib import Path
 from unittest import mock
 
@@ -294,7 +295,10 @@ def test_risk_manager_thread_safety() -> None:
 def test_risk_manager_has_lock() -> None:
     mgr = RiskManager()
     assert hasattr(mgr, "_lock")
-    assert isinstance(mgr._lock, threading.Lock)
+    # 不能用 `isinstance(mgr._lock, threading.Lock)`：threading.Lock 到 Python 3.13
+    # 才变成类，3.12 里它是个工厂函数，isinstance 会直接抛 TypeError。
+    # 本项目 requires-python >=3.12，而 CI 恰好跑 3.12，用 LockType 才跨版本成立。
+    assert isinstance(mgr._lock, _thread.LockType)
 
 
 # ========================================

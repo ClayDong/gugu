@@ -380,7 +380,7 @@ class AutoRecover:
         data_errors = scan.get("data_errors") if scan else None
         streak = (self._read_json(DEFAULT_SCAN_STREAK_FILE) or {}).get("streak", 0)
         root_cause = (
-            f"连续 {streak} 轮 0 信号；data_health={data_health}；" f"data_errors={data_errors}"
+            f"连续 {streak} 轮 0 信号；data_health={data_health}；data_errors={data_errors}"
         )
 
         if self.test_mode:

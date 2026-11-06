@@ -31,10 +31,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# 与下方 [dependency-groups] dev 必须保持一致。
+# quality-gate.yml 的 lint 用 `pip install -e ".[dev]"`，ci.yml 用 `uv sync --group dev`，
+# 两份定义一旦分叉，就会出现「本地绿、CI 红」——2026-11-06 就这么红过一次：
+# 组里只留了 pytest 三件套，lint job 的 `uv run ruff` 找不到命令，
+# test job 的 `--cov` 未被识别，两个 job 都在 13 秒内挂掉。
 dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
     "pytest-cov>=4.0",
+    "pytest-timeout>=2.3",
     "ruff>=0.4",
     "mypy>=1.8",
 ]
@@ -95,7 +101,11 @@ max-args = 7
 max-returns = 4
 
 [tool.mypy]
-python_version = "3.11"
+# 必须与 requires-python（>=3.12）和 CI 使用的解释器一致。
+# 这里曾是 3.11，而项目要求 >=3.12：mypy 按 3.11 语法去解析 numpy 的 .pyi，
+# 一见 `type X = ...` 就报 "Type statement is only supported in Python 3.12 and greater"，
+# 整次检查在第一个文件就中断，等于 mypy 从来没真正跑过。
+python_version = "3.12"
 strict = true
 ignore_missing_imports = true
 plugins = ["pydantic.mypy"]
@@ -115,8 +125,14 @@ min-assertions-per-test = 1
 skips = ["B310", "B323", "B324"]
 
 [dependency-groups]
+# 必须覆盖 CI 实际用到的每一条命令：ci.yml 在 `uv sync --group dev` 之后直接
+# `uv run ruff` / `uv run mypy`，两个 workflow 的 pytest 都带 `--cov`。
+# 缺哪个，对应 job 就会在依赖装完的瞬间报错——快得像是环境问题，其实是声明缺失。
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-cov>=4.0",
     "pytest-timeout>=2.3",
+    "ruff>=0.4",
+    "mypy>=1.8",
 ]

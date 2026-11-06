@@ -6,10 +6,11 @@ import contextlib
 import os
 import time
 from collections import defaultdict, deque
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -178,7 +179,7 @@ def _get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _rate_limit(limit: int, window_seconds: int = 60):
+def _rate_limit(limit: int, window_seconds: int = 60) -> Callable[[Request], None]:
     """生成速率限制 FastAPI 依赖。
 
     Args:
@@ -325,7 +326,10 @@ def create_app() -> FastAPI:
     app = FastAPI(title="gugu 交易仪表盘", version=__version__)
 
     @app.middleware("http")
-    async def protect_remote_api(request: Request, call_next):
+    async def protect_remote_api(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
         """Require the admin key for non-loopback API reads when remotely exposed."""
         path = request.url.path
         client_host = request.client.host if request.client else ""

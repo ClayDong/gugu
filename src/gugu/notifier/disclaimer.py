@@ -33,9 +33,7 @@ def with_disclaimer(text: str) -> str:
 def performance_note(sample_count: int) -> str | None:
     """样本不足时返回提示文案（调用方应据此隐藏胜率/收益数字）。"""
     if sample_count < MIN_PERFORMANCE_SAMPLES:
-        return (
-            f"样本不足（n={sample_count} < {MIN_PERFORMANCE_SAMPLES}），" "暂不展示胜率与收益统计"
-        )
+        return f"样本不足（n={sample_count} < {MIN_PERFORMANCE_SAMPLES}），暂不展示胜率与收益统计"
     return None
 
 

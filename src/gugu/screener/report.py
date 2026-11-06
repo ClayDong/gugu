@@ -39,7 +39,7 @@ def format_screener_report(
             "尾盘选股 · 无结果",
             "yellow",
             sections=[
-                f"今日扫描 {total_scanned} 只股票，未找到符合条件的标的。\n" f"{no_result_reason}",
+                f"今日扫描 {total_scanned} 只股票，未找到符合条件的标的。\n{no_result_reason}",
             ],
             note="明策 · gugu · 尾盘选股",
         )
