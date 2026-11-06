@@ -17,6 +17,9 @@ from gugu.backtest.data_gate import (
 
 ROOT = Path(__file__).resolve().parents[2]
 REAL_CACHE = ROOT / "data" / "parquet_cache"
+# 真实全市场缓存有几百上千个文件；CI 上被其他测试顺手建出来的目录只有个位数。
+# 用这个下限把「真数据」和「测试残留」分开，避免非 hermetic 用例在干净环境里失败。
+MIN_REAL_CACHE_FILES = 20
 
 
 def _df(rows: int = 60, start: str = "2024-01-01") -> pd.DataFrame:
@@ -56,9 +59,18 @@ class TestCacheNaming:
         assert len(iter_cache_files(tmp_path)) == 2
 
     def test_real_cache_500d_files_are_now_discoverable(self) -> None:
-        """修复前 glob('*_500d.parquet') 命中 0，现应识别到 *_500d_none.parquet。"""
+        """修复前 glob('*_500d.parquet') 命中 0，现应识别到 *_500d_none.parquet。
+
+        这个用例读的是真实缓存目录，而 ``data/`` 被 .gitignore 排除，CI 上本就没有，
+        所以必须跳过。只判目录存在是不够的：``ParquetPersistentCache.__init__``
+        会 mkdir，任何碰到 DataManager 的测试都会顺手把这个目录建出来（实测 CI 上
+        出现过只剩 1d/3d 两个文件的情况），于是跳过条件失效、断言必然失败。
+        因此改成「目录里得真有像样的缓存」才跑。
+        """
         if not REAL_CACHE.is_dir():
             pytest.skip("本地无行情缓存")
+        if len(list(REAL_CACHE.glob("*.parquet"))) < MIN_REAL_CACHE_FILES:
+            pytest.skip("缓存目录不是真实数据（可能只是别的测试建出来的空目录）")
         files = iter_cache_files(REAL_CACHE, days=500)
         assert files, "500d 缓存应至少被识别到一个（即便样本长度不合格）"
         assert all(parse_cache_name(f)[1] == 500 for f in files)

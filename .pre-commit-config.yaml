@@ -8,7 +8,10 @@ default_language_version:
 repos:
   # === 代码格式（快速）===
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.5.4
+    # 必须与 uv.lock 里的 ruff 版本一致（ci.yml / quality-gate.yml 都用它）。
+    # 原先是 v0.5.4，比 CI 的 0.15.18 落后十几个版本，本地钩子放过的代码
+    # CI 会拦下；反过来上游一发版 `pip install ruff` 又会引入新规则。
+    rev: v0.15.18
     hooks:
       - id: ruff
         name: ruff lint + fix

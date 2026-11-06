@@ -7,8 +7,9 @@ on:
     branches: [main, master, develop]
 
 # 与 ci.yml 统一：Python 3.12 / 测试用 uv 环境 / pytest --timeout=60。
-# lint 与 security 仅做静态检查，使用独立安装的 ruff/mypy/bandit，
-# 不参与项目运行时依赖，避免双包管理器影响测试结果。
+# lint 也用 uv.lock 里的 ruff/mypy，不再 `pip install ruff`——工具版本不锁会让
+# 同一个 commit 因为上游发版而红绿翻转（2026-11-06 被 ruff 0.15.18→0.17.4 坑过）。
+# security 仍是独立装的 bandit（未纳入锁文件，规则集稳定，只阻断 HIGH）。
 
 jobs:
   # === 第一层：代码格式和类型检查 ===
@@ -17,21 +18,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install static analysis tools
-        run: |
-          pip install ruff mypy
-          pip install -e ".[dev]"
+      # 用锁文件装工具，不用 `pip install ruff`。
+      # 2026-11-06 就是被这个坑到：pip 装到 ruff 0.17.4，而 uv.lock 里是 0.15.18，
+      # 新增的 ISC004 规则让同一个 commit 在本地绿、在这里红。工具版本必须可复现。
+      - name: Install dependencies
+        run: uv sync --group dev
 
       - name: Ruff lint
-        run: ruff check src/ --output-format=github
+        run: uv run ruff check src/ --output-format=github
 
       - name: Ruff format check
-        run: ruff format src/ --check --diff
+        run: uv run ruff format src/ --check --diff
 
       - name: Mypy strict
         # 只查关键模块，与 ci.yml 保持同一口径。
@@ -40,7 +46,7 @@ jobs:
         # >=3.12，mypy 在解析 numpy 的 .pyi 时直接中断——这个门槛从写下起就没
         # 真正执行过，红灯只提供噪声不提供信号。
         # 收敛范围是有意为之，不是放宽：欠账仍在，等哪天专项清偿再放开。
-        run: mypy --strict src/gugu/config src/gugu/filters/money_flow.py src/gugu/web/app.py --ignore-missing-imports
+        run: uv run mypy --strict src/gugu/config src/gugu/filters/money_flow.py src/gugu/web/app.py --ignore-missing-imports
 
   # === 第二层：测试和质量门禁 ===
   test:
